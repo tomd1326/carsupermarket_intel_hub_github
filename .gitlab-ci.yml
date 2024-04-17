@@ -10,7 +10,7 @@ include:
       ref: ${CI_TEMPLATE_TAG}
 
 variables:
-  SOURCE_CODE_WORKING_DIR: ${CI_PROJECT_DIR}
+  SOURCE_CODE_WORKING_DIR: "."
   AWS_PROD_REGION: "eu-west-1"
   AWS_DEV_REGION: "us-east-2"
   AWS_ECR_REPOSITORY_NAME: "vehicle_list_evaluator_repository_carsupermarket"

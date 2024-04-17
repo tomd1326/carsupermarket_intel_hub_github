@@ -31,3 +31,4 @@ def test_execution(data: dict):
 
 handler = Mangum(app, lifespan="auto")
 lambda_requests_manager = LambdaRequestsManager(mangum_handler=handler)
+
