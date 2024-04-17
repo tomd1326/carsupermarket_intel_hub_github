@@ -1,0 +1,20 @@
+# -----------------------------
+# -- pipeline
+# -----------------------------
+
+include:   
+    - project: 'data_team3/platform/common/gitlab_ci_job_templates'
+      file: 
+        - 'docker/pipeline/local_docker_aws_lambda_pipeline.yml'
+        - 'terraform/pipeline/terraform_aws_pipeline.yml'
+      ref: ${CI_TEMPLATE_TAG}
+
+variables:
+  SOURCE_CODE_WORKING_DIR: "source_code"
+  AWS_PROD_REGION: "eu-west-1"
+  AWS_DEV_REGION: "us-east-2"
+  AWS_ECR_REPOSITORY_NAME: "vehicle_list_evaluator_repository_carsupermarket"
+  AWS_LAMBDA_FUNCTION_NAME: "vehicle_list_evaluator_carsupermarket"
+  DOCKERFILE_NAME: "Dockerfile.aws.lambda"
+  IAC_WORKING_DIR: "terraform"
+  COMPANY_NAME: "carsupermarket"
