@@ -1,0 +1,26 @@
+{
+  "httpMethod": "GET",
+  "path": "/",
+  "headers": {},
+  "multiValueHeaders": {},
+  "queryStringParameters": {},
+  "multiValueQueryStringParameters": {},
+  "pathParameters": {},
+  "stageVariables": {},
+  "version": "1.0",
+  "requestContext": {
+      "accountId": "123456789012",
+      "resourceId": "123456",
+      "stage": "prod",
+      "requestId": "c6af9ac6-7b61-11e6-9a3e-23b6",
+      "identity": {
+          "sourceIp": "127.0.0.1"
+      },
+      "resourcePath": "/",
+      "httpMethod": "GET",
+      "apiId": "1234567890",
+      "operationName": "/"
+  },
+  "body": "",
+  "isBase64Encoded": false
+}
