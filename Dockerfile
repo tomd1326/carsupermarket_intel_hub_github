@@ -1,5 +1,4 @@
 ARG BUILD_DIR="backend"
-ARG COMPANY_NAME="aramisauto"
 
 FROM python:3.9-slim-buster as build-image
 
@@ -25,16 +24,18 @@ ARG BUILD_DIR
 
 RUN mkdir -p ${BUILD_DIR}
 
-#COPY ./requirements.txt .
 COPy ./pyproject.toml .
 COPY ./backend ${BUILD_DIR}/
 
+# Upgrade pip
 RUN pip3 install \
       --upgrade pip \
       --target ${BUILD_DIR}
 
-RUN pip3 install poetry
-RUN poetry export -f requirements.txt --output requirements.txt
+# Generating the requirements.txt file
+RUN pip3 install poetry && \
+    poetry export -f requirements.txt --output requirements.txt && \
+    pip3 uninstall poetry
 
 #RUN pip install --target ${BUILD_DIR} pricing-toolbox==${LAST_PKG_VERSION} --extra-index-url ${PKG_URL}
 
@@ -48,13 +49,4 @@ COPY --from=build-image ${BUILD_DIR}/* ${LAMBDA_TASK_ROOT}/
 
 COPY backend/* ${LAMBDA_TASK_ROOT}/
 
-ARG DOMAIN_ML
-ARG DOMAIN_GENERIC
-ARG DOMAIN_NAME_CAR_CONFLICT
-ARG DOMAIN_NAME_FMC
-
-ENV DOMAIN_NAME_ML=${DOMAIN_ML}
-ENV DOMAIN_NAME_GENERIC=${DOMAIN_GENERIC}
-ENV DOMAIN_NAME_CAR_CONFLICT=${DOMAIN_NAME_CAR_CONFLICT}
-ENV DOMAIN_NAME_FMC=${DOMAIN_NAME_FMC}
 CMD ["main.handler"]
