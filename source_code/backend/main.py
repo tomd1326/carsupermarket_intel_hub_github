@@ -6,7 +6,12 @@ from utils.lambda_http import LambdaRequestsManager
 app = FastAPI()
 
 
-@app.get("/")
+@app.get('/')
+def simple_healthcheck(request: Request):
+    return {"status": "ok"}
+
+
+@app.get("/test")
 def read_root(request: Request):
     res = {"Hello": "World2"}
 
