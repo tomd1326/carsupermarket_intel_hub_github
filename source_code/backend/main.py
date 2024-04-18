@@ -15,7 +15,8 @@ from utils.lambda_http import LambdaRequestsManager
 
 
 app = FastAPI()
-templates = Jinja2Templates(directory="templates")
+cur_dir = os.path.dirname(__file__)
+templates = Jinja2Templates(directory=os.path.join(cur_dir, "templates"))
 logger = logging.getLogger(__name__)
 
 logging.basicConfig(level="INFO", format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
