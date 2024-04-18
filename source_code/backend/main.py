@@ -5,6 +5,7 @@ import json
 
 from utils.lambda_http import LambdaRequestsManager
 
+
 app = FastAPI()
 logger = logging.getLogger(__name__)
 
