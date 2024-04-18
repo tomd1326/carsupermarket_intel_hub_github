@@ -35,7 +35,7 @@ RUN pip3 install \
 # Generating the requirements.txt file
 RUN pip3 install poetry && \
     poetry export -f requirements.txt --output requirements.txt && \
-    pip3 uninstall poetry
+    pip3 uninstall poetry -y
 
 #RUN pip install --target ${BUILD_DIR} pricing-toolbox==${LAST_PKG_VERSION} --extra-index-url ${PKG_URL}
 
