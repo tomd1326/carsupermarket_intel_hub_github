@@ -1,14 +1,21 @@
 import logging
 import os
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, Form, Depends, HTTPException
+from fastapi.templating import Jinja2Templates
+from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
+from starlette.middleware.sessions import SessionMiddleware
+from starlette.status import HTTP_401_UNAUTHORIZED
 from mangum import Mangum
 import json
+import hashlib
 
 from utils.lambda_http import LambdaRequestsManager
 
 
 app = FastAPI()
+templates = Jinja2Templates(directory="templates")
 logger = logging.getLogger(__name__)
 
 logging.basicConfig(level="INFO", format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
@@ -16,10 +23,65 @@ logging.basicConfig(level="INFO", format="%(asctime)s - %(name)s - %(levelname)s
 logger.addHandler(logging.StreamHandler())
 
 
-@app.get('/')
+# Add middleware for session management
+app.add_middleware(SessionMiddleware, secret_key="your-secret-key")
+
+# OAuth2 password bearer token utilization (assuming token-based auth for simplicity)
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
+
+def get_current_user(request: Request):
+    user = request.session.get('user')
+    if not user:
+        return None
+        # raise HTTPException(status_code=HTTP_401_UNAUTHORIZED, detail="Unauthorized", headers={"Location": "/login"})
+        # redirect to login page
+        # return RedirectResponse(url="/login", status_code=303)
+    return user
+
+@app.get("/", response_class=HTMLResponse)
+def root(request: Request, user: str = Depends(get_current_user)):
+    if not user:
+        return RedirectResponse(url="/login", status_code=303)
+    return templates.TemplateResponse("dashboard.html", {"request": request, "user": user})
+
+@app.get("/login", response_class=HTMLResponse)
+def login(request: Request):
+    return templates.TemplateResponse("login.html", {"request": request})
+
+@app.post("/login")
+def login(request: Request, username: str = Form(...), password: str = Form(...)):
+    # calculate sha256 hash of the password
+    pwd_hash = hashlib.sha256(password.encode()).hexdigest()
+    if pwd_hash == "a05ef593239b0ff678c3bb69731e785c470d781a121692302912550aa2459b74":
+        request.session['user'] = username
+        return RedirectResponse(url="/", status_code=303)
+    return templates.TemplateResponse("login.html", {"request": request, "error": "Invalid username or password"})
+
+@app.get("/logout")
+def logout(request: Request):
+    request.session.pop('user', None)
+    return RedirectResponse(url="/login", status_code=303)
+
+@app.get('/healthcheck')
 def simple_healthcheck(request: Request):
     logger.info('Healthcheck')
-    return {"status": "ok", 'context': json.dumps(request.scope['aws.context'], default=str)}
+    context = None
+    if 'aws.context' in request.scope:
+        context = request.scope['aws.context']
+    return {"status": "ok", 'context': json.dumps(context, default=str)}
+#
+# @app.get("/", response_class=HTMLResponse)
+# def login(request: Request):
+#     return templates.TemplateResponse("login.html", {"request": request})
+#
+# @app.get('/healthcheck')
+# def simple_healthcheck(request: Request):
+#     logger.info('Healthcheck')
+#     context = None
+#     if 'aws.context' in request.scope:
+#         context = request.scope['aws.context']
+#     return {"status": "ok", 'context': json.dumps(context, default=str)}
+
 
 
 @app.get("/test")
@@ -73,6 +135,7 @@ def test_db(request: Request):
     return {"status": "ok", 'data': result}
 
 
+
 @app.post("/test_execution")
 def test_execution(data: dict):
     print('Test execution which can take up to 15 minutes to complete (max aws lambda timeout)')
@@ -88,4 +151,4 @@ lambda_requests_manager = LambdaRequestsManager(mangum_handler=handler)
 if __name__ == '__main__':
     import uvicorn
     print('Running local server')
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run('main:app', host="0.0.0.0", port=8000, reload=True, workers=1)
