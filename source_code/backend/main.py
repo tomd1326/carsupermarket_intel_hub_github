@@ -35,6 +35,16 @@ def read_root(request: Request):
     # Return the response to the client
     return res
 
+@app.get("/test-secrets-manager")
+def test_secrets_manager(request: Request):
+    import boto3
+    ssm = boto3.client('ssm')
+    response = ssm.get_parameter(Name='prod/common/car_pricer/rds/admin_credentials', WithDecryption=True)
+    data = response['Parameter']['Value']
+    print(data)
+    logger.info('Testing secrets manager')
+    return {"status": "ok", 'data': data}
+
 
 @app.post("/test_execution")
 def test_execution(data: dict):
