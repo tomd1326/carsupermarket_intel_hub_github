@@ -13,7 +13,7 @@ logging.basicConfig(level="INFO", format="%(asctime)s - %(name)s - %(levelname)s
 @app.get('/')
 def simple_healthcheck(request: Request):
     logger.info('Healthcheck')
-    return {"status": "ok"}
+    return {"status": "ok", 'context': request.scope['aws.context']}
 
 
 @app.get("/test")

@@ -7,7 +7,7 @@ include:
       file: 
         - 'docker/pipeline/local_docker_aws_lambda_pipeline.yml'
         - 'terraform/pipeline/terraform_aws_pipeline.yml'
-      ref: ${CI_TEMPLATE_TAG}
+      ref: 2.3.0-beta
 
 variables:
   SOURCE_CODE_WORKING_DIR: "source_code"
