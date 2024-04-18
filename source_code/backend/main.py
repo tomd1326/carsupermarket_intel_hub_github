@@ -1,6 +1,7 @@
 import logging
 from fastapi import FastAPI, Request
 from mangum import Mangum
+import json
 
 from utils.lambda_http import LambdaRequestsManager
 
@@ -13,7 +14,7 @@ logging.basicConfig(level="INFO", format="%(asctime)s - %(name)s - %(levelname)s
 @app.get('/')
 def simple_healthcheck(request: Request):
     logger.info('Healthcheck')
-    return {"status": "ok", 'context': request.scope['aws.context']}
+    return {"status": "ok", 'context': json.dumps(request.scope['aws.context'], default=str)}
 
 
 @app.get("/test")
