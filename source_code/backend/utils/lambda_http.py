@@ -6,6 +6,7 @@ from datetime import datetime
 import os
 import asyncio
 import logging
+import uuid
 
 from mangum import Mangum
 from mangum.types import LambdaContext
@@ -38,16 +39,16 @@ class LambdaRequestsManager:
             "stageVariables": {},
             "version": "2.0",
             "requestContext": {
-                "accountId": "0000000",
-                "resourceId": "000",
+                "accountId": "123456789012",
+                "resourceId": "123456",
                 "stage": "prod",
-                "requestId": aws_context.aws_request_id,
+                "requestId": str(uuid.uuid4()),
                 "identity": {
                     "sourceIp": "127.0.0.1"
                 },
                 "resourcePath": path,
                 "httpMethod": method,
-                "apiId": "000",
+                "apiId": "1234567890",
                 "operationName": path.strip('/'),
                 "http": {
                     "method": method,
@@ -61,10 +62,12 @@ class LambdaRequestsManager:
         }
 
         logger.info(f"Simulating HTTP request: {event}")
+        print(f"Simulating HTTP request: {event}")
 
         # If we are locally testing the Lambda function, we can invoke it directly
         if os.getenv('LOCAL_ENV') == '1':
             logger.info('Running locally')
+            print('Running locally')
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
             resp = self.mangum_handler(event, aws_context)
@@ -77,6 +80,7 @@ class LambdaRequestsManager:
             invocation_type = 'Event'
 
         logger.info(f"Invoking ({invocation_type}) Lambda function {aws_context.function_name} with event: {event}")
+        print(f"Invoking ({invocation_type}) Lambda function {aws_context.function_name} with event: {event}")
 
         # Invoke the Lambda function directly
         response = self.lambda_client.invoke(

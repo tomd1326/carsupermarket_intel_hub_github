@@ -10,6 +10,8 @@ app = FastAPI()
 logger = logging.getLogger(__name__)
 
 logging.basicConfig(level="INFO", format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+# redirect output to stdout
+logger.addHandler(logging.StreamHandler())
 
 
 @app.get('/')
