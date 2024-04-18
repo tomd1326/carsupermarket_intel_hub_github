@@ -16,7 +16,9 @@ from utils.lambda_http import LambdaRequestsManager
 
 app = FastAPI()
 cur_dir = os.path.dirname(__file__)
-templates = Jinja2Templates(directory=os.path.join(cur_dir, "templates"))
+templates_dir = os.path.join(cur_dir, "templates")
+templates = Jinja2Templates(directory=templates_dir)
+
 logger = logging.getLogger(__name__)
 
 logging.basicConfig(level="INFO", format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
@@ -25,7 +27,7 @@ logger.addHandler(logging.StreamHandler())
 
 
 # Add middleware for session management
-app.add_middleware(SessionMiddleware, secret_key="your-secret-key")
+app.add_middleware(SessionMiddleware, secret_key="as#$RD$26xc04$GF3r1dFDmhjd")
 
 # OAuth2 password bearer token utilization (assuming token-based auth for simplicity)
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")

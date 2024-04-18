@@ -1,6 +1,6 @@
 {
   "httpMethod": "GET",
-  "path": "/",
+  "path": "/login",
   "headers": {},
   "multiValueHeaders": {},
   "queryStringParameters": {},

@@ -29,9 +29,7 @@ COPy ./pyproject.toml .
 COPY ./backend ${BUILD_DIR}/
 
 # Upgrade pip
-RUN pip3 install \
-      --upgrade pip \
-      --target ${BUILD_DIR}
+RUN pip3 install --upgrade pip
 
 # Generating the requirements.txt file
 RUN pip3 install poetry
@@ -53,7 +51,7 @@ FROM public.ecr.aws/lambda/python:3.9 as run-image
 COPY --from=build-image ${BUILD_DIR}/ ${LAMBDA_TASK_ROOT}/
 COPY --from=build-image /python_build /python_build
 
-COPY backend/* ${LAMBDA_TASK_ROOT}/
+COPY backend/ ${LAMBDA_TASK_ROOT}/
 
 ENV PYTHONPATH=.:backend:/python_build
 
