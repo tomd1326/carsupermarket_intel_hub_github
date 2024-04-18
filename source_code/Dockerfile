@@ -21,6 +21,7 @@ RUN apt-get update -y && \
 
 # Include global arg in this stage of the build
 ARG BUILD_DIR
+ARG LOCAL_ENV
 
 RUN mkdir -p ${BUILD_DIR}
 
@@ -33,20 +34,27 @@ RUN pip3 install \
       --target ${BUILD_DIR}
 
 # Generating the requirements.txt file
-RUN pip3 install poetry && \
-    poetry export -f requirements.txt --output requirements.txt && \
-    pip3 uninstall poetry -y
+RUN pip3 install poetry
+
+RUN if [ "$LOCAL_ENV" = "1" ]; then \
+        poetry export -f requirements.txt --output requirements.txt --with dev; \
+    else \
+        poetry export -f requirements.txt --output requirements.txt; \
+    fi
 
 #RUN pip install --target ${BUILD_DIR} pricing-toolbox==${LAST_PKG_VERSION} --extra-index-url ${PKG_URL}
 
 RUN pip3 install \
-      --target ${BUILD_DIR} \
+      --target /python_build \
       -r requirements.txt
 
 FROM public.ecr.aws/lambda/python:3.9 as run-image
 
-COPY --from=build-image ${BUILD_DIR}/* ${LAMBDA_TASK_ROOT}/
+COPY --from=build-image ${BUILD_DIR}/ ${LAMBDA_TASK_ROOT}/
+COPY --from=build-image /python_build /python_build
 
 COPY backend/* ${LAMBDA_TASK_ROOT}/
+
+ENV PYTHONPATH=.:backend:/python_build
 
 CMD ["main.handler"]

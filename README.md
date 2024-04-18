@@ -34,10 +34,10 @@ Running the FastAPI app in a Docker container
 
 ```bash
 docker build -t uk-list-evaluator .
-docker run --platform linux/amd64 -p 9000:8080 -e LOCAL_ENV=1 docker-image:test
+docker run --platform linux/amd64 -p 9000:8080 -e LOCAL_ENV=1 uk-list-evaluator
 ```
 Invoking the FastAPI app in a Docker container
 
 ```bash
-curl "http://localhost:9000/2015-03-31/functions/function/invocations" -d '@request.json'
+curl "http://localhost:9000/2015-03-31/functions/function/invocations" -d '@docs/request.json'
 ```

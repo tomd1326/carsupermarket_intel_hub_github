@@ -1,4 +1,6 @@
 import logging
+import os
+
 from fastapi import FastAPI, Request
 from mangum import Mangum
 import json
@@ -46,6 +48,31 @@ def test_secrets_manager(request: Request):
     return {"status": "ok", 'data': data}
 
 
+@app.get("/test-db")
+def test_db(request: Request):
+    """this function tries to establish a connection to amazon aurora db (mysql)"""
+    import pymysql
+    # Connect to the database
+    connection = pymysql.connect(
+        host='car-pricer-rds-cluster-prod.cluster-c2qnpexfpjx7.eu-west-1.rds.amazonaws.com',
+        user='test',
+        password='test',
+        database='test',
+        port=3306
+    )
+
+    with connection.cursor() as cursor:
+        # Create a new record
+        sql = "SELECT * FROM test_table"
+        cursor.execute(sql)
+        result = cursor.fetchall()
+        print(result)
+
+    connection.close()
+
+    return {"status": "ok", 'data': result}
+
+
 @app.post("/test_execution")
 def test_execution(data: dict):
     print('Test execution which can take up to 15 minutes to complete (max aws lambda timeout)')
@@ -56,3 +83,9 @@ def test_execution(data: dict):
 handler = Mangum(app, lifespan="auto")
 lambda_requests_manager = LambdaRequestsManager(mangum_handler=handler)
 
+
+# if there's a var LOCAL_ENV=1, run local http server
+if __name__ == '__main__':
+    import uvicorn
+    print('Running local server')
+    uvicorn.run(app, host="0.0.0.0", port=8000)
