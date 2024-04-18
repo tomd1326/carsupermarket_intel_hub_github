@@ -5,9 +5,13 @@ import json
 from datetime import datetime
 import os
 import asyncio
+import logging
 
 from mangum import Mangum
 from mangum.types import LambdaContext
+
+
+logger = logging.getLogger(__name__)
 
 
 class LambdaRequestsManager:
@@ -21,7 +25,7 @@ class LambdaRequestsManager:
         # self.function_name = function_name
         self.mangum_handler = mangum_handler
 
-    def simulate_http(self, aws_context: LambdaContext, path, method, headers=None, params=None, data=None, asynchronous=False):
+    def simulate_http(self, aws_context: LambdaContext, path, method, headers=None, params=None, data=None, asynchronous=True):
         # Construct the event object that mimics API Gateway
         event = {
             "httpMethod": method,
@@ -56,8 +60,11 @@ class LambdaRequestsManager:
             "isBase64Encoded": False
         }
 
+        logger.info(f"Simulating HTTP request: {event}")
+
         # If we are locally testing the Lambda function, we can invoke it directly
         if os.getenv('LOCAL_ENV') == '1':
+            logger.info('Running locally')
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
             resp = self.mangum_handler(event, aws_context)
@@ -68,6 +75,8 @@ class LambdaRequestsManager:
         invocation_type = 'RequestResponse'
         if asynchronous:
             invocation_type = 'Event'
+
+        logger.info(f"Invoking ({invocation_type}) Lambda function {aws_context.function_name} with event: {event}")
 
         # Invoke the Lambda function directly
         response = self.lambda_client.invoke(
