@@ -75,7 +75,7 @@ build_ecr_repository:
   before_script: *before_script_docker
   parallel:
     matrix:
-      - SOURCE_CODE_WORKING_DIR: "source_code/backend"
+      - SOURCE_CODE_WORKING_DIR: "source_code/evaluator"
         AWS_ECR_REPOSITORY_NAME: "vehicle_list_router_repository_carsupermarket"
       - SOURCE_CODE_WORKING_DIR: "source_code/evaluator" 
         AWS_ECR_REPOSITORY_NAME: "vehicle_list_evaluator_repository_carsupermarket"
@@ -105,7 +105,7 @@ deploy_docker_image:
   before_script: *before_script_docker
   parallel:
     matrix:
-      - SOURCE_CODE_WORKING_DIR: "source_code/backend"
+      - SOURCE_CODE_WORKING_DIR: "source_code/evaluator"
         AWS_LAMBDA_FUNCTION_NAME: "vehicle_list_router_carsupermarket"
         AWS_ECR_REPOSITORY_NAME: "vehicle_list_router_repository_carsupermarket"
       - SOURCE_CODE_WORKING_DIR: "source_code/evaluator" 
