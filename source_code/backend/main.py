@@ -105,9 +105,14 @@ def read_root(request: Request):
 @app.get("/test-secrets-manager")
 def test_secrets_manager(request: Request):
     import boto3
-    sm = boto3.client('secretsmanager', region_name='eu-west-1')
+    sm = boto3.client(
+        'secretsmanager',
+        region_name='eu-west-1',
+        config=boto3.session.Config(connect_timeout=10, read_timeout=10, retries={'max_attempts': 0})
+    )
     env = 'prod' if os.getenv('AWS_REGION') == 'eu-west-1' else 'dev'
     varname = f'{env}/common/car_pricer/rds/admin_credentials'
+    print(f'Trying to get secret {varname}')
     response = sm.get_secret_value(SecretId=varname)
     data = json.loads(response['SecretString'])
     logger.info('Testing secrets manager')
