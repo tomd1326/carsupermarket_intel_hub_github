@@ -1,13 +1,36 @@
+stages:
+  - build
+  - deploy
+
 # -----------------------------
-# -- pipeline
+# -- anchor
 # -----------------------------
 
-include:   
-    - project: 'data_team3/platform/common/gitlab_ci_job_templates'
-      file: 
-        - 'docker/pipeline/local_docker_aws_lambda_pipeline.yml'
-        - 'terraform/pipeline/terraform_aws_pipeline.yml'
-      ref: "2.3.0-beta"
+.before_script_docker: &before_script_docker
+  - AWS_REGION=$(cat aws_region.txt)
+  - AWS_ECR_TOKEN=$(cat aws_token.txt)
+  - ENVIRONMENT=$(cat $CI_PROJECT_DIR/environment.txt)
+  - cd ${SOURCE_CODE_WORKING_DIR}
+
+# -----------------------------
+# load job templates
+# -----------------------------
+
+include:
+    - project: "data_team3/platform/common/gitlab_ci_job_templates"
+      file:
+        - "utils/pre/get_aws_variables.yml"
+        - "utils/pre/get_environment.yml"
+        - "utils/pre/get_ecr_repository_policy.yml"
+        - "docker/build/build_ecr.yml"
+        - "docker/build/build_docker.yml"
+        - "docker/deploy/deploy_docker_aws_lambda.yml"
+        - "terraform/pipeline/terraform_aws_pipeline.yml"
+      ref: ${CI_TEMPLATE_TAG}
+
+# -----------------------------
+# input variables
+# -----------------------------
 
 variables:
   SOURCE_CODE_WORKING_DIR: "source_code"
@@ -18,3 +41,77 @@ variables:
   DOCKERFILE_NAME: "Dockerfile"
   IAC_WORKING_DIR: "terraform"
   COMPANY_NAME: "carsupermarket"
+
+get_aws_variables:
+  stage: .pre
+  extends: .get_aws_variables
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main" || $CI_COMMIT_BRANCH == "dev"
+
+get_environment:
+  stage: .pre
+  extends: .get_environment
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main" || $CI_COMMIT_BRANCH == "dev"
+  
+get_ecr_repository_policy:
+  stage: .pre
+  extends: .get_ecr_repository_policy
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main" || $CI_COMMIT_BRANCH == "dev"
+      changes:
+        - ${SOURCE_CODE_WORKING_DIR}/**/*
+
+build_ecr_repository:
+  stage: .pre
+  extends: .build_ecr_repository
+  needs:
+    - job: get_aws_variables
+      artifacts: true
+    - job: get_environment
+      artifacts: true
+    - job: get_ecr_repository_policy
+      artifacts: true
+  before_script: *before_script_docker
+  parallel:
+    matrix:
+      - SOURCE_CODE_WORKING_DIR: "source_code/backend"
+        AWS_ECR_REPOSITORY_NAME: "vehicle_list_router_repository_carsupermarket"
+      - SOURCE_CODE_WORKING_DIR: "source_code/evaluator" 
+        AWS_ECR_REPOSITORY_NAME: "vehicle_list_evaluator_repository_carsupermarket"
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main" || $CI_COMMIT_BRANCH == "dev"
+      changes:
+        - ${SOURCE_CODE_WORKING_DIR}/**/*
+      
+build_docker_image:
+  stage: build
+  extends: .build_docker_image
+  before_script: *before_script_docker
+  parallel:
+    matrix:
+      - SOURCE_CODE_WORKING_DIR: "source_code/router"
+        AWS_ECR_REPOSITORY_NAME: "vehicle_list_router_repository_carsupermarket"
+      - SOURCE_CODE_WORKING_DIR: "source_code/evaluator"
+        AWS_ECR_REPOSITORY_NAME: "vehicle_list_evaluator_repository_carsupermarket"
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main" || $CI_COMMIT_BRANCH == "dev"
+      changes:
+        - ${SOURCE_CODE_WORKING_DIR}/**/*
+
+deploy_docker_image:
+  stage: deploy
+  extends: .deploy_docker_image
+  before_script: *before_script_docker
+  parallel:
+    matrix:
+      - SOURCE_CODE_WORKING_DIR: "source_code/backend"
+        AWS_LAMBDA_FUNCTION_NAME: "vehicle_list_router_carsupermarket"
+        AWS_ECR_REPOSITORY_NAME: "vehicle_list_router_repository_carsupermarket"
+      - SOURCE_CODE_WORKING_DIR: "source_code/evaluator" 
+        AWS_LAMBDA_FUNCTION_NAME: "vehicle_list_evaluator_carsupermarket_dev"
+        AWS_ECR_REPOSITORY_NAME: "vehicle_list_evaluator_repository_carsupermarket"
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main" || $CI_COMMIT_BRANCH == "dev"
+      changes:
+        - ${SOURCE_CODE_WORKING_DIR}/**/*
