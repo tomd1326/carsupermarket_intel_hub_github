@@ -44,6 +44,58 @@ terraform {
 }
 
 # -------------------------------------------------
+# -- aws secret manager
+# -------------------------------------------------
+
+resource "aws_secretsmanager_secret" "secret_1" {
+  name                    = "${local.env}/${var.company}/${var.aws_secret_manager_secret_name_1}"
+  recovery_window_in_days = "0"
+
+  tags = {
+    Environment     = local.env
+    Country         = var.tags_country
+    Application     = var.tags_application
+    Team            = var.tags_team
+    BillingService  = var.tags_billing_service
+    BillingPlatform = var.tags_billing_platform
+    ManagedBy       = var.tags_managed_by
+  }
+}
+
+resource "aws_secretsmanager_secret_version" "secret_version_1" {
+  secret_id     = aws_secretsmanager_secret.secret_1.id
+  secret_string = <<EOF
+    {
+      "key": "value"
+    }
+  EOF
+}
+
+resource "aws_secretsmanager_secret" "secret_2" {
+  name                    = "${local.env}/${var.company}/${var.aws_secret_manager_secret_name_2}"
+  recovery_window_in_days = "0"
+
+  tags = {
+    Environment     = local.env
+    Country         = var.tags_country
+    Application     = var.tags_application
+    Team            = var.tags_team
+    BillingService  = var.tags_billing_service
+    BillingPlatform = var.tags_billing_platform
+    ManagedBy       = var.tags_managed_by
+  }
+}
+
+resource "aws_secretsmanager_secret_version" "secret_version" {
+  secret_id     = aws_secretsmanager_secret.secret_2.id
+  secret_string = <<EOF
+    {
+      "key": "value"
+    }
+  EOF
+}
+
+# -------------------------------------------------
 # -- aws vpc - security groups
 # -------------------------------------------------
 
@@ -92,7 +144,7 @@ data "aws_ecr_repository" "image_repository_1" {
   name = "${var.aws_lambda_function_name_1}_repository_${var.company}_${local.env}"
 }
 
-data "aws_ecr_image" "image_container_2" {
+data "aws_ecr_image" "image_container_1" {
   repository_name = data.aws_ecr_repository.image_repository_1.name
   image_tag       = "latest"
 }
@@ -150,7 +202,7 @@ module "lambda_2" {
   aws_lambda_function_name = var.aws_lambda_function_name_2
   aws_lambda_memory_size   = var.aws_lambda_memory_size_2
   aws_lambda_timeout       = var.aws_lambda_timeout_2
-  aws_lambda_image_uri     = "${data.aws_ecr_repository.image_repository_2repository_url}@${data.aws_ecr_image.image_container_2.image_digest}"
+  aws_lambda_image_uri     = "${data.aws_ecr_repository.image_repository_2.repository_url}@${data.aws_ecr_image.image_container_2.image_digest}"
   aws_lambda_iam_role_arn  = module.iam_role_lambda.iam_role_arn
   subnet_list              = [local.private_subnet_id_1, local.private_subnet_id_2]
   security_group_list      = [module.security_group.aws_security_group_id]

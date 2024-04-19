@@ -11,6 +11,36 @@ variable "user_profile" {
 }
 
 # -------------------------------------------------
+# -- aws secret manager
+# -------------------------------------------------
+
+variable "aws_secret_manager_secret_name_1" {
+  type        = string
+  description = "secret name"
+  default     = "car_pricer/autotrader/api_access"
+}
+
+variable "aws_secret_manager_secret_name_2" {
+  type        = string
+  description = "secret name"
+  default     = "car_pricer/cat/api_access"
+}
+
+variable "aws_secret_manager_secret_value_1" {
+  type = object({
+    key           = string,
+    secret        = string,
+    advertiser_id = string
+  })
+  description = "secret value"
+  default = {
+    key           = "key",
+    secret        = "secret",
+    advertiser_id = "advertiser_id"
+  }
+}
+
+# -------------------------------------------------
 # -- aws security group
 # -------------------------------------------------
 

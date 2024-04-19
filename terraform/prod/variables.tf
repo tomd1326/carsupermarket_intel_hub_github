@@ -11,6 +11,36 @@ variable "user_profile" {
 }
 
 # -------------------------------------------------
+# -- aws secret manager
+# -------------------------------------------------
+
+variable "aws_secret_manager_secret_name_1" {
+  type        = string
+  description = "secret name"
+  default     = "car_pricer/autotrader/api_access"
+}
+
+variable "aws_secret_manager_secret_name_2" {
+  type        = string
+  description = "secret name"
+  default     = "car_pricer/cat/api_access"
+}
+
+variable "aws_secret_manager_secret_value_1" {
+  type = object({
+    key           = string,
+    secret        = string,
+    advertiser_id = string
+  })
+  description = "secret value"
+  default = {
+    key           = "key",
+    secret        = "secret",
+    advertiser_id = "advertiser_id"
+  }
+}
+
+# -------------------------------------------------
 # -- aws security group
 # -------------------------------------------------
 
@@ -59,7 +89,7 @@ variable "aws_rds_cluster_identifier" {
 variable "aws_lambda_function_name_1" {
   type        = string
   description = "lambda function name"
-  default     = "vehicle_list_evaluator"
+  default     = "vehicle_list_router"
 }
 
 variable "aws_lambda_memory_size_1" {
@@ -69,6 +99,24 @@ variable "aws_lambda_memory_size_1" {
 }
 
 variable "aws_lambda_timeout_1" {
+  type        = string
+  description = "lambda timeout"
+  default     = "250"
+}
+
+variable "aws_lambda_function_name_2" {
+  type        = string
+  description = "lambda function name"
+  default     = "vehicle_list_evaluator"
+}
+
+variable "aws_lambda_memory_size_2" {
+  type        = string
+  description = "lambda memory size"
+  default     = "6000"
+}
+
+variable "aws_lambda_timeout_2" {
   type        = string
   description = "lambda timeout"
   default     = "250"
