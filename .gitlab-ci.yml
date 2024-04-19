@@ -109,7 +109,7 @@ deploy_docker_image:
         AWS_LAMBDA_FUNCTION_NAME: "vehicle_list_router_carsupermarket"
         AWS_ECR_REPOSITORY_NAME: "vehicle_list_router_repository_carsupermarket"
       - SOURCE_CODE_WORKING_DIR: "source_code/evaluator" 
-        AWS_LAMBDA_FUNCTION_NAME: "vehicle_list_evaluator_carsupermarket_dev"
+        AWS_LAMBDA_FUNCTION_NAME: "vehicle_list_evaluator_carsupermarket"
         AWS_ECR_REPOSITORY_NAME: "vehicle_list_evaluator_repository_carsupermarket"
   rules:
     - if: $CI_COMMIT_BRANCH == "main" || $CI_COMMIT_BRANCH == "dev"
