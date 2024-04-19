@@ -117,7 +117,7 @@ output "rds_reader_endpoint" {
 # -------------------------------------------------
 
 module "lambda_1" {
-  source                   = "../modules/lambda/docker"
+  source                   = "../modules/lambda/docker/vpc"
   env                      = local.env
   company                  = var.company
   aws_lambda_function_name = var.aws_lambda_function_name_1
