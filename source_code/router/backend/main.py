@@ -11,7 +11,7 @@ from mangum import Mangum
 import json
 import hashlib
 
-from router.backend.utils.secrets_manager_client import get_cretentials
+from utils.secrets_manager_client import get_cretentials
 from utils.lambda_http import LambdaRequestsManager
 
 
