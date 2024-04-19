@@ -11,6 +11,7 @@ from mangum import Mangum
 import json
 import hashlib
 
+from utils.secrets_manager_client import get_cretentials
 from utils.lambda_http import LambdaRequestsManager
 
 
@@ -104,18 +105,9 @@ def read_root(request: Request):
 
 @app.get("/test-secrets-manager")
 def test_secrets_manager(request: Request):
-    import boto3
-    sm = boto3.client(
-        'secretsmanager',
-        region_name=os.getenv('AWS_REGION', 'eu-west-1'),
-        config=boto3.session.Config(connect_timeout=10, read_timeout=10, retries={'max_attempts': 0})
-    )
     env = 'prod' if os.getenv('AWS_REGION') == 'eu-west-1' else 'dev'
     varname = f'{env}/common/car_pricer/rds/admin_credentials'
-    print(f'Trying to get secret {varname}')
-    response = sm.get_secret_value(SecretId=varname)
-    data = json.loads(response['SecretString'])
-    logger.info('Testing secrets manager')
+    data = get_cretentials(varname)
     return {"status": "ok", 'data': data}
 
 
@@ -123,11 +115,16 @@ def test_secrets_manager(request: Request):
 def test_db(request: Request):
     """this function tries to establish a connection to amazon aurora db (mysql)"""
     import pymysql
+
+    env = 'prod' if os.getenv('AWS_REGION') == 'eu-west-1' else 'dev'
+    varname = f'{env}/common/car_pricer/rds/admin_credentials'
+    data = get_cretentials(varname)
+
     # Connect to the database
     connection = pymysql.connect(
-        host='car-pricer-rds-cluster-prod.cluster-c2qnpexfpjx7.eu-west-1.rds.amazonaws.com',
-        user='test',
-        password='test',
+        host=data['cluster_endpoint'],
+        user=data['username'],
+        password=data['password'],
         database='test',
         port=3306
     )
