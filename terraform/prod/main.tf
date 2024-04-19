@@ -9,10 +9,11 @@ variable "company" {}
 # -------------------------------------------------
 
 locals {
-  env                            = terraform.workspace == "prod" ? "prod" : "dev"
-  provider_region                = terraform.workspace == "prod" ? "eu-west-1" : "us-east-2"
-  public_subnet_id_1             = terraform.workspace == "prod" ? "subnet-0416a60c3a1a7110a" : "subnet-0ce392009f734ad2f"
-  public_subnet_id_2             = terraform.workspace == "prod" ? "subnet-02a7012ae9a5cd2a8" : "subnet-089bd758b1c40bea1"
+  env                 = terraform.workspace == "prod" ? "prod" : "dev"
+  provider_region     = terraform.workspace == "prod" ? "eu-west-1" : "us-east-2"
+  private_subnet_id_1 = terraform.workspace == "prod" ? "subnet-0bd39ab9470f22c9e" : "subnet-02ff6f9ea16628639"
+  private_subnet_id_2 = terraform.workspace == "prod" ? "subnet-0c9410ed3601a0eca" : "subnet-0398fc4aea95ec60c"
+
   api_gateway_custom_domain_name = terraform.workspace == "prod" ? var.api_gateway_custom_domain_name_prod : var.api_gateway_custom_domain_name_dev
 }
 
@@ -125,7 +126,7 @@ module "lambda_1" {
   aws_lambda_timeout       = var.aws_lambda_timeout_1
   aws_lambda_image_uri     = "${data.aws_ecr_repository.image_repository_1.repository_url}@${data.aws_ecr_image.image_container_1.image_digest}"
   aws_lambda_iam_role_arn  = module.iam_role_lambda.iam_role_arn
-  subnet_list              = [local.public_subnet_id_1, local.public_subnet_id_2]
+  subnet_list              = [local.private_subnet_id_1, local.private_subnet_id_2]
   security_group_list      = [module.security_group.aws_security_group_id]
   aws_environment_variable = jsonencode(
     {
