@@ -92,7 +92,7 @@ data "aws_ecr_repository" "image_repository_1" {
   name = "${var.aws_lambda_function_name_1}_repository_${var.company}_${local.env}"
 }
 
-data "aws_ecr_image" "image_container_1" {
+data "aws_ecr_image" "image_container_2" {
   repository_name = data.aws_ecr_repository.image_repository_1.name
   image_tag       = "latest"
 }
