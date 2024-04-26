@@ -12,6 +12,7 @@ from mangum import Mangum
 import json
 import hashlib
 
+from exceptions import unhandled_exception_handler
 from utils.secrets_manager_client import get_secret
 from utils.lambda_http import LambdaRequestsManager
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -129,8 +130,9 @@ def test_execution(data: dict):
     print(data)
     return {}
 
-app.include_router(router.router)
 
+app.include_router(router.router)
+app.add_exception_handler(Exception, unhandled_exception_handler)
 
 handler = Mangum(app, lifespan="auto")
 lambda_requests_manager = LambdaRequestsManager()
