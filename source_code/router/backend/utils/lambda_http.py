@@ -16,7 +16,12 @@ logger = logging.getLogger(__name__)
 
 
 class LambdaRequestsManager:
-    def __init__(self, mangum_handler: Mangum, region_name: Optional[str] = None):
+    def __init__(self):
+        self.mangum_handler = None
+        self.lambda_client = None
+        self.region_name = None
+
+    def init(self, mangum_handler: Mangum, region_name: Optional[str] = None):
         if region_name is not None:
             self.region_name = region_name
         else:
