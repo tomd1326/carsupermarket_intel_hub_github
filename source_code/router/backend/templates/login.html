@@ -23,7 +23,7 @@
                 {{ error }}
             </div>
         {% endif %}
-        <form action="/login" method="post">
+        <form action="{{ BASE_URL }}/login" method="post" ciao="{{ BASE_URL }}">
             <div class="mb-3">
                 <label for="username" class="form-label">Username:</label>
                 <input type="text" class="form-control" id="username" name="username" required>

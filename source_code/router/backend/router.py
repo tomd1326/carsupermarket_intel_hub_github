@@ -17,8 +17,9 @@ from utils.db_utils import (get_database_connection)
 from typing import Optional
 
 
+BASE_URL = os.getenv("BASE_URL", "/dev")
 router = APIRouter(
-    prefix="",
+    prefix=BASE_URL,
     tags=["Main Router"],
     responses={404: {"description": "Not found"}},
 )
@@ -44,14 +45,15 @@ def get_current_user(request: Request):
 @router.get("/", response_class=HTMLResponse)
 def root(request: Request, user: str = Depends(get_current_user)):
     if not user:
-        return RedirectResponse(url="/login", status_code=303)
-    return RedirectResponse(url="/tasks", status_code=303)
+        return RedirectResponse(url=BASE_URL + "/login", status_code=303)
+    #
+    return RedirectResponse(url=BASE_URL + "/tasks", status_code=303)
     # return templates.TemplateResponse("dashboard.html", {"request": request, "user": user})
 
 
 @router.get("/login", response_class=HTMLResponse)
 def login(request: Request):
-    return templates.TemplateResponse("login.html", {"request": request})
+    return templates.TemplateResponse("login.html", {"request": request, 'BASE_URL': BASE_URL})
 
 
 @router.post("/login")
@@ -60,20 +62,27 @@ def login(request: Request, username: str = Form(...), password: str = Form(...)
     pwd_hash = hashlib.sha256(password.encode()).hexdigest()
     if username == 'admin' and pwd_hash == "a05ef593239b0ff678c3bb69731e785c470d781a121692302912550aa2459b74":
         request.session['user'] = username
-        return RedirectResponse(url="/", status_code=303)
-    return templates.TemplateResponse("login.html", {"request": request, "error": "Invalid username or password"})
+        return RedirectResponse(url=BASE_URL + "/", status_code=303)
+    return templates.TemplateResponse(
+        "login.html",
+        {
+            "request": request,
+            "error": "Invalid username or password",
+            'BASE_URL': BASE_URL
+        }
+    )
 
 
 @router.get("/logout")
 def logout(request: Request):
     request.session.pop('user', None)
-    return RedirectResponse(url="/login", status_code=303)
+    return RedirectResponse(url=BASE_URL + "/login", status_code=303)
 
 
 @router.get("/tasks", response_class=HTMLResponse, name="read_tasks")
 def read_tasks(request: Request, page: Optional[int] = 1, page_size: Optional[int] = 25, user: str = Depends(get_current_user)):
     if not user:
-        return RedirectResponse(url="/login", status_code=303)
+        return RedirectResponse(url=BASE_URL + "/login", status_code=303)
 
     offset = (page - 1) * page_size
     with get_database_connection() as conn:
@@ -103,19 +112,20 @@ def read_tasks(request: Request, page: Optional[int] = 1, page_size: Optional[in
         "tasks": tasks,
         'suppliers': suppliers,
         "total_pages": total_pages,
-        "current_page": page
+        "current_page": page,
+        'BASE_URL': BASE_URL
     })
 
 
 @router.post("/upload-task")
 async def upload_task(request: Request, file: UploadFile = File(...), user: str = Depends(get_current_user)):
     if not user:
-        return RedirectResponse(url="/login", status_code=303)
+        return RedirectResponse(url=BASE_URL + "/login", status_code=303)
 
     with tempfile.NamedTemporaryFile() as temp_file:
         content = await file.read()
         if not content:
-            return RedirectResponse(url="/", status_code=303)
+            return RedirectResponse(url=BASE_URL + "/", status_code=303)
 
         filename = file.filename
         file_ext = filename.split('.')[-1]
@@ -126,7 +136,7 @@ async def upload_task(request: Request, file: UploadFile = File(...), user: str 
         form = await request.form()
         supplier_id = form.get('supplier_id')
         if not supplier_id:
-            return RedirectResponse(url="/", status_code=303)
+            return RedirectResponse(url=BASE_URL + "/", status_code=303)
 
         temp_file.write(content)
         temp_file.seek(0)
@@ -148,7 +158,7 @@ async def upload_task(request: Request, file: UploadFile = File(...), user: str 
         # upload the file to S3
         upload_file(temp_file.name, s3_bucketname, s3_location)
 
-    return RedirectResponse(url="/", status_code=303)
+    return RedirectResponse(url=BASE_URL + "/", status_code=303)
 
 
 @router.get("/download/{filename}", response_class=FileResponse)
