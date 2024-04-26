@@ -1,5 +1,6 @@
 import logging
 import os
+import re
 
 from fastapi import FastAPI, Request, Form, Depends, HTTPException
 from fastapi.templating import Jinja2Templates
@@ -13,6 +14,8 @@ import hashlib
 
 from utils.secrets_manager_client import get_secret
 from utils.lambda_http import LambdaRequestsManager
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.responses import Response
 import router
 
 
@@ -26,8 +29,19 @@ logging.basicConfig(level="INFO", format="%(asctime)s - %(name)s - %(levelname)s
 logger.addHandler(logging.StreamHandler())
 
 
+class BasePathMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        # Re-add the base path to URL path
+        new_path = re.sub(r'^/dev', '', request.url.path)
+        request.scope['path'] = new_path
+        response = await call_next(request)
+        return response
+
+
 # Add middleware for session management
 app.add_middleware(SessionMiddleware, secret_key="as#$RD$26xc04$GF3r1dFDmhjd")
+# Add middleware for base path
+app.add_middleware(BasePathMiddleware)
 
 # OAuth2 password bearer token utilization (assuming token-based auth for simplicity)
 #oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
