@@ -11,14 +11,13 @@ from mangum import Mangum
 import json
 import hashlib
 
-from utils.secrets_manager_client import get_cretentials
+from utils.secrets_manager_client import get_secret
 from utils.lambda_http import LambdaRequestsManager
+import router
 
 
 app = FastAPI()
-cur_dir = os.path.dirname(__file__)
-templates_dir = os.path.join(cur_dir, "templates")
-templates = Jinja2Templates(directory=templates_dir)
+
 
 logger = logging.getLogger(__name__)
 
@@ -31,40 +30,8 @@ logger.addHandler(logging.StreamHandler())
 app.add_middleware(SessionMiddleware, secret_key="as#$RD$26xc04$GF3r1dFDmhjd")
 
 # OAuth2 password bearer token utilization (assuming token-based auth for simplicity)
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
+#oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
 
-def get_current_user(request: Request):
-    user = request.session.get('user')
-    if not user:
-        return None
-        # raise HTTPException(status_code=HTTP_401_UNAUTHORIZED, detail="Unauthorized", headers={"Location": "/login"})
-        # redirect to login page
-        # return RedirectResponse(url="/login", status_code=303)
-    return user
-
-@app.get("/", response_class=HTMLResponse)
-def root(request: Request, user: str = Depends(get_current_user)):
-    if not user:
-        return RedirectResponse(url="/login", status_code=303)
-    return templates.TemplateResponse("dashboard.html", {"request": request, "user": user})
-
-@app.get("/login", response_class=HTMLResponse)
-def login(request: Request):
-    return templates.TemplateResponse("login.html", {"request": request})
-
-@app.post("/login")
-def login(request: Request, username: str = Form(...), password: str = Form(...)):
-    # calculate sha256 hash of the password
-    pwd_hash = hashlib.sha256(password.encode()).hexdigest()
-    if pwd_hash == "a05ef593239b0ff678c3bb69731e785c470d781a121692302912550aa2459b74":
-        request.session['user'] = username
-        return RedirectResponse(url="/", status_code=303)
-    return templates.TemplateResponse("login.html", {"request": request, "error": "Invalid username or password"})
-
-@app.get("/logout")
-def logout(request: Request):
-    request.session.pop('user', None)
-    return RedirectResponse(url="/login", status_code=303)
 
 @app.get('/healthcheck')
 def simple_healthcheck(request: Request):
@@ -107,7 +74,7 @@ def read_root(request: Request):
 def test_secrets_manager(request: Request):
     env = 'prod' if os.getenv('AWS_REGION') == 'eu-west-1' else 'dev'
     varname = f'{env}/common/car_pricer/rds/admin_credentials'
-    data = get_cretentials(varname)
+    data = get_secret(varname)
     return {"status": "ok", 'data': data}
 
 
@@ -118,7 +85,7 @@ def test_db(request: Request):
 
     env = 'prod' if os.getenv('AWS_REGION') == 'eu-west-1' else 'dev'
     varname = f'{env}/common/car_pricer/rds/admin_credentials'
-    data = get_cretentials(varname)
+    data = get_secret(varname)
 
     # Connect to the database
     connection = pymysql.connect(
@@ -147,6 +114,8 @@ def test_execution(data: dict):
     print('Test execution which can take up to 15 minutes to complete (max aws lambda timeout)')
     print(data)
     return {}
+
+app.include_router(router.router)
 
 
 handler = Mangum(app, lifespan="auto")
