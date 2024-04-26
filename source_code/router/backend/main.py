@@ -133,7 +133,8 @@ app.include_router(router.router)
 
 
 handler = Mangum(app, lifespan="auto")
-lambda_requests_manager = LambdaRequestsManager(mangum_handler=handler)
+lambda_requests_manager = LambdaRequestsManager()
+lambda_requests_manager.init(mangum_handler=handler)
 
 
 # if there's a var LOCAL_ENV=1, run local http server

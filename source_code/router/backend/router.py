@@ -12,6 +12,7 @@ import hashlib
 import logging
 import datetime
 
+from utils.lambda_http import LambdaRequestsManager
 from utils.s3_tools import upload_file
 from utils.db_utils import (get_database_connection)
 from typing import Optional
@@ -62,7 +63,7 @@ def login(request: Request, username: str = Form(...), password: str = Form(...)
     pwd_hash = hashlib.sha256(password.encode()).hexdigest()
     if username == 'admin' and pwd_hash == "a05ef593239b0ff678c3bb69731e785c470d781a121692302912550aa2459b74":
         request.session['user'] = username
-        return RedirectResponse(url=BASE_URL + "/", status_code=303)
+        return RedirectResponse(url=BASE_URL + "/tasks", status_code=303)
     return templates.TemplateResponse(
         "login.html",
         {
@@ -125,7 +126,7 @@ async def upload_task(request: Request, file: UploadFile = File(...), user: str 
     with tempfile.NamedTemporaryFile() as temp_file:
         content = await file.read()
         if not content:
-            return RedirectResponse(url=BASE_URL + "/", status_code=303)
+            return RedirectResponse(url=BASE_URL + "/tasks", status_code=303)
 
         filename = file.filename
         file_ext = filename.split('.')[-1]
@@ -136,7 +137,7 @@ async def upload_task(request: Request, file: UploadFile = File(...), user: str 
         form = await request.form()
         supplier_id = form.get('supplier_id')
         if not supplier_id:
-            return RedirectResponse(url=BASE_URL + "/", status_code=303)
+            return RedirectResponse(url=BASE_URL + "/tasks", status_code=303)
 
         temp_file.write(content)
         temp_file.seek(0)
@@ -158,9 +159,39 @@ async def upload_task(request: Request, file: UploadFile = File(...), user: str 
         # upload the file to S3
         upload_file(temp_file.name, s3_bucketname, s3_location)
 
-    return RedirectResponse(url=BASE_URL + "/", status_code=303)
+        # Execute the task elaboration
+        LambdaRequestsManager().simulate_http(
+            # lambda_requests_manager.simulate_http(
+            aws_context=request.scope["aws.context"] if "aws.context" in request.scope else None,
+            path=BASE_URL + "/elaborate-task",
+            method="POST",
+            data={
+                'task_id': task_id,
+            }
+        )
+
+    return RedirectResponse(url=BASE_URL + "/tasks", status_code=303)
 
 
 @router.get("/download/{filename}", response_class=FileResponse)
 def download_file(filename: str):
     return FileResponse(path=f"some/directory/{filename}", filename=filename)
+
+
+@router.post("/elaborate-task")
+def test_execution(data: dict):
+    print('Test execution which can take up to 15 minutes to complete (max aws lambda timeout)')
+    print(data)
+    # Fetch the task data from the db
+    with get_database_connection() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute("SELECT * FROM tasks WHERE task_id = %s", (data['task_id'],))
+            task = cursor.fetchone()
+            if not task:
+                return {"message": "Task not found"}
+
+            # Update the task status
+            cursor.execute("UPDATE tasks SET status = 'pending' WHERE task_id = %s", (data['task_id'],))
+            conn.commit()
+
+    return {}
