@@ -6,7 +6,7 @@ import boto3
 logger = logging.getLogger(__name__)
 
 
-def get_cretentials(secret_name: str) -> dict:
+def get_secret(secret_name: str) -> dict:
     sm = boto3.client(
         'secretsmanager',
         region_name=os.getenv('AWS_REGION', 'eu-west-1'),

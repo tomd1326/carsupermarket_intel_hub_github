@@ -35,7 +35,7 @@ services:
       MYSQL_ROOT_PASSWORD: password
       MYSQL_DATABASE: test_db
       MYSQL_USER: test
-      MYSQL_PASSWORD: root
+      MYSQL_PASSWORD: password
     networks:
       - aws_lambda_network
     restart: always
