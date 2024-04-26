@@ -19,7 +19,7 @@ from typing import Optional
 
 BASE_URL = os.getenv("BASE_URL", "/dev")
 router = APIRouter(
-    prefix=BASE_URL,
+    prefix="",
     tags=["Main Router"],
     responses={404: {"description": "Not found"}},
 )
