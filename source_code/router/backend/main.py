@@ -142,6 +142,7 @@ def test_execution(data: dict):
 app.include_router(router.router)
 app.add_exception_handler(Exception, unhandled_exception_handler)
 
+# TODO: probably it's more correct to put api_gateway_base_path="/dev" here
 handler = Mangum(app, lifespan="auto")
 lambda_requests_manager = LambdaRequestsManager()
 lambda_requests_manager.init(mangum_handler=handler)
