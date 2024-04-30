@@ -129,7 +129,9 @@ async def upload_task(request: Request, file: UploadFile = File(...), user: str 
     if not user:
         return RedirectResponse(url=BASE_URL + "/login", status_code=303)
 
-    with tempfile.NamedTemporaryFile() as temp_file:
+    fd_input, temp_input_file_path = tempfile.mkstemp()
+    os.close(fd_input)
+    try:
         content = await file.read()
         if not content:
             return RedirectResponse(url=BASE_URL + "/tasks", status_code=303)
@@ -145,8 +147,8 @@ async def upload_task(request: Request, file: UploadFile = File(...), user: str 
         if not supplier_id:
             return RedirectResponse(url=BASE_URL + "/tasks", status_code=303)
 
-        temp_file.write(content)
-        temp_file.seek(0)
+        with open(temp_input_file_path, 'wb') as temp_file:
+            temp_file.write(content)
 
         # Create a task in the db
         with get_database_connection() as conn:
@@ -160,7 +162,7 @@ async def upload_task(request: Request, file: UploadFile = File(...), user: str 
         s3_location = f'applications/pricing/uk-vehicle-list-evaluator/{env}/raw/{task_id}.{file_ext}'
 
         # upload the file to S3
-        upload_file(temp_file.name, s3_bucketname, s3_location)
+        upload_file(temp_input_file_path, s3_bucketname, s3_location)
 
         # Execute the task elaboration
         LambdaRequestsManager().simulate_http(
@@ -172,6 +174,8 @@ async def upload_task(request: Request, file: UploadFile = File(...), user: str 
                 'task_id': task_id,
             }
         )
+    finally:
+        os.remove(temp_input_file_path)
 
     return RedirectResponse(url=BASE_URL + "/tasks", status_code=303)
 

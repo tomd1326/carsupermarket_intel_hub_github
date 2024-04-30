@@ -267,9 +267,7 @@ class AutoTraderClient(metaclass=Singleton):
         if input_file_path.endswith('.csv'):
             df = pd.read_csv(input_file_path)
         elif input_file_path.endswith('.xlsx') or input_file_path.endswith('.xls'):
-            with open(input_file_path, 'rb') as f:
-                buffer = io.BytesIO(f.read())
-                df = pd.read_excel(buffer, engine='calamine')
+            df = pd.read_excel(input_file_path, engine='openpyxl')
         else:
             raise ValueError("Unsupported file format. Please use a .csv or .xlsx file.")
 
