@@ -1,3 +1,4 @@
+import base64
 import tempfile
 import traceback
 
@@ -125,19 +126,19 @@ def read_tasks(request: Request, page: Optional[int] = 1, page_size: Optional[in
 
 
 @router.post("/upload-task")
-async def upload_task(request: Request, file: UploadFile = File(...), user: str = Depends(get_current_user)):
+async def upload_task(request: Request, fileBase64: str = Form(...), supplier_id: str = Form(...), filename: str = Form(...), user: str = Depends(get_current_user)):
     if not user:
         return RedirectResponse(url=BASE_URL + "/login", status_code=303)
 
     fd_input, temp_input_file_path = tempfile.mkstemp()
     os.close(fd_input)
     try:
-        content = await file.read()
+        # Decode the base64 string to binary data
+        content = base64.b64decode(fileBase64)
         print(f'File size from the form: {len(content)}')
         if not content:
             return RedirectResponse(url=BASE_URL + "/tasks", status_code=303)
 
-        filename = file.filename
         file_ext = filename.split('.')[-1]
         if file_ext not in ['csv', 'xls', 'xlsx']:
             return {"message": "Invalid file format. Only csv, xls and xlsx files are allowed."}
@@ -155,7 +156,7 @@ async def upload_task(request: Request, file: UploadFile = File(...), user: str 
         with get_database_connection() as conn:
             with conn.cursor() as cursor:
                 cursor.execute("INSERT INTO tasks (created, status, supplier_id, filename) VALUES (%s, %s, %s, %s)",
-                               (datetime.datetime.now(), 'created', supplier_id, file.filename))
+                               (datetime.datetime.now(), 'created', supplier_id, filename))
                 task_id = cursor.lastrowid
                 conn.commit()
 

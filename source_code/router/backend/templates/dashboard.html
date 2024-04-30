@@ -23,7 +23,7 @@
 <body>
     <div class="container mt-4">
         <h2>Create Task</h2>
-        <form action="{{ BASE_URL }}/upload-task" method="post" enctype="multipart/form-data">
+        <form id="uploadForm" action="{{ BASE_URL }}/upload-task" method="post">
             <div class="mb-3">
                 <label for="supplierName" class="form-label">Supplier Name:</label>
                 <select class="form-select" id="supplierName" name="supplier_id">
@@ -35,7 +35,8 @@
             </div>
             <div class="mb-3">
                 <label for="fileUpload" class="form-label">Upload file:</label>
-                <input class="form-control" type="file" id="fileUpload" name="file">
+                <input class="form-control" type="file" id="fileUpload" name="filename">
+                <input type="hidden" id="fileBase64" name="fileBase64">
             </div>
             <button type="submit" class="btn btn-primary">Submit</button>
         </form>
@@ -79,5 +80,35 @@
           </ul>
         </nav>
     </div>
+    <script>
+
+    document.getElementById('uploadForm').onsubmit = function(e) {
+        e.preventDefault();
+        const form = this;
+        const fileInput = document.getElementById('fileUpload');
+        const file = fileInput.files[0];
+
+        if (file) {
+            const reader = new FileReader();
+            reader.readAsDataURL(file);
+            reader.onload = function() {
+                const base64EncodedFile = reader.result.split(',')[1];
+                document.getElementById('fileBase64').value = base64EncodedFile;
+
+                // Ensure that this line is being reached
+                console.log('Base64 Encoding Complete:', base64EncodedFile);
+
+                form.submit();
+            };
+            reader.onerror = function(error) {
+                console.error('FileReader Error: ', error);
+            };
+        } else {
+            // It's important to handle the case when no file is selected
+            console.error('No file selected.');
+            form.submit(); // Still submit the form if other data needs to be sent
+        }
+    };
+    </script>
 </body>
 </html>
