@@ -42,6 +42,15 @@ services:
     ports:
       - "3306:3306"
 
+  cache:
+    image: redis:6.2
+    container_name: uk_list_evaluator_cache
+    networks:
+      - aws_lambda_network
+    restart: always
+    ports:
+      - "6379:6379"
+
 networks:
     aws_lambda_network:
         driver: bridge

@@ -25,9 +25,16 @@ app = FastAPI()
 
 logger = logging.getLogger(__name__)
 
-logging.basicConfig(level="INFO", format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+logging.basicConfig(level="DEBUG", format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 # redirect output to stdout
 logger.addHandler(logging.StreamHandler())
+
+# Disable useless logging
+logging.getLogger('botocore').setLevel(logging.CRITICAL)
+logging.getLogger('boto3').setLevel(logging.CRITICAL)
+logging.getLogger('s3transfer').setLevel(logging.CRITICAL)
+logging.getLogger('urllib3').setLevel(logging.CRITICAL)
+logging.getLogger('asyncio').setLevel(logging.CRITICAL)
 
 
 class BasePathMiddleware(BaseHTTPMiddleware):

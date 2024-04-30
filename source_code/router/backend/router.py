@@ -1,4 +1,5 @@
 import tempfile
+import traceback
 
 from fastapi import APIRouter
 from fastapi import FastAPI, Request, Form, Depends, HTTPException
@@ -13,8 +14,10 @@ import logging
 import datetime
 
 from utils.lambda_http import LambdaRequestsManager
-from utils.s3_tools import upload_file
+from utils.s3_tools import upload_file, download_file
 from utils.db_utils import (get_database_connection)
+from list_processor.autotrader_client import AutoTraderClient
+from utils.secrets_manager_client import get_secret
 from typing import Optional
 
 
@@ -31,6 +34,9 @@ templates_dir = os.path.join(cur_dir, "templates")
 templates = Jinja2Templates(directory=templates_dir)
 
 logger = logging.getLogger(__name__)
+
+# Generic initialization
+s3_bucketname = 'aa-alimentation'
 
 
 def get_current_user(request: Request):
@@ -101,7 +107,7 @@ def read_tasks(request: Request, page: Optional[int] = 1, page_size: Optional[in
         # Get the tasks for the current page
         with conn.cursor() as cursor:
             # Adjust the query to use LIMIT and OFFSET for pagination
-            cursor.execute("SELECT * FROM tasks ORDER BY task_id DESC LIMIT %s OFFSET %s", (page_size, offset))
+            cursor.execute("SELECT * FROM tasks t LEFT JOIN suppliers s ON t.supplier_id = s.supplier_id ORDER BY t.task_id DESC LIMIT %s OFFSET %s", (page_size, offset))
             # get as list of dicts
             cols = [desc[0] for desc in cursor.description]
             tasks = [dict(zip(cols, row)) for row in cursor.fetchall()]
@@ -142,9 +148,6 @@ async def upload_task(request: Request, file: UploadFile = File(...), user: str 
         temp_file.write(content)
         temp_file.seek(0)
 
-        # process the file content
-        s3_bucketname = 'aa-alimentation'
-
         # Create a task in the db
         with get_database_connection() as conn:
             with conn.cursor() as cursor:
@@ -173,25 +176,69 @@ async def upload_task(request: Request, file: UploadFile = File(...), user: str 
     return RedirectResponse(url=BASE_URL + "/tasks", status_code=303)
 
 
-@router.get("/download/{filename}", response_class=FileResponse)
-def download_file(filename: str):
-    return FileResponse(path=f"some/directory/{filename}", filename=filename)
+@router.get("/download/{task_id}", response_class=FileResponse)
+def download_task_file(task_id: str):
+    # Get task info from the db
+    with get_database_connection() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute("SELECT * FROM tasks WHERE task_id = %s", (task_id,))
+            cols = [desc[0] for desc in cursor.description]
+            task = dict(zip(cols, cursor.fetchone()))
+
+    if not task:
+        return {"message": "Task not found"}
+
+    with tempfile.NamedTemporaryFile(suffix='.' + task['filename'].split('.')[-1], delete=False) as temp_output_file:
+        env = 'prod' if os.getenv('AWS_REGION') == 'eu-west-1' else 'dev'
+        file_ext = task['filename'].split('.')[-1]
+        s3_location = f'applications/pricing/uk-vehicle-list-evaluator/{env}/elaborated/{task["task_id"]}.{file_ext}'
+        download_file(temp_output_file.name, s3_bucketname, s3_location)
+        return FileResponse(temp_output_file.name, filename=task['filename'])
 
 
 @router.post("/elaborate-task")
-def test_execution(data: dict):
-    print('Test execution which can take up to 15 minutes to complete (max aws lambda timeout)')
-    print(data)
+async def test_execution(data: dict):
     # Fetch the task data from the db
     with get_database_connection() as conn:
         with conn.cursor() as cursor:
             cursor.execute("SELECT * FROM tasks WHERE task_id = %s", (data['task_id'],))
-            task = cursor.fetchone()
+            cols = [desc[0] for desc in cursor.description]  # Get column names from cursor.description
+            row = cursor.fetchone()
+            task = dict(zip(cols, row)) if row else None
             if not task:
                 return {"message": "Task not found"}
 
             # Update the task status
             cursor.execute("UPDATE tasks SET status = 'pending' WHERE task_id = %s", (data['task_id'],))
             conn.commit()
+
+    # Download the file from S3
+    env = 'prod' if os.getenv('AWS_REGION') == 'eu-west-1' else 'dev'
+    file_ext = task['filename'].split('.')[-1]
+    s3_location = f'applications/pricing/uk-vehicle-list-evaluator/{env}/raw/{data["task_id"]}.{file_ext}'
+    with tempfile.NamedTemporaryFile(suffix='.' + file_ext) as temp_input_file, \
+         tempfile.NamedTemporaryFile(suffix='.' + file_ext) as temp_output_file:
+        download_file(temp_input_file.name, s3_bucketname, s3_location)
+
+        secrets = get_secret(f'{env}/carsupermarket/car_pricer/api_access')
+        # Elaborate the file
+        try:
+            autotrader = AutoTraderClient(secrets['ADVERTISER_ID'], secrets['AUTOTRADER_KEY'], secrets['AUTOTRADER_SECRET'])
+            autotrader.process_file(temp_input_file.name, temp_output_file.name)
+
+            # Upload the elaborated file to S3
+            s3_location = f'applications/pricing/uk-vehicle-list-evaluator/{env}/elaborated/{data["task_id"]}.{file_ext}'
+            upload_file(temp_output_file.name, s3_bucketname, s3_location)
+
+            status = 'success'
+        except Exception as e:
+            logger.error(f"Error processing file: {e}, traceback: {traceback.format_exc()}")
+            status = 'error'
+
+        # Update the task status
+        with get_database_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute("UPDATE tasks SET status = %s WHERE task_id = %s", (status, data['task_id'],))
+                conn.commit()
 
     return {}
