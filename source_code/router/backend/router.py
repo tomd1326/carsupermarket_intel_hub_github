@@ -133,6 +133,7 @@ async def upload_task(request: Request, file: UploadFile = File(...), user: str 
     os.close(fd_input)
     try:
         content = await file.read()
+        print(f'File size from the form: {len(content)}')
         if not content:
             return RedirectResponse(url=BASE_URL + "/tasks", status_code=303)
 
