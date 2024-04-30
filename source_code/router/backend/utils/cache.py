@@ -37,7 +37,18 @@ class RedisCache(CacheInterface):
             conn.set(key, value, ex)
 
 
-def cache(client_class: type = RedisCache, ex=None, ignore_args=None):
+class MemoryCache(CacheInterface):
+    def __init__(self):
+        self.cache = {}
+
+    def get(self, key):
+        return self.cache.get(key)
+
+    def set(self, key, value, ex=None):
+        self.cache[key] = value
+
+
+def cache(client_class: type = MemoryCache, ex=None, ignore_args=None):
     """
     Caching decorator that caches the return value of a function based on its arguments,
     excluding any arguments specified in ignore_args.

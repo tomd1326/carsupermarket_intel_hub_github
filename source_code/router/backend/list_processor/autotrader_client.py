@@ -106,7 +106,7 @@ class AutoTraderClient(metaclass=Singleton):
             if valuations_response.status_code == 200:
                 return valuations_response.json()
             else:
-                logging.error(
+                logger.error(
                     f"Error in Valuations API call for VRM {vrm}, Derivative ID {derivative_id}: Status code {valuations_response.status_code}",
                     extra={'extra_vrm': vrm})
                 return None
@@ -125,13 +125,13 @@ class AutoTraderClient(metaclass=Singleton):
             try:
                 error_messages = json_data.get('messages', [])
                 for message in error_messages:
-                    logging.error(f'{api_name} API call for VRM {vrm} failed: {message}', extra={'extra_vrm': vrm})
+                    logger.error(f'{api_name} API call for VRM {vrm} failed: {message}', extra={'extra_vrm': vrm})
             except Exception as e:
-                logging.error(
+                logger.error(
                     f'{api_name} API call for VRM {vrm} failed with status code: {status_code} and error: {e}',
                     extra={'extra_vrm': vrm})
         elif json_data is not None and not error_only:
-            logging.info(f'{api_name} API call for VRM {vrm} succeeded with status code: {status_code}',
+            logger.info(f'{api_name} API call for VRM {vrm} succeeded with status code: {status_code}',
                          extra={'extra_vrm': vrm})
 
     def process_row(self, row: dict, session):
@@ -233,18 +233,18 @@ class AutoTraderClient(metaclass=Singleton):
                         total_results = self.competitor_request(session, headers, competitor_link)
 
         except Exception as e:
-            logging.error(f'Error processing row with VRM {vrm}: {e}', extra={'extra_vrm': vrm})
+            logger.error(f'Error processing row with VRM {vrm}: {e}', extra={'extra_vrm': vrm})
 
         if vehicles_data:
             self.log_api_response('Vehicles', vrm, 200, vehicles_data)
         else:
-            logging.error(f'Error processing row with VRM {vrm}: vehicles_data is None or Vehicles API call failed',
+            logger.error(f'Error processing row with VRM {vrm}: vehicles_data is None or Vehicles API call failed',
                           extra={'extra_vrm': vrm})
 
         if valuations_data:
             self.log_api_response('Valuations', vrm, 200, valuations_data)
         else:
-            logging.error(f'Error processing row with VRM {vrm}: valuations_data is None or Valuations API call failed',
+            logger.error(f'Error processing row with VRM {vrm}: valuations_data is None or Valuations API call failed',
                           extra={'extra_vrm': vrm})
 
         processing_time = time.time() - start_time
