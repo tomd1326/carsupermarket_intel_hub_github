@@ -44,6 +44,7 @@
         <table class="table">
             <thead>
                 <tr>
+                    <th scope="col">ID</th>
                     <th scope="col">Created Date</th>
                     <th scope="col">Supplier</th>
                     <th scope="col">Name of the File</th>
@@ -54,8 +55,9 @@
             <tbody>
                 {% for task in tasks %}
                 <tr>
+                    <td>{{ task.task_id }}</td>
                     <td>{{ task.created }}</td>
-                    <td>{{ task.supplier }}</td>
+                    <td>{{ task.supplier_name }}</td>
                     <td>{{ task.filename }}</td>
                     <td><span class="status-label {% if task.status == 'success' %}status-success{% elif task.status == 'created' %}status-created{% elif task.status == 'pending' %}status-pending{% else %}status-error{% endif %}">{{ task.status }}</span></td>
                     <td>
