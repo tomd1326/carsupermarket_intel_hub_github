@@ -1,4 +1,5 @@
 import datetime
+import io
 import logging
 import os
 import time
@@ -266,7 +267,9 @@ class AutoTraderClient(metaclass=Singleton):
         if input_file_path.endswith('.csv'):
             df = pd.read_csv(input_file_path)
         elif input_file_path.endswith('.xlsx') or input_file_path.endswith('.xls'):
-            df = pd.read_excel(input_file_path)
+            with open(input_file_path, 'rb') as f:
+                buffer = io.BytesIO(f.read())
+                df = pd.read_excel(buffer)
         else:
             raise ValueError("Unsupported file format. Please use a .csv or .xlsx file.")
 
