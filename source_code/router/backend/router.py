@@ -199,11 +199,11 @@ def download_task_file(task_id: str):
         file_ext = task['filename'].split('.')[-1]
         s3_location = f'applications/pricing/uk-vehicle-list-evaluator/{env}/elaborated/{task["task_id"]}.{file_ext}'
         download_file(temp_output_file.name, s3_bucketname, s3_location)
-        return FileResponse(temp_output_file.name, filename=task['filename'])
+        return FileResponse(temp_output_file.name, filename=task['filename'], media_type='application/octet-stream')
 
 
 @router.post("/elaborate-task")
-async def test_execution(data: dict):
+async def elaborate_task(data: dict):
     # Fetch the task data from the db
     with get_database_connection() as conn:
         with conn.cursor() as cursor:
@@ -223,7 +223,7 @@ async def test_execution(data: dict):
     file_ext = task['filename'].split('.')[-1]
     s3_location = f'applications/pricing/uk-vehicle-list-evaluator/{env}/raw/{data["task_id"]}.{file_ext}'
     with tempfile.NamedTemporaryFile(suffix='.' + file_ext) as temp_input_file, \
-         tempfile.NamedTemporaryFile(suffix='.' + file_ext) as temp_output_file:
+         tempfile.NamedTemporaryFile(suffix='_output.' + file_ext) as temp_output_file:
         download_file(temp_input_file.name, s3_bucketname, s3_location)
 
         secrets = get_secret(f'{env}/carsupermarket/car_pricer/api_access')
