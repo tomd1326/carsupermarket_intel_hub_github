@@ -216,8 +216,9 @@ async def test_execution(data: dict):
     env = 'prod' if os.getenv('AWS_REGION') == 'eu-west-1' else 'dev'
     file_ext = task['filename'].split('.')[-1]
     s3_location = f'applications/pricing/uk-vehicle-list-evaluator/{env}/raw/{data["task_id"]}.{file_ext}'
-    with tempfile.NamedTemporaryFile(suffix='.' + file_ext) as temp_input_file, \
-         tempfile.NamedTemporaryFile(suffix='.' + file_ext) as temp_output_file:
+    # In the code below I put delete=False due to an issue with AWS lambda FS system and pandas handling of excel files
+    with tempfile.NamedTemporaryFile(suffix='.' + file_ext, delete=False) as temp_input_file, \
+         tempfile.NamedTemporaryFile(suffix='.' + file_ext, delete=False) as temp_output_file:
         download_file(temp_input_file.name, s3_bucketname, s3_location)
 
         secrets = get_secret(f'{env}/carsupermarket/car_pricer/api_access')
