@@ -231,14 +231,16 @@ async def test_execution(data: dict):
             upload_file(temp_output_file.name, s3_bucketname, s3_location)
 
             status = 'success'
+            message = None
         except Exception as e:
             logger.error(f"Error processing file: {e}, traceback: {traceback.format_exc()}")
             status = 'error'
+            message = str(e)
 
         # Update the task status
         with get_database_connection() as conn:
             with conn.cursor() as cursor:
-                cursor.execute("UPDATE tasks SET status = %s WHERE task_id = %s", (status, data['task_id'],))
+                cursor.execute("UPDATE tasks SET status = %s, message = %s WHERE task_id = %s", (status, message, data['task_id'],))
                 conn.commit()
 
     return {}

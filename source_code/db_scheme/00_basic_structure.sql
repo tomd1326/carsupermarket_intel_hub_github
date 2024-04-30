@@ -4,6 +4,7 @@ create table tasks
     created     datetime                             null,
     last_update datetime                             null,
     status      enum ('created', 'pending', 'success', 'error') null,
+    message     varchar(250)                         null,
     supplier_id    int                               null,
     filename    varchar(250)                         null,
     s3_location    varchar(250)                      null,

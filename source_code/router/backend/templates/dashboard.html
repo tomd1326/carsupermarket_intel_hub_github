@@ -59,10 +59,10 @@
                     <td>{{ task.created }}</td>
                     <td>{{ task.supplier_name }}</td>
                     <td>{{ task.filename }}</td>
-                    <td><span class="status-label {% if task.status == 'success' %}status-success{% elif task.status == 'created' %}status-created{% elif task.status == 'pending' %}status-pending{% else %}status-error{% endif %}">{{ task.status }}</span></td>
+                    <td><span class="status-label {% if task.status == 'success' %}status-success{% elif task.status == 'created' %}status-created{% elif task.status == 'pending' %}status-pending{% else %}status-error{% endif %}" title="{{ task.message }}">{{ task.status }}</span></td>
                     <td>
                         {% if task.status == 'success' %}
-                            <a href="/download/{{ task.task_id }}" class="btn btn-primary"><i class="fa fa-download"></i></a>
+                            <a href="{{ BASE_URL }}/download/{{ task.task_id }}" class="btn btn-primary"><i class="fa fa-download"></i></a>
                         {% endif %}
                     </td>
                 </tr>
