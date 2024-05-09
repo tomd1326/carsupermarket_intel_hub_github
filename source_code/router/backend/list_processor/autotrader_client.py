@@ -27,7 +27,7 @@ class AutoTraderClient(metaclass=Singleton):
         self.vehicles_api_url = "https://api.autotrader.co.uk/vehicles"
         self.valuations_api_url = "https://api.autotrader.co.uk/valuations"
 
-        # Auth data
+        # Auth data, TODO: this should be taken from secrets manager here, not passed from the outside
         self.advertiser_id = advertiser_id
         self.key = key
         self.secret = secret

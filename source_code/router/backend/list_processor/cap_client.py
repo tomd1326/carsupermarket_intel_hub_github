@@ -4,10 +4,19 @@ import xml.etree.ElementTree as ET
 from utils.rate_limiter import RateLimiter
 from utils.singleton import Singleton
 from utils.cache import cache
+from typing import Optional
 import datetime
+import pydantic
 
 
 logger = logging.getLogger(__name__)
+
+
+class VehicleRow(pydantic.BaseModel):
+    vrm: str
+    mileage: int
+    registration_date: str
+    capid: Optional[int] = None
 
 
 class CAPClient(metaclass=Singleton):
@@ -124,6 +133,14 @@ class CAPClient(metaclass=Singleton):
         extrapolated_retail = upper_retail + ((mileage - upper_mileage) / mileage_diff) * retail_diff
         extrapolated_clean = upper_clean + ((mileage - upper_mileage) / mileage_diff) * clean_diff
         return extrapolated_retail, extrapolated_clean
+
+    def construct_vehicle_row(self, input_data) -> VehicleRow:
+        """
+        This function verifies the presence of:
+            - CAPID column. If absent, executes a call to recognize the CAPID based on VRM.
+            - Registration date. If absent checks for the Year column and calculates the registration date. If Year is
+              also absent, the function returns None.
+        """
 
     def process_row(self, session, row, total_valid_rows):
         # Check if any of the required columns have missing or NaN values
