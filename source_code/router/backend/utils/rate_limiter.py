@@ -10,7 +10,7 @@ from utils.singleton import Singleton
 logger = logging.getLogger(__name__)
 
 
-class RateLimiter(metaclass=Singleton):
+class RateLimiter():
     def __init__(self, rate_limit: int, time_window: int):
         """
         Rate limiter class that limits the number of requests within a given time window.

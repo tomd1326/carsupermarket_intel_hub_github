@@ -1,5 +1,9 @@
 import boto3
 import os
+import logging
+
+
+logger = logging.getLogger(__name__)
 
 # def upload_file(local_file_path: str, bucket_name: str, s3_file_path: str):
 #     """
@@ -15,7 +19,7 @@ import os
 
 def upload_file(local_file_path, bucket_name, s3_file_path):
     s3_client = boto3.client('s3')
-    print(f"Uploading {local_file_path} to {bucket_name}/{s3_file_path}, file size: {os.path.getsize(local_file_path)}")
+    logger.debug(f"Uploading {local_file_path} to {bucket_name}/{s3_file_path}, file size: {os.path.getsize(local_file_path)}")
     with open(local_file_path, 'rb') as f:
         s3_client.upload_fileobj(f, bucket_name, s3_file_path)
 
