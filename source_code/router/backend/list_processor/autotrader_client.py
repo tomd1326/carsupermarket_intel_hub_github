@@ -10,6 +10,7 @@ from inspect import signature
 import pandas as pd
 
 import requests
+from utils.secrets_manager_client import get_secret
 from utils.rate_limiter import RateLimiter
 from utils.singleton import Singleton
 from utils.cache import cache
@@ -19,18 +20,21 @@ logger = logging.getLogger(__name__)
 
 
 class AutoTraderClient(metaclass=Singleton):
-    def __init__(self, advertiser_id: str, key: str, secret: str):
+    def __init__(self):
         # Basic urls
         host = "https://api.autotrader.co.uk"
-        #host = 'https://api-sandbox.autotrader.co.uk'
-        self.auth_url = "https://api.autotrader.co.uk/authenticate"
-        self.vehicles_api_url = "https://api.autotrader.co.uk/vehicles"
-        self.valuations_api_url = "https://api.autotrader.co.uk/valuations"
+        # host = 'https://api-sandbox.autotrader.co.uk'
+        self.auth_url = f"{host}/authenticate"
+        self.vehicles_api_url = f"{host}/vehicles"
+        self.valuations_api_url = f"{host}/valuations"
 
         # Auth data
-        self.advertiser_id = advertiser_id
-        self.key = key
-        self.secret = secret
+        env = 'prod' if os.getenv('AWS_REGION') == 'eu-west-1' else 'dev'
+        secrets = get_secret(f'{env}/carsupermarket/car_pricer/api_access')
+
+        self.advertiser_id = secrets['ADVERTISER_ID']
+        self.key = secrets['AUTOTRADER_KEY']
+        self.secret = secrets['AUTOTRADER_SECRET']
 
         # Auth tokens
         self.access_token = None
@@ -134,7 +138,7 @@ class AutoTraderClient(metaclass=Singleton):
             logger.info(f'{api_name} API call for VRM {vrm} succeeded with status code: {status_code}',
                          extra={'extra_vrm': vrm})
 
-    def process_row(self, row: dict, session):
+    def process_row(self, row: dict, session) -> dict:
         start_time = time.time()
         # Initialize VRM and Mileage with default values
         vrm = ''
@@ -150,29 +154,32 @@ class AutoTraderClient(metaclass=Singleton):
             if 'mile' in lower_key and not mileage:
                 mileage = row[key]
 
-        # Initialize all variables to default values
-        first_registration_date = ''
-        make = ''
-        model = ''
-        derivative = ''
-        derivative_id = ''
-        market_condition = ''
-        rating = ''
-        original_days_to_sell = ''
-        valuations_retail_valuation = 'N/A'
-        total_results = 'N/A'
-        description = ''
-        factory_fitted_features = []
-        factory_fitted_feature_names = []
-        features_data = []
-
-        vehicles_data = None  # Initialize vehicles_data to None
-
-        access_token = self.get_access_token(session)
-
-        headers = {'Authorization': f'Bearer {access_token}'}
+        logger.debug(f'Processing row with VRM {vrm} and Mileage {mileage}')
 
         try:
+            # Initialize all variables to default values
+            first_registration_date = ''
+            make = ''
+            model = ''
+            derivative = ''
+            derivative_id = ''
+            market_condition = ''
+            rating = ''
+            original_days_to_sell = ''
+            valuations_retail_valuation = 'N/A'
+            total_results = 'N/A'
+            description = ''
+            factory_fitted_features = []
+            factory_fitted_feature_names = []
+            features_data = []
+
+            vehicles_data = None  # Initialize vehicles_data to None
+
+            access_token = self.get_access_token(session)
+
+            headers = {'Authorization': f'Bearer {access_token}'}
+
+
             vehicles_data = self.send_vehicles_post_request(session, headers, vrm, mileage)
 
             # Check if vehicles_data is None and handle it without logging an error
@@ -232,45 +239,48 @@ class AutoTraderClient(metaclass=Singleton):
                     if competitor_link != 'N/A':
                         total_results = self.competitor_request(session, headers, competitor_link)
 
+            if vehicles_data:
+                self.log_api_response('Vehicles', vrm, 200, vehicles_data)
+            else:
+                logger.error(f'Error processing row with VRM {vrm}: vehicles_data is None or Vehicles API call failed',
+                              extra={'extra_vrm': vrm})
+
+            if valuations_data:
+                self.log_api_response('Valuations', vrm, 200, valuations_data)
+            else:
+                logger.error(f'Error processing row with VRM {vrm}: valuations_data is None or Valuations API call failed',
+                              extra={'extra_vrm': vrm})
+
+            processing_time = time.time() - start_time
+
+            return {
+                'description': description,  # Vehicle description
+                'vrm': vrm,  # Vehicle registration mark
+                'mileage': mileage,  # Vehicle mileage
+                'valuations_retail_valuation': valuations_retail_valuation,  # Retail valuation from the Valuations API
+                'rating': rating,  # Rating from the Vehicles API
+                'original_days_to_sell': original_days_to_sell,  # Days to sell from the Vehicles API
+                'market_condition': market_condition,  # Market condition from the Vehicles API
+                'total_results': total_results,  # Total results from competitor analysis
+                'factory_fitted_feature_names': ', '.join(factory_fitted_feature_names),  # Comma-separated list of factory-fitted features
+                'processing_time': processing_time,
+            }
+
         except Exception as e:
-            logger.error(f'Error processing row with VRM {vrm}: {e}', extra={'extra_vrm': vrm})
+            return {
+                'description': 'N/A',
+                'vrm': vrm,
+                'mileage': mileage,
+                'valuations_retail_valuation': 'N/A',
+                'rating': 'N/A',
+                'original_days_to_sell': 'N/A',
+                'market_condition': 'N/A',
+                'total_results': 'N/A',
+                'factory_fitted_feature_names': 'N/A',
+                'processing_time': 'N/A',
+            }
 
-        if vehicles_data:
-            self.log_api_response('Vehicles', vrm, 200, vehicles_data)
-        else:
-            logger.error(f'Error processing row with VRM {vrm}: vehicles_data is None or Vehicles API call failed',
-                          extra={'extra_vrm': vrm})
-
-        if valuations_data:
-            self.log_api_response('Valuations', vrm, 200, valuations_data)
-        else:
-            logger.error(f'Error processing row with VRM {vrm}: valuations_data is None or Valuations API call failed',
-                          extra={'extra_vrm': vrm})
-
-        processing_time = time.time() - start_time
-
-        return {
-            'description': description,  # Vehicle description
-            'vrm': vrm,  # Vehicle registration mark
-            'mileage': mileage,  # Vehicle mileage
-            'valuations_retail_valuation': valuations_retail_valuation,  # Retail valuation from the Valuations API
-            'rating': rating,  # Rating from the Vehicles API
-            'original_days_to_sell': original_days_to_sell,  # Days to sell from the Vehicles API
-            'market_condition': market_condition,  # Market condition from the Vehicles API
-            'total_results': total_results,  # Total results from competitor analysis
-            'factory_fitted_feature_names': ', '.join(factory_fitted_feature_names),  # Comma-separated list of factory-fitted features
-            'processing_time': processing_time,
-        }
-
-    def process_file(self, input_file_path: str, output_file_path: str):
-        # Read the input CSV or escel file into a DataFrame
-        if input_file_path.endswith('.csv'):
-            df = pd.read_csv(input_file_path)
-        elif input_file_path.endswith('.xlsx') or input_file_path.endswith('.xls'):
-            df = pd.read_excel(input_file_path, engine='openpyxl')
-        else:
-            raise ValueError("Unsupported file format. Please use a .csv or .xlsx file.")
-
+    def process_file(self, input_df: pd.DataFrame) -> pd.DataFrame:
         # Initialize session object
         session = requests.Session()
 
@@ -280,7 +290,7 @@ class AutoTraderClient(metaclass=Singleton):
         # Initialize thread pool
         with ThreadPoolExecutor(max_workers=10) as executor:
             # Process each row in the DataFrame
-            for index, row in df.iterrows():
+            for index, row in input_df.iterrows():
                 processed_rows.append(executor.submit(self.process_row, (row.to_dict()), session))
 
             # Wait for all threads to finish
@@ -289,15 +299,20 @@ class AutoTraderClient(metaclass=Singleton):
         # transform processed rows into a DataFrame
         processed_df = pd.DataFrame(processed_rows)
 
-        # Merge new DataFrame with the original DataFrame
-        processed_df = pd.concat([df, processed_df], axis=1)
+        # Add prefix at_ to all columns
+        processed_df.columns = [f'at_{col}' for col in processed_df.columns]
 
+        return processed_df
+
+        # # Merge new DataFrame with the original DataFrame
+        # processed_df = pd.concat([df, processed_df], axis=1)
+        #
         # Save the processed DataFrame to the output file
-        if output_file_path.endswith('.csv'):
-            processed_df.to_csv(output_file_path, index=False)
-        elif output_file_path.endswith('.xlsx'):
-            processed_df.to_excel(output_file_path, index=False)
-        else:
-            raise ValueError("Unsupported file format. Please use a .csv or .xlsx file.")
-
-        return output_file_path
+        # if output_file_path.endswith('.csv'):
+        #     processed_df.to_csv(output_file_path, index=False)
+        # elif output_file_path.endswith('.xlsx'):
+        #     processed_df.to_excel(output_file_path, index=False)
+        # else:
+        #     raise ValueError("Unsupported file format. Please use a .csv or .xlsx file.")
+        #
+        # return output_file_path

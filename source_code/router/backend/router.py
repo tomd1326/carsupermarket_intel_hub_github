@@ -1,6 +1,8 @@
 import base64
 import tempfile
+import threading
 import traceback
+from multiprocessing.pool import ThreadPool
 
 from fastapi import APIRouter
 from fastapi import FastAPI, Request, Form, Depends, HTTPException
@@ -18,8 +20,11 @@ from utils.lambda_http import LambdaRequestsManager
 from utils.s3_tools import upload_file, download_file
 from utils.db_utils import (get_database_connection)
 from list_processor.autotrader_client import AutoTraderClient
+from list_processor.cap_client import CAPClient
 from utils.secrets_manager_client import get_secret
+from utils.file_handler import read_dataframe_file, write_dataframe_file
 from typing import Optional
+import pandas as pd
 
 
 BASE_URL = os.getenv("BASE_URL", "/dev")
@@ -231,8 +236,22 @@ async def elaborate_task(data: dict):
         secrets = get_secret(f'{env}/carsupermarket/car_pricer/api_access')
         # Elaborate the file
         try:
-            autotrader = AutoTraderClient(secrets['ADVERTISER_ID'], secrets['AUTOTRADER_KEY'], secrets['AUTOTRADER_SECRET'])
-            autotrader.process_file(temp_input_file.name, temp_output_file.name)
+            input_df = read_dataframe_file(temp_input_file.name)
+
+            autotrader = AutoTraderClient()
+            cap_client = CAPClient()
+
+            def process_df(args):
+                processor_obj, input_df = args
+                return processor_obj.process_file(input_df)
+
+            tp = ThreadPool(processes=2)
+            inputs = [(autotrader, input_df), (cap_client, input_df)]
+            results = tp.map(process_df, inputs)
+
+            processed_df = pd.concat([input_df, *results], axis=1)
+
+            write_dataframe_file(processed_df, temp_output_file.name)
 
             # Upload the elaborated file to S3
             s3_location = f'applications/pricing/uk-vehicle-list-evaluator/{env}/elaborated/{data["task_id"]}.{file_ext}'
