@@ -6,6 +6,8 @@ from utils.rate_limiter import RateLimiter
 from utils.singleton import Singleton
 from utils.cache import cache
 from utils.secrets_manager_client import get_secret
+from list_processor.structs import VehicleRow
+from list_processor.columns_mapper import BaseColumnsMapper
 from typing import Optional, Tuple
 import datetime
 import requests
@@ -16,13 +18,6 @@ import pydantic
 
 
 logger = logging.getLogger(__name__)
-
-
-class VehicleRow(pydantic.BaseModel):
-    vrm: str
-    mileage: int
-    registration_date: Optional[str] = None
-    capid: Optional[int] = None
 
 
 class CAPOutput(pydantic.BaseModel):
@@ -164,7 +159,7 @@ class CAPClient(metaclass=Singleton):
             'password': self.cap_password,
             'database': self.database,
             'capid': vehicle.capid,
-            'valuationDate': datetime.datetime.now().strftime('%d/%m/%Y'),
+            'valuationDate': datetime.datetime.now().strftime('%Y-%m-%d'),
             'regDate': vehicle.registration_date,
         }
 
@@ -284,34 +279,11 @@ class CAPClient(metaclass=Singleton):
         except ValueError:
             return None
 
-    def process_row(self, row: pd.Series) -> Optional[dict]:
+    def process_row(self, row: pd.Series, column_mapper: BaseColumnsMapper) -> Optional[dict]:
 
-        mileage_column = next((col for col in row.index if re.search(r'(mile|odo)', col, re.IGNORECASE)), None)
-        capid_column = next((col for col in row.index if re.search(r'cap\s*id', col, re.IGNORECASE)), None)
-        vrm_column = next((col for col in row.index if re.search(r'vrm|reg', col, re.IGNORECASE)), None)
-        registration_column = next((col for col in row.index if re.search(r'date\s*of\s*registration', col, re.IGNORECASE)), None)
+        vehicle = column_mapper.map_row(row)
 
-        if not mileage_column or not vrm_column:
-            return None
-
-        if not capid_column:
-
-            if not registration_column:
-                year_column = next((col for col in row.index if re.search(r'year', col, re.IGNORECASE)), None)
-                year = int(row[year_column])
-                vrm_middle_numbers = int(row[vrm_column][2:4])
-                registration_date = self.get_registration_date(year, vrm_middle_numbers)
-            else:
-                registration_date = row[registration_column]
-                if self.is_excel_date_format(registration_date):
-                    registration_date = self.convert_excel_date(int(registration_date))
-
-            vehicle = VehicleRow(
-                vrm=row[vrm_column],
-                mileage=row[mileage_column],
-                registration_date=registration_date,
-                capid=row[capid_column]
-            )
+        if not vehicle.capid:
 
             live_cap_retail, live_cap_clean = self.live_valuation(vehicle)
 
@@ -333,11 +305,6 @@ class CAPClient(metaclass=Singleton):
             )
 
         else:
-            vehicle = VehicleRow(
-                vrm=row[vrm_column],
-                mileage=row[mileage_column],
-                capid=row[capid_column]
-            )
             vrm_valuation_data = self.vrm_valuation(vehicle)
 
             output = CAPOutput(
@@ -365,12 +332,12 @@ class CAPClient(metaclass=Singleton):
 
         return output.dict()
 
-    def process_file(self, input_df: pd.DataFrame) -> pd.DataFrame:
+    def process_file(self, input_df: pd.DataFrame, column_mapper: BaseColumnsMapper) -> pd.DataFrame:
         processed_rows = []
 
         with ThreadPoolExecutor(max_workers=10) as executor:
             for index, row in input_df.iterrows():
-                processed_rows.append(executor.submit(self.process_row, row))
+                processed_rows.append(executor.submit(self.process_row, row, column_mapper))
 
             # Wait for all threads to finish
             processed_rows = [future.result() for future in processed_rows]

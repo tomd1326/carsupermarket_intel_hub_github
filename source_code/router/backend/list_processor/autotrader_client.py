@@ -11,6 +11,7 @@ import pandas as pd
 
 import requests
 from utils.secrets_manager_client import get_secret
+from list_processor.columns_mapper import BaseColumnsMapper
 from utils.rate_limiter import RateLimiter
 from utils.singleton import Singleton
 from utils.cache import cache
@@ -138,23 +139,25 @@ class AutoTraderClient(metaclass=Singleton):
             logger.info(f'{api_name} API call for VRM {vrm} succeeded with status code: {status_code}',
                          extra={'extra_vrm': vrm})
 
-    def process_row(self, row: dict, session) -> dict:
+    def process_row(self, row: dict, session, column_mapper: BaseColumnsMapper) -> dict:
         start_time = time.time()
         # Initialize VRM and Mileage with default values
-        vrm = ''
-        mileage = ''
+        # vrm = ''
+        # mileage = ''
+
+        vehicle = column_mapper.map_row(row)
 
         # Initialize features list
 
         # Iterate over row keys to find VRM and Mileage regardless of case and exact match
-        for key in row.keys():
-            lower_key = key.lower()
-            if 'vrm' in lower_key or 'reg' in lower_key and not vrm:
-                vrm = row[key]
-            if 'mile' in lower_key and not mileage:
-                mileage = row[key]
+        # for key in row.keys():
+        #     lower_key = key.lower()
+        #     if 'vrm' in lower_key or 'reg' in lower_key and not vrm:
+        #         vrm = row[key]
+        #     if 'mile' in lower_key and not mileage:
+        #         mileage = row[key]
 
-        logger.debug(f'Processing row with VRM {vrm} and Mileage {mileage}')
+        logger.debug(f'Processing row with VRM {vehicle.vrm} and Mileage {vehicle.mileage}')
 
         try:
             # Initialize all variables to default values
@@ -180,7 +183,7 @@ class AutoTraderClient(metaclass=Singleton):
             headers = {'Authorization': f'Bearer {access_token}'}
 
 
-            vehicles_data = self.send_vehicles_post_request(session, headers, vrm, mileage)
+            vehicles_data = self.send_vehicles_post_request(session, headers, vehicle.vrm, vehicle.mileage)
 
             # Check if vehicles_data is None and handle it without logging an error
             if vehicles_data is not None:
@@ -206,7 +209,7 @@ class AutoTraderClient(metaclass=Singleton):
 
             # Valuations API call
             valuations_data = self.send_valuations_post_request(
-                session, headers, vrm, derivative_id, first_registration_date, mileage, factory_fitted_features
+                session, headers, vehicle.vrm, derivative_id, first_registration_date, vehicle.mileage, factory_fitted_features
             )
             # Check if valuations_data is None and handle it without logging an error
             if valuations_data is not None:
@@ -240,23 +243,23 @@ class AutoTraderClient(metaclass=Singleton):
                         total_results = self.competitor_request(session, headers, competitor_link)
 
             if vehicles_data:
-                self.log_api_response('Vehicles', vrm, 200, vehicles_data)
+                self.log_api_response('Vehicles', vehicle.vrm, 200, vehicles_data)
             else:
-                logger.error(f'Error processing row with VRM {vrm}: vehicles_data is None or Vehicles API call failed',
-                              extra={'extra_vrm': vrm})
+                logger.error(f'Error processing row with VRM {vehicle.vrm}: vehicles_data is None or Vehicles API call failed',
+                              extra={'extra_vrm': vehicle.vrm})
 
             if valuations_data:
-                self.log_api_response('Valuations', vrm, 200, valuations_data)
+                self.log_api_response('Valuations', vehicle.vrm, 200, valuations_data)
             else:
-                logger.error(f'Error processing row with VRM {vrm}: valuations_data is None or Valuations API call failed',
-                              extra={'extra_vrm': vrm})
+                logger.error(f'Error processing row with VRM {vehicle.vrm}: valuations_data is None or Valuations API call failed',
+                              extra={'extra_vrm': vehicle.vrm})
 
             processing_time = time.time() - start_time
 
             return {
                 'description': description,  # Vehicle description
-                'vrm': vrm,  # Vehicle registration mark
-                'mileage': mileage,  # Vehicle mileage
+                'vrm': vehicle.vrm,  # Vehicle registration mark
+                'mileage': vehicle.mileage,  # Vehicle mileage
                 'valuations_retail_valuation': valuations_retail_valuation,  # Retail valuation from the Valuations API
                 'rating': rating,  # Rating from the Vehicles API
                 'original_days_to_sell': original_days_to_sell,  # Days to sell from the Vehicles API
@@ -269,8 +272,8 @@ class AutoTraderClient(metaclass=Singleton):
         except Exception as e:
             return {
                 'description': 'N/A',
-                'vrm': vrm,
-                'mileage': mileage,
+                'vrm': vehicle.vrm,
+                'mileage': vehicle.mileage,
                 'valuations_retail_valuation': 'N/A',
                 'rating': 'N/A',
                 'original_days_to_sell': 'N/A',
@@ -280,7 +283,7 @@ class AutoTraderClient(metaclass=Singleton):
                 'processing_time': 'N/A',
             }
 
-    def process_file(self, input_df: pd.DataFrame) -> pd.DataFrame:
+    def process_file(self, input_df: pd.DataFrame, column_mapper: BaseColumnsMapper) -> pd.DataFrame:
         # Initialize session object
         session = requests.Session()
 
@@ -291,7 +294,7 @@ class AutoTraderClient(metaclass=Singleton):
         with ThreadPoolExecutor(max_workers=10) as executor:
             # Process each row in the DataFrame
             for index, row in input_df.iterrows():
-                processed_rows.append(executor.submit(self.process_row, (row.to_dict()), session))
+                processed_rows.append(executor.submit(self.process_row, (row.to_dict()), session, column_mapper))
 
             # Wait for all threads to finish
             processed_rows = [future.result() for future in processed_rows]
