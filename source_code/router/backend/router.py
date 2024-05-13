@@ -21,6 +21,7 @@ from utils.s3_tools import upload_file, download_file
 from utils.db_utils import (get_database_connection)
 from list_processor.autotrader_client import AutoTraderClient
 from list_processor.cap_client import CAPClient
+from list_processor.columns_mapper import get_columns_mapper, BaseColumnsMapper
 from utils.secrets_manager_client import get_secret
 from utils.file_handler import read_dataframe_file, write_dataframe_file
 from typing import Optional
@@ -214,7 +215,7 @@ async def elaborate_task(data: dict):
     # Fetch the task data from the db
     with get_database_connection() as conn:
         with conn.cursor() as cursor:
-            cursor.execute("SELECT * FROM tasks WHERE task_id = %s", (data['task_id'],))
+            cursor.execute("SELECT t.*, s.supplier_name FROM tasks t LEFT JOIN suppliers s ON s.supplier_id = t.supplier_id WHERE t.task_id = %s", (data['task_id'],))
             cols = [desc[0] for desc in cursor.description]  # Get column names from cursor.description
             row = cursor.fetchone()
             task = dict(zip(cols, row)) if row else None
@@ -242,14 +243,17 @@ async def elaborate_task(data: dict):
             autotrader = AutoTraderClient()
             cap_client = CAPClient()
 
+            # Columns mapper
+            columns_mapper = get_columns_mapper(task['supplier_name'])
+
             def process_df(args):
-                processor_obj, input_df = args
-                return processor_obj.process_file(input_df)
+                processor_obj, input_df, columns_mapper = args
+                return processor_obj.process_file(input_df, columns_mapper)
 
             # Using ThreadPoolExecutor
             with ThreadPoolExecutor(max_workers=2) as executor:
-                futures = [executor.submit(process_df, (autotrader, input_df)),
-                           executor.submit(process_df, (cap_client, input_df))]
+                futures = [executor.submit(process_df, (autotrader, input_df, columns_mapper)),
+                           executor.submit(process_df, (cap_client, input_df, columns_mapper))]
                 results = [future.result() for future in futures]
 
             processed_df = pd.concat([input_df, *results], axis=1)
