@@ -2,7 +2,7 @@ import base64
 import tempfile
 import threading
 import traceback
-from multiprocessing.pool import ThreadPool
+from concurrent.futures import ThreadPoolExecutor
 
 from fastapi import APIRouter
 from fastapi import FastAPI, Request, Form, Depends, HTTPException
@@ -231,11 +231,12 @@ async def elaborate_task(data: dict):
     s3_location = f'applications/pricing/uk-vehicle-list-evaluator/{env}/raw/{data["task_id"]}.{file_ext}'
     with tempfile.NamedTemporaryFile(suffix='.' + file_ext) as temp_input_file, \
          tempfile.NamedTemporaryFile(suffix='.' + file_ext) as temp_output_file:
+
+        # Download the file from S3
         download_file(temp_input_file.name, s3_bucketname, s3_location)
 
-        secrets = get_secret(f'{env}/carsupermarket/car_pricer/api_access')
-        # Elaborate the file
         try:
+            # Elaborate the file
             input_df = read_dataframe_file(temp_input_file.name)
 
             autotrader = AutoTraderClient()
@@ -245,9 +246,11 @@ async def elaborate_task(data: dict):
                 processor_obj, input_df = args
                 return processor_obj.process_file(input_df)
 
-            tp = ThreadPool(processes=2)
-            inputs = [(autotrader, input_df), (cap_client, input_df)]
-            results = tp.map(process_df, inputs)
+            # Using ThreadPoolExecutor
+            with ThreadPoolExecutor(max_workers=2) as executor:
+                futures = [executor.submit(process_df, (autotrader, input_df)),
+                           executor.submit(process_df, (cap_client, input_df))]
+                results = [future.result() for future in futures]
 
             processed_df = pd.concat([input_df, *results], axis=1)
 
