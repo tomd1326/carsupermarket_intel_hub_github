@@ -1,3 +1,4 @@
+import datetime
 import re
 
 from pydantic import BaseModel
@@ -5,7 +6,7 @@ from typing import Optional, Dict
 from list_processor.structs import VehicleRow
 
 
-def get_registration_date(year: int, vrm_middle_numbers: int) -> str:
+def get_registration_date(year: int, vrm_middle_numbers: int) -> datetime.date:
     if vrm_middle_numbers == year % 100:
         month = "03"
     elif vrm_middle_numbers % 10 == year % 10:
@@ -13,7 +14,7 @@ def get_registration_date(year: int, vrm_middle_numbers: int) -> str:
     else:
         month = "01"
 
-    return f"01/{month}/{year}"
+    return datetime.date(year, int(month), 1)
 
 # Base mapper class
 class BaseColumnsMapper:
@@ -40,10 +41,16 @@ class MotabilityColumnsMapper(BaseColumnsMapper):
         else:
             registration_date = None
 
+        try:
+            capid = row.get("CAP ID", float('nan'))
+            capid = int(capid)
+        except ValueError:
+            capid = None
+
         return VehicleRow(
             vrm=row["Reg No."],
             mileage=int(row["Mileage"]),
-            capid=int(row.get("CAP ID", 0)),  # Assuming CAP ID might be absent, default to 0
+            capid=capid,
             registration_date=registration_date
         )
 
@@ -51,11 +58,27 @@ class MotabilityColumnsMapper(BaseColumnsMapper):
 # Mapper for 1Link
 class OneLinkColumnsMapper(BaseColumnsMapper):
     def map_row(self, row: Dict) -> VehicleRow:
+        try:
+            capid = row.get("CAP ID", float('nan'))
+            capid = int(capid)
+        except ValueError:
+            capid = None
+
+        # Parse the date
+        registration_date = None
+        # parse different formats
+        for fmt in ["%d/%m/%Y", "%d-%m-%Y", "%d.%m.%Y"]:
+            try:
+                registration_date = datetime.datetime.strptime(row["Date Of Registration"], fmt).date()
+                break
+            except ValueError:
+                pass
+
         return VehicleRow(
             vrm=row["Reg No."],
             mileage=int(row["Odometer"]),
-            capid=int(row.get("CAP ID", 0)),
-            registration_date=row["Date Of Registration"]
+            capid=capid,
+            registration_date=registration_date
         )
 
 

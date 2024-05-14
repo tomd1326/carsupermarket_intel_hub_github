@@ -160,7 +160,7 @@ class CAPClient(metaclass=Singleton):
             'database': self.database,
             'capid': vehicle.capid,
             'valuationDate': datetime.datetime.now().strftime('%Y-%m-%d'),
-            'regDate': vehicle.registration_date,
+            'regDate': vehicle.registration_date.strftime('%Y-%m-%d'),
         }
 
         current_valuations = self.fetch_and_parse_data(self.live_valuation_url, live_payload)
@@ -174,17 +174,6 @@ class CAPClient(metaclass=Singleton):
 
         return current_retail_25, current_clean_25
 
-    @classmethod
-    def get_registration_date(cls, year: int, vrm_middle_numbers: int) -> str:
-        if vrm_middle_numbers == year % 100:
-            month = "03"
-        elif vrm_middle_numbers % 10 == year % 10:
-            month = "09"
-        else:
-            month = "01"
-
-        return f"01/{month}/{year}"
-
     def capid_monthly_valuation(self, vehicle: VehicleRow) -> dict:
         # Fetch old valuation from MONTHLY_VALUATION_URL
         rounded_mileage = self.round_to_nearest_thousand(vehicle.mileage)
@@ -194,7 +183,7 @@ class CAPClient(metaclass=Singleton):
             'Password': self.cap_password,
             'Database': self.database,
             'CAPID': vehicle.capid,
-            'RegisteredDate': vehicle.registration_date,
+            'RegisteredDate': vehicle.registration_date.strftime('%Y-%m-%d'),
             'Mileage': rounded_mileage,
             'StandardEquipmentRequired': False
         }
@@ -275,7 +264,7 @@ class CAPClient(metaclass=Singleton):
     @classmethod
     def convert_date_format(cls, date_str):
         try:
-            return datetime.datetime.strptime(date_str, '%d/%m/%Y').strftime('%Y-%m-%d')
+            return datetime.datetime.strptime(date_str, '%d/%m/%Y')
         except ValueError:
             return None
 
@@ -283,7 +272,7 @@ class CAPClient(metaclass=Singleton):
 
         vehicle = column_mapper.map_row(row)
 
-        if not vehicle.capid:
+        if vehicle.capid:
 
             live_cap_retail, live_cap_clean = self.live_valuation(vehicle)
 
@@ -292,16 +281,16 @@ class CAPClient(metaclass=Singleton):
 
             output = CAPOutput(
                 capid=vehicle.capid,
-                capcode=monthly_valuation_data['CAPcode'],
-                manufacturer=monthly_valuation_data['CAPMan'],
-                model=monthly_valuation_data['CAPMod'],
-                derivative=monthly_valuation_data['CAPDer'],
-                registration_date=vehicle.registration_date,
+                capcode=monthly_valuation_data.get('CAPcode'),
+                manufacturer=monthly_valuation_data.get('CAPMan'),
+                model=monthly_valuation_data.get('CAPMod'),
+                derivative=monthly_valuation_data.get('CAPDer'),
+                registration_date=vehicle.registration_date.strftime('%d/%m/%Y') if vehicle.registration_date else None,
                 rounded_mileage=vehicle.mileage,
                 live_clean=live_cap_clean,
                 live_retail=live_cap_retail,
-                monthly_clean=monthly_valuation_data['Clean'],
-                monthly_retail=monthly_valuation_data['Retail']
+                monthly_clean=monthly_valuation_data.get('Clean'),
+                monthly_retail=monthly_valuation_data.get('Retail'),
             )
 
         else:
