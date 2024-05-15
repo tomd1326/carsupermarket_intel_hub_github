@@ -207,7 +207,7 @@ def download_task_file(task_id: str):
         download_file(temp_output_file.name, s3_bucketname, s3_location)
         # Add the suffix _output to the filename
         output_filename = task['filename'].split('.')[0] + '_output.' + task['filename'].split('.')[-1]
-        return FileResponse(temp_output_file.name, filename=output_filename)  #, media_type='application/octet-stream')
+        return FileResponse(temp_output_file.name, filename=output_filename, media_type='application/octet-stream')
 
 
 @router.post("/elaborate-task")
