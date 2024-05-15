@@ -25,10 +25,11 @@ class BaseColumnsMapper:
 # Mapper for Enterprise
 class EnterpriseColumnsMapper(BaseColumnsMapper):
     def map_row(self, row: Dict) -> VehicleRow:
-        mileage = re.sub(r"[^\d]", "", row["MILES"])
-        if mileage == "":
-            mileage = 0
-        else:
+        mileage = 0
+        if isinstance(row["MILES"], int):
+            mileage = row["MILES"]
+        elif isinstance(row["MILES"], str):
+            mileage = re.sub(r"[^\d]", "", row["MILES"])
             mileage = int(mileage)
         return VehicleRow(
             vrm=row["REGNO"],
