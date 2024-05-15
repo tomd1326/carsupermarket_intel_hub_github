@@ -182,7 +182,6 @@ class AutoTraderClient(metaclass=Singleton):
 
             headers = {'Authorization': f'Bearer {access_token}'}
 
-
             vehicles_data = self.send_vehicles_post_request(session, headers, vehicle.vrm, vehicle.mileage)
 
             # Check if vehicles_data is None and handle it without logging an error
@@ -217,30 +216,30 @@ class AutoTraderClient(metaclass=Singleton):
                 valuations_retail_valuation = valuations_data.get('valuations', {}).get('retail', {}).get('amountGBP',
                                                                                                           '')
 
-                # Extract competitor link
-                competitor_link = vehicles_data.get('links', {}).get('competitors', {}).get('href', 'N/A')
-
-                # Check if competitor link is available
-                if competitor_link != 'N/A':
-                    # Append advertiserId to the competitor link
-                    if 'advertiserId=' not in competitor_link:
-                        if '?' in competitor_link:
-                            competitor_link += '&'
-                        else:
-                            competitor_link += '?'
-                        competitor_link += f'advertiserId={self.advertiser_id}'
-
-                    # Append advertiserType=Trade to the competitor link
-                    if 'advertiserType=' not in competitor_link:
-                        competitor_link += '&advertiserType=Trade'
-
-                    # Append !insuranceWriteoffCategory with a blank value
-                    if '!insuranceWriteoffCategory=' not in competitor_link:
-                        competitor_link += '&!insuranceWriteoffCategory='
-
-                    # Send GET request to the Stock API using Competitor Link and the session object
-                    if competitor_link != 'N/A':
-                        total_results = self.competitor_request(session, headers, competitor_link)
+                # # Extract competitor link
+                # competitor_link = vehicles_data.get('links', {}).get('competitors', {}).get('href', 'N/A')
+                #
+                # # Check if competitor link is available
+                # if competitor_link != 'N/A':
+                #     # Append advertiserId to the competitor link
+                #     if 'advertiserId=' not in competitor_link:
+                #         if '?' in competitor_link:
+                #             competitor_link += '&'
+                #         else:
+                #             competitor_link += '?'
+                #         competitor_link += f'advertiserId={self.advertiser_id}'
+                #
+                #     # Append advertiserType=Trade to the competitor link
+                #     if 'advertiserType=' not in competitor_link:
+                #         competitor_link += '&advertiserType=Trade'
+                #
+                #     # Append !insuranceWriteoffCategory with a blank value
+                #     if '!insuranceWriteoffCategory=' not in competitor_link:
+                #         competitor_link += '&!insuranceWriteoffCategory='
+                #
+                #     # Send GET request to the Stock API using Competitor Link and the session object
+                #     if competitor_link != 'N/A':
+                #         total_results = self.competitor_request(session, headers, competitor_link)
 
             if vehicles_data:
                 self.log_api_response('Vehicles', vehicle.vrm, 200, vehicles_data)
@@ -264,7 +263,7 @@ class AutoTraderClient(metaclass=Singleton):
                 'rating': rating,  # Rating from the Vehicles API
                 'original_days_to_sell': original_days_to_sell,  # Days to sell from the Vehicles API
                 'market_condition': market_condition,  # Market condition from the Vehicles API
-                'total_results': total_results,  # Total results from competitor analysis
+                # 'total_results': total_results,  # Total results from competitor analysis
                 'factory_fitted_feature_names': ', '.join(factory_fitted_feature_names),  # Comma-separated list of factory-fitted features
                 'processing_time': processing_time,
             }
@@ -278,7 +277,7 @@ class AutoTraderClient(metaclass=Singleton):
                 'rating': 'N/A',
                 'original_days_to_sell': 'N/A',
                 'market_condition': 'N/A',
-                'total_results': 'N/A',
+                # 'total_results': 'N/A',
                 'factory_fitted_feature_names': 'N/A',
                 'processing_time': 'N/A',
             }

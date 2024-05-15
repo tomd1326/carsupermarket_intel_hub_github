@@ -272,6 +272,9 @@ class CAPClient(metaclass=Singleton):
 
         vehicle = column_mapper.map_row(row)
 
+        if not vehicle.registration_date:
+            return CAPOutput().dict()
+
         if vehicle.capid:
 
             live_cap_retail, live_cap_clean = self.live_valuation(vehicle)
@@ -306,6 +309,7 @@ class CAPClient(metaclass=Singleton):
                 capid=vrm_valuation_data['capid'],
                 rounded_mileage=vehicle.mileage
             )
+            vehicle.capid = vrm_valuation_data['capid']
 
             if vrm_valuation_data['database'] == 'CAR':
                 formatted_registered_date = self.convert_date_format(vrm_valuation_data['registered_date'])
