@@ -272,10 +272,10 @@ class CAPClient(metaclass=Singleton):
 
         vehicle = column_mapper.map_row(row)
 
-        if not vehicle.registration_date:
-            return CAPOutput().dict()
-
         if vehicle.capid:
+
+            if not vehicle.registration_date:
+                return CAPOutput().dict()
 
             live_cap_retail, live_cap_clean = self.live_valuation(vehicle)
 
