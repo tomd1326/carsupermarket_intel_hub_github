@@ -33,8 +33,8 @@ poetry run uvicorn main:app --reload
 Running the FastAPI app in a Docker container
 
 ```bash
-docker build -t uk-list-evaluator .
-docker run --platform linux/amd64 -p 9000:8080 -e LOCAL_ENV=1 uk-list-evaluator
+docker build -t uk_list_evaluator .
+docker run -p 9000:8080 -e AWS_PROFILE=aramis -e AWS_REGION=us-east-2 -v ~/.aws:/root/.aws uk_list_evaluator
 ```
 Invoking the FastAPI app in a Docker container
 
