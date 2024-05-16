@@ -54,6 +54,7 @@
                     <th scope="col">Created Date</th>
                     <th scope="col">Supplier</th>
                     <th scope="col">Name of the File</th>
+                    <th scope="col">Total rows, Exec. time</th>
                     <th scope="col">Status</th>
                     <th scope="col">Download</th>
                 </tr>
@@ -65,6 +66,13 @@
                     <td>{{ task.created }}</td>
                     <td>{{ task.supplier_name }}</td>
                     <td>{{ task.filename }}</td>
+                    <td>
+                        {% if task.total_rows is none %}
+                            -
+                        {% else %}
+                            {{ task.total_rows }} rows, {{ "-" if task.execution_time is none else "%.1f" | format(task.execution_time) }} sec
+                        {% endif %}
+                    </td>
                     <td><span class="status-label {% if task.status == 'success' %}status-success{% elif task.status == 'created' %}status-created{% elif task.status == 'pending' %}status-pending{% else %}status-error{% endif %}" title="{% if task.message %}{{ task.message }}{% endif %}">{{ task.status }}</span></td>
                     <td>
                         {% if task.status == 'success' %}

@@ -8,6 +8,8 @@ create table tasks
     supplier_id    int                               null,
     filename    varchar(250)                         null,
     s3_location    varchar(250)                      null,
+    total_rows  int                                  null,
+    execution_time float                             null,
     constraint tasks_pk
         primary key (task_id)
 );

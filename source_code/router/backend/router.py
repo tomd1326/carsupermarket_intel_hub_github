@@ -12,6 +12,7 @@ from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from fastapi.responses import FileResponse
 from fastapi import File, UploadFile
 import os
+import time
 import hashlib
 import logging
 import datetime
@@ -230,8 +231,12 @@ async def elaborate_task(data: dict):
     env = 'prod' if os.getenv('AWS_REGION') == 'eu-west-1' else 'dev'
     file_ext = task['filename'].split('.')[-1]
     s3_location = f'applications/pricing/uk-vehicle-list-evaluator/{env}/raw/{data["task_id"]}.{file_ext}'
+    total_rows = None
+    execution_time = None
     with tempfile.NamedTemporaryFile(suffix='.' + file_ext) as temp_input_file, \
          tempfile.NamedTemporaryFile(suffix='.' + file_ext) as temp_output_file:
+
+        t = time.time()
 
         # Download the file from S3
         download_file(temp_input_file.name, s3_bucketname, s3_location)
@@ -239,6 +244,7 @@ async def elaborate_task(data: dict):
         try:
             # Elaborate the file
             input_df = read_dataframe_file(temp_input_file.name)
+            total_rows = len(input_df)
 
             autotrader = AutoTraderClient()
             cap_client = CAPClient()
@@ -264,6 +270,7 @@ async def elaborate_task(data: dict):
             s3_location = f'applications/pricing/uk-vehicle-list-evaluator/{env}/elaborated/{data["task_id"]}.{file_ext}'
             upload_file(temp_output_file.name, s3_bucketname, s3_location)
 
+            execution_time = time.time() - t
             status = 'success'
             message = None
         except Exception as e:
@@ -274,7 +281,7 @@ async def elaborate_task(data: dict):
         # Update the task status
         with get_database_connection() as conn:
             with conn.cursor() as cursor:
-                cursor.execute("UPDATE tasks SET status = %s, message = %s WHERE task_id = %s", (status, message, data['task_id'],))
+                cursor.execute("UPDATE tasks SET status = %s, message = %s, total_rows = %s, execution_time = %s WHERE task_id = %s", (status, message, total_rows, execution_time, data['task_id'],))
                 conn.commit()
 
     return {}

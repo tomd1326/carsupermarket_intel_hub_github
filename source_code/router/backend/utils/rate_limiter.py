@@ -1,46 +1,75 @@
-from collections import deque
-from threading import Lock
-import datetime
-import logging
+import contextlib
+import collections
+import threading
 import time
-
-from utils.singleton import Singleton
-
-
-logger = logging.getLogger(__name__)
+from typing import Dict, Optional, Type
 
 
-class RateLimiter():
-    def __init__(self, rate_limit: int, time_window: int):
+class RateLimiter(contextlib.AbstractContextManager):
+    """A leaky bucket rate limiter.
+    Allows up to max_rate / time_period acquisitions before blocking.
+    time_period is measured in seconds; the default is 60.
+    """
+    def __init__(
+        self,
+        rate_limit: float,
+        time_window: float = 60
+    ) -> None:
+        self._max_level = rate_limit
+        self._rate_per_sec = rate_limit / time_window
+        self._level = 0.0
+        self._last_check = time.time()
+        self._waiters: Dict[int, threading.Event] = collections.OrderedDict()
+        self._lock = threading.Lock()
+
+    def _leak(self) -> None:
+        """Drip out capacity from the bucket."""
+        if self._level:
+            elapsed = time.time() - self._last_check
+            decrement = elapsed * self._rate_per_sec
+            self._level = max(self._level - decrement, 0)
+        self._last_check = time.time()
+
+    def has_capacity(self, amount: float = 1) -> bool:
+        """Check if there is enough space remaining in the bucket"""
+        with self._lock:
+            self._leak()
+            requested = self._level + amount
+            if requested < self._max_level:
+                for event in self._waiters.values():
+                    if not event.is_set():
+                        event.set()
+                        break
+            return self._level + amount <= self._max_level
+
+    def acquire(self, amount: float = 1) -> None:
+        """Acquire space in the bucket.
+
+        If the bucket is full, block until there is space.
+
         """
-        Rate limiter class that limits the number of requests within a given time window.
+        if amount > self._max_level:
+            raise ValueError("Can't acquire more than the bucket capacity")
 
-        :param rate_limit: The maximum number of requests allowed in the time window.
-        :param time_window: The time window in seconds within which the requests are counted.
-        """
-        self.rate_limit = rate_limit
-        self.time_window = time_window
-        self.lock = Lock()
-        self.request_times = deque()  # Stores the times of the last 'rate_limit' requests
+        while not self.has_capacity(amount):
+            event = threading.Event()
+            thread_id = threading.get_ident()
+            self._waiters[thread_id] = event
+            event.wait(timeout=1 / self._rate_per_sec * amount)
+            with self._lock:
+                self._waiters.pop(thread_id, None)
 
-    def __enter__(self):
-        with self.lock:
-            current_time = datetime.datetime.now()
-            # Clean up old entries that are outside the time window
-            while self.request_times and (current_time - self.request_times[0]).total_seconds() > self.time_window:
-                self.request_times.popleft()
+        with self._lock:
+            self._level += amount
 
-            # Check if the current number of requests is within the rate limit
-            if len(self.request_times) >= self.rate_limit:
-                # Calculate the time to wait before allowing the next request
-                next_allowed_time = self.request_times[0] + datetime.timedelta(seconds=self.time_window)
-                sleep_time = (next_allowed_time - current_time).total_seconds()
-                if sleep_time > 0:
-                    logger.debug(f"Rate limit reached. Waiting {sleep_time} seconds.")
-                    time.sleep(sleep_time)
+    def __enter__(self) -> None:
+        self.acquire()
+        return None
 
-            # Register the new request time
-            self.request_times.append(datetime.datetime.now())
-
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        pass
+    def __exit__(
+        self,
+        exc_type: Optional[Type[BaseException]],
+        exc: Optional[BaseException],
+        tb: Optional
+    ) -> None:
+        return None
