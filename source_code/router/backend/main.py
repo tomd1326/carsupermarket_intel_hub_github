@@ -1,5 +1,6 @@
 import logging
 import os
+import re
 
 from fastapi import FastAPI, Request, Form, Depends, HTTPException
 from fastapi.templating import Jinja2Templates
@@ -11,59 +12,49 @@ from mangum import Mangum
 import json
 import hashlib
 
+from exceptions import unhandled_exception_handler
+from utils.secrets_manager_client import get_secret
 from utils.lambda_http import LambdaRequestsManager
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.responses import Response
+import router
 
 
 app = FastAPI()
-cur_dir = os.path.dirname(__file__)
-templates_dir = os.path.join(cur_dir, "templates")
-templates = Jinja2Templates(directory=templates_dir)
+
 
 logger = logging.getLogger(__name__)
 
-logging.basicConfig(level="INFO", format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+logging.basicConfig(level="DEBUG", format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 # redirect output to stdout
 logger.addHandler(logging.StreamHandler())
+
+# Disable useless logging
+logging.getLogger('botocore').setLevel(logging.CRITICAL)
+logging.getLogger('boto3').setLevel(logging.CRITICAL)
+logging.getLogger('s3transfer').setLevel(logging.CRITICAL)
+logging.getLogger('urllib3').setLevel(logging.CRITICAL)
+logging.getLogger('asyncio').setLevel(logging.CRITICAL)
+logging.getLogger('multipart').setLevel(logging.CRITICAL)
+
+
+class BasePathMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        # Re-add the base path to URL path
+        new_path = re.sub(r'^/dev', '', request.url.path)
+        request.scope['path'] = new_path
+        response = await call_next(request)
+        return response
 
 
 # Add middleware for session management
 app.add_middleware(SessionMiddleware, secret_key="as#$RD$26xc04$GF3r1dFDmhjd")
+# Add middleware for base path
+app.add_middleware(BasePathMiddleware)
 
 # OAuth2 password bearer token utilization (assuming token-based auth for simplicity)
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
+#oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
 
-def get_current_user(request: Request):
-    user = request.session.get('user')
-    if not user:
-        return None
-        # raise HTTPException(status_code=HTTP_401_UNAUTHORIZED, detail="Unauthorized", headers={"Location": "/login"})
-        # redirect to login page
-        # return RedirectResponse(url="/login", status_code=303)
-    return user
-
-@app.get("/", response_class=HTMLResponse)
-def root(request: Request, user: str = Depends(get_current_user)):
-    if not user:
-        return RedirectResponse(url="/login", status_code=303)
-    return templates.TemplateResponse("dashboard.html", {"request": request, "user": user})
-
-@app.get("/login", response_class=HTMLResponse)
-def login(request: Request):
-    return templates.TemplateResponse("login.html", {"request": request})
-
-@app.post("/login")
-def login(request: Request, username: str = Form(...), password: str = Form(...)):
-    # calculate sha256 hash of the password
-    pwd_hash = hashlib.sha256(password.encode()).hexdigest()
-    if pwd_hash == "a05ef593239b0ff678c3bb69731e785c470d781a121692302912550aa2459b74":
-        request.session['user'] = username
-        return RedirectResponse(url="/", status_code=303)
-    return templates.TemplateResponse("login.html", {"request": request, "error": "Invalid username or password"})
-
-@app.get("/logout")
-def logout(request: Request):
-    request.session.pop('user', None)
-    return RedirectResponse(url="/login", status_code=303)
 
 @app.get('/healthcheck')
 def simple_healthcheck(request: Request):
@@ -104,18 +95,9 @@ def read_root(request: Request):
 
 @app.get("/test-secrets-manager")
 def test_secrets_manager(request: Request):
-    import boto3
-    sm = boto3.client(
-        'secretsmanager',
-        region_name=os.getenv('AWS_REGION', 'eu-west-1'),
-        config=boto3.session.Config(connect_timeout=10, read_timeout=10, retries={'max_attempts': 0})
-    )
     env = 'prod' if os.getenv('AWS_REGION') == 'eu-west-1' else 'dev'
     varname = f'{env}/common/car_pricer/rds/admin_credentials'
-    print(f'Trying to get secret {varname}')
-    response = sm.get_secret_value(SecretId=varname)
-    data = json.loads(response['SecretString'])
-    logger.info('Testing secrets manager')
+    data = get_secret(varname)
     return {"status": "ok", 'data': data}
 
 
@@ -123,11 +105,16 @@ def test_secrets_manager(request: Request):
 def test_db(request: Request):
     """this function tries to establish a connection to amazon aurora db (mysql)"""
     import pymysql
+
+    env = 'prod' if os.getenv('AWS_REGION') == 'eu-west-1' else 'dev'
+    varname = f'{env}/common/car_pricer/rds/admin_credentials'
+    data = get_secret(varname)
+
     # Connect to the database
     connection = pymysql.connect(
-        host='car-pricer-rds-cluster-prod.cluster-c2qnpexfpjx7.eu-west-1.rds.amazonaws.com',
-        user='test',
-        password='test',
+        host=data['cluster_endpoint'],
+        user=data['username'],
+        password=data['password'],
         database='test',
         port=3306
     )
@@ -152,8 +139,13 @@ def test_execution(data: dict):
     return {}
 
 
+app.include_router(router.router)
+app.add_exception_handler(Exception, unhandled_exception_handler)
+
+# TODO: probably it's more correct to put api_gateway_base_path="/dev" here
 handler = Mangum(app, lifespan="auto")
-lambda_requests_manager = LambdaRequestsManager(mangum_handler=handler)
+lambda_requests_manager = LambdaRequestsManager()
+lambda_requests_manager.init(mangum_handler=handler)
 
 
 # if there's a var LOCAL_ENV=1, run local http server

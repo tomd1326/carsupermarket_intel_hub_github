@@ -10,13 +10,19 @@ import uuid
 
 from mangum import Mangum
 from mangum.types import LambdaContext
+from utils.singleton import Singleton
 
 
 logger = logging.getLogger(__name__)
 
 
-class LambdaRequestsManager:
-    def __init__(self, mangum_handler: Mangum, region_name: Optional[str] = None):
+class LambdaRequestsManager(metaclass=Singleton):
+    def __init__(self):
+        self.mangum_handler = None
+        self.lambda_client = None
+        self.region_name = None
+
+    def init(self, mangum_handler: Mangum, region_name: Optional[str] = None):
         if region_name is not None:
             self.region_name = region_name
         else:
