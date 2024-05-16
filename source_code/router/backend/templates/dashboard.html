@@ -27,7 +27,7 @@
             <div class="mb-3">
                 <label for="supplierName" class="form-label">Supplier Name:</label>
                 <select class="form-select" id="supplierName" name="supplier_id">
-                    <option selected>Choose...</option>
+                    <option selected value="None">Choose...</option>
                     {% for supplier in suppliers %}
                         <option value="{{ supplier.supplier_id }}">{{ supplier.supplier_name }}</option>
                     {% endfor %}
@@ -94,34 +94,44 @@
         </nav>
     </div>
     <script>
+        document.addEventListener("DOMContentLoaded", function() {
+            document.getElementById('uploadForm').addEventListener('submit', function (event) {
+                event.preventDefault();
 
-    document.getElementById('uploadForm').onsubmit = function(e) {
-        e.preventDefault();
-        const form = this;
-        const fileInput = document.getElementById('fileUpload');
-        const file = fileInput.files[0];
+                const supplierSelect = document.getElementById('supplierName');
+                const selectedSupplier = supplierSelect.value;
 
-        if (file) {
-            const reader = new FileReader();
-            reader.readAsDataURL(file);
-            reader.onload = function() {
-                const base64EncodedFile = reader.result.split(',')[1];
-                document.getElementById('fileBase64').value = base64EncodedFile;
+                if (selectedSupplier === 'None') {
+                    alert('Please select a supplier.');
+                    return;
+                }
 
-                // Ensure that this line is being reached
-                console.log('Base64 Encoding Complete:', base64EncodedFile);
+                const form = this;
+                const fileInput = document.getElementById('fileUpload');
+                const file = fileInput.files[0];
 
-                form.submit();
-            };
-            reader.onerror = function(error) {
-                console.error('FileReader Error: ', error);
-            };
-        } else {
-            // It's important to handle the case when no file is selected
-            console.error('No file selected.');
-            form.submit(); // Still submit the form if other data needs to be sent
-        }
-    };
+                if (file) {
+                    const reader = new FileReader();
+                    reader.readAsDataURL(file);
+                    reader.onload = function () {
+                        const base64EncodedFile = reader.result.split(',')[1];
+                        document.getElementById('fileBase64').value = base64EncodedFile;
+
+                        // Ensure that this line is being reached
+                        console.log('Base64 Encoding Complete:', base64EncodedFile);
+
+                        form.submit();
+                    };
+                    reader.onerror = function (error) {
+                        console.error('FileReader Error: ', error);
+                    };
+                } else {
+                    // It's important to handle the case when no file is selected
+                    console.error('No file selected.');
+                    form.submit(); // Still submit the form if other data needs to be sent
+                }
+            });
+        });
     </script>
 </body>
 </html>
