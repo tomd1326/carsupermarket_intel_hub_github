@@ -40,7 +40,7 @@ class RateLimiter():
                     time.sleep(sleep_time)
 
             # Register the new request time
-            self.request_times.append(current_time)
+            self.request_times.append(datetime.datetime.now())
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         pass
