@@ -81,7 +81,7 @@ class AutoTraderClient(metaclass=Singleton):
             'vehicleMetrics': 'true',
             'odometerReadingMiles': mileage,
             'includeFirstRegistrationDate': 'true',
-            'competitors': 'true',
+            'competitors': 'false',
             'features': 'true'
         }
 
@@ -107,7 +107,10 @@ class AutoTraderClient(metaclass=Singleton):
         }
 
         with self.limiter:
+            s = time.time()
             valuations_response = session.post(valuations_url, json=valuations_payload, headers=headers)
+            logger.info(f"Valuations API call for VRM {vrm} took {round(time.time() - s, 4)} seconds")
+
             if valuations_response.status_code == 200:
                 return valuations_response.json()
             else:
@@ -182,7 +185,9 @@ class AutoTraderClient(metaclass=Singleton):
 
             headers = {'Authorization': f'Bearer {access_token}'}
 
+            s = time.time()
             vehicles_data = self.send_vehicles_post_request(session, headers, vehicle.vrm, vehicle.mileage)
+            logger.info(f"Vehicles API call for VRM {vehicle.vrm} took {round(time.time() - s, 4)} seconds")
 
             # Check if vehicles_data is None and handle it without logging an error
             if vehicles_data is not None:
@@ -290,7 +295,7 @@ class AutoTraderClient(metaclass=Singleton):
         processed_rows = []
 
         # Initialize thread pool
-        with ThreadPoolExecutor(max_workers=10) as executor:
+        with ThreadPoolExecutor(max_workers=1) as executor:
             # Process each row in the DataFrame
             for index, row in input_df.iterrows():
                 processed_rows.append(executor.submit(self.process_row, (row.to_dict()), session, column_mapper))

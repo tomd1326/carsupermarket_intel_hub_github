@@ -114,41 +114,6 @@
             form.submit(); // Still submit the form if other data needs to be sent
         }
     };
-
-    // document.addEventListener('DOMContentLoaded', function() {
-    //     const downloadLinks = document.querySelectorAll('.download-link');
-    //
-    //     downloadLinks.forEach(link => {
-    //         link.addEventListener('click', async function(event) {
-    //             event.preventDefault();
-    //
-    //             const url = this.href;
-    //             const filename = this.getAttribute('data-filename');
-    //
-    //             try {
-    //                 const response = await fetch(url);
-    //                 const base64Data = await response.text();
-    //                 const binaryString = atob(base64Data);
-    //                 const len = binaryString.length;
-    //                 const bytes = new Uint8Array(len);
-    //
-    //                 for (let i = 0; i < len; i++) {
-    //                     bytes[i] = binaryString.charCodeAt(i);
-    //                 }
-    //
-    //                 const blob = new Blob([bytes], { type: 'application/octet-stream' });
-    //                 const link = document.createElement('a');
-    //                 link.href = URL.createObjectURL(blob);
-    //                 link.download = filename;
-    //                 document.body.appendChild(link);
-    //                 link.click();
-    //                 document.body.removeChild(link);
-    //             } catch (error) {
-    //                 console.error('Download failed:', error);
-    //             }
-    //         });
-    //     });
-    // });
     </script>
 </body>
 </html>

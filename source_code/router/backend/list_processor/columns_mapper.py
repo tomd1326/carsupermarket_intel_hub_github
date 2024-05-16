@@ -73,7 +73,7 @@ class OneLinkColumnsMapper(BaseColumnsMapper):
         # Parse the date
         registration_date = None
         # parse different formats
-        for fmt in ["%d/%m/%Y", "%d-%m-%Y", "%d.%m.%Y"]:
+        for fmt in ["%d/%m/%Y", "%d-%m-%Y", "%d.%m.%Y", '%Y-%m-%d', '%Y/%m/%d']:
             try:
                 registration_date = datetime.datetime.strptime(row["Date Of Registration"], fmt).date()
                 break
