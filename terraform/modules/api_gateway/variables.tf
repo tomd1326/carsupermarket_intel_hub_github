@@ -10,6 +10,8 @@ variable "api_gateway_name" {}
 
 variable "api_gateway_description" {}
 
+variable "api_gateway_binary_media_types_list" {}
+
 variable "api_gateway_parent_resource_name" {}
 
 variable "api_gateway_method" {}
