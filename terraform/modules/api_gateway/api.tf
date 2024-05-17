@@ -33,6 +33,8 @@ resource "aws_api_gateway_rest_api" "api" {
     types = ["REGIONAL"]
   }
 
+  binary_media_types = var.api_gateway_binary_media_types_list
+
   tags = {
     Environment     = var.env
     Country         = var.tags_country
