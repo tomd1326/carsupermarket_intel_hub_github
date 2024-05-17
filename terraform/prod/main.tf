@@ -43,57 +43,53 @@ terraform {
   backend "s3" {}
 }
 
-# -------------------------------------------------
-# -- aws secret manager
-# -------------------------------------------------
+# # -------------------------------------------------
+# # -- aws secret manager
+# # -------------------------------------------------
 
-resource "aws_secretsmanager_secret" "secret_1" {
-  name                    = "${local.env}/${var.company}/${var.aws_secret_manager_secret_name_1}"
-  recovery_window_in_days = "0"
+# resource "aws_secretsmanager_secret" "secret_1" {
+#   name                    = "${local.env}/${var.company}/${var.aws_secret_manager_secret_name_1}"
+#   recovery_window_in_days = "0"
 
-  tags = {
-    Environment     = local.env
-    Country         = var.tags_country
-    Application     = var.tags_application
-    Team            = var.tags_team
-    BillingService  = var.tags_billing_service
-    BillingPlatform = var.tags_billing_platform
-    ManagedBy       = var.tags_managed_by
-  }
-}
+#   tags = {
+#     Environment     = local.env
+#     Country         = var.tags_country
+#     Application     = var.tags_application
+#     Team            = var.tags_team
+#     BillingService  = var.tags_billing_service
+#     BillingPlatform = var.tags_billing_platform
+#     ManagedBy       = var.tags_managed_by
+#   }
+# }
 
-resource "aws_secretsmanager_secret_version" "secret_version_1" {
-  secret_id     = aws_secretsmanager_secret.secret_1.id
-  secret_string = <<EOF
-    {
-      "key": "value"
-    }
-  EOF
-}
+# resource "aws_secretsmanager_secret_version" "secret_version_1" {
+#   secret_id     = aws_secretsmanager_secret.secret_1.id
+#   secret_string = var.aws_secret_manager_secret_value_1
+# }
 
-resource "aws_secretsmanager_secret" "secret_2" {
-  name                    = "${local.env}/${var.company}/${var.aws_secret_manager_secret_name_2}"
-  recovery_window_in_days = "0"
+# resource "aws_secretsmanager_secret" "secret_2" {
+#   name                    = "${local.env}/${var.company}/${var.aws_secret_manager_secret_name_2}"
+#   recovery_window_in_days = "0"
 
-  tags = {
-    Environment     = local.env
-    Country         = var.tags_country
-    Application     = var.tags_application
-    Team            = var.tags_team
-    BillingService  = var.tags_billing_service
-    BillingPlatform = var.tags_billing_platform
-    ManagedBy       = var.tags_managed_by
-  }
-}
+#   tags = {
+#     Environment     = local.env
+#     Country         = var.tags_country
+#     Application     = var.tags_application
+#     Team            = var.tags_team
+#     BillingService  = var.tags_billing_service
+#     BillingPlatform = var.tags_billing_platform
+#     ManagedBy       = var.tags_managed_by
+#   }
+# }
 
-resource "aws_secretsmanager_secret_version" "secret_version" {
-  secret_id     = aws_secretsmanager_secret.secret_2.id
-  secret_string = <<EOF
-    {
-      "key": "value"
-    }
-  EOF
-}
+# resource "aws_secretsmanager_secret_version" "secret_version" {
+#   secret_id     = aws_secretsmanager_secret.secret_2.id
+#   secret_string = <<EOF
+#     {
+#       "key": "value"
+#     }
+#   EOF
+# }
 
 # -------------------------------------------------
 # -- aws vpc - security groups
@@ -156,6 +152,10 @@ data "aws_ecr_repository" "image_repository_2" {
 data "aws_ecr_image" "image_container_2" {
   repository_name = data.aws_ecr_repository.image_repository_2.name
   image_tag       = "latest"
+}
+
+output "TEST" {
+  value = "${data.aws_ecr_repository.image_repository_2.repository_url}@${data.aws_ecr_image.image_container_2.image_digest}"
 }
 
 # -------------------------------------------------
@@ -229,12 +229,13 @@ module "api_gateway_1" {
   env     = local.env
   company = var.company
 
-  api_gateway_name                 = var.api_gateway_name
-  api_gateway_description          = var.api_gateway_description
-  api_gateway_parent_resource_name = var.api_gateway_parent_resource_name
-  api_gateway_method               = var.api_gateway_method
-  api_gateway_authorization        = var.api_gateway_authorization
-  api_gateway_custom_domain_name   = local.api_gateway_custom_domain_name
+  api_gateway_name                    = var.api_gateway_name
+  api_gateway_description             = var.api_gateway_description
+  api_gateway_binary_media_types_list = var.api_gateway_binary_media_types_list
+  api_gateway_parent_resource_name    = var.api_gateway_parent_resource_name
+  api_gateway_method                  = var.api_gateway_method
+  api_gateway_authorization           = var.api_gateway_authorization
+  api_gateway_custom_domain_name      = local.api_gateway_custom_domain_name
 
   aws_lambda_function_name = module.lambda_1.aws_lambda_function_name
   aws_lambda_invoke_arn    = module.lambda_1.aws_lambda_function_invoke_arn

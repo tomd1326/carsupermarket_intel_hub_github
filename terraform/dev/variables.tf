@@ -10,35 +10,37 @@ variable "user_profile" {
   default = "default"
 }
 
-# -------------------------------------------------
-# -- aws secret manager
-# -------------------------------------------------
+# # -------------------------------------------------
+# # -- aws secret manager
+# # -------------------------------------------------
 
-variable "aws_secret_manager_secret_name_1" {
-  type        = string
-  description = "secret name"
-  default     = "car_pricer/autotrader/api_access"
-}
+# variable "aws_secret_manager_secret_name_1" {
+#   type        = string
+#   description = "secret name"
+#   default     = "car_pricer/autotrader/api_access"
+# }
 
-variable "aws_secret_manager_secret_name_2" {
-  type        = string
-  description = "secret name"
-  default     = "car_pricer/cat/api_access"
-}
+# variable "aws_secret_manager_secret_name_2" {
+#   type        = string
+#   description = "secret name"
+#   default     = "car_pricer/cat/api_access"
+# }
 
-variable "aws_secret_manager_secret_value_1" {
-  type = object({
-    key           = string,
-    secret        = string,
-    advertiser_id = string
-  })
-  description = "secret value"
-  default = {
-    key           = "key",
-    secret        = "secret",
-    advertiser_id = "advertiser_id"
-  }
-}
+# variable "aws_secret_manager_secret_value_1" {
+#   type        = string
+#   description = "secret value"
+#   default     = <<EOF
+#     {
+#       "key": "value"
+#     }
+#     EOF
+
+#   # default = {
+#   #   key           = "key",
+#   #   secret        = "secret",
+#   #   advertiser_id = "advertiser_id"
+#   # }
+# }
 
 # -------------------------------------------------
 # -- aws security group
@@ -95,13 +97,13 @@ variable "aws_lambda_function_name_1" {
 variable "aws_lambda_memory_size_1" {
   type        = string
   description = "lambda memory size"
-  default     = "6000"
+  default     = "500"
 }
 
 variable "aws_lambda_timeout_1" {
   type        = string
   description = "lambda timeout"
-  default     = "250"
+  default     = "600"
 }
 
 variable "aws_lambda_function_name_2" {
@@ -113,13 +115,13 @@ variable "aws_lambda_function_name_2" {
 variable "aws_lambda_memory_size_2" {
   type        = string
   description = "lambda memory size"
-  default     = "6000"
+  default     = "500"
 }
 
 variable "aws_lambda_timeout_2" {
   type        = string
   description = "lambda timeout"
-  default     = "250"
+  default     = "600"
 }
 
 
@@ -137,6 +139,12 @@ variable "api_gateway_description" {
   type        = string
   description = "api gateway description"
   default     = "vehicle list evaluator api"
+}
+
+variable "api_gateway_binary_media_types_list" {
+  type        = list(string)
+  description = "api gateway binary media types"
+  default     = ["*/*"]
 }
 
 variable "api_gateway_parent_resource_name" {
