@@ -154,10 +154,6 @@ data "aws_ecr_image" "image_container_2" {
   image_tag       = "latest"
 }
 
-output "TEST" {
-  value = "${data.aws_ecr_repository.image_repository_2.repository_url}@${data.aws_ecr_image.image_container_2.image_digest}"
-}
-
 # -------------------------------------------------
 # -- aws rds
 # -------------------------------------------------
