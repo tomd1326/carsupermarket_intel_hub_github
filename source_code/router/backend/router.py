@@ -99,6 +99,7 @@ def read_tasks(request: Request, page: Optional[int] = 1, page_size: Optional[in
     if not user:
         return RedirectResponse(url=BASE_URL + "/login", status_code=303)
 
+    at_least_one_pending = False
     offset = (page - 1) * page_size
     with get_database_connection() as conn:
         # Get the list of suppliers
@@ -118,13 +119,19 @@ def read_tasks(request: Request, page: Optional[int] = 1, page_size: Optional[in
             cursor.execute("SELECT * FROM tasks t LEFT JOIN suppliers s ON t.supplier_id = s.supplier_id ORDER BY t.task_id DESC LIMIT %s OFFSET %s", (page_size, offset))
             # get as list of dicts
             cols = [desc[0] for desc in cursor.description]
-            tasks = [dict(zip(cols, row)) for row in cursor.fetchall()]
+            tasks = []
+            for row in cursor.fetchall():
+                task = dict(zip(cols, row))
+                tasks.append(task)
+                if task['status'] == 'pending':
+                    at_least_one_pending = True
 
     total_pages = (total_tasks + page_size - 1) // page_size  # Calculate the total number of pages
 
     return templates.TemplateResponse("dashboard.html", {
         "request": request,
         "tasks": tasks,
+        "at_least_one_pending": at_least_one_pending,
         'suppliers': suppliers,
         "total_pages": total_pages,
         "current_page": page,

@@ -18,6 +18,17 @@
         .status-created { background-color: #777777; }
         .status-pending { background-color: #b79011; }
         .status-error { background-color: #c71829; }
+
+        .countdown-label {
+            margin-right: 10px;
+            font-size: 1.2rem;
+            /*font-weight: bold;*/
+            text-align: left;
+        }
+        #countdown {
+            width: 30px;
+            display: inline-block;
+        }
     </style>
 </head>
 <body>
@@ -42,11 +53,18 @@
         </form>
 
         <div class="d-flex justify-content-between align-items-center mt-5">
-            <h2>Task List</h2>
+        <h2>Task List</h2>
+        <div class="d-flex align-items-center">
+            {% if at_least_one_pending %}
+                <span class="countdown-label">Auto-refresh in <span id="countdown">10</span></span>
+            {% endif %}
             <button class="btn btn-outline-secondary" onclick="location.reload()">
                 <i class="fa fa-refresh"></i>
             </button>
+
         </div>
+    </div>
+
         <table class="table">
             <thead>
                 <tr>
@@ -94,6 +112,23 @@
         </nav>
     </div>
     <script>
+        function startCountdown() {
+            var countdownElement = document.getElementById('countdown');
+            var timeLeft = 10;
+            var decrease = function() {
+                if (timeLeft <= 0) {
+                    clearInterval(countdownTimer);
+                    location.reload(); // Reload the page when countdown reaches 0
+                } else {
+                    countdownElement.textContent = timeLeft;
+                    timeLeft -= 1;
+                }
+            };
+
+            decrease(); // Call decrease function immediately to avoid 1-second delay
+            var countdownTimer = setInterval(decrease, 1000);
+        }
+
         document.addEventListener("DOMContentLoaded", function() {
             document.getElementById('uploadForm').addEventListener('submit', function (event) {
                 event.preventDefault();
@@ -131,6 +166,10 @@
                     form.submit(); // Still submit the form if other data needs to be sent
                 }
             });
+
+            {% if at_least_one_pending %}
+                startCountdown();
+            {% endif %}
         });
     </script>
 </body>
