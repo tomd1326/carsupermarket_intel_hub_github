@@ -48,7 +48,7 @@ RUN pip3 install \
 
 FROM public.ecr.aws/lambda/python:3.9 as run-image
 
-ENV TZ=Europe/Paris
+ENV TZ=Europe/London
 
 COPY --from=build-image ${BUILD_DIR}/ ${LAMBDA_TASK_ROOT}/
 COPY --from=build-image /python_build /python_build
