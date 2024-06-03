@@ -32,6 +32,20 @@ class CAPOutput(pydantic.BaseModel):
     live_retail: Optional[int] = None
     monthly_clean: Optional[int] = None
     monthly_retail: Optional[int] = None
+    note: Optional[str] = None
+
+
+class CAPVRMResponse(pydantic.BaseModel):
+    database: Optional[str] = None
+    capid: Optional[str] = None
+    capman: Optional[str] = None
+    capmod: Optional[str] = None
+    capder: Optional[str] = None
+    capcode: Optional[str] = None
+    clean: Optional[str] = None
+    retail: Optional[str] = None
+    registered_date: Optional[str] = None
+    note: Optional[str] = None
 
 
 class CAPClient(metaclass=Singleton):
@@ -197,7 +211,8 @@ class CAPClient(metaclass=Singleton):
 
         vehicle_found = root.find('.//ns:VRMLookup/ns:VehicleFound', namespaces)
         if vehicle_found is not None and vehicle_found.text == 'false':
-            return None, None, None, None, None, None, None, None, None  # Ensure this line also has 10 elements
+            fail_reason = root.find('.//ns:VRMLookup/ns:FailReason', namespaces)
+            return CAPVRMResponse(note=fail_reason.text)
 
         database = root.find('.//ns:VRMLookup/ns:Database', namespaces)
         capid = root.find('.//ns:VRMLookup/ns:CAPID', namespaces)
@@ -227,7 +242,17 @@ class CAPClient(metaclass=Singleton):
             registered_date_text = 'Not Found'
 
         # Existing return statement with the addition of registered_date_text
-        return database_text, capid_text, capman_text, capmod_text, capder_text, capcode_text, clean_text, retail_text, registered_date_text
+        return CAPVRMResponse(
+            database=database_text,
+            capid=capid_text,
+            capman=capman_text,
+            capmod=capmod_text,
+            capder=capder_text,
+            capcode=capcode_text,
+            clean=clean_text,
+            retail=retail_text,
+            registered_date=registered_date_text
+        )
 
     def vrm_valuation(self, vehicle: VehicleRow) -> dict:
         vrm_payload = {
@@ -247,18 +272,18 @@ class CAPClient(metaclass=Singleton):
                 timeout=15
             )
 
-        database, capid, capman, capmod, capder, capcode, clean, retail, registered_date = self.extract_vrm_values(response.text)
-
+        cap_vrm_response = self.extract_vrm_values(response.text)
         return {
-            'database': database,
-            'capid': capid,
-            'capman': capman,
-            'capmod': capmod,
-            'capder': capder,
-            'capcode': capcode,
-            'clean': clean,
-            'retail': retail,
-            'registered_date': registered_date
+            'database': cap_vrm_response.database,
+            'capid': cap_vrm_response.capid,
+            'capman': cap_vrm_response.capman,
+            'capmod': cap_vrm_response.capmod,
+            'capder': cap_vrm_response.capder,
+            'capcode': cap_vrm_response.capcode,
+            'clean': cap_vrm_response.clean,
+            'retail': cap_vrm_response.retail,
+            'registered_date': cap_vrm_response.registered_date,
+            'note': cap_vrm_response.note
         }
 
     @classmethod
@@ -307,7 +332,8 @@ class CAPClient(metaclass=Singleton):
                 monthly_clean=vrm_valuation_data['clean'],
                 monthly_retail=vrm_valuation_data['retail'],
                 capid=vrm_valuation_data['capid'],
-                rounded_mileage=vehicle.mileage
+                rounded_mileage=vehicle.mileage,
+                note=vrm_valuation_data['note']
             )
             vehicle.capid = vrm_valuation_data['capid']
 
