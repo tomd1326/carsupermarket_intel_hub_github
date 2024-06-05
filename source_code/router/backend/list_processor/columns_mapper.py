@@ -16,6 +16,7 @@ def get_registration_date(year: int, vrm_middle_numbers: int) -> datetime.date:
 
     return datetime.date(year, int(month), 1)
 
+
 # Base mapper class
 class BaseColumnsMapper:
     def map_row(self, row: Dict) -> VehicleRow:
@@ -85,6 +86,14 @@ class OneLinkColumnsMapper(BaseColumnsMapper):
             mileage=int(row["Odometer"]),
             capid=capid,
             registration_date=registration_date
+        )
+
+
+class UniversalColumnsMapper(BaseColumnsMapper):
+    def map_row(self, row: Dict) -> VehicleRow:
+        return VehicleRow(
+            vrm=row["Registration"],
+            mileage=row["Mileage"]
         )
 
 
