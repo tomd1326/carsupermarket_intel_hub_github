@@ -174,5 +174,4 @@ class TestColumnMapper:
         row = row_data["input"]
         expected = row_data["expected"]
         vehicle_row = column_mapper.map_row(row)
-        assert vehicle_row.vrm == expected.vrm
-        assert vehicle_row.mileage == expected.mileage
+        assert vehicle_row == expected, f"Expected: {expected}, got: {vehicle_row}"

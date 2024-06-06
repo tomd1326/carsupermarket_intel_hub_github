@@ -91,9 +91,36 @@ class OneLinkColumnsMapper(BaseColumnsMapper):
 
 class UniversalColumnsMapper(BaseColumnsMapper):
     def map_row(self, row: Dict) -> VehicleRow:
+        # Must contain: "vrm" or "reg"
+        vrm = None
+        for pattern in ["vrm", "reg.*n[uo]"]:
+            for col in row.keys():
+                if re.match(fr'.*{pattern}.*', col, re.IGNORECASE):
+                    vrm = row[col]
+
+        # Must be "capid" or "cap id" or "cap_id"
+        capid = None
+        for key in ["capid", "cap id", "cap_id"]:
+            for col in row.keys():
+                if key in col.lower():
+                    try:
+                        capid = int(row[col])
+                    except ValueError:
+                        pass
+        # Must contain "mileage", "miles", "odo"
+        mileage = None
+        for key in ["mileage", "miles", "odo"]:
+            for col in row.keys():
+                if key in col.lower():
+                    try:
+                        mileage = int(row[col])
+                    except ValueError:
+                        pass
+
         return VehicleRow(
-            vrm=row["Registration"],
-            mileage=row["Mileage"]
+            vrm=vrm,
+            mileage=mileage,
+            capid=capid
         )
 
 
