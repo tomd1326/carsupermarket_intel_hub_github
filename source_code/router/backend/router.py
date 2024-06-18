@@ -217,6 +217,23 @@ def download_task_file(task_id: str):
         output_filename = task['filename'].split('.')[0] + '_output.' + task['filename'].split('.')[-1]
         return FileResponse(temp_output_file.name, filename=output_filename, media_type='application/octet-stream')
 
+@router.get("/trigger-elaborate-task")
+async def trigger_elaborate_task(request: Request, user: str = Depends(get_current_user)):
+
+    if not user:
+        return RedirectResponse(url=BASE_URL + "/login", status_code=303)
+
+    # Execute the task elaboration
+    LambdaRequestsManager().simulate_http(
+        aws_context=request.scope["aws.context"] if "aws.context" in request.scope else None,
+        path=BASE_URL + "/elaborate-task",
+        method="POST",
+        data={
+            'task_id': request.query_params['task_id'],
+        }
+    )
+
+    return RedirectResponse(url=BASE_URL + "/", status_code=303)
 
 @router.post("/elaborate-task")
 async def elaborate_task(data: dict):
