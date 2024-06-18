@@ -233,7 +233,7 @@ async def trigger_elaborate_task(request: Request, user: str = Depends(get_curre
         }
     )
 
-    return RedirectResponse(url=BASE_URL + "/", status_code=303)
+    return RedirectResponse(url=BASE_URL + "/tasks", status_code=303)
 
 @router.post("/elaborate-task")
 async def elaborate_task(data: dict):
