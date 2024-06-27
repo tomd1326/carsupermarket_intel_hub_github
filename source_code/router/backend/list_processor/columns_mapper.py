@@ -23,15 +23,20 @@ class BaseColumnsMapper:
         raise NotImplementedError("This method needs to be implemented by subclasses.")
 
 
-# Mapper for Enterprise
 class EnterpriseColumnsMapper(BaseColumnsMapper):
     def map_row(self, row: Dict) -> VehicleRow:
         mileage = 0
-        if isinstance(row["MILES"], int):
-            mileage = row["MILES"]
-        elif isinstance(row["MILES"], str):
-            mileage = re.sub(r"[^\d]", "", row["MILES"])
-            mileage = int(mileage)
+        mileage_keys = ["MILES", "Mileage", "ODO"]
+        
+        for key in mileage_keys:
+            if key in row:
+                if isinstance(row[key], int):
+                    mileage = row[key]
+                elif isinstance(row[key], str):
+                    mileage = re.sub(r"[^\d]", "", row[key])
+                    mileage = int(mileage)
+                break
+        
         return VehicleRow(
             vrm=row["REGNO"],
             mileage=mileage
