@@ -75,6 +75,7 @@
                     <th scope="col">Total rows, Exec. time</th>
                     <th scope="col">Status</th>
                     <th scope="col">Download</th>
+<!--                    <th scope="col">Re-process</th>-->
                 </tr>
             </thead>
             <tbody>
@@ -94,9 +95,15 @@
                     <td><span class="status-label {% if task.status == 'success' %}status-success{% elif task.status == 'created' %}status-created{% elif task.status == 'pending' %}status-pending{% else %}status-error{% endif %}" title="{% if task.message %}{{ task.message }}{% endif %}">{{ task.status }}</span></td>
                     <td>
                         {% if task.status == 'success' %}
-                            <a href="{{ BASE_URL }}/download/{{ task.task_id }}" class="btn btn-primary download-link" data-filename="{{ task.filename }}"><i class="fa fa-download"></i></a>
+                            <a href="{{ BASE_URL }}/download/{{ task.task_id }}" class="btn btn-primary download-link" data-filename="{{ task.filename }}" title="Download"><i class="fa fa-download"></i></a>
+                        {% else %}
+                            <a href="#" class="btn btn-secondary disabled" aria-disabled="true"><i class="fa fa-download"></i></a>
                         {% endif %}
-                    </td>
+                        {% if task.status != 'pending' %}
+                            <a href="{{ BASE_URL }}/trigger-elaborate-task?task_id={{ task.task_id }}" class="btn btn-outline-dark reprocess-link" data-task_id="{{ task.task_id }}" title="Re-process"><i class="fa fa-redo"></i></a>
+                        {% else %}
+                            <a href="#" class="btn btn-outline-dark disabled" aria-disabled="true"><i class="fa fa-redo"></i></a>
+                        {% endif %}
                 </tr>
                 {% endfor %}
             </tbody>
