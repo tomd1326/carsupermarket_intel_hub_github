@@ -28,7 +28,7 @@ class TestColumnMapper:
             "expected": VehicleRow(
                 vrm="WM70BKY",
                 mileage=15687,
-                registration_date=datetime.date(2021, 1, 1)
+                registration_date=datetime.date(2021, 1, 26)
             )
         },
         # Spoticar
@@ -53,8 +53,10 @@ class TestColumnMapper:
                 'Options': 'BUMPER FRT & RR BLACK, CARRIER-ROOF LUG, DELETE, BLACK HOOD PACK'
             },
             "expected": VehicleRow(
-                vrm="WM70BKY",
-                mileage=15687
+                vrm="WG22CKO",
+                mileage=1231,
+                capid=99097,
+                registration_date=datetime.date(2022, 4, 30)
             )
         },
         # LCVR
@@ -121,7 +123,8 @@ class TestColumnMapper:
             },
             "expected": VehicleRow(
                 vrm="HW21JSZ",
-                mileage=18762
+                mileage=18762,
+                capid=94077,
             )
         },
         # 1link
@@ -163,7 +166,9 @@ class TestColumnMapper:
             },
             "expected": VehicleRow(
                 vrm="PJ18PVO",
-                mileage=43125
+                mileage=43125,
+                capid=75462,
+                registration_date=datetime.date(2018, 5, 31)
             )
         }
     ])
