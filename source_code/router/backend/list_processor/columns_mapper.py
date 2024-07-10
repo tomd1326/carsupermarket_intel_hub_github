@@ -17,6 +17,7 @@ def get_registration_date(year: int, vrm_middle_numbers: int) -> datetime.date:
 
     return datetime.date(year, int(month), 1)
 
+
 # Base mapper class
 class BaseColumnsMapper:
     def map_row(self, row: Dict) -> VehicleRow:
@@ -95,6 +96,65 @@ class OneLinkColumnsMapper(BaseColumnsMapper):
         )
 
 
+class UniversalColumnsMapper(BaseColumnsMapper):
+    def map_row(self, row: Dict) -> VehicleRow:
+        # Match VRM / Registration Number / License Plate
+        vrm = None
+        for pattern in ["vrm", "reg.*n[uo]?"]:
+            for col in row.keys():
+                match_col_name = re.match(fr'{pattern}', col, re.IGNORECASE)
+                match_vrm = re.match(r"^[A-Z]{2,3}\d{2,3}[A-Z]{2,3}$", row[col])
+                if match_col_name and match_vrm:
+                    vrm = row[col]
+
+        # Match CAP ID
+        capid = None
+        for pattern in ["cap[\s_-]?(id|code)"]:
+            for col in row.keys():
+                match_col_name = re.match(fr'{pattern}', col, re.IGNORECASE)
+                match_value = re.match(r"\d{5}", row[col])
+                if match_col_name and match_value:
+                    try:
+                        capid = int(row[col])
+                    except ValueError:
+                        pass
+
+        # Match mileage
+        mileage = None
+        for key in ["mileage", "miles", "odo"]:
+            for col in row.keys():
+                if key in col.lower():
+                    try:
+                        value_row = re.sub(r"[^\d]", "", row[col])
+                        mileage = int(value_row)
+                    except ValueError:
+                        pass
+
+        # Match registration date
+        registration_date = None
+        for pattern in ["date", "reg.*n[uo]?"]:
+            for col in row.keys():
+                match_col_name = re.match(fr'.*{pattern}.*', col, re.IGNORECASE)
+                if match_col_name:
+                    for fmt in ["%d/%m/%Y", "%d-%m-%Y", "%d.%m.%Y", '%Y-%m-%d', '%Y/%m/%d']:
+                        try:
+                            registration_date = datetime.datetime.strptime(row[col], fmt).date()
+                            break
+                        except ValueError:
+                            pass
+        if not registration_date:
+            for col in row.keys():
+                if "year" in col.lower():
+                    registration_date = get_registration_date(int(row[col]), int(vrm[2:4]))
+
+        return VehicleRow(
+            vrm=vrm,
+            mileage=mileage,
+            capid=capid,
+            registration_date=registration_date
+        )
+
+
 # Factory to get the appropriate mapper
 def get_columns_mapper(supplier_name: str) -> BaseColumnsMapper:
     if supplier_name == "Enterprise":
@@ -103,5 +163,7 @@ def get_columns_mapper(supplier_name: str) -> BaseColumnsMapper:
         return MotabilityColumnsMapper()
     elif supplier_name == "1link":
         return OneLinkColumnsMapper()
+    elif supplier_name in ("Universal", "Generic"):
+        return UniversalColumnsMapper()
     else:
         raise ValueError(f"Unknown supplier name: {supplier_name}")

@@ -24,6 +24,7 @@ python-calamine = "^0.2.0"
 
 [tool.poetry.group.dev.dependencies]
 uvicorn = "^0.15.0"
+pytest = "^8.2.2"
 
 [build-system]
 requires = ["poetry-core"]
