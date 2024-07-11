@@ -150,6 +150,9 @@ class AutoTraderClient(metaclass=Singleton):
 
         vehicle = column_mapper.map_row(row)
 
+        if vehicle is None:
+            return None
+
         # Initialize features list
 
         # Iterate over row keys to find VRM and Mileage regardless of case and exact match

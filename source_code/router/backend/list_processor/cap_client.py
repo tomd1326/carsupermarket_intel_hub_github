@@ -133,7 +133,6 @@ class CAPClient(metaclass=Singleton):
                     }
             return {}  # Return empty dictionary if conditions aren't met
 
-
     def get_valuations(self, mileage, valuations):
         # Ensure the valuations are sorted by mileage
         valuations.sort()
@@ -296,6 +295,8 @@ class CAPClient(metaclass=Singleton):
     def process_row(self, row: pd.Series, column_mapper: BaseColumnsMapper) -> Optional[dict]:
 
         vehicle = column_mapper.map_row(row)
+        if not vehicle:
+            return None
 
         if vehicle.capid:
 
