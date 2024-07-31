@@ -141,7 +141,7 @@ class UniversalColumnsMapper(BaseColumnsMapper):
 
         # Match registration date
         registration_date = None
-        for pattern in ["date", "reg.*n[uo]?"]:
+        for pattern in ["date", r"reg.*n([\s-]*[^uo]|$)", 'dfr']:
             for col in row.keys():
                 if pd.isnull(row[col]):
                     continue

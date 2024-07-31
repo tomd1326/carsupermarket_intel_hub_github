@@ -362,6 +362,9 @@ class CAPClient(metaclass=Singleton):
             # Wait for all threads to finish
             processed_rows = [future.result() for future in processed_rows]
 
+        # Filter None values
+        processed_rows = [row if row is not None else {} for row in processed_rows]
+
         # transform processed rows into a DataFrame
         processed_df = pd.DataFrame(processed_rows)
 
