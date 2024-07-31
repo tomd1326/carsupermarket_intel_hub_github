@@ -133,7 +133,6 @@ class CAPClient(metaclass=Singleton):
                     }
             return {}  # Return empty dictionary if conditions aren't met
 
-
     def get_valuations(self, mileage, valuations):
         # Ensure the valuations are sorted by mileage
         valuations.sort()
@@ -296,6 +295,8 @@ class CAPClient(metaclass=Singleton):
     def process_row(self, row: pd.Series, column_mapper: BaseColumnsMapper) -> Optional[dict]:
 
         vehicle = column_mapper.map_row(row)
+        if not vehicle:
+            return None
 
         if vehicle.capid:
 
@@ -360,6 +361,9 @@ class CAPClient(metaclass=Singleton):
 
             # Wait for all threads to finish
             processed_rows = [future.result() for future in processed_rows]
+
+        # Filter None values
+        processed_rows = [row if row is not None else {} for row in processed_rows]
 
         # transform processed rows into a DataFrame
         processed_df = pd.DataFrame(processed_rows)

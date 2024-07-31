@@ -125,6 +125,7 @@ class TestColumnMapper:
                 vrm="HW21JSZ",
                 mileage=18762,
                 capid=94077,
+                registration_date=datetime.date(2021, 3, 1)
             )
         },
         # 1link
