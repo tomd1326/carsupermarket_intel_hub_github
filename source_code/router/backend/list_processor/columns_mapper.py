@@ -134,7 +134,11 @@ class UniversalColumnsMapper(BaseColumnsMapper):
                     continue
                 if key in col.lower():
                     try:
-                        value_row = re.sub(r"[^\d]", "", str(row[col]))
+                        value_row = row[col]
+                        if not isinstance(value_row, (int, float)):
+                            value_row = re.sub(r"[^\d.]", "", str(value_row))
+                            # Remove all dots but not the last one
+                            value_row = re.sub(r"(\.)(?=.*\.)", "", value_row)
                         mileage = int(value_row)
                     except ValueError:
                         pass
