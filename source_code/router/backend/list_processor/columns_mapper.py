@@ -105,7 +105,7 @@ class UniversalColumnsMapper(BaseColumnsMapper):
     def map_row(self, row: Dict) -> Optional[VehicleRow]:
         # Match VRM / Registration Number / License Plate
         vrm = None
-        for pattern in ["vrm", "reg.*n[uo]?"]:
+        for pattern in ["vrm", "reg.*[n#][uo]?"]:
             for col in row.keys():
                 if pd.isnull(row[col]):
                     continue
@@ -147,15 +147,19 @@ class UniversalColumnsMapper(BaseColumnsMapper):
                     continue
                 match_col_name = re.match(fr'.*{pattern}.*', col, re.IGNORECASE)
                 if match_col_name:
+                    # if instance of pd.Timestamp
+                    if isinstance(row[col], pd.Timestamp):
+                        registration_date = row[col].date()
+                        break
                     for fmt in ["%d/%m/%Y", "%d-%m-%Y", "%d.%m.%Y", '%Y-%m-%d', '%Y/%m/%d']:
                         try:
                             registration_date = datetime.datetime.strptime(row[col], fmt).date()
-                            break
+                            break # TODO: need to break even for one more level up
                         except ValueError:
                             pass
         if not registration_date:
             for col in row.keys():
-                if "year" in col.lower() and not pd.isnull(row[col]):
+                if not pd.isnull(row[col]) and "year" in col.lower():
                     registration_date = get_registration_date(int(row[col]), int(vrm[2:4]))
 
         try:
