@@ -1,10 +1,15 @@
 import datetime
 import re
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 from typing import Optional, Dict
 import pandas as pd
 from list_processor.structs import VehicleRow
+import logging
+
+
+# Get the logger
+logger = logging.getLogger(__name__)
 
 
 def get_registration_date(year: int, vrm_middle_numbers: int) -> datetime.date:
@@ -17,14 +22,15 @@ def get_registration_date(year: int, vrm_middle_numbers: int) -> datetime.date:
 
     return datetime.date(year, int(month), 1)
 
+
 # Base mapper class
 class BaseColumnsMapper:
-    def map_row(self, row: Dict) -> VehicleRow:
+    def map_row(self, row: Dict) -> Optional[VehicleRow]:
         raise NotImplementedError("This method needs to be implemented by subclasses.")
 
 
 class EnterpriseColumnsMapper(BaseColumnsMapper):
-    def map_row(self, row: Dict) -> VehicleRow:
+    def map_row(self, row: Dict) -> Optional[VehicleRow]:
         mileage = 0
         mileage_keys = ["MILES", "Mileage", "ODO"]
         
@@ -45,7 +51,7 @@ class EnterpriseColumnsMapper(BaseColumnsMapper):
 
 # Mapper for Motability
 class MotabilityColumnsMapper(BaseColumnsMapper):
-    def map_row(self, row: Dict) -> VehicleRow:
+    def map_row(self, row: Dict) -> Optional[VehicleRow]:
         vrm = row["Reg No."]
         if re.match(r"^[A-Z]{2}\d{2}[A-Z]{3}$", vrm):
             vrm_middle_numbers = int(vrm[2:4])
@@ -69,7 +75,7 @@ class MotabilityColumnsMapper(BaseColumnsMapper):
 
 # Mapper for 1Link
 class OneLinkColumnsMapper(BaseColumnsMapper):
-    def map_row(self, row: Dict) -> VehicleRow:
+    def map_row(self, row: Dict) -> Optional[VehicleRow]:
         try:
             capid = row.get("CAP ID", float('nan'))
             capid = int(capid)
@@ -95,6 +101,83 @@ class OneLinkColumnsMapper(BaseColumnsMapper):
         )
 
 
+class UniversalColumnsMapper(BaseColumnsMapper):
+    def map_row(self, row: Dict) -> Optional[VehicleRow]:
+        # Match VRM / Registration Number / License Plate
+        vrm = None
+        for pattern in ["vrm", "reg.*[n#][uo]?"]:
+            for col in row.keys():
+                if pd.isnull(row[col]):
+                    continue
+                match_col_name = re.match(fr'{pattern}', col, re.IGNORECASE)
+                if match_col_name and re.match(r"^[A-Z]{2,3}\d{2,3}[A-Z]{2,3}$", str(row[col])):
+                    vrm = row[col]
+
+        # Match CAP ID
+        capid = None
+        for pattern in ["cap[\s_-]?(id|code)"]:
+            for col in row.keys():
+                if pd.isnull(row[col]):
+                    continue
+                match_col_name = re.match(fr'{pattern}', col, re.IGNORECASE)
+                if match_col_name and re.match(r"\d{5}", str(row[col])):
+                    try:
+                        capid = int(row[col])
+                    except ValueError:
+                        pass
+
+        # Match mileage
+        mileage = None
+        for key in ["mileage", "miles", "odo"]:
+            for col in row.keys():
+                if pd.isnull(row[col]):
+                    continue
+                if key in col.lower():
+                    try:
+                        value_row = row[col]
+                        if not isinstance(value_row, (int, float)):
+                            value_row = re.sub(r"[^\d.]", "", str(value_row))
+                            # Remove all dots but not the last one
+                            value_row = re.sub(r"(\.)(?=.*\.)", "", value_row)
+                        mileage = int(value_row)
+                    except ValueError:
+                        pass
+
+        # Match registration date
+        registration_date = None
+        for pattern in ["date", r"reg.*n([\s-]*[^uo]|$)", 'dfr']:
+            for col in row.keys():
+                if pd.isnull(row[col]):
+                    continue
+                match_col_name = re.match(fr'.*{pattern}.*', col, re.IGNORECASE)
+                if match_col_name:
+                    # if instance of pd.Timestamp
+                    if isinstance(row[col], pd.Timestamp):
+                        registration_date = row[col].date()
+                        break
+                    for fmt in ["%d/%m/%Y", "%d-%m-%Y", "%d.%m.%Y", '%Y-%m-%d', '%Y/%m/%d']:
+                        try:
+                            registration_date = datetime.datetime.strptime(row[col], fmt).date()
+                            break # TODO: need to break even for one more level up
+                        except ValueError:
+                            pass
+        if not registration_date:
+            for col in row.keys():
+                if not pd.isnull(row[col]) and "year" in col.lower():
+                    registration_date = get_registration_date(int(row[col]), int(vrm[2:4]))
+
+        try:
+            return VehicleRow(
+                vrm=vrm,
+                mileage=mileage,
+                capid=capid,
+                registration_date=registration_date
+            )
+        except ValidationError as e:
+            logger.warning(f"Error validating row: {e}")
+            return None
+
+
 # Factory to get the appropriate mapper
 def get_columns_mapper(supplier_name: str) -> BaseColumnsMapper:
     if supplier_name == "Enterprise":
@@ -103,5 +186,7 @@ def get_columns_mapper(supplier_name: str) -> BaseColumnsMapper:
         return MotabilityColumnsMapper()
     elif supplier_name == "1link":
         return OneLinkColumnsMapper()
+    elif supplier_name in ("Universal", "Generic"):
+        return UniversalColumnsMapper()
     else:
         raise ValueError(f"Unknown supplier name: {supplier_name}")

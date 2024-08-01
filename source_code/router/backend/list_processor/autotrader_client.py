@@ -150,6 +150,9 @@ class AutoTraderClient(metaclass=Singleton):
 
         vehicle = column_mapper.map_row(row)
 
+        if vehicle is None:
+            return None
+
         # Initialize features list
 
         # Iterate over row keys to find VRM and Mileage regardless of case and exact match
@@ -302,6 +305,9 @@ class AutoTraderClient(metaclass=Singleton):
 
             # Wait for all threads to finish
             processed_rows = [future.result() for future in processed_rows]
+
+        # Filter None values
+        processed_rows = [row if row is not None else {} for row in processed_rows]
 
         # transform processed rows into a DataFrame
         processed_df = pd.DataFrame(processed_rows)

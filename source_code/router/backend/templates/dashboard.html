@@ -56,12 +56,14 @@
         <h2>Task List</h2>
         <div class="d-flex align-items-center">
             {% if at_least_one_pending %}
-                <span class="countdown-label">Auto-refresh in <span id="countdown">10</span></span>
+                <div class="form-check me-2">
+                    <input type="checkbox" class="form-check-input" id="auto-refresh-checkbox" checked>
+                    <label class="form-check-label countdown-label" for="auto-refresh-checkbox">Auto-refresh in <span id="countdown">10</span></label>
+                </div>
             {% endif %}
             <button class="btn btn-outline-secondary" onclick="location.reload()">
-                <i class="fa fa-refresh"></i>
+                <i class="fas fa-sync-alt"></i>
             </button>
-
         </div>
     </div>
 
@@ -123,6 +125,11 @@
             var countdownElement = document.getElementById('countdown');
             var timeLeft = 10;
             var decrease = function() {
+                // CHeck the auto-refresh-checkbox status
+                var autoRefreshCheckbox = document.getElementById('auto-refresh-checkbox');
+                if (!autoRefreshCheckbox.checked) {
+                    return;
+                }
                 if (timeLeft <= 0) {
                     clearInterval(countdownTimer);
                     location.reload(); // Reload the page when countdown reaches 0
