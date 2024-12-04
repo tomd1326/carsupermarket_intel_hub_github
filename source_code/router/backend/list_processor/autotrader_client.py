@@ -43,7 +43,7 @@ class AutoTraderClient(metaclass=Singleton):
         self.auth_lock = Lock()
 
         # Rate limiter
-        self.limiter = RateLimiter(rate_limit=29, time_window=1)
+        self.limiter = RateLimiter(rate_limit=40, time_window=1)
 
     def get_access_token(self, session) -> str:
         with self.auth_lock:
@@ -298,7 +298,7 @@ class AutoTraderClient(metaclass=Singleton):
         processed_rows = []
 
         # Initialize thread pool
-        with ThreadPoolExecutor(max_workers=20) as executor:
+        with ThreadPoolExecutor(max_workers=40) as executor:
             # Process each row in the DataFrame
             for index, row in input_df.iterrows():
                 processed_rows.append(executor.submit(self.process_row, (row.to_dict()), session, column_mapper))
