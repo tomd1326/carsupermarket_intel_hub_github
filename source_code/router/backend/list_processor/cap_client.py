@@ -355,7 +355,7 @@ class CAPClient(metaclass=Singleton):
     def process_file(self, input_df: pd.DataFrame, column_mapper: BaseColumnsMapper) -> pd.DataFrame:
         processed_rows = []
 
-        with ThreadPoolExecutor(max_workers=40) as executor:
+        with ThreadPoolExecutor(max_workers=20) as executor:
             for index, row in input_df.iterrows():
                 processed_rows.append(executor.submit(self.process_row, row, column_mapper))
 
