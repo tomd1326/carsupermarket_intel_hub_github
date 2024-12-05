@@ -43,7 +43,7 @@ class AutoTraderClient(metaclass=Singleton):
         self.auth_lock = Lock()
 
         # Rate limiter
-        self.limiter = RateLimiter(rate_limit=29, time_window=1)
+        self.limiter = RateLimiter(rate_limit=40, time_window=1)
 
     def get_access_token(self, session) -> str:
         with self.auth_lock:

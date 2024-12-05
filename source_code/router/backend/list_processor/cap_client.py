@@ -64,7 +64,7 @@ class CAPClient(metaclass=Singleton):
         self.database = "CAR"
 
         # Rate limiter
-        self.limiter = RateLimiter(rate_limit=29, time_window=1)
+        self.limiter = RateLimiter(rate_limit=40, time_window=1)
 
     @classmethod
     def is_excel_date_format(cls, date_str):
