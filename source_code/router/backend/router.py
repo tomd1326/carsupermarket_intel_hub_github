@@ -44,7 +44,7 @@ templates = Jinja2Templates(directory=templates_dir)
 logger = logging.getLogger(__name__)
 
 # Generic initialization
-s3_bucketname = 'aa-alimentation'
+s3_bucketname = 'aa-raw-sources-uk'
 
 
 def get_current_user(request: Request):
