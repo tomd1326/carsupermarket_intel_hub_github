@@ -19,8 +19,8 @@ stages:
 include:
     - project: "data_team3/platform/common/gitlab_ci_job_templates"
       file:
-        - "utils/pre/get_aws_variables.yml"
-        - "utils/pre/get_environment.yml"
+        - "utils/pre/set_aws_variables.yml"
+        - "utils/pre/set_environment.yml"
         - "utils/pre/get_ecr_repository_policy.yml"
         - "docker/build/build_ecr.yml"
         - "docker/build/build_docker.yml"
@@ -42,15 +42,15 @@ variables:
   IAC_WORKING_DIR: "terraform"
   COMPANY_NAME: "carsupermarket"
 
-get_aws_variables:
+set_aws_variables:
   stage: .pre
-  extends: .get_aws_variables
+  extends: .set_aws_variables
   rules:
     - if: $CI_COMMIT_BRANCH == "main" || $CI_COMMIT_BRANCH == "dev"
 
-get_environment:
+set_environment:
   stage: .pre
-  extends: .get_environment
+  extends: .set_environment
   rules:
     - if: $CI_COMMIT_BRANCH == "main" || $CI_COMMIT_BRANCH == "dev"
   
@@ -66,9 +66,9 @@ build_ecr_repository:
   stage: .pre
   extends: .build_ecr_repository
   needs:
-    - job: get_aws_variables
+    - job: set_aws_variables
       artifacts: true
-    - job: get_environment
+    - job: set_environment
       artifacts: true
     - job: get_ecr_repository_policy
       artifacts: true
