@@ -32,7 +32,7 @@ COPY ./backend ${BUILD_DIR}/
 RUN pip3 install --upgrade pip
 
 # Generating the requirements.txt file
-RUN pip3 install poetry
+RUN pip3 install poetry poetry-plugin-export
 
 RUN if [ "$LOCAL_ENV" = "1" ]; then \
         poetry export -f requirements.txt --output requirements.txt --with dev; \
