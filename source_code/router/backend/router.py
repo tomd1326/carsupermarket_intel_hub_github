@@ -288,7 +288,22 @@ async def elaborate_task(data: dict):
 
             processed_df = pd.concat([input_df, *results], axis=1)
 
+            # Add the hyperlink column
+            base_url = "https://portal.autotrader.co.uk/managing/pricing/vrm"
+            try:
+                processed_df['hyperlink'] = processed_df.apply(
+                    lambda row: f"{base_url}/{row['vrm']}/{row['mileage']}" 
+                    if pd.notna(row['vrm']) and pd.notna(row['mileage']) 
+                    else "", 
+                    axis=1
+                )
+            except Exception as e:
+                logger.error(f"Error creating hyperlinks: {e}")
+                processed_df['hyperlink'] = ""
+
             write_dataframe_file(processed_df, temp_output_file.name)
+
+
 
             # Upload the elaborated file to S3
             s3_location = f'applications/pricing/uk-vehicle-list-evaluator/{env}/elaborated/{data["task_id"]}.{file_ext}'
