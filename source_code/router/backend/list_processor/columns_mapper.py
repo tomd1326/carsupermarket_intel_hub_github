@@ -28,23 +28,52 @@ class BaseColumnsMapper:
     def map_row(self, row: Dict) -> Optional[VehicleRow]:
         raise NotImplementedError("This method needs to be implemented by subclasses.")
 
-
 class EnterpriseColumnsMapper(BaseColumnsMapper):
     def map_row(self, row: Dict) -> Optional[VehicleRow]:
-        mileage = 0
-        mileage_keys = ["MILES", "Mileage", "ODO"]
-        
-        for key in mileage_keys:
-            if key in row:
-                if isinstance(row[key], int):
-                    mileage = row[key]
-                elif isinstance(row[key], str):
-                    mileage = re.sub(r"[^\d]", "", row[key])
-                    mileage = int(mileage)
+        # Convert all keys in the row to lowercase for case-insensitive comparison
+        lowercased_row = {key.lower(): value for key, value in row.items()}
+
+        # Define required keys
+        required_mileage_keys = ["miles", "mileage", "odo", "odom"]
+        required_vrm_keys = ["vrm", "reg", "regno"]
+
+        # Initialize flags for missing keys
+        mileage_found = any(key in lowercased_row for key in required_mileage_keys)
+        vrm_found = any(key in lowercased_row for key in required_vrm_keys)
+
+        # Log and raise an exception if mileage or VRM is missing
+        if not mileage_found or not vrm_found:
+            if not mileage_found:
+                logger.error("Mileage column not matched in row")
+            if not vrm_found:
+                logger.error("VRM column not matched in row")
+            raise ValueError("Essential column(s) missing")
+
+        # Process mileage
+        mileage = None
+        for key in required_mileage_keys:
+            if key in lowercased_row:
+                if isinstance(lowercased_row[key], int):
+                    mileage = lowercased_row[key]
+                elif isinstance(lowercased_row[key], str):
+                    # Remove non-digit characters and convert to integer
+                    mileage_str = re.sub(r"[^\d]", "", lowercased_row[key])
+                    mileage = int(mileage_str) if mileage_str else None
                 break
-        
+
+        # Process VRM
+        vrm = None
+        for key in required_vrm_keys:
+            if key in lowercased_row:
+                vrm = lowercased_row[key]
+                break
+
+        if mileage is None or vrm is None:
+            logger.error("Could not extract both mileage and VRM from row")
+            return None
+
         return VehicleRow(
-            vrm=row["REGNO"],
+            vrm=vrm,
             mileage=mileage
         )
 
