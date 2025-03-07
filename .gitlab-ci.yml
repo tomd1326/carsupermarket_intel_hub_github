@@ -17,7 +17,7 @@ stages:
 # -----------------------------
 
 include:
-    - project: "data_team3/platform/common/gitlab_ci_job_templates"
+    - project: "data/platform/common/gitlab_ci_job_templates"
       file:
         - "utils/pre/set_aws_variables.yml"
         - "utils/pre/set_environment.yml"
