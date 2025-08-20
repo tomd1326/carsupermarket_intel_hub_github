@@ -19,7 +19,7 @@ def get_db_credentials():
         varname = f'{env}/aramis_group/data_platform/rds/aurora_pg_core_cluster_admin_credentials'
         data = get_secret(varname)
         return {
-            'host': data['cluster_endpoint'],
+            'host': data['endpoint'],
             'user': data['username'],
             'password': data['password'],
             'database': 'carsupermarket_pricer',
