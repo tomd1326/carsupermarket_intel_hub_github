@@ -1,6 +1,6 @@
 ARG BUILD_DIR="backend"
 
-FROM python:3.9-slim-buster as build-image
+FROM python:3.9-slim as build-image
    
 ARG PKG_URL
 ARG LAST_PKG_VERSION
