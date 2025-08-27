@@ -25,9 +25,9 @@ app = FastAPI()
 
 logger = logging.getLogger(__name__)
 
-logging.basicConfig(level="DEBUG", format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
-# redirect output to stdout
-logger.addHandler(logging.StreamHandler())
+# Force configure logging for AWS Lambda
+logging.getLogger().handlers.clear()
+logging.basicConfig(level=logging.DEBUG, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", force=True)
 
 # Disable useless logging
 logging.getLogger('botocore').setLevel(logging.CRITICAL)
