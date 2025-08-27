@@ -103,24 +103,23 @@ def test_secrets_manager(request: Request):
 
 @app.get("/test-db")
 def test_db(request: Request):
-    """this function tries to establish a connection to amazon aurora db (postgresql)"""
-    import psycopg2
-    import psycopg2.extras
+    """this function tries to establish a connection to amazon aurora db (mysql)"""
+    import pymysql
 
     env = 'prod' if os.getenv('AWS_REGION') == 'eu-west-1' else 'dev'
     varname = f'{env}/common/car_pricer/rds/admin_credentials'
     data = get_secret(varname)
 
     # Connect to the database
-    connection = psycopg2.connect(
+    connection = pymysql.connect(
         host=data['cluster_endpoint'],
         user=data['username'],
         password=data['password'],
-        database='postgres',
-        port=5432
+        database='test',
+        port=3306
     )
 
-    with connection.cursor(cursor_factory=psycopg2.extras.DictCursor) as cursor:
+    with connection.cursor() as cursor:
         # Create a new record
         sql = "SELECT * FROM test_table"
         cursor.execute(sql)
