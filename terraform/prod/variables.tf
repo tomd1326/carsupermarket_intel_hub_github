@@ -97,7 +97,7 @@ variable "aws_lambda_function_name_1" {
 variable "aws_lambda_memory_size_1" {
   type        = string
   description = "lambda memory size"
-  default     = "500"
+  default     = "3072"
 }
 
 variable "aws_lambda_timeout_1" {
@@ -115,7 +115,7 @@ variable "aws_lambda_function_name_2" {
 variable "aws_lambda_memory_size_2" {
   type        = string
   description = "lambda memory size"
-  default     = "500"
+  default     = "3072"
 }
 
 variable "aws_lambda_timeout_2" {
