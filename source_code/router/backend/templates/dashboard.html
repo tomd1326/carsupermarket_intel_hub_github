@@ -84,7 +84,7 @@
                 {% for task in tasks %}
                 <tr>
                     <td>{{ task.task_id }}</td>
-                    <td>{{ task.created }}</td>
+                    <td>{{ task.created.strftime("%Y-%m-%d %H:%M:%S") }}</td>
                     <td>{{ task.supplier_name }}</td>
                     <td>{{ task.filename }}</td>
                     <td>
