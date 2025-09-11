@@ -104,7 +104,7 @@ def read_tasks(request: Request, page: Optional[int] = 1, page_size: Optional[in
     with get_database_connection() as conn:
         # Get the list of suppliers
         with conn.cursor() as cursor:
-            cursor.execute("SELECT supplier_id, supplier_name FROM suppliers order by supplier_name")
+            cursor.execute("SELECT supplier_id, supplier_name FROM suppliers ORDER BY supplier_name")
             cols = [desc[0] for desc in cursor.description]
             suppliers = [dict(zip(cols, row)) for row in cursor.fetchall()]
 
@@ -169,9 +169,9 @@ async def upload_task(request: Request, fileBase64: str = Form(...), supplier_id
         # Create a task in the db
         with get_database_connection() as conn:
             with conn.cursor() as cursor:
-                cursor.execute("INSERT INTO tasks (created, status, supplier_id, filename) VALUES (%s, %s, %s, %s)",
+                cursor.execute("INSERT INTO tasks (created, status, supplier_id, filename) VALUES (%s, %s, %s, %s) RETURNING task_id",
                                (datetime.datetime.now(), 'created', supplier_id, filename))
-                task_id = cursor.lastrowid
+                task_id = cursor.fetchone()[0]
                 conn.commit()
 
         env = 'prod' if os.getenv('AWS_REGION') == 'eu-west-1' else 'dev'
