@@ -1,4 +1,4 @@
-# This file creates two containers: aws lambda (compiled from local Dockerfile) and a DB (amazon aurora mysql)
+# This file creates two containers: aws lambda (compiled from local Dockerfile) and a DB (PostgreSQL)
 # The lambda container is built from the Dockerfile in the source_code directory
 
 version: '3.7'
@@ -29,18 +29,17 @@ services:
       - "8000:8000"
 
   db:
-    image: mysql:5.7
+    image: postgres:14
     container_name: uk_list_evaluator_db
     environment:
-      MYSQL_ROOT_PASSWORD: password
-      MYSQL_DATABASE: test_db
-      MYSQL_USER: test
-      MYSQL_PASSWORD: password
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: test_db
+      POSTGRES_USER: test
     networks:
       - aws_lambda_network
     restart: always
     ports:
-      - "3306:3306"
+      - "5432:5432"
 
   cache:
     image: redis:6.2
