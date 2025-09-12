@@ -273,7 +273,7 @@ class AutoTraderClient(metaclass=Singleton):
                 'market_condition': market_condition,  # Market condition from the Vehicles API
                 # 'total_results': total_results,  # Total results from competitor analysis
                 'factory_fitted_feature_names': ', '.join(factory_fitted_feature_names),  # Comma-separated list of factory-fitted features
-                'processing_time': processing_time,
+                'at_first_registration_date': first_registration_date,  # Replaces processing_time
             }
 
         except Exception as e:
@@ -287,7 +287,7 @@ class AutoTraderClient(metaclass=Singleton):
                 'market_condition': 'N/A',
                 # 'total_results': 'N/A',
                 'factory_fitted_feature_names': 'N/A',
-                'processing_time': 'N/A',
+                'at_first_registration_date': 'N/A',
             }
 
     def process_file(self, input_df: pd.DataFrame, column_mapper: BaseColumnsMapper) -> pd.DataFrame:
