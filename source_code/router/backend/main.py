@@ -1,6 +1,7 @@
 import logging
 import os
 import re
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request, Form, Depends, HTTPException
 from fastapi.templating import Jinja2Templates
@@ -20,14 +21,22 @@ from starlette.responses import Response
 import router
 
 
-app = FastAPI()
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup
+    logger.info("Application starting up...")
+    yield
+    # Shutdown
+    logger.info("Application shutting down...")
 
+
+app = FastAPI(lifespan=lifespan)
 
 logger = logging.getLogger(__name__)
 
 # Force configure logging for AWS Lambda
 logging.getLogger().handlers.clear()
-logging.basicConfig(level=logging.DEBUG, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", force=True)
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", force=True)
 
 # Disable useless logging
 logging.getLogger('botocore').setLevel(logging.CRITICAL)
@@ -36,6 +45,11 @@ logging.getLogger('s3transfer').setLevel(logging.CRITICAL)
 logging.getLogger('urllib3').setLevel(logging.CRITICAL)
 logging.getLogger('asyncio').setLevel(logging.CRITICAL)
 logging.getLogger('multipart').setLevel(logging.CRITICAL)
+logging.getLogger('python_multipart').setLevel(logging.WARNING)  # Add this
+logging.getLogger('utils.secrets_manager_client').setLevel(logging.WARNING)  # Add this
+logging.getLogger('list_processor.autotrader_client').setLevel(logging.WARNING)  # Add this
+logging.getLogger('list_processor.cap_client').setLevel(logging.WARNING)  # Add this
+logging.getLogger('utils.s3_tools').setLevel(logging.WARNING)  # Add this
 
 
 class BasePathMiddleware(BaseHTTPMiddleware):
@@ -52,9 +66,6 @@ app.add_middleware(SessionMiddleware, secret_key="as#$RD$26xc04$GF3r1dFDmhjd")
 # Add middleware for base path
 app.add_middleware(BasePathMiddleware)
 
-# OAuth2 password bearer token utilization (assuming token-based auth for simplicity)
-#oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
-
 
 @app.get('/healthcheck')
 def simple_healthcheck(request: Request):
@@ -63,26 +74,13 @@ def simple_healthcheck(request: Request):
     if 'aws.context' in request.scope:
         context = request.scope['aws.context']
     return {"status": "ok", 'context': json.dumps(context, default=str)}
-#
-# @app.get("/", response_class=HTMLResponse)
-# def login(request: Request):
-#     return templates.TemplateResponse("login.html", {"request": request})
-#
-# @app.get('/healthcheck')
-# def simple_healthcheck(request: Request):
-#     logger.info('Healthcheck')
-#     context = None
-#     if 'aws.context' in request.scope:
-#         context = request.scope['aws.context']
-#     return {"status": "ok", 'context': json.dumps(context, default=str)}
-
 
 
 @app.get("/test")
 def read_root(request: Request):
     res = {"Hello": "World2"}
 
-    # This is an asynchronous call that will be executed in a new AWS Lambda function context (as it was an intependent HTTP request, but not going through the API Gateway)
+    # This is an asynchronous call that will be executed in a new AWS Lambda function context
     lambda_requests_manager.simulate_http(
         aws_context=request.scope["aws.context"],
         path="/test_execution",
@@ -90,8 +88,8 @@ def read_root(request: Request):
         data=res
     )
 
-    # Return the response to the client
     return res
+
 
 @app.get("/test-secrets-manager")
 def test_secrets_manager(request: Request):
@@ -130,7 +128,6 @@ def test_db(request: Request):
     connection.close()
 
     return {"status": "ok", 'data': result}
-
 
 
 @app.post("/test_execution")
