@@ -1,153 +1,158 @@
+# FILE PATH: source_code/router/backend/main.py
+
 import logging
 import os
 import re
-from contextlib import asynccontextmanager
-
-from fastapi import FastAPI, Request, Form, Depends, HTTPException
-from fastapi.templating import Jinja2Templates
-from fastapi.responses import HTMLResponse, RedirectResponse
-from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
-from starlette.middleware.sessions import SessionMiddleware
-from starlette.status import HTTP_401_UNAUTHORIZED
-from mangum import Mangum
 import json
-import hashlib
+from contextlib import asynccontextmanager
+from typing import Optional
+
+from fastapi import FastAPI, Request
+from starlette.middleware.sessions import SessionMiddleware
+from starlette.middleware.base import BaseHTTPMiddleware
+from mangum import Mangum
 
 from exceptions import unhandled_exception_handler
 from utils.secrets_manager_client import get_secret
 from utils.lambda_http import LambdaRequestsManager
-from starlette.middleware.base import BaseHTTPMiddleware
-from starlette.responses import Response
-import router
 
+# ---------- logging ----------
+logging.getLogger().handlers.clear()
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    force=True,
+)
+logger = logging.getLogger("app")
 
+for name, lvl in {
+    "botocore": logging.CRITICAL,
+    "boto3": logging.CRITICAL,
+    "s3transfer": logging.CRITICAL,
+    "urllib3": logging.CRITICAL,
+    "asyncio": logging.CRITICAL,
+    "multipart": logging.CRITICAL,
+    "python_multipart": logging.WARNING,
+    "utils.secrets_manager_client": logging.WARNING,
+    "list_processor.autotrader_client": logging.WARNING,
+    "list_processor.cap_client": logging.WARNING,
+    "utils.s3_tools": logging.WARNING,
+}.items():
+    logging.getLogger(name).setLevel(lvl)
+
+# Import router - FIXED: Changed from router2 to router
+try:
+    from router import router as api_router
+    logger.info("Router loaded successfully")
+except Exception as e:
+    logger.error("Router import failed: %s", e)
+    raise
+
+# ---------- middleware ----------
+class BasePathMiddleware(BaseHTTPMiddleware):
+    """Strip API Gateway base path (stage) so FastAPI sees clean routes."""
+
+    def __init__(self, app: FastAPI, base_path: Optional[str]) -> None:
+        super().__init__(app)
+        self._pattern = re.compile(rf"^/{re.escape(base_path.lstrip('/'))}") if base_path else None
+
+    async def dispatch(self, request: Request, call_next):
+        if self._pattern:
+            new_path = self._pattern.sub("", request.url.path) or "/"
+            request.scope["path"] = new_path
+        return await call_next(request)
+
+# ---------- lifespan ----------
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup
-    logger.info("Application starting up...")
+    logger.info("Application starting up")
     yield
-    # Shutdown
-    logger.info("Application shutting down...")
+    logger.info("Application shutting down")
 
-
+# ---------- app ----------
 app = FastAPI(lifespan=lifespan)
 
-logger = logging.getLogger(__name__)
+# Sessions - MUST be added before routers
+session_secret = os.getenv("SESSION_SECRET", "change-me-in-prod")
+app.add_middleware(SessionMiddleware, secret_key=session_secret)
 
-# Force configure logging for AWS Lambda
-logging.getLogger().handlers.clear()
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", force=True)
+# Base path strip for API Gateway stage, e.g. "/dev"
+api_base_path = os.getenv("API_GATEWAY_BASE_PATH", "/dev")
+if api_base_path and api_base_path != "/":
+    app.add_middleware(BasePathMiddleware, base_path=api_base_path)
 
-# Disable useless logging
-logging.getLogger('botocore').setLevel(logging.CRITICAL)
-logging.getLogger('boto3').setLevel(logging.CRITICAL)
-logging.getLogger('s3transfer').setLevel(logging.CRITICAL)
-logging.getLogger('urllib3').setLevel(logging.CRITICAL)
-logging.getLogger('asyncio').setLevel(logging.CRITICAL)
-logging.getLogger('multipart').setLevel(logging.CRITICAL)
-logging.getLogger('python_multipart').setLevel(logging.WARNING)  # Add this
-logging.getLogger('utils.secrets_manager_client').setLevel(logging.WARNING)  # Add this
-logging.getLogger('list_processor.autotrader_client').setLevel(logging.WARNING)  # Add this
-logging.getLogger('list_processor.cap_client').setLevel(logging.WARNING)  # Add this
-logging.getLogger('utils.s3_tools').setLevel(logging.WARNING)  # Add this
+# Include routers AFTER session middleware
+app.include_router(api_router)
 
+# Exceptions
+app.add_exception_handler(Exception, unhandled_exception_handler)
 
-class BasePathMiddleware(BaseHTTPMiddleware):
-    async def dispatch(self, request: Request, call_next):
-        # Re-add the base path to URL path
-        new_path = re.sub(r'^/dev', '', request.url.path)
-        request.scope['path'] = new_path
-        response = await call_next(request)
-        return response
+# REMOVED: Noisy route registration logging
 
-
-# Add middleware for session management
-app.add_middleware(SessionMiddleware, secret_key="as#$RD$26xc04$GF3r1dFDmhjd")
-# Add middleware for base path
-app.add_middleware(BasePathMiddleware)
-
-
-@app.get('/healthcheck')
+# ---------- utility endpoints ----------
+@app.get("/healthcheck")
 def simple_healthcheck(request: Request):
-    logger.info('Healthcheck')
-    context = None
-    if 'aws.context' in request.scope:
-        context = request.scope['aws.context']
-    return {"status": "ok", 'context': json.dumps(context, default=str)}
-
+    ctx = request.scope.get("aws.context")
+    return {"status": "ok", "context": json.dumps(ctx, default=str) if ctx else None}
 
 @app.get("/test")
 def read_root(request: Request):
     res = {"Hello": "World2"}
-
-    # This is an asynchronous call that will be executed in a new AWS Lambda function context
+    ctx = request.scope.get("aws.context")
     lambda_requests_manager.simulate_http(
-        aws_context=request.scope["aws.context"],
+        aws_context=ctx,
         path="/test_execution",
         method="POST",
-        data=res
+        data=res,
     )
-
     return res
-
 
 @app.get("/test-secrets-manager")
 def test_secrets_manager(request: Request):
-    env = 'prod' if os.getenv('AWS_REGION') == 'eu-west-1' else 'dev'
-    varname = f'{env}/common/car_pricer/rds/admin_credentials'
+    env = "prod" if os.getenv("AWS_REGION") == "eu-west-1" else "dev"
+    varname = f"{env}/common/car_pricer/rds/admin_credentials"
     data = get_secret(varname)
-    return {"status": "ok", 'data': data}
-
+    return {"status": "ok", "data": data}
 
 @app.get("/test-db")
 def test_db(request: Request):
-    """this function tries to establish a connection to amazon aurora db (postgresql)"""
+    """Test connection to Aurora PostgreSQL. Returns rows from test_table."""
     import psycopg2
     import psycopg2.extras
 
-    env = 'prod' if os.getenv('AWS_REGION') == 'eu-west-1' else 'dev'
-    varname = f'{env}/common/car_pricer/rds/admin_credentials'
-    data = get_secret(varname)
+    env = "prod" if os.getenv("AWS_REGION") == "eu-west-1" else "dev"
+    varname = f"{env}/common/car_pricer/rds/admin_credentials"
+    creds = get_secret(varname)
 
-    # Connect to the database
-    connection = psycopg2.connect(
-        host=data['cluster_endpoint'],
-        user=data['username'],
-        password=data['password'],
-        database='postgres',
-        port=5432
+    conn = psycopg2.connect(
+        host=creds["cluster_endpoint"],
+        user=creds["username"],
+        password=creds["password"],
+        database="postgres",
+        port=5432,
     )
+    try:
+        with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
+            cur.execute("SELECT * FROM test_table")
+            rows = cur.fetchall()
+        result = [dict(r) for r in rows]
+    finally:
+        conn.close()
 
-    with connection.cursor(cursor_factory=psycopg2.extras.DictCursor) as cursor:
-        # Create a new record
-        sql = "SELECT * FROM test_table"
-        cursor.execute(sql)
-        result = cursor.fetchall()
-        print(result)
-
-    connection.close()
-
-    return {"status": "ok", 'data': result}
-
+    return {"status": "ok", "data": result}
 
 @app.post("/test_execution")
 def test_execution(data: dict):
-    print('Test execution which can take up to 15 minutes to complete (max aws lambda timeout)')
-    print(data)
+    logger.info("test_execution invoked")
+    logger.info(data)
     return {}
 
-
-app.include_router(router.router)
-app.add_exception_handler(Exception, unhandled_exception_handler)
-
-# TODO: probably it's more correct to put api_gateway_base_path="/dev" here
+# ---------- lambda adapter ----------
 handler = Mangum(app, lifespan="auto")
 lambda_requests_manager = LambdaRequestsManager()
 lambda_requests_manager.init(mangum_handler=handler)
 
-
-# if there's a var LOCAL_ENV=1, run local http server
-if __name__ == '__main__':
+# ---------- local dev ----------
+if __name__ == "__main__":
     import uvicorn
-    print('Running local server')
-    uvicorn.run('main:app', host="0.0.0.0", port=8080, reload=True, workers=1)
+    uvicorn.run("main:app", host="0.0.0.0", port=8080, reload=True, workers=1)

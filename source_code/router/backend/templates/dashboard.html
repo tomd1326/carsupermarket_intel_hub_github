@@ -1,5 +1,6 @@
+<!-- FILE: source_code/router/backend/templates/dashboard.html -->
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-auto-refresh="{{ '1' if at_least_one_pending else '0' }}">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -7,34 +8,24 @@
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css" rel="stylesheet">
     <style>
-        .status-label {
-            padding: 2px 8px;
-            color: white;
-            border-radius: 5px;
-            font-size: 0.8rem;
-            font-weight: bold;
-        }
+        .status-label { padding: 2px 8px; color: white; border-radius: 5px; font-size: 0.8rem; font-weight: bold; }
         .status-success { background-color: #067921; }
         .status-created { background-color: #777777; }
         .status-pending { background-color: #b79011; }
         .status-error { background-color: #c71829; }
-
-        .countdown-label {
-            margin-right: 10px;
-            font-size: 1.2rem;
-            /*font-weight: bold;*/
-            text-align: left;
-        }
-        #countdown {
-            width: 30px;
-            display: inline-block;
-        }
+        .countdown-label { margin-right: 10px; font-size: 1.2rem; text-align: left; }
+        #countdown { width: 30px; display: inline-block; }
     </style>
 </head>
 <body>
     <div class="container mt-4">
         <h2>Create Task</h2>
-        <form id="uploadForm" action="{{ BASE_URL }}/upload-task" method="post">
+
+        <!-- hidden iframe to keep upload alive; no visual impact -->
+        <iframe name="upload_iframe" id="upload_iframe" style="display:none;"></iframe>
+
+        <!-- relative action avoids base-path issues locally -->
+        <form id="uploadForm" action="upload-task-multipart" method="post" enctype="multipart/form-data">
             <div class="mb-3">
                 <label for="supplierName" class="form-label">Supplier Name:</label>
                 <select class="form-select" id="supplierName" name="supplier_id">
@@ -58,19 +49,19 @@
         </form>
 
         <div class="d-flex justify-content-between align-items-center mt-5">
-        <h2>Task List</h2>
-        <div class="d-flex align-items-center">
-            {% if at_least_one_pending %}
-                <div class="form-check me-2">
-                    <input type="checkbox" class="form-check-input" id="auto-refresh-checkbox" checked>
-                    <label class="form-check-label countdown-label" for="auto-refresh-checkbox">Auto-refresh in <span id="countdown">10</span></label>
-                </div>
-            {% endif %}
-            <button class="btn btn-outline-secondary" onclick="location.reload()">
-                <i class="fas fa-sync-alt"></i>
-            </button>
+            <h2>Task List</h2>
+            <div class="d-flex align-items-center">
+                {% if at_least_one_pending %}
+                    <div class="form-check me-2">
+                        <input type="checkbox" class="form-check-input" id="auto-refresh-checkbox" checked>
+                        <label class="form-check-label countdown-label" for="auto-refresh-checkbox">Auto-refresh in <span id="countdown">10</span></label>
+                    </div>
+                {% endif %}
+                <button class="btn btn-outline-secondary" onclick="location.reload()">
+                    <i class="fas fa-sync-alt"></i>
+                </button>
+            </div>
         </div>
-    </div>
 
         <table class="table">
             <thead>
@@ -82,7 +73,6 @@
                     <th scope="col">Total rows, Exec. time</th>
                     <th scope="col">Status</th>
                     <th scope="col">Download</th>
-<!--                    <th scope="col">Re-process</th>-->
                 </tr>
             </thead>
             <tbody>
@@ -111,10 +101,12 @@
                         {% else %}
                             <a href="#" class="btn btn-outline-dark disabled" aria-disabled="true"><i class="fa fa-redo"></i></a>
                         {% endif %}
+                    </td>
                 </tr>
                 {% endfor %}
             </tbody>
         </table>
+
         <nav aria-label="Task pagination">
           <ul class="pagination">
             {% for num in range(1, total_pages + 1) %}
@@ -125,100 +117,43 @@
           </ul>
         </nav>
     </div>
+
     <script>
         function startCountdown() {
             var countdownElement = document.getElementById('countdown');
             var timeLeft = 10;
-            var decrease = function() {
-                // CHeck the auto-refresh-checkbox status
-                var autoRefreshCheckbox = document.getElementById('auto-refresh-checkbox');
-                if (!autoRefreshCheckbox.checked) {
-                    return;
-                }
-                if (timeLeft <= 0) {
-                    clearInterval(countdownTimer);
-                    location.reload(); // Reload the page when countdown reaches 0
-                } else {
-                    countdownElement.textContent = timeLeft;
-                    timeLeft -= 1;
-                }
-            };
-
-            decrease(); // Call decrease function immediately to avoid 1-second delay
-            var countdownTimer = setInterval(decrease, 1000);
+            function decrease() {
+                var box = document.getElementById('auto-refresh-checkbox');
+                if (box && !box.checked) return;
+                if (timeLeft <= 0) { clearInterval(timer); location.reload(); }
+                else { countdownElement.textContent = timeLeft; timeLeft -= 1; }
+            }
+            decrease();
+            var timer = setInterval(decrease, 1000);
         }
 
         document.addEventListener("DOMContentLoaded", function() {
-            document.getElementById('uploadForm').addEventListener('submit', function (event) {
+            var form = document.getElementById('uploadForm');
+
+            form.addEventListener('submit', function (event) {
                 event.preventDefault();
 
-                const supplierSelect = document.getElementById('supplierName');
-                const selectedSupplier = supplierSelect.value;
+                var supplier = document.getElementById('supplierName').value;
+                if (supplier === 'None') { alert('Please select a supplier.'); return; }
 
-                if (selectedSupplier === 'None') {
-                    alert('Please select a supplier.');
-                    return;
-                }
+                try { sessionStorage.setItem('last_status', 'pending'); } catch(e) {}
 
-                const form = this;
-                const fileInput = document.getElementById('fileUpload');
-                const previousFileInput = document.getElementById('previousFileUpload');
-                const file = fileInput.files[0];
-                const previousFile = previousFileInput.files[0];
+                // stream to server; no Base64 reads
+                form.setAttribute('target', 'upload_iframe');
+                form.submit();
 
-                let filesToProcess = 0;
-                let filesProcessed = 0;
-
-                if (file) filesToProcess++;
-                if (previousFile) filesToProcess++;
-
-                if (filesToProcess === 0) {
-                    console.error('No files selected.');
-                    form.submit();
-                    return;
-                }
-
-                function checkSubmit() {
-                    filesProcessed++;
-                    if (filesProcessed === filesToProcess) {
-                        form.submit();
-                    }
-                }
-
-                if (file) {
-                    const reader = new FileReader();
-                    reader.readAsDataURL(file);
-                    reader.onload = function () {
-                        const base64EncodedFile = reader.result.split(',')[1];
-                        document.getElementById('fileBase64').value = base64EncodedFile;
-                        console.log('Base64 Encoding Complete (main file):', base64EncodedFile);
-                        checkSubmit();
-                    };
-                    reader.onerror = function (error) {
-                        console.error('FileReader Error (main file): ', error);
-                        checkSubmit();
-                    };
-                }
-
-                if (previousFile) {
-                    const previousReader = new FileReader();
-                    previousReader.readAsDataURL(previousFile);
-                    previousReader.onload = function () {
-                        const base64EncodedPreviousFile = previousReader.result.split(',')[1];
-                        document.getElementById('previousFileBase64').value = base64EncodedPreviousFile;
-                        console.log('Base64 Encoding Complete (previous file):', base64EncodedPreviousFile);
-                        checkSubmit();
-                    };
-                    previousReader.onerror = function (error) {
-                        console.error('FileReader Error (previous file): ', error);
-                        checkSubmit();
-                    };
-                }
+                // reload immediately
+                setTimeout(function(){ location.replace(location.href); }, 50);
             });
 
-            {% if at_least_one_pending %}
+            if (document.documentElement.getAttribute('data-auto-refresh') === '1') {
                 startCountdown();
-            {% endif %}
+            }
         });
     </script>
 </body>

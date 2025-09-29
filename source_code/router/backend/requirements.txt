@@ -1,0 +1,11 @@
+fastapi>=0.110
+uvicorn[standard]>=0.23
+pandas>=2.1
+openpyxl>=3.1           # read/write .xlsx
+xlrd>=2.0               # read legacy .xls (if needed)
+xlsxwriter>=3.1         # write .xlsx with formatting
+boto3>=1.28
+psycopg2-binary>=2.9    # PostgreSQL client (dev/local)
+snowflake-connector-python>=3.10
+python-multipart>=0.0.9 # form/file uploads
+Jinja2>=3.1
