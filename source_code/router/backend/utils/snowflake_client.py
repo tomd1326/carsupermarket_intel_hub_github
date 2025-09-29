@@ -1,18 +1,32 @@
-# source_code/router/backend/utils/snowflake_client.py
+# FILE PATH: source_code/router/backend/utils/snowflake_client.py
+# LAMBDA-OPTIMIZED: HARDCODED PROD + minimal logging + no emojis
+
 from __future__ import annotations
 from typing import Optional, Sequence, Any, Tuple, List
+
+import logging
+import boto3
 import snowflake.connector
 from utils.secrets_manager_client import get_secret
+
+logger = logging.getLogger(__name__)
 
 try:
     import pandas as pd
 except Exception:
-    pd = None  # optional
+    pd = None
 
 class SnowflakeClient:
-    """Tiny Snowflake wrapper: connect, run query, close."""
     def __init__(self, environment: str = "prod"):
-        secret = get_secret(f"{environment}/carsupermarket/core/snowflake/data_analyst_credentials")
+        # HARDCODED: ALWAYS USE PROD
+        environment = "prod"
+
+        # PROD secret and region
+        secret_name = "prod/carsupermarket/core/snowflake/data_analyst_credentials"
+        region = "eu-west-1"
+
+        secret = get_secret(secret_name, region_name=region)
+
         self._conn: Optional[snowflake.connector.SnowflakeConnection] = None
         self._cfg = {
             "user": secret["user"],
@@ -27,9 +41,8 @@ class SnowflakeClient:
     def connect(self) -> None:
         if self._conn:
             return
-        self._conn = snowflake.connector.connect(
-            client_session_keep_alive=True, **{k: v for k, v in self._cfg.items() if v}
-        )
+        cfg = {k: v for k, v in self._cfg.items() if v}
+        self._conn = snowflake.connector.connect(client_session_keep_alive=True, **cfg)
 
     def close(self) -> None:
         if self._conn:

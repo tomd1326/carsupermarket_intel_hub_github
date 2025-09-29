@@ -1,94 +1,111 @@
-import os
-import sys
+#!/usr/bin/env python3
+"""
+Test script to check access to the exact PROD Snowflake secret
+"""
+
+import boto3
 import json
-import requests
+from botocore.exceptions import ClientError
 
-# Add parent directory to path to find utils module
-current_dir = os.path.dirname(os.path.abspath(__file__))
-parent_dir = os.path.dirname(current_dir)
-sys.path.append(parent_dir)
+def test_secret_access():
+    """Test access to the exact PROD secret that's failing"""
+    
+    secret_name = "prod/carsupermarket/core/snowflake/data_analyst_credentials"
+    region_name = "eu-west-1"
+    
+    print(f"🔍 Testing access to secret: '{secret_name}'")
+    print(f"🌍 Region: {region_name}")
+    print(f"🔑 Using your current AWS credentials...")
+    print("-" * 60)
+    
+    try:
+        # Create secrets manager client
+        session = boto3.Session()
+        client = session.client(
+            service_name='secretsmanager',
+            region_name=region_name
+        )
+        
+        print(f"✅ Created SecretsManager client for {region_name}")
+        
+        # Try to get the secret
+        print(f"🔍 Attempting to retrieve secret...")
+        response = client.get_secret_value(SecretId=secret_name)
+        
+        # Success!
+        print(f"✅ SUCCESS: Secret retrieved successfully!")
+        secret_string = response['SecretString']
+        secret_data = json.loads(secret_string)
+        
+        # Show what we got (without sensitive data)
+        print(f"📋 Secret contains {len(secret_data)} keys:")
+        for key in secret_data.keys():
+            if key.lower() == 'password':
+                print(f"   - {key}: ***HIDDEN***")
+            else:
+                print(f"   - {key}: {secret_data[key]}")
+        
+        return True
+        
+    except ClientError as e:
+        error_code = e.response['Error']['Code']
+        error_message = e.response['Error']['Message']
+        
+        print(f"❌ AWS ClientError: {error_code}")
+        print(f"❌ Error message: {error_message}")
+        
+        if error_code == 'ResourceNotFoundException':
+            print(f"🔍 DIAGNOSIS: Secret doesn't exist at that path/region")
+            print(f"🔍 SUGGESTION: Double-check the secret name and region")
+        elif error_code == 'AccessDeniedException':
+            print(f"🔍 DIAGNOSIS: Your AWS credentials don't have permission")
+            print(f"🔍 SUGGESTION: You need secretsmanager:GetSecretValue permission for PROD secrets")
+        elif error_code == 'UnauthorizedOperation':
+            print(f"🔍 DIAGNOSIS: IAM permissions issue")
+            print(f"🔍 SUGGESTION: Check your IAM user/role permissions")
+        else:
+            print(f"🔍 DIAGNOSIS: Unknown error - see AWS documentation for {error_code}")
+        
+        return False
+        
+    except Exception as e:
+        print(f"❌ Unexpected error: {type(e).__name__}")
+        print(f"❌ Error message: {str(e)}")
+        return False
 
-from utils.secrets_manager_client import get_secret
-
-def get_autotrader_secrets():
-    env = 'prod' if os.getenv('AWS_REGION') == 'eu-west-1' else 'dev'
-    return get_secret(f'{env}/carsupermarket/car_pricer/api_access')
-
-def authenticate_autotrader():
-    secrets = get_autotrader_secrets()
-    host = "https://api.autotrader.co.uk"
-    auth_url = f"{host}/authenticate"
-    auth_data = {
-        'key': secrets['AUTOTRADER_KEY'],
-        'secret': secrets['AUTOTRADER_SECRET']
-    }
-    response = requests.post(auth_url, data=auth_data)
-    response.raise_for_status()
-    return response.json().get('access_token')
-
-def get_vehicle_data(vrm, mileage, access_token):
-    secrets = get_autotrader_secrets()
-    host = "https://api.autotrader.co.uk"
-    vehicles_api_url = f"{host}/vehicles"
-    headers = {'Authorization': f'Bearer {access_token}'}
-    params = {
-        'advertiserId': secrets['ADVERTISER_ID'],
-        'registration': vrm,
-        'valuations': 'true',
-        'vehicleMetrics': 'true',
-        'odometerReadingMiles': mileage,
-        'includeFirstRegistrationDate': 'true',
-        'competitors': 'false',
-        'features': 'true'
-    }
-    response = requests.get(vehicles_api_url, params=params, headers=headers)
-    response.raise_for_status()
-    return response.json()
-
-def get_valuation_data(derivative_id, first_registration_date, mileage, access_token):
-    secrets = get_autotrader_secrets()
-    host = "https://api.autotrader.co.uk"
-    valuations_api_url = f"{host}/valuations?advertiserId={secrets['ADVERTISER_ID']}"
-    headers = {'Authorization': f'Bearer {access_token}'}
-    payload = {
-        "vehicle": {
-            "derivativeId": derivative_id,
-            "firstRegistrationDate": first_registration_date,
-            "odometerReadingMiles": mileage
-        },
-        "features": []
-    }
-    response = requests.post(valuations_api_url, json=payload, headers=headers)
-    response.raise_for_status()
-    return response.json()
-
-def main():
-    vrm = "EF71NWO"
-    mileage = 30925
-
-    access_token = authenticate_autotrader()
-    vehicles_data = get_vehicle_data(vrm, mileage, access_token)
-
-    # Write vehicles API output
-    output_dir = r"C:\Users\tom.drayson\OneDrive - Motor Depot"
-    os.makedirs(output_dir, exist_ok=True)
-    vehicles_file = os.path.join(output_dir, f"vehicles_output_{vrm}.json")
-    with open(vehicles_file, "w") as f:
-        json.dump(vehicles_data, f, indent=2)
-    print(f"Vehicles API JSON saved to: {vehicles_file}")
-
-    # Get required fields for Valuations API
-    vehicle_info = vehicles_data.get('vehicle', {})
-    derivative_id = vehicle_info.get('derivativeId', '')
-    first_registration_date = vehicle_info.get('firstRegistrationDate', '')
-
-    valuations_data = get_valuation_data(derivative_id, first_registration_date, mileage, access_token)
-
-    # Write valuations API output
-    valuations_file = os.path.join(output_dir, f"valuations_output_{vrm}.json")
-    with open(valuations_file, "w") as f:
-        json.dump(valuations_data, f, indent=2)
-    print(f"Valuations API JSON saved to: {valuations_file}")
+def check_aws_identity():
+    """Check what AWS identity we're using"""
+    try:
+        sts_client = boto3.client('sts')
+        identity = sts_client.get_caller_identity()
+        
+        print(f"🔑 Your AWS Identity:")
+        print(f"   - Account: {identity.get('Account', 'Unknown')}")
+        print(f"   - User ARN: {identity.get('Arn', 'Unknown')}")
+        print(f"   - User ID: {identity.get('UserId', 'Unknown')}")
+        
+    except Exception as e:
+        print(f"❌ Could not get AWS identity: {str(e)}")
 
 if __name__ == "__main__":
-    main()
+    print("🚀 PROD Secret Access Test")
+    print("=" * 60)
+    
+    # First check what AWS identity we're using
+    check_aws_identity()
+    print()
+    
+    # Test the secret access
+    success = test_secret_access()
+    
+    print()
+    print("=" * 60)
+    if success:
+        print("✅ RESULT: You have access to the PROD secret!")
+        print("🤔 If Snowflake still fails, the issue is elsewhere.")
+    else:
+        print("❌ RESULT: You don't have access to the PROD secret.")
+        print("💡 This is normal for developers - use DEV environment for testing.")
+
+# Alternative quick CLI test:
+# aws secretsmanager get-secret-value --secret-id "prod/carsupermarket/core/snowflake/data_analyst_credentials" --region eu-west-1
