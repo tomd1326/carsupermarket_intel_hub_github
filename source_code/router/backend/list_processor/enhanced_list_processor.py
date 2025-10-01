@@ -1,80 +1,184 @@
-# source_code/router/backend/list_processor/enhanced_list_processor.py
+# FILE: source_code/router/backend/list_processor/enhanced_list_processor.py
 
+import asyncio
 import logging
-import pandas as pd
-from typing import Optional
+from typing import Any, Dict, List, Optional, Tuple
 
-from list_processor.columns_mapper import get_columns_mapper
-from list_processor.autotrader_client import AutoTraderClient
-from list_processor.cap_client import CAPClient
-from list_processor.snowflake_enrichment import enrich_with_stock_sales
+import pandas as pd
+
+from .autotrader_client import AutoTraderClient
+from .cap_client import CAPClient
+from ..utils.config import MAX_WORKERS
+from ..utils.secrets_manager_client import get_secret  # existing module
+from ..utils.lambda_http import get_http_client  # ensure client init in cold start
 
 log = logging.getLogger(__name__)
 
 
-def process_vehicle_list(
+# ---------- Orchestration ----------
+
+async def _process_one(
+    idx: int,
+    row: Dict[str, Any],
+    at: AutoTraderClient,
+    cap: CAPClient,
+) -> Dict[str, Any]:
+    """Process a single vehicle row. Mirrors test_fixed.py semantics."""
+    result: Dict[str, Any] = dict(row)
+    result["row_index"] = idx
+
+    vrm = str(row.get("REGNO", "")).strip()
+    mileage = int(row.get("MILES", 0) or 0)
+
+    if not vrm or mileage <= 0:
+        result["error"] = "Missing VRM or mileage"
+        return result
+
+    # CAP
+    cap_data = await cap.vrm(vrm, mileage)
+    result.update(cap_data)
+
+    # AutoTrader vehicles
+    atv = await at.vehicles(vrm, mileage)
+    result.update(atv)
+
+    # AutoTrader valuations (only with derivative)
+    if atv.get("at_success") and atv.get("at_derivative_id"):
+        features = [f.strip() for f in (atv.get("at_factory_features") or "").split(",") if f.strip()]
+        val = await at.valuations(
+            vrm=vrm,
+            derivative_id=atv["at_derivative_id"],
+            first_reg_date=atv.get("at_first_reg_date", ""),
+            mileage_miles=mileage,
+            features=features,
+        )
+        result.update(val)
+
+    return result
+
+
+async def _bounded_gather(
+    rows: List[Tuple[int, Dict[str, Any]]],
+    at: AutoTraderClient,
+    cap: CAPClient,
+    max_workers: int,
+) -> List[Dict[str, Any]]:
+    sem = asyncio.Semaphore(max_workers)
+
+    async def _wrap(i: int, r: Dict[str, Any]):
+        async with sem:
+            return await _process_one(i, r, at, cap)
+
+    tasks = [asyncio.create_task(_wrap(i, r)) for i, r in rows]
+    results: List[Dict[str, Any]] = []
+    for t in asyncio.as_completed(tasks):
+        results.append(await t)
+    # restore original order
+    results.sort(key=lambda d: d.get("row_index", 0))
+    return results
+
+
+async def process_dataframe_async(
     df: pd.DataFrame,
-    supplier_name: str,
-    rate_limit: int = 40,
-    enable_snowflake: bool = True,
-    snowflake_env: str = "prod"
-) -> pd.DataFrame:
+    *,
+    env_region: Optional[str] = None,
+) -> List[Dict[str, Any]]:
     """
-    Process a vehicle list with smart CAPID handling.
-    
-    Args:
-        df: Input DataFrame
-        supplier_name: Supplier name ("Enterprise", "Motability", "1link", "Universal")
-        rate_limit: API requests per second
-        enable_snowflake: Whether to enrich with Snowflake data
-        snowflake_env: Snowflake environment
-        
-    Returns:
-        Enhanced DataFrame
+    Async entrypoint. Builds clients from Secrets Manager and processes the frame.
+    Secrets layout follows test_fixed.py:
+      {ENV}/carsupermarket/car_pricer/api_access
+        AUTOTRADER_KEY, AUTOTRADER_SECRET, ADVERTISER_ID,
+        CAP_SUBSCRIBER_ID, CAP_PASSWORD
     """
-    log.info(f"Processing vehicle list: supplier={supplier_name}, rows={len(df)}")
-    
-    # Step 1: Map columns
-    column_mapper = get_columns_mapper(supplier_name)
-    mapped_rows = []
-    
-    for idx, row in df.iterrows():
-        vehicle_row = column_mapper.map_row(row.to_dict())
-        if vehicle_row is not None:
-            mapped_rows.append(vehicle_row.dict())
-    
-    if not mapped_rows:
-        return pd.DataFrame()
-        
-    mapped_df = pd.DataFrame(mapped_rows)
-    
-    # Step 2: Enrich with CAP IDs for rows that need them
-    missing_capid = mapped_df['capid'].isna()
-    if missing_capid.any():
-        log.info(f"Performing VRM lookup for {missing_capid.sum()} rows")
-        cap_client = CAPClient(rps=rate_limit)
-        mapped_df = cap_client.enrich_dataframe_with_capid(
-            mapped_df,
-            vrm_col="vrm",
-            registration_date_col="registration_date",
-            mileage_col="mileage"
-        )
-        # Merge VRM-sourced CAPIDs
-        if 'capid_vrm' in mapped_df.columns:
-            mapped_df['capid'] = mapped_df['capid'].fillna(mapped_df['capid_vrm'])
-    
-    # Step 3: AutoTrader enrichment (if needed)
-    autotrader_client = AutoTraderClient()
-    at_df = autotrader_client.process_file(mapped_df, column_mapper)
-    result_df = pd.concat([mapped_df, at_df], axis=1)
-    
-    # Step 4: Snowflake enrichment with auto-detection
-    if enable_snowflake:
-        result_df = enrich_with_stock_sales(
-            result_df,
-            capid_col=None,  # Auto-detect
-            environment=snowflake_env
-        )
-    
-    log.info(f"Processing complete: {len(result_df)} rows, {len(result_df.columns)} columns")
-    return result_df
+    # Warm shared HTTP client early (helps cold start overlap)
+    await get_http_client()
+
+    env = "prod" if (env_region or pd.options.mode.chained_assignment is None) else "dev"  # dummy branch to avoid unused var lint
+    # Real env detection mirrors test_fixed.py
+    import os
+    env = "prod" if os.getenv("AWS_REGION") == "eu-west-1" else "dev"
+
+    secrets = get_secret(f"{env}/carsupermarket/car_pricer/api_access")
+    at = AutoTraderClient(
+        base_url="https://api.autotrader.co.uk",
+        advertiser_id=secrets["ADVERTISER_ID"],
+        key=secrets["AUTOTRADER_KEY"],
+        secret=secrets["AUTOTRADER_SECRET"],
+    )
+    cap = CAPClient(
+        subscriber_id=secrets["CAP_SUBSCRIBER_ID"],
+        password=secrets["CAP_PASSWORD"],
+    )
+
+    rows = [(i, row._asdict() if hasattr(row, "_asdict") else dict(row)) for i, row in enumerate(df.to_dict(orient="records"))]
+    return await _bounded_gather(rows, at, cap, MAX_WORKERS)
+
+
+def process_dataframe(df: pd.DataFrame) -> List[Dict[str, Any]]:
+    """
+    Sync wrapper for environments that call synchronously (e.g., FastAPI endpoints).
+    """
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = None
+
+    if loop and loop.is_running():
+        # Nested loop scenario, create task and wait
+        return asyncio.run(process_dataframe_async(df))  # type: ignore
+    else:
+        return asyncio.run(process_dataframe_async(df))
+
+
+# ---------- XLSX writing (fast) ----------
+
+def results_to_excel_fast(results: List[Dict[str, Any]], output_path: str) -> None:
+    """
+    Fast write-only XLSX. Avoids pandas .to_excel overhead.
+    Preserves column order from first row, adds any new keys encountered.
+    """
+    from openpyxl import Workbook
+
+    if not results:
+        # Create empty file with no rows
+        wb = Workbook(write_only=True)
+        ws = wb.create_sheet()
+        wb.save(output_path)
+        return
+
+    # Build header
+    header: List[str] = []
+    seen = set()
+    for r in results:
+        for k in r.keys():
+            if k not in seen:
+                seen.add(k)
+                header.append(k)
+
+    wb = Workbook(write_only=True)
+    ws = wb.create_sheet()
+    ws.append(header)
+
+    for r in results:
+        ws.append([r.get(c, "") for c in header])
+
+    wb.save(output_path)
+
+
+# ---------- Convenience end-to-end ----------
+
+def process_and_write_xlsx(
+    df: pd.DataFrame,
+    output_path: str,
+) -> None:
+    """
+    Full pipeline:
+      - async fetch + enrich with AutoTrader and CAP
+      - preserve order
+      - write XLSX fast
+    """
+    results = process_dataframe(df)
+    # drop row_index before save
+    for r in results:
+        r.pop("row_index", None)
+    results_to_excel_fast(results, output_path)

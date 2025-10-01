@@ -7,7 +7,7 @@ from typing import Optional, Sequence, Any, Tuple, List
 import logging
 import boto3
 import snowflake.connector
-from utils.secrets_manager_client import get_secret
+from router.backend.utils.secrets_manager_client import get_secret
 
 logger = logging.getLogger(__name__)
 

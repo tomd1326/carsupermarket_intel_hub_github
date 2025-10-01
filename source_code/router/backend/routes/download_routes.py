@@ -8,7 +8,7 @@ from botocore.exceptions import ClientError
 from fastapi import APIRouter
 from starlette.responses import StreamingResponse
 
-from utils.db_utils import get_database_connection
+from router.backend.utils.db_utils import get_database_connection
 
 logger = logging.getLogger(__name__)
 

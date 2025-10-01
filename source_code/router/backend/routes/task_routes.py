@@ -11,8 +11,8 @@ from fastapi import APIRouter, Request, Depends
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
-from utils.db_utils import get_database_connection
-from routes.auth_routes import get_current_user
+from router.backend.utils.db_utils import get_database_connection
+from router.backend.routes.auth_routes import get_current_user
 
 logger = logging.getLogger(__name__)
 

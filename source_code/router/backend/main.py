@@ -12,11 +12,14 @@ from starlette.middleware.sessions import SessionMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
 from mangum import Mangum
 
-from exceptions import unhandled_exception_handler
-from utils.secrets_manager_client import get_secret
-from utils.lambda_http import LambdaRequestsManager
+from router.backend.exceptions import unhandled_exception_handler
+from router.backend.utils.secrets_manager_client import get_secret
+from router.backend.utils.lambda_http import LambdaRequestsManager
 
 # ---------- logging ----------
+import logging
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
 logging.getLogger().handlers.clear()
 logging.basicConfig(
     level=logging.INFO,
@@ -40,22 +43,26 @@ for name, lvl in {
 }.items():
     logging.getLogger(name).setLevel(lvl)
 
-# Import router - FIXED: Changed from router2 to router
+# Import router
 try:
-    from router import router as api_router
+    from router.backend.router import router as api_router
     logger.info("Router loaded successfully")
 except Exception as e:
     logger.error("Router import failed: %s", e)
     raise
 
+# ---------- runtime config ----------
+APP_HOST = os.getenv("APP_HOST", "127.0.0.1")
+APP_PORT = int(os.getenv("APP_PORT", "8000"))
+API_BASE_PATH = os.getenv("API_GATEWAY_BASE_PATH", "/dev")
+SESSION_SECRET = os.getenv("SESSION_SECRET", "change-me-in-prod")
+
 # ---------- middleware ----------
 class BasePathMiddleware(BaseHTTPMiddleware):
     """Strip API Gateway base path (stage) so FastAPI sees clean routes."""
-
     def __init__(self, app: FastAPI, base_path: Optional[str]) -> None:
         super().__init__(app)
         self._pattern = re.compile(rf"^/{re.escape(base_path.lstrip('/'))}") if base_path else None
-
     async def dispatch(self, request: Request, call_next):
         if self._pattern:
             new_path = self._pattern.sub("", request.url.path) or "/"
@@ -66,6 +73,12 @@ class BasePathMiddleware(BaseHTTPMiddleware):
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("Application starting up")
+    # Announce URLs on startup
+    url = f"http://{APP_HOST}:{APP_PORT}"
+    logger.info("Server ready: %s", url)
+    logger.info("Docs: %s/docs", url)
+    print(f"Server ready: {url}", flush=True)
+    print(f"Docs: {url}/docs", flush=True)
     yield
     logger.info("Application shutting down")
 
@@ -73,21 +86,17 @@ async def lifespan(app: FastAPI):
 app = FastAPI(lifespan=lifespan)
 
 # Sessions - MUST be added before routers
-session_secret = os.getenv("SESSION_SECRET", "change-me-in-prod")
-app.add_middleware(SessionMiddleware, secret_key=session_secret)
+app.add_middleware(SessionMiddleware, secret_key=SESSION_SECRET)
 
 # Base path strip for API Gateway stage, e.g. "/dev"
-api_base_path = os.getenv("API_GATEWAY_BASE_PATH", "/dev")
-if api_base_path and api_base_path != "/":
-    app.add_middleware(BasePathMiddleware, base_path=api_base_path)
+if API_BASE_PATH and API_BASE_PATH != "/":
+    app.add_middleware(BasePathMiddleware, base_path=API_BASE_PATH)
 
 # Include routers AFTER session middleware
 app.include_router(api_router)
 
 # Exceptions
 app.add_exception_handler(Exception, unhandled_exception_handler)
-
-# REMOVED: Noisy route registration logging
 
 # ---------- utility endpoints ----------
 @app.get("/healthcheck")
@@ -150,9 +159,10 @@ def test_execution(data: dict):
 # ---------- lambda adapter ----------
 handler = Mangum(app, lifespan="auto")
 lambda_requests_manager = LambdaRequestsManager()
+# .init is a no-op shim in local; stored for Lambda
 lambda_requests_manager.init(mangum_handler=handler)
 
 # ---------- local dev ----------
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("main:app", host="0.0.0.0", port=8080, reload=True, workers=1)
+    uvicorn.run("main:app", host=APP_HOST, port=APP_PORT, reload=True, workers=1)

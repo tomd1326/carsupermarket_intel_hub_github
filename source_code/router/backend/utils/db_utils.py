@@ -2,7 +2,7 @@ import os
 import psycopg2
 import psycopg2.extras
 from contextlib import contextmanager
-from utils.secrets_manager_client import get_secret
+from router.backend.utils.secrets_manager_client import get_secret
 
 
 def get_db_credentials():

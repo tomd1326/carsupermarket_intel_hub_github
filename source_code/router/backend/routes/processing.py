@@ -1,70 +1,82 @@
 # FILE PATH: source_code/router/backend/routes/processing.py
-# LAMBDA-OPTIMIZED: PROD Snowflake + minimal logging + REMOVED cap_registration_date
+# LAMBDA-OPTIMIZED: async AT/CAP pipeline, minimal logging, fast XLSX, no duplicate merges
 
 import os
 import time
 import logging
-import datetime
 import tempfile
 import asyncio
 import traceback
-from concurrent.futures import ThreadPoolExecutor
+from typing import Dict, Any, List, Optional
 
 import pandas as pd
 
-from utils.db_utils import get_database_connection
-from utils.s3_tools import upload_file, download_file
-from utils.file_handler import read_dataframe_file, write_dataframe_file
-from list_processor.autotrader_client import AutoTraderClient
-from list_processor.cap_client import CAPClient
-from list_processor.columns_mapper import get_columns_mapper
-from list_processor.snowflake_enrichment import enrich_with_stock_sales
+from router.backend.utils.db_utils import get_database_connection
+from router.backend.utils.s3_tools import upload_file, download_file
+from router.backend.utils.file_handler import read_dataframe_file
+from router.backend.list_processor.columns_mapper import get_columns_mapper
+from router.backend.list_processor.snowflake_enrichment import enrich_with_stock_sales
+from router.backend.list_processor.enhanced_list_processor import (
+    process_dataframe_async,
+    results_to_excel_fast,
+)
 
 logger = logging.getLogger(__name__)
-
-# S3 bucket
 s3_bucketname = "aa-raw-sources-uk"
 
-# -------- FIXED: Background Processing Function --------
 
 def _run_elaborate_background(task_id: int):
     """Run elaborate_task in a background thread with its own event loop."""
     try:
         asyncio.run(elaborate_task({"task_id": task_id}))
     except Exception as e:
-        logger.error(f"Processing failed for task {task_id}: {e}")
+        logger.error("Processing failed for task %s: %s", task_id, e)
 
-# -------- Helper Functions --------
 
-def _prepare_df_for_cap_client(df: pd.DataFrame, columns_mapper) -> pd.DataFrame:
-    """Prepare DataFrame for CAP client with minimal logging"""
-    prepared_df = df.copy()
-    
-    # Map VRM column
-    vrm_candidates = [col for col in df.columns if any(x in col.lower() for x in ['vrm', 'reg', 'plate'])]
-    if vrm_candidates and 'vrm' not in prepared_df.columns:
-        prepared_df['vrm'] = df[vrm_candidates[0]]
-    
-    # Map mileage column
-    mileage_candidates = [col for col in df.columns if any(x in col.lower() for x in ['mile', 'odometer'])]
-    if mileage_candidates and 'mileage' not in prepared_df.columns:
-        prepared_df['mileage'] = df[mileage_candidates[0]]
-    
-    # Map registration date
-    reg_date_candidates = [col for col in df.columns if any(x in col.lower() for x in ['registration', 'reg_date', 'first_reg', 'date'])]
-    if reg_date_candidates and 'registration_date' not in prepared_df.columns:
-        prepared_df['registration_date'] = df[reg_date_candidates[0]]
-    elif 'registration_date' not in prepared_df.columns:
-        prepared_df['registration_date'] = ''
-    
-    return prepared_df
+def _normalize_columns_for_pipeline(df: pd.DataFrame, supplier_name: Optional[str]) -> pd.DataFrame:
+    """
+    Ensure canonical columns expected by the async pipeline:
+      - REGNO (VRM)
+      - MILES (odometer miles)
+    """
+    out = df.copy()
+    try:
+        mapper = get_columns_mapper(supplier_name) if supplier_name else {}
+    except Exception:
+        mapper = {}
 
-# -------- Main Processing Function --------
+    if "REGNO" not in out.columns:
+        src = None
+        for key in ("vrm", "regno", "registration", "reg", "plate"):
+            if isinstance(mapper, dict) and key in mapper and mapper[key] in out.columns:
+                src = mapper[key]; break
+        if not src:
+            for c in out.columns:
+                cl = c.lower()
+                if any(k in cl for k in ("vrm", "regno", "registration", "reg", "plate")):
+                    src = c; break
+        if src:
+            out["REGNO"] = out[src].astype(str).str.strip()
 
-async def elaborate_task(data: dict):
-    """LAMBDA-OPTIMIZED processing with minimal logging"""
-    
-    # Fetch task
+    if "MILES" not in out.columns:
+        src = None
+        for key in ("miles", "mileage", "odometer"):
+            if isinstance(mapper, dict) and key in mapper and mapper[key] in out.columns:
+                src = mapper[key]; break
+        if not src:
+            for c in out.columns:
+                cl = c.lower()
+                if any(k in cl for k in ("miles", "mileage", "odometer")):
+                    src = c; break
+        if src:
+            out["MILES"] = pd.to_numeric(out[src], errors="coerce").fillna(0).astype(int)
+
+    return out
+
+
+async def elaborate_task(data: Dict[str, Any]):
+    """Download, enrich, Snowflake-enrich, write XLSX, upload, update DB."""
+    # Fetch task metadata
     with get_database_connection() as conn:
         with conn.cursor() as cursor:
             cursor.execute(
@@ -81,11 +93,9 @@ async def elaborate_task(data: dict):
                 return {"message": "Task not found"}
             cols = [d[0] for d in cursor.description]
             task = dict(zip(cols, row))
-
             cursor.execute("UPDATE tasks SET status = 'pending' WHERE task_id = %s", (data["task_id"],))
             conn.commit()
 
-    # Environment setup
     env = "prod" if os.getenv("AWS_REGION") == "eu-west-1" else "dev"
     file_ext = task["filename"].split(".")[-1].lower()
     s3_raw_key = f'applications/pricing/uk-vehicle-list-evaluator/{env}/raw/{data["task_id"]}.{file_ext}'
@@ -94,46 +104,42 @@ async def elaborate_task(data: dict):
     total_rows = None
     execution_time = None
 
-    # Process in temp directory
     with tempfile.TemporaryDirectory() as tmpdir:
         local_in = os.path.join(tmpdir, f'raw_{data["task_id"]}.{file_ext}')
         local_out = os.path.join(tmpdir, f'out_{data["task_id"]}.{file_ext}')
 
         t0 = time.time()
-
         try:
-            # Download and read
+            # I/O
             download_file(local_in, s3_bucketname, s3_raw_key)
             input_df = read_dataframe_file(local_in)
             total_rows = len(input_df)
 
-            # Initialize clients
-            autotrader = AutoTraderClient()
-            cap_client = CAPClient()
-            columns_mapper = get_columns_mapper(task["supplier_name"])
+            # Normalize for pipeline
+            input_df = _normalize_columns_for_pipeline(input_df, task.get("supplier_name"))
 
-            # Process AutoTrader and CAP
-            autotrader_result = autotrader.process_file(input_df, columns_mapper)
-            cap_prepared_df = _prepare_df_for_cap_client(input_df, columns_mapper)
-            cap_result = cap_client.process_file(cap_prepared_df, columns_mapper)
+            # Enrich with async pipeline (includes original columns; preserves order)
+            results = await process_dataframe_async(input_df)
+            for r in results:
+                r.pop("row_index", None)
+            merged_df = pd.DataFrame(results)
 
-            # Combine results
-            processed_df = pd.concat([input_df, autotrader_result, cap_result], axis=1)
-
-            # HARDCODED PROD Snowflake enrichment
-            processed_df = enrich_with_stock_sales(
-                processed_df,
+            # Snowflake enrichment (prod as per original)
+            merged_df = enrich_with_stock_sales(
+                merged_df,
                 capid_col=None,
-                environment="prod",  # ALWAYS PROD
+                environment="prod",
                 fill_missing_zero=True,
             )
 
-            # ⚡ REMOVE cap_registration_date column from final output
-            columns_to_remove = ['cap_registration_date']
-            processed_df = processed_df.drop(columns=[col for col in columns_to_remove if col in processed_df.columns])
+            # Remove unwanted column if present
+            if "cap_registration_date" in merged_df.columns:
+                merged_df = merged_df.drop(columns=["cap_registration_date"])
 
-            # Write and upload
-            write_dataframe_file(processed_df, local_out)
+            # Fast XLSX write
+            results_to_excel_fast(merged_df.to_dict(orient="records"), local_out)
+
+            # Upload
             upload_file(local_out, s3_bucketname, s3_out_key)
 
             execution_time = time.time() - t0
@@ -141,11 +147,11 @@ async def elaborate_task(data: dict):
 
         except Exception as e:
             execution_time = time.time() - t0
-            error_message = str(e)
-            logger.error(f"Task {data['task_id']} failed: {error_message}")
-            status, message = "error", error_message
+            status, message = "error", f"{e}"
+            logger.error("Task %s failed: %s", data["task_id"], message)
+            logger.debug("Traceback:\n%s", traceback.format_exc())
 
-        # Update database
+        # DB status
         with get_database_connection() as conn:
             with conn.cursor() as cursor:
                 cursor.execute(
@@ -154,4 +160,4 @@ async def elaborate_task(data: dict):
                 )
                 conn.commit()
 
-    return {"message": "Task processing completed"}
+    return {"message": "Task processing completed", "status": status, "rows": total_rows}

@@ -5,10 +5,10 @@ from fastapi import APIRouter
 from fastapi.responses import JSONResponse
 
 # Import all route modules
-from routes.auth_routes import router as auth_router
-from routes.task_routes import router as task_router
-from routes.upload_routes import router as upload_router
-from routes.download_routes import router as download_router
+from router.backend.routes.auth_routes import router as auth_router
+from router.backend.routes.task_routes import router as task_router
+from router.backend.routes.upload_routes import router as upload_router
+from router.backend.routes.download_routes import router as download_router
 
 logger = logging.getLogger(__name__)
 
@@ -29,7 +29,7 @@ router.include_router(download_router)
 # -------- Direct Processing Endpoint --------
 # This one stays here since it's called by background threads, not web requests
 
-from routes.processing import elaborate_task
+from router.backend.routes.processing import elaborate_task
 
 @router.post("/elaborate-task")
 async def elaborate_task_endpoint(data: dict):

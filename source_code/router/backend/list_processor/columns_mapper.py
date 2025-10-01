@@ -4,7 +4,7 @@ import re
 from pydantic import BaseModel, ValidationError
 from typing import Optional, Dict
 import pandas as pd
-from list_processor.structs import VehicleRow
+from router.backend.list_processor.structs import VehicleRow
 import logging
 
 
