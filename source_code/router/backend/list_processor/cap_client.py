@@ -1,399 +1,437 @@
-from concurrent.futures import ThreadPoolExecutor
+# FILE: source_code/router/backend/list_processor/cap_client.py
 
-import logging
+import asyncio
+from typing import Any, Dict, Optional, List, Tuple
 import xml.etree.ElementTree as ET
-from utils.rate_limiter import RateLimiter
-from utils.singleton import Singleton
-from utils.cache import cache
-from utils.secrets_manager_client import get_secret
-from list_processor.structs import VehicleRow
-from list_processor.columns_mapper import BaseColumnsMapper
-from typing import Optional, Tuple
 import datetime
-import requests
-import os
-import re
-import pandas as pd
-import pydantic
+import logging
 
+import httpx
+
+from router.backend.utils.config import CAP_RPS, HTTP_TOTAL_RETRIES, HTTP_BACKOFF_BASE
+from router.backend.utils.rate_limiter import AsyncTokenBucket
+from router.backend.utils.lambda_http import get_http_client
 
 logger = logging.getLogger(__name__)
 
 
-class CAPOutput(pydantic.BaseModel):
-    capid: Optional[int] = None
-    capcode: Optional[str] = None
-    manufacturer: Optional[str] = None
-    model: Optional[str] = None
-    derivative: Optional[str] = None
-    registration_date: Optional[str] = None
-    rounded_mileage: Optional[int] = None
-    live_clean: Optional[int] = None
-    live_retail: Optional[int] = None
-    monthly_clean: Optional[int] = None
-    monthly_retail: Optional[int] = None
-    note: Optional[str] = None
+class CAPClient:
+    """
+    CAP API client.
 
+    Transport:
+      - Use HTTP POST (application/x-www-form-urlencoded) for speed and reliability.
 
-class CAPVRMResponse(pydantic.BaseModel):
-    database: Optional[str] = None
-    capid: Optional[str] = None
-    capman: Optional[str] = None
-    capmod: Optional[str] = None
-    capder: Optional[str] = None
-    capcode: Optional[str] = None
-    clean: Optional[str] = None
-    retail: Optional[str] = None
-    registered_date: Optional[str] = None
-    note: Optional[str] = None
+    Endpoints:
+      - VRMValuation (monthly via VRM + CAPID/regDate discovery)
+      - CAPIDValuation (monthly via CAPID) — expects RegisteredDate in yyyy-MM-dd format
+      - GetUsedLive_IdRegDate (live valuations; returns multiple mileage bands)
 
+    Rules:
+      - When CAPID is present from source: call CAPIDValuation + GetUsedLive_IdRegDate (in parallel)
+      - When CAPID not present: call VRMValuation (gets monthly + CAPID/regDate), then live if possible
+    """
 
-class CAPClient(metaclass=Singleton):
-    def __init__(self):
-        # Basic urls
-        self.live_valuation_url = "https://soap.cap.co.uk/usedvalueslive/capusedvalueslive.asmx/GetUsedLive_IdRegDate"
-        self.monthly_valuation_url = "https://soap.cap.co.uk/vrm/capvrm.asmx/CAPIDValuation"
+    def __init__(self, subscriber_id: str, password: str) -> None:
+        self.subscriber_id = subscriber_id
+        self.password = password
+
+        # HTTP endpoints (method-specific)
         self.vrm_url = "https://soap.cap.co.uk/vrm/capvrm.asmx/VRMValuation"
+        self.capid_monthly_url = "https://soap.cap.co.uk/vrm/capvrm.asmx/CAPIDValuation"
+        self.capid_live_url = "https://soap.cap.co.uk/usedvalueslive/capusedvalueslive.asmx/GetUsedLive_IdRegDate"
 
-        # Auth data
-        env = 'prod' if os.getenv('AWS_REGION') == 'eu-west-1' else 'dev'
-        secrets = get_secret(f'{env}/carsupermarket/car_pricer/api_access')
-
-        self.subscriber_id = secrets['CAP_SUBSCRIBER_ID']
-        self.cap_password = secrets['CAP_PASSWORD']
         self.database = "CAR"
+        self._rl = AsyncTokenBucket(CAP_RPS)
 
-        # Rate limiter
-        self.limiter = RateLimiter(rate_limit=100, time_window=1)
+        # XML namespaces
+        self._ns_vrm = {"ns": "https://soap.cap.co.uk/vrm"}
+        self._ns_live = {"ns": "https://soap.cap.co.uk/usedvalueslive"}
 
-    @classmethod
-    def is_excel_date_format(cls, date_str):
-        try:
-            int(date_str)
-            return True
-        except ValueError:
-            return False
+    # ---------- Retry wrapper ----------
 
-    @classmethod
-    def convert_excel_date(cls, serial):
-        excel_epoch = datetime.datetime(1899, 12, 30)  # Excel's epoch starts on January 1, 1900, but there's an off-by-two error
-        converted_date = excel_epoch + datetime.timedelta(days=serial)
-        return converted_date.strftime('%d/%m/%Y')
+    async def _retry(self, coro_fn, *args, **kwargs):
+        """Exponential backoff retry for transient failures."""
+        backoff = HTTP_BACKOFF_BASE
+        last_exc: Optional[Exception] = None
 
-    @classmethod
-    def round_to_nearest_thousand(cls, mileage):
+        for attempt in range(HTTP_TOTAL_RETRIES + 1):
+            try:
+                return await coro_fn(*args, **kwargs)
+            except (httpx.ConnectError, httpx.ReadTimeout, httpx.RemoteProtocolError) as e:
+                last_exc = e
+                if attempt >= HTTP_TOTAL_RETRIES:
+                    raise
+                await asyncio.sleep(backoff)
+                backoff *= 2
+            except httpx.HTTPStatusError as e:
+                # Retry only transient server errors and rate limits
+                if e.response.status_code in (429, 500, 502, 503, 504) and attempt < HTTP_TOTAL_RETRIES:
+                    await asyncio.sleep(backoff)
+                    backoff *= 2
+                    continue
+                raise
+
+        if last_exc:
+            raise last_exc
+
+    # ---------- Helpers ----------
+
+    @staticmethod
+    def _round_to_nearest_thousand(mileage: int) -> int:
         if mileage < 1000:
             return 1000
         return round(mileage / 1000) * 1000
 
-    @classmethod
-    def round_to_nearest_25(cls, value):
+    @staticmethod
+    def _round_to_nearest_25(value: float) -> int:
         return round(value / 25) * 25
 
-    def fetch_and_parse_data(self, url, payload):
-        with self.limiter:
-            logger.debug(f"Fetching data from {url}")
-            response = requests.post(
-                url,
-                headers={'Content-Type': 'application/x-www-form-urlencoded'},
-                data=payload,
-                timeout=15
-            )
-        response.raise_for_status()
-
-        # Parse the XML content
-        root = ET.fromstring(response.text)
-        namespace_live = {'ns': 'https://soap.cap.co.uk/usedvalueslive'}
-        namespace_vrm = {'ns': 'https://soap.cap.co.uk/vrm'}
-
-        if url == self.live_valuation_url:
-            valuations = root.findall('.//ns:Valuations/ns:Valuation', namespace_live)
-            valuation_list = []
-            for valuation in valuations:
-                mileage = int(valuation.find('ns:Mileage', namespace_live).text) * 1000
-                retail = int(valuation.find('ns:Retail', namespace_live).text)
-                clean = int(valuation.find('ns:Clean', namespace_live).text)
-                valuation_list.append((mileage, retail, clean))
-            return valuation_list
-
-        elif url == self.monthly_valuation_url:
-            # Ensure the response is successful
-            if root.find('.//ns:Success', namespace_vrm).text == 'true':
-                capid_lookup = root.find('.//ns:CAPIDLookup', namespace_vrm)
-                valuation = root.find('.//ns:Valuation', namespace_vrm)
-                if capid_lookup is not None and valuation is not None and valuation.find('ns:Success',
-                                                                                         namespace_vrm).text == 'true':
-                    return {
-                        'Retail': valuation.find('ns:Retail', namespace_vrm).text,
-                        'Clean': valuation.find('ns:Clean', namespace_vrm).text,
-                        'CAPMan': capid_lookup.find('ns:CAPMan', namespace_vrm).text,
-                        'CAPMod': capid_lookup.find('ns:CAPMod', namespace_vrm).text,
-                        'CAPDer': capid_lookup.find('ns:CAPDer', namespace_vrm).text,
-                        'CAPcode': capid_lookup.find('ns:CAPcode', namespace_vrm).text
-                    }
-            return {}  # Return empty dictionary if conditions aren't met
-
-    def get_valuations(self, mileage, valuations):
-        # Ensure the valuations are sorted by mileage
-        valuations.sort()
-        # If mileage is below the first band, use the lowest values
-        if mileage < valuations[0][0]:
-            return valuations[0][1], valuations[0][2]  # Return retail and clean from the first band
-
-        # If mileage is within the mileage bands
-        for i in range(len(valuations) - 1):
-            if valuations[i][0] <= mileage < valuations[i + 1][0]:
-                lower_mileage, lower_retail, lower_clean = valuations[i]
-                upper_mileage, upper_retail, upper_clean = valuations[i + 1]
-                # Linear interpolation
-                retail_value = lower_retail + (mileage - lower_mileage) * (upper_retail - lower_retail) / (
-                            upper_mileage - lower_mileage)
-                clean_value = lower_clean + (mileage - lower_mileage) * (upper_clean - lower_clean) / (
-                            upper_mileage - lower_mileage)
-                return retail_value, clean_value
-
-        # Mileage exceeds the highest known band, perform extrapolation
-        lower_mileage, lower_retail, lower_clean = valuations[-2]
-        upper_mileage, upper_retail, upper_clean = valuations[-1]
-        # Assuming linear continuation of the last known trend
-        mileage_diff = upper_mileage - lower_mileage
-        retail_diff = upper_retail - lower_retail
-        clean_diff = upper_clean - lower_clean
-        extrapolated_retail = upper_retail + ((mileage - upper_mileage) / mileage_diff) * retail_diff
-        extrapolated_clean = upper_clean + ((mileage - upper_mileage) / mileage_diff) * clean_diff
-        return extrapolated_retail, extrapolated_clean
-
-    def live_valuation(self, vehicle: VehicleRow) -> Tuple[Optional[int], Optional[int]]:
-        # Fetch current valuation from LIVE_VALUATION_URL
-        rounded_mileage = self.round_to_nearest_thousand(vehicle.mileage)
-
-        live_payload = {
-            'subscriberId': self.subscriber_id,
-            'password': self.cap_password,
-            'database': self.database,
-            'capid': vehicle.capid,
-            'valuationDate': datetime.datetime.now().strftime('%Y-%m-%d'),
-            'regDate': vehicle.registration_date.strftime('%Y-%m-%d'),
-        }
-
-        current_valuations = self.fetch_and_parse_data(self.live_valuation_url, live_payload)
-        if not current_valuations:
-            return None, None
-
-        # Calculate interpolated/extrapolated values for current valuation
-        current_retail, current_clean = self.get_valuations(rounded_mileage, current_valuations)
-        current_retail_25 = self.round_to_nearest_25(current_retail)
-        current_clean_25 = self.round_to_nearest_25(current_clean)
-
-        return current_retail_25, current_clean_25
-
-    def capid_monthly_valuation(self, vehicle: VehicleRow) -> dict:
-        # Fetch old valuation from MONTHLY_VALUATION_URL
-        rounded_mileage = self.round_to_nearest_thousand(vehicle.mileage)
-
-        old_payload = {
-            'SubscriberID': self.subscriber_id,
-            'Password': self.cap_password,
-            'Database': self.database,
-            'CAPID': vehicle.capid,
-            'RegisteredDate': vehicle.registration_date.strftime('%Y-%m-%d'),
-            'Mileage': rounded_mileage,
-            'StandardEquipmentRequired': False
-        }
-
-        monthly_valuation_data = self.fetch_and_parse_data(self.monthly_valuation_url, old_payload)
-        return monthly_valuation_data
-
-    def extract_vrm_values(self, response):
-        root = ET.fromstring(response)
-        namespaces = {'ns': 'https://soap.cap.co.uk/vrm'}
-
-        vehicle_found = root.find('.//ns:VRMLookup/ns:VehicleFound', namespaces)
-        if vehicle_found is not None and vehicle_found.text == 'false':
-            fail_reason = root.find('.//ns:VRMLookup/ns:FailReason', namespaces)
-            return CAPVRMResponse(note=fail_reason.text)
-
-        database = root.find('.//ns:VRMLookup/ns:Database', namespaces)
-        capid = root.find('.//ns:VRMLookup/ns:CAPID', namespaces)
-        clean = root.find('.//ns:Valuation/ns:Clean', namespaces)
-        retail = root.find('.//ns:Valuation/ns:Retail', namespaces)
-        capman = root.find('.//ns:VRMLookup/ns:CAPMan', namespaces)
-        capmod = root.find('.//ns:VRMLookup/ns:CAPMod', namespaces)
-        capder = root.find('.//ns:VRMLookup/ns:CAPDer', namespaces)
-        capcode = root.find('.//ns:VRMLookup/ns:CAPcode', namespaces)
-
-        database_text = database.text if database is not None else 'Not Found'
-        capid_text = capid.text if capid is not None else 'Not Found'
-        clean_text = clean.text if clean is not None else 'Not Found'
-        retail_text = retail.text if retail is not None else 'Not Found'
-        capman_text = capman.text if capman is not None else 'Not Found'
-        capmod_text = capmod.text if capmod is not None else 'Not Found'
-        capder_text = capder.text if capder is not None else 'Not Found'
-        capcode_text = capcode.text if capcode is not None else 'Not Found'
-
-        registered_date = root.find('.//ns:VRMLookup/ns:RegisteredDate', namespaces)
-        if registered_date is not None and registered_date.text:
-            # Parse the existing date format
-            registered_date_obj = datetime.datetime.strptime(registered_date.text, '%Y-%m-%dT%H:%M:%S')
-            # Format it to the desired format
-            registered_date_text = registered_date_obj.strftime('%d/%m/%Y')
-        else:
-            registered_date_text = 'Not Found'
-
-        # Existing return statement with the addition of registered_date_text
-        return CAPVRMResponse(
-            database=database_text,
-            capid=capid_text,
-            capman=capman_text,
-            capmod=capmod_text,
-            capder=capder_text,
-            capcode=capcode_text,
-            clean=clean_text,
-            retail=retail_text,
-            registered_date=registered_date_text
-        )
-
-    def vrm_valuation(self, vehicle: VehicleRow) -> dict:
-        vrm_payload = {
-            'SubscriberID': self.subscriber_id,
-            'Password': self.cap_password,
-            'VRM': vehicle.vrm,
-            'Mileage': vehicle.mileage,
-            'StandardEquipmentRequired': 'false'
-        }
-
-        with self.limiter:
-            logger.debug(f"Fetching VRM valuation for {vehicle.vrm}")
-            response = requests.post(
-                self.vrm_url,
-                headers={'Content-Type': 'application/x-www-form-urlencoded'},
-                data=vrm_payload,
-                timeout=15
-            )
-
-        cap_vrm_response = self.extract_vrm_values(response.text)
-        return {
-            'database': cap_vrm_response.database,
-            'capid': cap_vrm_response.capid,
-            'capman': cap_vrm_response.capman,
-            'capmod': cap_vrm_response.capmod,
-            'capder': cap_vrm_response.capder,
-            'capcode': cap_vrm_response.capcode,
-            'clean': cap_vrm_response.clean,
-            'retail': cap_vrm_response.retail,
-            'registered_date': cap_vrm_response.registered_date,
-            'note': cap_vrm_response.note
-        }
-
-    @classmethod
-    def convert_date_format(cls, date_str):
+    @staticmethod
+    def _parse_date_ddmmyyyy(date_str: str) -> Optional[datetime.date]:
         try:
-            return datetime.datetime.strptime(date_str, '%d/%m/%Y')
-        except ValueError:
+            return datetime.datetime.strptime(date_str, "%d/%m/%Y").date()
+        except Exception:
             return None
 
-    def process_row(self, row: pd.Series, column_mapper: BaseColumnsMapper) -> Optional[dict]:
+    def _interpolate_valuations(self, mileage: int, valuations: List[Tuple[int, int, int]]) -> Tuple[Optional[float], Optional[float]]:
+        """Return (retail, clean) for specific mileage from banded valuations."""
+        if not valuations:
+            return None, None
+        valuations.sort()
 
-        vehicle = column_mapper.map_row(row)
-        if not vehicle:
-            return None
+        # Below lowest band
+        if mileage < valuations[0][0]:
+            return float(valuations[0][1]), float(valuations[0][2])
 
-        if vehicle.capid:
+        # Within bands
+        for i in range(len(valuations) - 1):
+            ml, r1, c1 = valuations[i]
+            mu, r2, c2 = valuations[i + 1]
+            if ml <= mileage < mu:
+                span = mu - ml
+                if span <= 0:
+                    return float(r1), float(c1)
+                ratio = (mileage - ml) / span
+                return r1 + ratio * (r2 - r1), c1 + ratio * (c2 - c1)
 
-            if not vehicle.registration_date:
-                return CAPOutput().dict()
+        # Above top band: linear extrapolation from last two points
+        ml, r1, c1 = valuations[-2]
+        mu, r2, c2 = valuations[-1]
+        span = mu - ml if (mu - ml) != 0 else 1
+        dr = r2 - r1
+        dc = c2 - c1
+        overshoot = mileage - mu
+        return r2 + (overshoot / span) * dr, c2 + (overshoot / span) * dc
 
-            live_cap_retail, live_cap_clean = self.live_valuation(vehicle)
+    # ---------- Internal API calls ----------
 
-            # Do capid_monthly_valuation
-            monthly_valuation_data = self.capid_monthly_valuation(vehicle)
+    async def _fetch_live_valuation(self, capid: int, rounded_mileage: int, reg_date_yyyy_mm_dd: str) -> List[Tuple[int, int, int]]:
+        """Return list of (mileage, retail, clean) bands for a vehicle."""
+        await self._rl.acquire()
+        client = get_http_client()
 
-            output = CAPOutput(
-                capid=vehicle.capid,
-                capcode=monthly_valuation_data.get('CAPcode'),
-                manufacturer=monthly_valuation_data.get('CAPMan'),
-                model=monthly_valuation_data.get('CAPMod'),
-                derivative=monthly_valuation_data.get('CAPDer'),
-                registration_date=vehicle.registration_date.strftime('%d/%m/%Y') if vehicle.registration_date else None,
-                rounded_mileage=vehicle.mileage,
-                live_clean=live_cap_clean,
-                live_retail=live_cap_retail,
-                monthly_clean=monthly_valuation_data.get('Clean'),
-                monthly_retail=monthly_valuation_data.get('Retail'),
+        payload = {
+            "subscriberId": str(self.subscriber_id),
+            "password": self.password,
+            "database": self.database,
+            "capid": str(capid),
+            "valuationDate": datetime.datetime.now().strftime("%Y-%m-%d"),
+            "regDate": reg_date_yyyy_mm_dd,
+        }
+        headers = {"Content-Type": "application/x-www-form-urlencoded"}
+
+        async def _do():
+            r = await client.post(self.capid_live_url, data=payload, headers=headers)
+            r.raise_for_status()
+            return r
+
+        try:
+            resp = await self._retry(_do)
+            root = ET.fromstring(resp.text)
+            ns = self._ns_live
+
+            out: List[Tuple[int, int, int]] = []
+            for v in root.findall(".//ns:Valuations/ns:Valuation", ns):
+                mile = v.find("ns:Mileage", ns)
+                ret = v.find("ns:Retail", ns)
+                cle = v.find("ns:Clean", ns)
+                if mile is None or ret is None or cle is None:
+                    continue
+                try:
+                    # CAP returns mileage bands in thousands (e.g., 10 => 10,000)
+                    out.append((int(mile.text) * 1000, int(ret.text), int(cle.text)))
+                except Exception:
+                    continue
+            return out
+        except Exception as e:
+            logger.error(f"Live valuation failed for CAPID {capid}: {e}")
+            return []
+
+    async def _fetch_monthly_capid(self, capid: int, rounded_mileage: int, reg_date_yyyy_mm_dd: str) -> Dict[str, Any]:
+        """
+        Monthly valuation by CAPID.
+        
+        IMPORTANT: When using HTTP POST (not SOAP XML), CAPIDValuation expects
+        RegisteredDate in yyyy-MM-dd format (ISO 8601), NOT dd/mm/yyyy.
+        """
+        # Validate registration date presence
+        if not reg_date_yyyy_mm_dd:
+            logger.warning(f"Missing RegisteredDate for CAPID {capid} — skipping CAPIDValuation")
+            return {}
+
+        await self._rl.acquire()
+        client = get_http_client()
+
+        payload = {
+            "SubscriberID": str(self.subscriber_id),
+            "Password": self.password,
+            "Database": self.database,
+            "CAPID": str(capid),
+            "RegisteredDate": reg_date_yyyy_mm_dd,  # yyyy-MM-dd format required
+            "Mileage": str(rounded_mileage),
+            "StandardEquipmentRequired": "false",
+        }
+        headers = {"Content-Type": "application/x-www-form-urlencoded"}
+
+        async def _do():
+            r = await client.post(self.capid_monthly_url, data=payload, headers=headers)
+            r.raise_for_status()
+            return r
+
+        try:
+            resp = await self._retry(_do)
+            root = ET.fromstring(resp.text)
+        except httpx.HTTPStatusError as e:
+            status = e.response.status_code
+            # Log body for diagnostics
+            try:
+                body = e.response.text[:500]  # first 500 chars
+            except Exception:
+                body = "<no response body>"
+            logger.error(
+                f"CAPIDValuation HTTP {status} for CAPID {capid}. "
+                f"Payload: {payload}. Response body: {body}"
             )
+            return {}
+        except Exception as e:
+            logger.error(f"Monthly CAPID valuation failed for CAPID {capid}: {e}")
+            return {}
 
-        else:
-            vrm_valuation_data = self.vrm_valuation(vehicle)
+        # Parse XML response
+        ns = self._ns_vrm
+        success = root.find(".//ns:Success", ns)
+        if not (success is not None and success.text == "true"):
+            return {}
 
-            output = CAPOutput(
-                capcode=vrm_valuation_data['capcode'],
-                manufacturer=vrm_valuation_data['capman'],
-                model=vrm_valuation_data['capmod'],
-                derivative=vrm_valuation_data['capder'],
-                monthly_clean=vrm_valuation_data['clean'],
-                monthly_retail=vrm_valuation_data['retail'],
-                capid=vrm_valuation_data['capid'],
-                rounded_mileage=vehicle.mileage,
-                note=vrm_valuation_data['note']
-            )
-            vehicle.capid = vrm_valuation_data['capid']
+        capid_lookup = root.find(".//ns:CAPIDLookup", ns)
+        valuation = root.find(".//ns:Valuation", ns)
+        if capid_lookup is None or valuation is None:
+            return {}
 
-            if vrm_valuation_data['database'] == 'CAR':
-                formatted_registered_date = self.convert_date_format(vrm_valuation_data['registered_date'])
-                vehicle.registration_date = formatted_registered_date
+        val_success = valuation.find("ns:Success", ns)
+        if not (val_success is not None and val_success.text == "true"):
+            return {}
 
-                # Live
-                live_cap_retail, live_cap_clean = self.live_valuation(vehicle)
+        # Parse monthly values
+        def _to_int(node):
+            try:
+                return int(node.text) if node is not None and node.text else ""
+            except Exception:
+                return ""
 
-                if live_cap_clean is not None:
-                    output.live_clean = self.round_to_nearest_25(live_cap_clean)
-                if live_cap_retail is not None:
-                    output.live_retail = self.round_to_nearest_25(live_cap_retail)
+        retail = _to_int(valuation.find("ns:Retail", ns))
+        clean = _to_int(valuation.find("ns:Clean", ns))
 
-        return output.dict()
+        return {
+            "Retail": retail,
+            "Clean": clean,
+            "CAPMan": capid_lookup.find("ns:CAPMan", ns).text if capid_lookup.find("ns:CAPMan", ns) is not None else "",
+            "CAPMod": capid_lookup.find("ns:CAPMod", ns).text if capid_lookup.find("ns:CAPMod", ns) is not None else "",
+            "CAPDer": capid_lookup.find("ns:CAPDer", ns).text if capid_lookup.find("ns:CAPDer", ns) is not None else "",
+            "CAPcode": capid_lookup.find("ns:CAPcode", ns).text if capid_lookup.find("ns:CAPcode", ns) is not None else "",
+        }
 
-    def process_file(self, input_df: pd.DataFrame, column_mapper: BaseColumnsMapper) -> pd.DataFrame:
-        processed_rows = []
+    # ---------- Public API ----------
 
-        with ThreadPoolExecutor(max_workers=40) as executor:
-            for index, row in input_df.iterrows():
-                processed_rows.append(executor.submit(self.process_row, row, column_mapper))
+    async def vrm(self, vrm: str, mileage: int) -> Dict[str, Any]:
+        """
+        VRM-based monthly valuation. Returns monthly and (if database=='CAR' and CAPID present)
+        fetches live valuations using the returned CAPID/regDate.
+        """
+        rounded_mileage = self._round_to_nearest_thousand(mileage)
 
-            # Wait for all threads to finish
-            processed_rows = [future.result() for future in processed_rows]
+        await self._rl.acquire()
+        client = get_http_client()
 
-        # Filter None values
-        processed_rows = [row if row is not None else {} for row in processed_rows]
+        payload = {
+            "SubscriberID": str(self.subscriber_id),
+            "Password": self.password,
+            "VRM": vrm,
+            "Mileage": str(rounded_mileage),
+            "StandardEquipmentRequired": "false",
+        }
+        headers = {"Content-Type": "application/x-www-form-urlencoded"}
 
-        # transform processed rows into a DataFrame
-        processed_df = pd.DataFrame(processed_rows)
+        async def _do():
+            r = await client.post(self.vrm_url, data=payload, headers=headers)
+            r.raise_for_status()
+            return r
 
-        # Add prefix cap_ to all columns
-        processed_df.columns = [f'cap_{col}' for col in processed_df.columns]
+        try:
+            resp = await self._retry(_do)
+            root = ET.fromstring(resp.text)
+            ns = self._ns_vrm
 
-        return processed_df
+            # Vehicle found?
+            vehicle_found = root.find(".//ns:VRMLookup/ns:VehicleFound", ns)
+            if vehicle_found is not None and vehicle_found.text == "false":
+                fail_reason = root.find(".//ns:VRMLookup/ns:FailReason", ns)
+                return {"cap_success": False, "cap_error": fail_reason.text if fail_reason is not None else "Vehicle not found"}
 
+            # Extract fields
+            database = root.find(".//ns:VRMLookup/ns:Database", ns)
+            capid_node = root.find(".//ns:VRMLookup/ns:CAPID", ns)
+            capcode = root.find(".//ns:VRMLookup/ns:CAPcode", ns)
+            capman = root.find(".//ns:VRMLookup/ns:CAPMan", ns)
+            capmod = root.find(".//ns:VRMLookup/ns:CAPMod", ns)
+            capder = root.find(".//ns:VRMLookup/ns:CAPDer", ns)
+            registered_date = root.find(".//ns:VRMLookup/ns:RegisteredDate", ns)
+            clean = root.find(".//ns:Valuation/ns:Clean", ns)
+            retail = root.find(".//ns:Valuation/ns:Retail", ns)
 
-if __name__ == '__main__':
-    from utils.file_reader import read_dataframe_file
+            # Parse monthly values
+            def _to_int(node):
+                try:
+                    return int(node.text) if node is not None and node.text else ""
+                except Exception:
+                    return ""
 
-    logging.basicConfig(level="DEBUG", format="%(asctime)s - %(name)s - %(threadName)s - %(levelname)s - %(message)s")
-    # redirect output to stdout
-    logger.addHandler(logging.StreamHandler())
+            monthly_clean = _to_int(clean)
+            monthly_retail = _to_int(retail)
 
-    # Disable useless logging
-    logging.getLogger('botocore').setLevel(logging.CRITICAL)
-    logging.getLogger('boto3').setLevel(logging.CRITICAL)
-    logging.getLogger('s3transfer').setLevel(logging.CRITICAL)
-    logging.getLogger('urllib3').setLevel(logging.CRITICAL)
-    logging.getLogger('asyncio').setLevel(logging.CRITICAL)
-    logging.getLogger('multipart').setLevel(logging.CRITICAL)
+            # Registration date formats
+            reg_date_formatted = ""
+            reg_date_obj = None
+            if registered_date is not None and registered_date.text:
+                try:
+                    # Example: 2021-06-30T00:00:00
+                    reg_date_obj = datetime.datetime.strptime(registered_date.text, "%Y-%m-%dT%H:%M:%S")
+                    reg_date_formatted = reg_date_obj.strftime("%d/%m/%Y")
+                except Exception:
+                    pass
 
-    cap_client = CAPClient()
-    input_file = '/home/ivan/Downloads/MFL_2024_05_10_1649.xlsx'
-    # input_file = '/home/ivan/Downloads/Stocklist_10_05_2024_10_54.csv'
-    output_file = '/home/ivan/Downloads/Motability Stocklist exported 17-04-2024_1400_processed.csv'
-    input_df = read_dataframe_file(input_file)
-    # input_df = input_df[
-    output_df = cap_client.process_file(input_df)
-    print(1)
+            result = {
+                "cap_success": True,
+                "cap_database": database.text if database is not None else "",
+                "cap_capid": capid_node.text if capid_node is not None else "",
+                "cap_capcode": capcode.text if capcode is not None else "",
+                "cap_manufacturer": capman.text if capman is not None else "",
+                "cap_model": capmod.text if capmod is not None else "",
+                "cap_derivative": capder.text if capder is not None else "",
+                "cap_rounded_mileage": rounded_mileage,
+                "cap_monthly_clean": monthly_clean,
+                "cap_monthly_retail": monthly_retail,
+                "cap_registration_date": reg_date_formatted,
+                "cap_live_clean": "",
+                "cap_live_retail": "",
+            }
+
+            # Live valuation if we have CAPID + reg date and in CAR DB
+            if (
+                database is not None and database.text == "CAR" and
+                capid_node is not None and capid_node.text and
+                reg_date_obj is not None
+            ):
+                try:
+                    capid_int = int(capid_node.text)
+                    reg_date_iso = reg_date_obj.strftime("%Y-%m-%d")
+                    bands = await self._fetch_live_valuation(capid_int, rounded_mileage, reg_date_iso)
+                    if bands:
+                        r, c = self._interpolate_valuations(rounded_mileage, bands)
+                        if r is not None and c is not None:
+                            result["cap_live_retail"] = self._round_to_nearest_25(float(r))
+                            result["cap_live_clean"] = self._round_to_nearest_25(float(c))
+                except Exception as e:
+                    logger.error(f"Live valuation after VRM lookup failed for {vrm}: {e}")
+
+            return result
+
+        except Exception as e:
+            logger.error(f"VRM valuation failed for {vrm}: {e}")
+            return {"cap_success": False, "cap_error": str(e)}
+
+    async def capid(self, capid: int, mileage: int, registration_date: str) -> Dict[str, Any]:
+        """
+        CAPID-based path (monthly + live), when CAPID and reg date are known.
+        registration_date: 'YYYY-MM-DD' (ISO format)
+        
+        Both CAPIDValuation and GetUsedLive_IdRegDate expect yyyy-MM-dd format.
+        """
+        # If reg date missing, still return monthly fields with blanks
+        if not registration_date:
+            logger.warning(f"Missing registration_date for CAPID {capid} — returning empty monthly/live values")
+            return {
+                "cap_success": True,
+                "cap_capid": str(capid),
+                "cap_rounded_mileage": self._round_to_nearest_thousand(mileage),
+                "cap_capcode": "",
+                "cap_manufacturer": "",
+                "cap_model": "",
+                "cap_derivative": "",
+                "cap_monthly_clean": "",
+                "cap_monthly_retail": "",
+                "cap_live_clean": "",
+                "cap_live_retail": "",
+            }
+
+        rounded_mileage = self._round_to_nearest_thousand(mileage)
+
+        # Validate date format (should be yyyy-MM-dd from source)
+        try:
+            reg_dt = datetime.datetime.strptime(registration_date, "%Y-%m-%d").date()
+            reg_date_iso = reg_dt.strftime("%Y-%m-%d")  # Already in correct format
+        except Exception:
+            logger.warning(f"Invalid registration_date format for CAPID {capid}: {registration_date}")
+            return {
+                "cap_success": True,
+                "cap_capid": str(capid),
+                "cap_rounded_mileage": rounded_mileage,
+                "cap_capcode": "",
+                "cap_manufacturer": "",
+                "cap_model": "",
+                "cap_derivative": "",
+                "cap_monthly_clean": "",
+                "cap_monthly_retail": "",
+                "cap_live_clean": "",
+                "cap_live_retail": "",
+            }
+
+        # Monthly (CAPIDValuation) and live (GetUsedLive_IdRegDate) in parallel
+        # Both now use yyyy-MM-dd format
+        monthly_task = asyncio.create_task(self._fetch_monthly_capid(capid, rounded_mileage, reg_date_iso))
+        live_task = asyncio.create_task(self._fetch_live_valuation(capid, rounded_mileage, reg_date_iso))
+
+        monthly_data, live_bands = await asyncio.gather(monthly_task, live_task)
+
+        live_retail = ""
+        live_clean = ""
+        if live_bands:
+            r, c = self._interpolate_valuations(rounded_mileage, live_bands)
+            if r is not None and c is not None:
+                live_retail = self._round_to_nearest_25(float(r))
+                live_clean = self._round_to_nearest_25(float(c))
+
+        return {
+            "cap_success": True,
+            "cap_capid": str(capid),
+            "cap_capcode": monthly_data.get("CAPcode", ""),
+            "cap_manufacturer": monthly_data.get("CAPMan", ""),
+            "cap_model": monthly_data.get("CAPMod", ""),
+            "cap_derivative": monthly_data.get("CAPDer", ""),
+            "cap_rounded_mileage": rounded_mileage,
+            "cap_monthly_clean": monthly_data.get("Clean", ""),
+            "cap_monthly_retail": monthly_data.get("Retail", ""),
+            "cap_live_clean": live_clean,
+            "cap_live_retail": live_retail,
+        }

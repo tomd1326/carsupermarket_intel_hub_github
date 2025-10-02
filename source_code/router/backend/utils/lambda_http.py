@@ -1,103 +1,67 @@
+# FILE PATH: source_code/router/backend/utils/lambda_http.py
+
 from typing import Optional
+import threading
+import httpx
 
-import boto3
-import json
-from datetime import datetime
-import os
-import asyncio
-import logging
-import uuid
+from .config import PER_HOST_LIMIT, HTTP_TIMEOUT_S
 
-from mangum import Mangum
-from mangum.types import LambdaContext
-from utils.singleton import Singleton
+# One httpx.AsyncClient per thread/event-loop
+# Avoids "Event loop is closed" when background threads create their own loops.
+_thread_local = threading.local()
 
 
-logger = logging.getLogger(__name__)
+def get_http_client() -> httpx.AsyncClient:
+    """
+    Return a thread-local httpx.AsyncClient configured for high throughput.
+
+    - HTTP/2 enabled
+    - Large connection pool per host (PER_HOST_LIMIT)
+    - Keep-Alive headers
+    - Reused within the same background thread/event loop
+    """
+    client: Optional[httpx.AsyncClient] = getattr(_thread_local, "client", None)
+    if client is not None:
+        return client
+
+    limits = httpx.Limits(
+        max_connections=PER_HOST_LIMIT,
+        max_keepalive_connections=PER_HOST_LIMIT,
+    )
+    timeout = httpx.Timeout(HTTP_TIMEOUT_S)
+
+    client = httpx.AsyncClient(
+        http2=True,
+        limits=limits,
+        timeout=timeout,
+        headers={
+            "Connection": "keep-alive",
+            "User-Agent": "CarSupermarket/1.0 (+lambda-http)",
+        },
+    )
+    _thread_local.client = client
+    return client
 
 
-class LambdaRequestsManager(metaclass=Singleton):
-    def __init__(self):
-        self.mangum_handler = None
-        self.lambda_client = None
-        self.region_name = None
+async def close_http_client():
+    """Close the current thread's client (optional graceful shutdown)."""
+    client: Optional[httpx.AsyncClient] = getattr(_thread_local, "client", None)
+    if client is not None:
+        try:
+            await client.aclose()
+        finally:
+            _thread_local.client = None
 
-    def init(self, mangum_handler: Mangum, region_name: Optional[str] = None):
-        if region_name is not None:
-            self.region_name = region_name
-        else:
-            self.region_name = os.environ.get('AWS_REGION', 'eu-west-1')
 
-        self.lambda_client = boto3.client('lambda', region_name=self.region_name)
-        # self.function_name = function_name
-        self.mangum_handler = mangum_handler
+# Backward-compat shim used elsewhere in the app
+class LambdaRequestsManager:
+    """
+    Legacy shim so existing code can import/init without errors.
+    New code should use get_http_client() directly.
+    """
+    def __init__(self) -> None:
+        self._state = {}
 
-    def simulate_http(self, aws_context: LambdaContext, path, method, headers=None, params=None, data=None, asynchronous=True):
-        # Construct the event object that mimics API Gateway
-        event = {
-            "httpMethod": method,
-            "path": path,
-            "headers": headers if headers else {},
-            "multiValueHeaders": {},
-            "queryStringParameters": params if params else {},
-            "multiValueQueryStringParameters": {},
-            "pathParameters": {},
-            "stageVariables": {},
-            "version": "2.0",
-            "requestContext": {
-                "accountId": "123456789012",
-                "resourceId": "123456",
-                "stage": "prod",
-                "requestId": str(uuid.uuid4()),
-                "identity": {
-                    "sourceIp": "127.0.0.1"
-                },
-                "resourcePath": path,
-                "httpMethod": method,
-                "apiId": "1234567890",
-                "operationName": path.strip('/'),
-                "http": {
-                    "method": method,
-                    "path": path,
-                    "protocol": "HTTP/1.1",
-                    "sourceIp": "127.0.0.1"
-                }
-            },
-            "body": json.dumps(data) if data else None,
-            "isBase64Encoded": False
-        }
-
-        logger.info(f"Simulating HTTP request: {event}")
-        print(f"Simulating HTTP request: {event}")
-
-        # If we are locally testing the Lambda function, we can invoke it directly
-        if os.getenv('LOCAL_ENV') == '1':
-            logger.info('Running locally')
-            print('Running locally')
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            resp = self.mangum_handler(event, aws_context)
-            return resp
-
-        # Otherwise, we need to invoke the Lambda function remotely
-
-        invocation_type = 'RequestResponse'
-        if asynchronous:
-            invocation_type = 'Event'
-
-        logger.info(f"Invoking ({invocation_type}) Lambda function {aws_context.function_name} with event: {event}")
-        print(f"Invoking ({invocation_type}) Lambda function {aws_context.function_name} with event: {event}")
-
-        # Invoke the Lambda function directly
-        response = self.lambda_client.invoke(
-            FunctionName=aws_context.function_name,
-            InvocationType=invocation_type,
-            Payload=json.dumps(event)
-        )
-
-        # Read and return the Lambda response
-        if asynchronous:
-            return response
-
-        response_payload = response['Payload'].read()
-        return json.loads(response_payload)
+    def init(self, **kwargs):
+        self._state.update(kwargs)
+        return self
