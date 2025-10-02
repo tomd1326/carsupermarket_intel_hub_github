@@ -73,17 +73,21 @@ class BasePathMiddleware(BaseHTTPMiddleware):
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("Application starting up")
-    # Announce URLs on startup
+    # Announce URLs on startup (no docs URL)
     url = f"http://{APP_HOST}:{APP_PORT}"
     logger.info("Server ready: %s", url)
-    logger.info("Docs: %s/docs", url)
     print(f"Server ready: {url}", flush=True)
-    print(f"Docs: {url}/docs", flush=True)
     yield
     logger.info("Application shutting down")
 
 # ---------- app ----------
-app = FastAPI(lifespan=lifespan)
+# DISABLE DOCS: Set docs_url, redoc_url, and openapi_url to None
+app = FastAPI(
+    lifespan=lifespan,
+    docs_url=None,      # Disables /docs
+    redoc_url=None,     # Disables /redoc
+    openapi_url=None    # Disables /openapi.json
+)
 
 # Sessions - MUST be added before routers
 app.add_middleware(SessionMiddleware, secret_key=SESSION_SECRET)

@@ -32,22 +32,18 @@ def download_task_file(task_id: str):
             cols = [d[0] for d in cursor.description]
             task = dict(zip(cols, row))
 
-    file_ext = task["filename"].split(".")[-1].lower()
+    # CRITICAL FIX: Output is ALWAYS xlsx regardless of input format
+    output_ext = "xlsx"
+    
     env = "prod" if os.getenv("AWS_REGION") == "eu-west-1" else "dev"
-    s3_key = f'applications/pricing/uk-vehicle-list-evaluator/{env}/elaborated/{task["task_id"]}.{file_ext}'
+    s3_key = f'applications/pricing/uk-vehicle-list-evaluator/{env}/elaborated/{task["task_id"]}.{output_ext}'
 
-    # Nice filename for download
-    output_filename = f'{task["filename"].rsplit(".", 1)[0]}_output.{file_ext}'
+    # Nice filename for download (preserve input name but change extension to xlsx)
+    input_name = task["filename"].rsplit(".", 1)[0]
+    output_filename = f'{input_name}_output.{output_ext}'
 
-    # Content type
-    if file_ext == "xlsx":
-        content_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-    elif file_ext == "xls":
-        content_type = "application/vnd.ms-excel"
-    elif file_ext == "csv":
-        content_type = "text/csv"
-    else:
-        content_type = "application/octet-stream"
+    # Content type for XLSX
+    content_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
     s3 = boto3.client("s3")
 
@@ -56,6 +52,7 @@ def download_task_file(task_id: str):
     except ClientError as e:
         code = e.response.get("Error", {}).get("Code")
         if code in {"NoSuchKey", "404"}:
+            logger.error(f"File not found in S3: {s3_key}")
             return {"message": "Output file not ready yet. Please try again shortly."}
         logger.error(f"Error fetching {s3_key} from S3: {e}")
         return {"message": "Error fetching the file."}
