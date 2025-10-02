@@ -1,5 +1,5 @@
 # FILE PATH: source_code/router/backend/routes/processing.py
-# LAMBDA-OPTIMIZED: async AT/CAP pipeline, minimal logging, fast XLSX, no duplicate merges
+# Async AT/CAP pipeline with stable threading, progress logging, fast XLSX
 
 import os
 import time
@@ -7,7 +7,7 @@ import logging
 import tempfile
 import asyncio
 import traceback
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any
 
 import pandas as pd
 
@@ -20,55 +20,45 @@ from router.backend.list_processor.enhanced_list_processor import (
     process_dataframe_async,
     write_results_to_xlsx,
 )
+from router.backend.utils.config import PROGRESS_UPDATE_INTERVAL
 
 logger = logging.getLogger(__name__)
 s3_bucketname = "aa-raw-sources-uk"
 
 
-def _run_elaborate_background(task_id: int):
+def _run_elaborate_background(task_id: int, buying_target: int = 500):
     """
     Run elaborate_task in a background thread with its own event loop.
-    
-    CRITICAL FIX: Don't wait for executor shutdown - let daemon thread die naturally.
     """
-    new_loop = None
+    loop = None
     try:
-        # Create a brand new event loop for this thread
-        new_loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(new_loop)
-        
-        # Run the async task
-        new_loop.run_until_complete(elaborate_task({"task_id": task_id}))
-        
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        loop.run_until_complete(
+            elaborate_task({"task_id": task_id, "buying_target": buying_target})
+        )
     except Exception as e:
         logger.error("Processing failed for task %s: %s", task_id, e)
         logger.error("Traceback: %s", traceback.format_exc())
     finally:
-        # CRITICAL FIX: Don't wait for threads to finish
-        # Since this is a daemon thread, just close the loop immediately
-        if new_loop:
+        if loop:
             try:
-                # Cancel pending tasks only (don't wait)
-                pending = asyncio.all_tasks(new_loop)
-                for task in pending:
-                    task.cancel()
-                
-                # Close immediately without waiting for executor
-                new_loop.close()
-            except Exception as cleanup_error:
-                logger.warning(f"Error during event loop cleanup: {cleanup_error}")
+                # Cancel pending tasks (don't wait on executors)
+                for t in asyncio.all_tasks(loop):
+                    t.cancel()
+            except Exception:
+                pass
+            try:
+                loop.close()
+            except Exception:
+                pass
 
 
 async def elaborate_task(data: Dict[str, Any]):
     """
-    Download, enrich, Snowflake-enrich, write XLSX, upload, update DB.
-    
-    FIXED: 
-    - Uses columns_mapper with supplier_name for proper CAPID/regdate extraction
-    - ALL outputs are XLSX regardless of input format
-    - Correct column order: [SOURCE] + [API]
+    Download input, enrich with AT+CAP, Snowflake-enrich, write XLSX, upload, update DB.
     """
-    # Fetch task metadata
+    # 1) Read task metadata and mark pending
     with get_database_connection() as conn:
         with conn.cursor() as cursor:
             cursor.execute(
@@ -85,75 +75,104 @@ async def elaborate_task(data: Dict[str, Any]):
                 return {"message": "Task not found"}
             cols = [d[0] for d in cursor.description]
             task = dict(zip(cols, row))
-            cursor.execute("UPDATE tasks SET status = 'pending' WHERE task_id = %s", (data["task_id"],))
+
+            cursor.execute(
+                "UPDATE tasks SET status = 'pending', message = NULL WHERE task_id = %s",
+                (data["task_id"],),
+            )
             conn.commit()
 
-    # Get supplier_name for columns_mapper
     supplier_name = task.get("supplier_name", "Universal")
-    logger.info(f"Task {data['task_id']}: Processing with supplier '{supplier_name}'")
+    buying_target = int(data.get("buying_target", 500))
+    logger.info(
+        f"Task {data['task_id']}: Processing with supplier '{supplier_name}', buying_target={buying_target}"
+    )
 
     env = "prod" if os.getenv("AWS_REGION") == "eu-west-1" else "dev"
-    
-    # Input file extension (for S3 download)
+
+    # Input and output
     input_ext = task["filename"].split(".")[-1].lower()
-    
-    # ALWAYS output XLSX regardless of input format
     output_ext = "xlsx"
-    
-    s3_raw_key = f'applications/pricing/uk-vehicle-list-evaluator/{env}/raw/{data["task_id"]}.{input_ext}'
-    s3_out_key = f'applications/pricing/uk-vehicle-list-evaluator/{env}/elaborated/{data["task_id"]}.{output_ext}'
+
+    s3_raw_key = f"applications/pricing/uk-vehicle-list-evaluator/{env}/raw/{data['task_id']}.{input_ext}"
+    s3_out_key = f"applications/pricing/uk-vehicle-list-evaluator/{env}/elaborated/{data['task_id']}.{output_ext}"
 
     total_rows = None
     execution_time = None
 
     with tempfile.TemporaryDirectory() as tmpdir:
-        local_in = os.path.join(tmpdir, f'raw_{data["task_id"]}.{input_ext}')
-        local_out = os.path.join(tmpdir, f'out_{data["task_id"]}.{output_ext}')
+        local_in = os.path.join(tmpdir, f"raw_{data['task_id']}.{input_ext}")
+        local_out = os.path.join(tmpdir, f"out_{data['task_id']}.{output_ext}")
 
         t0 = time.time()
         try:
-            # Download and read input file
+            # 2) Download and read input
             download_file(local_in, s3_bucketname, s3_raw_key)
             input_df = read_dataframe_file(local_in)
             total_rows = len(input_df)
-            
             logger.info(f"Task {data['task_id']}: Loaded {total_rows} rows from {local_in}")
 
-            # CRITICAL: Call async function directly (we're already in an async context)
-            results = await process_dataframe_async(input_df, supplier_name)
-            
+            # 3) Enrichment (AT + CAP) with progress logging
+            def _progress(n: int):
+                if n == total_rows or n % PROGRESS_UPDATE_INTERVAL == 0:
+                    logger.info(f"Task {data['task_id']}: Progress {n}/{total_rows}")
+
+            results = await process_dataframe_async(
+                input_df, supplier_name, progress_callback=_progress
+            )
+
             logger.info(f"Task {data['task_id']}: API enrichment completed")
 
-            # Clean up internal fields
+            # Clean internal fields
             for r in results:
                 r.pop("row_index", None)
 
-            # Convert to dataframe for Snowflake enrichment
             merged_df = pd.DataFrame(results)
 
-            # Snowflake enrichment
+            # 4) Snowflake enrichment
             merged_df = enrich_with_stock_sales(
                 merged_df,
                 capid_col=None,
                 environment="prod",
                 fill_missing_zero=True,
             )
-            
             logger.info(f"Task {data['task_id']}: Snowflake enrichment completed")
 
-            # Remove unwanted column if present
+            # Normalize numeric types for calculations (if present)
+            numeric_cols = [
+                "capid_stock",
+                "capid_sales",
+                "capid_sales_7_days",
+                "capid_avg_days_in_stock_acknowledged",
+                "capid_sales_percentage",
+                "total_sales",
+                "total_stock",
+            ]
+            for c in numeric_cols:
+                if c in merged_df.columns:
+                    merged_df[c] = pd.to_numeric(merged_df[c], errors="coerce").fillna(0)
+
+            # 5) Calculated columns (far right)
+            merged_df["buying_target"] = int(buying_target)
+            merged_df["total_stock_target"] = merged_df["total_stock"] + buying_target
+            merged_df["capid_ideal_stock"] = (
+                merged_df["capid_sales_percentage"] * merged_df["total_stock_target"]
+            )
+            merged_df["capid_requirement"] = (
+                merged_df["capid_ideal_stock"] - merged_df["capid_stock"]
+            )
+
+            # Drop any unwanted columns if present
             if "cap_registration_date" in merged_df.columns:
                 merged_df = merged_df.drop(columns=["cap_registration_date"])
 
-            # Write XLSX with correct column order
+            # 6) Write XLSX with correct order
             mapper = get_columns_mapper(supplier_name)
             write_results_to_xlsx(merged_df, local_out, mapper)
-            
             logger.info(f"Task {data['task_id']}: Wrote XLSX to {local_out}")
 
-            # Upload to S3
+            # 7) Upload
             upload_file(local_out, s3_bucketname, s3_out_key)
-            
             logger.info(f"Task {data['task_id']}: Uploaded to S3: {s3_out_key}")
 
             execution_time = time.time() - t0
@@ -165,7 +184,7 @@ async def elaborate_task(data: Dict[str, Any]):
             logger.error("Task %s failed: %s", data["task_id"], message)
             logger.debug("Traceback:\n%s", traceback.format_exc())
 
-        # Update database status
+        # 8) Update DB
         with get_database_connection() as conn:
             with conn.cursor() as cursor:
                 cursor.execute(

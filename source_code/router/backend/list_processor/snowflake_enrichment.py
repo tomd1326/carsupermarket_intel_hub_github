@@ -3,7 +3,7 @@
 
 import logging
 import time
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Tuple
 import pandas as pd
 import numpy as np
 from router.backend.utils.snowflake_client import SnowflakeClient
@@ -18,6 +18,7 @@ def enrich_with_stock_sales(
 ) -> pd.DataFrame:
     """
     LAMBDA-OPTIMIZED: Always uses PROD Snowflake with minimal logging
+    Adds 7 columns: 5 CAPID-specific + 2 market-wide totals
     """
     start_time = time.time()
     
@@ -38,11 +39,11 @@ def enrich_with_stock_sales(
     if not unique_capids:
         return _add_empty_snowflake_columns(df)
     
-    # Bulk query Snowflake
-    snowflake_data = _bulk_query_snowflake(unique_capids, "prod")  # Always PROD
+    # Bulk query Snowflake for CAPID-specific data + market totals
+    snowflake_data, market_totals = _bulk_query_snowflake(unique_capids, "prod")
     
     # Vectorized merge
-    result_df = _vectorized_merge(df, snowflake_data, capid_col, fill_missing_zero)
+    result_df = _vectorized_merge(df, snowflake_data, market_totals, capid_col, fill_missing_zero)
     
     # Minimal performance log
     total_time = time.time() - start_time
@@ -76,61 +77,91 @@ def _get_unique_capids(df: pd.DataFrame, capid_col: str) -> List[int]:
     return unique_capids
 
 
-def _bulk_query_snowflake(capids: List[int], environment: str) -> Dict[int, Dict[str, Any]]:
-    """SPEED-OPTIMIZED: Bulk query Snowflake"""
+def _bulk_query_snowflake(capids: List[int], environment: str) -> Tuple[Dict[int, Dict[str, Any]], Dict[str, Any]]:
+    """
+    SPEED-OPTIMIZED: Bulk query Snowflake for CAPID data + market totals
+    Returns: (capid_data_dict, market_totals_dict)
+    """
     if not capids:
-        return {}
+        return {}, {}
     
     try:
-        with SnowflakeClient("prod") as client:  # Force PROD
+        with SnowflakeClient("prod") as client:
             capids_str = ",".join(map(str, capids))
             
-            # FIXED SCHEMA: product_vehicle_journey
-            sql = f"""
+            # Query 1: CAPID-specific data (already aggregated in Snowflake)
+            capid_sql = f"""
                 SELECT 
                     CAP_ID,
-                    SUM(COALESCE(STOCK, 0)) as total_stock,
-                    SUM(COALESCE(SALES, 0)) as total_sales_30d,
-                    SUM(COALESCE(SALES_7_DAYS, 0)) as total_sales_7d,
-                    COUNT(*) as record_count
+                    STOCK,
+                    SALES,
+                    SALES_7_DAYS,
+                    AVG_DAYS_IN_STOCK_ACKNOWLEDGED,
+                    SALES_PERCENTAGE
                 FROM PROD_CARSUPERMARKET_DB.product_vehicle_journey.stock_coverage
                 WHERE CAP_ID IN ({capids_str})
-                GROUP BY CAP_ID
             """
             
-            rows, cols = client.execute(sql)
+            capid_rows, capid_cols = client.execute(capid_sql)
             
             # Convert to lookup dictionary
-            result = {}
-            for row in rows:
+            capid_data = {}
+            for row in capid_rows:
                 cap_id = int(row[0])
-                result[cap_id] = {
-                    'stock': int(row[1]),
-                    'sales_30d': int(row[2]),
-                    'sales_7d': int(row[3]),
-                    'record_count': int(row[4])
+                capid_data[cap_id] = {
+                    'stock': row[1] if row[1] is not None else 0,
+                    'sales': row[2] if row[2] is not None else 0,
+                    'sales_7_days': row[3] if row[3] is not None else 0,
+                    'avg_days_in_stock_acknowledged': row[4] if row[4] is not None else 0,
+                    'sales_percentage': row[5] if row[5] is not None else 0.0
                 }
             
-            return result
+            # Query 2: Market-wide totals (single row, same for all)
+            market_sql = """
+                SELECT 
+                    TOTAL_SALES,
+                    TOTAL_STOCK
+                FROM PROD_CARSUPERMARKET_DB.product_vehicle_journey.stock_coverage
+                LIMIT 1
+            """
+            
+            market_rows, market_cols = client.execute(market_sql)
+            
+            market_totals = {}
+            if market_rows:
+                market_totals = {
+                    'total_sales': market_rows[0][0] if market_rows[0][0] is not None else 0,
+                    'total_stock': market_rows[0][1] if market_rows[0][1] is not None else 0
+                }
+            
+            return capid_data, market_totals
             
     except Exception as e:
         logger.error(f"Snowflake query failed: {str(e)}")
-        return {}
+        return {}, {}
 
 
-def _vectorized_merge(df: pd.DataFrame, snowflake_data: Dict[int, Dict], capid_col: str, fill_missing_zero: bool) -> pd.DataFrame:
+def _vectorized_merge(
+    df: pd.DataFrame, 
+    snowflake_data: Dict[int, Dict], 
+    market_totals: Dict[str, Any],
+    capid_col: str, 
+    fill_missing_zero: bool
+) -> pd.DataFrame:
     """SPEED-OPTIMIZED: High-performance vectorized merge"""
     if not snowflake_data:
         return _add_empty_snowflake_columns(df)
     
-    # Create lookup DataFrame
+    # Create lookup DataFrame for CAPID-specific data
     lookup_data = []
     for capid, data in snowflake_data.items():
         lookup_data.append({
             capid_col: capid,
-            'sf_stock': data['stock'],
-            'sf_sales_30d': data['sales_30d'],
-            'sf_sales_7d': data['sales_7d']
+            'capid_stock': data['stock'],
+            'capid_sales': data['sales'],
+            'capid_sales_7_days': data['sales_7_days'],
+            'capid_avg_days_in_stock_acknowledged': data['avg_days_in_stock_acknowledged'],
+            'capid_sales_percentage': data['sales_percentage']
         })
     
     lookup_df = pd.DataFrame(lookup_data)
@@ -139,14 +170,20 @@ def _vectorized_merge(df: pd.DataFrame, snowflake_data: Dict[int, Dict], capid_c
     df_copy = df.copy()
     df_copy[capid_col] = pd.to_numeric(df_copy[capid_col], errors='coerce')
     
-    # Vectorized left join
+    # Vectorized left join for CAPID-specific columns
     result_df = df_copy.merge(lookup_df, on=capid_col, how='left')
     
-    # Fill missing values
+    # Fill missing values for CAPID-specific columns
     default_value = 0 if fill_missing_zero else np.nan
-    result_df['sf_stock'] = result_df['sf_stock'].fillna(default_value)
-    result_df['sf_sales_30d'] = result_df['sf_sales_30d'].fillna(default_value)
-    result_df['sf_sales_7d'] = result_df['sf_sales_7d'].fillna(default_value)
+    result_df['capid_stock'] = result_df['capid_stock'].fillna(default_value)
+    result_df['capid_sales'] = result_df['capid_sales'].fillna(default_value)
+    result_df['capid_sales_7_days'] = result_df['capid_sales_7_days'].fillna(default_value)
+    result_df['capid_avg_days_in_stock_acknowledged'] = result_df['capid_avg_days_in_stock_acknowledged'].fillna(default_value)
+    result_df['capid_sales_percentage'] = result_df['capid_sales_percentage'].fillna(default_value)
+    
+    # Add market-wide totals (same value for all rows)
+    result_df['total_sales'] = market_totals.get('total_sales', 0)
+    result_df['total_stock'] = market_totals.get('total_stock', 0)
     
     return result_df
 
@@ -154,7 +191,11 @@ def _vectorized_merge(df: pd.DataFrame, snowflake_data: Dict[int, Dict], capid_c
 def _add_empty_snowflake_columns(df: pd.DataFrame) -> pd.DataFrame:
     """Add empty Snowflake columns when no data available"""
     result_df = df.copy()
-    result_df['sf_stock'] = 0
-    result_df['sf_sales_30d'] = 0
-    result_df['sf_sales_7d'] = 0
+    result_df['capid_stock'] = 0
+    result_df['capid_sales'] = 0
+    result_df['capid_sales_7_days'] = 0
+    result_df['capid_avg_days_in_stock_acknowledged'] = 0
+    result_df['capid_sales_percentage'] = 0.0
+    result_df['total_sales'] = 0
+    result_df['total_stock'] = 0
     return result_df

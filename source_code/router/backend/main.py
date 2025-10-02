@@ -4,10 +4,14 @@ import logging
 import os
 import re
 import json
+import signal
+import sys
+import pathlib
 from contextlib import asynccontextmanager
 from typing import Optional
 
 from fastapi import FastAPI, Request
+from fastapi.staticfiles import StaticFiles
 from starlette.middleware.sessions import SessionMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
 from mangum import Mangum
@@ -15,9 +19,9 @@ from mangum import Mangum
 from router.backend.exceptions import unhandled_exception_handler
 from router.backend.utils.secrets_manager_client import get_secret
 from router.backend.utils.lambda_http import LambdaRequestsManager
+import router.backend.routes.task_routes as task_routes
 
 # ---------- logging ----------
-import logging
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
 logging.getLogger().handlers.clear()
@@ -45,7 +49,7 @@ for name, lvl in {
 
 # Import router
 try:
-    from router.backend.router import router as api_router
+    from router.backend.api_router import router as api_router
     logger.info("Router loaded successfully")
 except Exception as e:
     logger.error("Router import failed: %s", e)
@@ -77,10 +81,23 @@ async def lifespan(app: FastAPI):
     logger.info("Server ready: %s", url)
     print(f"Server ready: {url}", flush=True)
     yield
-    logger.info("Application shutting down")
+
+    logger.info("Application shutting down: running cleanup")
+
+    try:
+        with task_routes.task_events_lock:
+            for ev in list(task_routes.task_events.values()):
+                try:
+                    ev.set()
+                except Exception:
+                    pass
+            task_routes.task_events.clear()
+    except Exception:
+        logger.exception("Error notifying task events")
+
+    logger.info("Application shutdown complete")
 
 # ---------- app ----------
-# Disable docs in production
 app = FastAPI(
     lifespan=lifespan,
     docs_url=None,
@@ -95,7 +112,11 @@ app.add_middleware(SessionMiddleware, secret_key=SESSION_SECRET)
 if API_BASE_PATH and API_BASE_PATH != "/":
     app.add_middleware(BasePathMiddleware, base_path=API_BASE_PATH)
 
-# Include routers AFTER session middleware
+# ---- Mount static directory (Lambda-safe) ----
+STATIC_DIR = pathlib.Path(__file__).parent / "static"
+app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+
+# Include routers AFTER middleware
 app.include_router(api_router)
 
 # Exceptions
@@ -162,11 +183,11 @@ def test_execution(data: dict):
 # ---------- lambda adapter ----------
 handler = Mangum(app, lifespan="auto")
 lambda_requests_manager = LambdaRequestsManager()
-# .init is a no-op shim in local; stored for Lambda
 lambda_requests_manager.init(mangum_handler=handler)
 
-# ---------- local dev ----------
-if __name__ == "__main__":
-    import uvicorn
-    # CRITICAL: reload=False to prevent event loop issues with background threads
-    uvicorn.run("main:app", host=APP_HOST, port=APP_PORT, reload=False, workers=1)
+# ---------- signal handler for clean Ctrl+C ----------
+def handle_sigterm(*args):
+    logger.info("Received SIGTERM, shutting down gracefully")
+    sys.exit(0)
+
+signal.signal(signal.SIGTERM, handle_sigterm)

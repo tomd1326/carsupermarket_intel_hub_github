@@ -27,13 +27,14 @@ router = APIRouter(prefix="", tags=["File Upload"])
 # -------- Helper Functions --------
 
 async def _process_upload(main_content: bytes, supplier_id: str, filename: str, 
+                         buying_target: int,
                          prev_content: Optional[bytes], prev_filename: Optional[str]):
     """Common upload processing logic"""
-    logger.info(f"Processing upload: filename='{filename}', supplier_id='{supplier_id}', size={len(main_content)}")
+    logger.info(f"Processing upload: filename='{filename}', supplier_id='{supplier_id}', buying_target={buying_target}, size={len(main_content)}")
     
     file_ext = filename.split(".")[-1].lower()
     
-    # 1) Create the task as 'created'
+    # 1) Create the task as 'created' (NO buying_target in DB)
     with get_database_connection() as conn:
         with conn.cursor() as cursor:
             cursor.execute(
@@ -91,8 +92,8 @@ async def _process_upload(main_content: bytes, supplier_id: str, filename: str,
             cursor.execute("UPDATE tasks SET status = 'pending', message = NULL WHERE task_id = %s", (task_id,))
             conn.commit()
 
-    # 5) Kick off processing in background thread
-    t = threading.Thread(target=_run_elaborate_background, args=(task_id,), daemon=True)
+    # 5) Kick off processing in background thread WITH buying_target
+    t = threading.Thread(target=_run_elaborate_background, args=(task_id, buying_target), daemon=True)
     t.start()
 
     # 6) Redirect to dashboard
@@ -106,6 +107,7 @@ async def upload_task_base64(
     fileBase64: str = Form(...),
     supplier_id: str = Form(...),
     filename: str = Form(...),
+    buying_target: int = Form(500),
     previousFileBase64: Optional[str] = Form(None),
     previousfilename: Optional[str] = Form(None),
     user: str = Depends(get_current_user),
@@ -129,7 +131,7 @@ async def upload_task_base64(
     if file_ext not in ["csv", "xls", "xlsx"]:
         return {"message": "Invalid file format. Only csv, xls and xlsx files are allowed."}
 
-    return await _process_upload(content, supplier_id, filename, None, None)
+    return await _process_upload(content, supplier_id, filename, buying_target, None, None)
 
 
 @router.post("/upload-task-multipart")
@@ -147,9 +149,10 @@ async def upload_task_multipart(
         
         # Extract fields exactly as frontend sends them
         supplier_id = form.get("supplier_id")
+        buying_target = int(form.get("buying_target", 500))
         
         # Frontend sends the actual file as 'filename' field (not 'file')
-        main_file = form.get("filename")  # ← KEY FIX: This is where your file comes through
+        main_file = form.get("filename")
         
         # Optional previous file is sent as 'previousfilename'  
         previous_file = form.get("previousfilename") if "previousfilename" in form else None
@@ -160,6 +163,10 @@ async def upload_task_multipart(
 
         if not main_file or not hasattr(main_file, 'filename') or not main_file.filename:
             return {"error": "Main file is required"}
+        
+        # Validate buying_target
+        if buying_target < 1:
+            return {"error": "Buying target must be at least 1"}
 
         # Validate file extension
         file_ext = main_file.filename.split(".")[-1].lower()
@@ -171,7 +178,7 @@ async def upload_task_multipart(
         if not main_content:
             return {"error": "Main file is empty"}
 
-        logger.info(f"Processing upload: {main_file.filename}, size: {len(main_content)} bytes")
+        logger.info(f"Processing upload: {main_file.filename}, size: {len(main_content)} bytes, buying_target: {buying_target}")
 
         # Handle optional previous file
         prev_content = None
@@ -184,7 +191,7 @@ async def upload_task_multipart(
                 logger.info(f"Previous file: {prev_filename}, size: {len(prev_content)} bytes")
 
         # Process the upload
-        return await _process_upload(main_content, supplier_id, main_file.filename, prev_content, prev_filename)
+        return await _process_upload(main_content, supplier_id, main_file.filename, buying_target, prev_content, prev_filename)
 
     except Exception as e:
         logger.error(f"Error in upload_task_multipart: {e}")

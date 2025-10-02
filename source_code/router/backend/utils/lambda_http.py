@@ -1,62 +1,67 @@
-# FILE: source_code/router/backend/utils/lambda_http.py
+# FILE PATH: source_code/router/backend/utils/lambda_http.py
 
-import asyncio
 from typing import Optional
+import threading
 import httpx
 
 from .config import PER_HOST_LIMIT, HTTP_TIMEOUT_S
 
-# Module-level singleton AsyncClient reused across Lambda invocations.
-_client: Optional[httpx.AsyncClient] = None
-_init_lock = asyncio.Lock()
+# One httpx.AsyncClient per thread/event-loop
+# Avoids "Event loop is closed" when background threads create their own loops.
+_thread_local = threading.local()
 
-async def get_http_client() -> httpx.AsyncClient:
-    """
-    Returns a shared httpx.AsyncClient with HTTP/2, connection pooling,
-    and keep-alive tuned for high throughput on AWS Lambda.
-    """
-    global _client
-    if _client is not None:
-        return _client
 
-    async with _init_lock:
-        if _client is None:
-            limits = httpx.Limits(
-                max_keepalive_connections=PER_HOST_LIMIT,
-                max_connections=PER_HOST_LIMIT,
-            )
-            timeout = httpx.Timeout(HTTP_TIMEOUT_S)
-            _client = httpx.AsyncClient(
-                limits=limits,
-                timeout=timeout,
-                http2=True,
-                headers={
-                    "Connection": "keep-alive",
-                    "User-Agent": "CarSupermarket-Lambda/1.0",
-                },
-            )
-    return _client
+def get_http_client() -> httpx.AsyncClient:
+    """
+    Return a thread-local httpx.AsyncClient configured for high throughput.
+
+    - HTTP/2 enabled
+    - Large connection pool per host (PER_HOST_LIMIT)
+    - Keep-Alive headers
+    - Reused within the same background thread/event loop
+    """
+    client: Optional[httpx.AsyncClient] = getattr(_thread_local, "client", None)
+    if client is not None:
+        return client
+
+    limits = httpx.Limits(
+        max_connections=PER_HOST_LIMIT,
+        max_keepalive_connections=PER_HOST_LIMIT,
+    )
+    timeout = httpx.Timeout(HTTP_TIMEOUT_S)
+
+    client = httpx.AsyncClient(
+        http2=True,
+        limits=limits,
+        timeout=timeout,
+        headers={
+            "Connection": "keep-alive",
+            "User-Agent": "CarSupermarket/1.0 (+lambda-http)",
+        },
+    )
+    _thread_local.client = client
+    return client
+
 
 async def close_http_client():
-    """
-    Optional helper for local dev or graceful shutdowns.
-    Lambda typically does not require explicit close.
-    """
-    global _client
-    if _client is not None:
-        await _client.aclose()
-        _client = None
+    """Close the current thread's client (optional graceful shutdown)."""
+    client: Optional[httpx.AsyncClient] = getattr(_thread_local, "client", None)
+    if client is not None:
+        try:
+            await client.aclose()
+        finally:
+            _thread_local.client = None
 
-# ---------- Backward-compat shim ----------
-class LambdaRequestsManager:  # deprecated
+
+# Backward-compat shim used elsewhere in the app
+class LambdaRequestsManager:
     """
-    Legacy shim to satisfy existing imports and calls.
-    New code should use: `await get_http_client()`.
+    Legacy shim so existing code can import/init without errors.
+    New code should use get_http_client() directly.
     """
     def __init__(self) -> None:
         self._state = {}
 
     def init(self, **kwargs):
-        # Accepts e.g. mangum_handler=handler. No-op for local run.
         self._state.update(kwargs)
         return self

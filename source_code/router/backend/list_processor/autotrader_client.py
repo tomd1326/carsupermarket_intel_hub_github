@@ -18,17 +18,17 @@ from router.backend.utils.lambda_http import get_http_client
 
 class AutoTraderClient:
     """
-    Optimized AutoTrader API client for high-throughput Lambda execution.
+    Auto Trader API client.
 
     Endpoints:
       - POST {base_url}/authenticate
       - GET  {base_url}/vehicles
       - POST {base_url}/valuations?advertiserId=...
 
-    Optimizations:
-      - Parallel-safe token caching with lock
-      - Efficient retry strategy
-      - Minimal memory allocation per request
+    Notes:
+      - HTTP client is thread-local (via get_http_client)
+      - Token cached for 15 minutes (conservative)
+      - Vehicles and Valuations have separate token buckets
     """
 
     def __init__(
@@ -46,92 +46,94 @@ class AutoTraderClient:
         self._veh_rl = AsyncTokenBucket(AT_VEHICLES_RPS)
         self._val_rl = AsyncTokenBucket(AT_VALUATIONS_RPS)
 
-        # Token cache with thread-safe access
+        # Token cache with async lock
         self._token: Optional[str] = None
         self._token_expiry: Optional[dt.datetime] = None
         self._token_lock = asyncio.Lock()
 
-    # ---------- Optimized Retry Logic ----------
+    # ---------- Retry wrapper ----------
 
     async def _retry(self, coro_fn, *args, **kwargs):
-        """
-        Retry with exponential backoff for transient failures.
-        Optimized: faster initial backoff, max 3 retries total.
-        """
+        """Backoff retry for transient network/server failures."""
         backoff = HTTP_BACKOFF_BASE
-        last_exception = None
-        
+        last_exc: Optional[Exception] = None
+
         for attempt in range(HTTP_TOTAL_RETRIES + 1):
             try:
                 return await coro_fn(*args, **kwargs)
             except (httpx.ConnectError, httpx.ReadTimeout, httpx.RemoteProtocolError) as e:
-                last_exception = e
+                last_exc = e
                 if attempt >= HTTP_TOTAL_RETRIES:
                     raise
                 await asyncio.sleep(backoff)
                 backoff *= 2
             except httpx.HTTPStatusError as e:
                 status = e.response.status_code
-                # Retry only transient server errors and rate limits
+                # Retry transient errors and rate limits
                 if status in (429, 500, 502, 503, 504) and attempt < HTTP_TOTAL_RETRIES:
                     await asyncio.sleep(backoff)
                     backoff *= 2
                     continue
                 raise
-        
-        # Should never reach here, but handle gracefully
-        if last_exception:
-            raise last_exception
 
-    # ---------- Token Management ----------
+        if last_exc:
+            raise last_exc
+
+    # ---------- Authentication ----------
 
     async def _authenticate(self) -> str:
-        """Authenticate and cache token with 15min expiry."""
-        client = await get_http_client()
-        url = f"{self.base_url}/authenticate"
+        """
+        Authenticate and cache token with ~15 min expiry.
+        Safe to call concurrently; only one will actually set the token.
+        """
+        # Fast path if token is still valid
+        if self._token and self._token_expiry and dt.datetime.now(dt.timezone.utc) < self._token_expiry:
+            return self._token
 
-        async def _do():
-            r = await client.post(url, data={"key": self.key, "secret": self.secret})
-            r.raise_for_status()
-            return r.json()
-
-        data = await self._retry(_do)
-        token = data.get("access_token")
-        if not token:
-            raise ValueError("No access_token in auth response")
-        
-        # Cache with 15min expiry (conservative to avoid edge cases)
-        expiry = dt.datetime.now(dt.timezone.utc) + dt.timedelta(minutes=15)
-        
         async with self._token_lock:
+            # Double-check inside lock
+            if self._token and self._token_expiry and dt.datetime.now(dt.timezone.utc) < self._token_expiry:
+                return self._token
+
+            client = get_http_client()
+            url = f"{self.base_url}/authenticate"
+
+            async def _do():
+                r = await client.post(url, data={"key": self.key, "secret": self.secret})
+                r.raise_for_status()
+                return r.json()
+
+            data = await self._retry(_do)
+            token = data.get("access_token")
+            if not token:
+                raise ValueError("No access_token in auth response")
+
+            # Cache token
+            expiry = dt.datetime.now(dt.timezone.utc) + dt.timedelta(minutes=15)
             self._token = token
             self._token_expiry = expiry
-        
-        return token
+            return token
 
     async def _get_token(self) -> str:
-        """Get cached token or refresh if expired."""
-        # Fast path: check without lock
-        if self._token and self._token_expiry:
-            if dt.datetime.now(dt.timezone.utc) < self._token_expiry:
-                return self._token
-        
-        # Slow path: refresh token (outside lock to avoid blocking)
         return await self._authenticate()
 
-    # ---------- API Calls ----------
+    # ---------- API calls ----------
 
     async def vehicles(self, vrm: str, mileage_miles: int) -> Dict[str, Any]:
         """
-        Fetch vehicle details, metrics, and features.
-        
-        Returns dict with keys:
-          at_success, at_make, at_model, at_derivative, at_derivative_id,
-          at_first_reg_date, at_rating, at_days_to_sell, at_market_condition,
-          at_factory_features, at_response_code, at_error (if failed)
+        GET /vehicles — vehicle details, metrics, first registration date, features.
+
+        Returns:
+          {
+            at_success: bool,
+            at_make, at_model, at_derivative, at_derivative_id,
+            at_first_reg_date, at_rating, at_days_to_sell, at_market_condition,
+            at_factory_features, at_response_code,
+            at_error (if failed)
+          }
         """
         await self._veh_rl.acquire()
-        client = await get_http_client()
+        client = get_http_client()
         token = await self._get_token()
 
         params = {
@@ -155,16 +157,14 @@ class AutoTraderClient:
         try:
             resp = await self._retry(_do)
             data = resp.json()
-            
-            # Parse response with safe dict access
+
             vehicle = data.get("vehicle") or {}
-            metrics = ((data.get("vehicleMetrics") or {}).get("retail")) or {}
+            metrics_retail = ((data.get("vehicleMetrics") or {}).get("retail")) or {}
             features = data.get("features") or []
-            
-            # Extract factory-fitted features
+
             factory_features = [
-                f.get("name", "") 
-                for f in features 
+                f.get("name", "")
+                for f in features
                 if f.get("factoryFitted")
             ]
 
@@ -175,14 +175,13 @@ class AutoTraderClient:
                 "at_derivative": vehicle.get("derivative", ""),
                 "at_derivative_id": vehicle.get("derivativeId", ""),
                 "at_first_reg_date": vehicle.get("firstRegistrationDate", ""),
-                "at_rating": (metrics.get("rating") or {}).get("value", ""),
-                "at_days_to_sell": (metrics.get("daysToSell") or {}).get("value", ""),
-                "at_market_condition": (metrics.get("marketCondition") or {}).get("value", ""),
+                "at_rating": (metrics_retail.get("rating") or {}).get("value", ""),
+                "at_days_to_sell": (metrics_retail.get("daysToSell") or {}).get("value", ""),
+                "at_market_condition": (metrics_retail.get("marketCondition") or {}).get("value", ""),
                 "at_factory_features": ", ".join(factory_features),
                 "at_response_code": resp.status_code,
             }
         except httpx.HTTPStatusError as e:
-            # 404 = vehicle not found (expected for some VRMs)
             return {
                 "at_success": False,
                 "at_error": f"Status {e.response.status_code}",
@@ -204,32 +203,29 @@ class AutoTraderClient:
         features: List[str],
     ) -> Dict[str, Any]:
         """
-        Fetch retail valuation for a specific derivative.
-        
-        Returns dict with keys:
-          at_valuation, at_valuation_success
+        POST /valuations — retail valuation for given derivative and options.
+
+        Returns:
+          { at_valuation, at_valuation_success }
         """
         if not derivative_id:
-            return {
-                "at_valuation": "No derivative ID",
-                "at_valuation_success": False
-            }
+            return {"at_valuation": "No derivative ID", "at_valuation_success": False}
 
         await self._val_rl.acquire()
-        client = await get_http_client()
+        client = get_http_client()
         token = await self._get_token()
 
         url = f"{self.base_url}/valuations"
         headers = {"Authorization": f"Bearer {token}"}
         params = {"advertiserId": self.advertiser_id}
-        
-        # Limit to 10 features as per API spec
+
         payload = {
             "vehicle": {
                 "derivativeId": derivative_id,
                 "firstRegistrationDate": first_reg_date,
                 "odometerReadingMiles": mileage_miles,
             },
+            # API spec: max 10 features
             "features": [{"name": f} for f in features if f][:10],
         }
 
@@ -241,25 +237,20 @@ class AutoTraderClient:
         try:
             resp = await self._retry(_do)
             data = resp.json()
-            
-            # Navigate to retail valuation
-            valuation = (
-                ((data.get("valuations") or {}).get("retail")) or {}
-            ).get("amountGBP", "")
-            
+            valuation = (((data.get("valuations") or {}).get("retail")) or {}).get("amountGBP", "")
+
             return {
                 "at_valuation": valuation,
-                "at_valuation_success": True
+                "at_valuation_success": True,
             }
         except httpx.HTTPStatusError as e:
             status = e.response.status_code
-            # 400/404 are non-fatal (invalid derivative, etc.)
             return {
                 "at_valuation": f"Error {status}",
-                "at_valuation_success": False
+                "at_valuation_success": False,
             }
         except Exception as e:
             return {
                 "at_valuation": f"Error: {str(e)}",
-                "at_valuation_success": False
+                "at_valuation_success": False,
             }
