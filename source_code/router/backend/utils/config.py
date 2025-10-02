@@ -6,7 +6,7 @@ import os
 # These match your API provider limits
 AT_VEHICLES_RPS = float(os.getenv("AT_VEHICLES_RPS", "100"))
 AT_VALUATIONS_RPS = float(os.getenv("AT_VALUATIONS_RPS", "100"))
-CAP_RPS = float(os.getenv("CAP_RPS", "300"))
+CAP_RPS = float(os.getenv("CAP_RPS", "400"))
 
 # ========================================
 # Concurrency Settings

@@ -58,6 +58,19 @@ def _round_mileage(mileage: int) -> int:
     return round(mileage / 1000) * 1000
 
 
+def _is_van(row: Dict[str, Any], supplier_name: str) -> bool:
+    """
+    Check if this vehicle is a van.
+    
+    Rules:
+    - 1link: Check "Body Style" column for "Van"
+    """
+    if supplier_name.lower() == "1link":
+        body_style = row.get("Body Style", "").strip().lower()
+        return body_style == "van"
+    return False
+
+
 # ---------- Optimized Orchestration ----------
 
 async def _process_one_parallel(
@@ -66,15 +79,21 @@ async def _process_one_parallel(
     at: AutoTraderClient,
     cap: CAPClient,
     mapper: BaseColumnsMapper,
+    supplier_name: str,
 ) -> Dict[str, Any]:
     """
     Process a single vehicle with PARALLEL CAP + AT vehicles calls.
     
     Uses columns_mapper to extract VRM, mileage, CAPID, registration_date.
     Handles both VRM-only and CAPID+VRM scenarios.
+    
+    SKIP LOGIC: For 1link vans, skip CAP calls but KEEP AutoTrader calls.
     """
     result: Dict[str, Any] = dict(row)
     result["row_index"] = idx
+
+    # Check if this is a van
+    is_van = _is_van(row, supplier_name)
 
     # Use columns_mapper to extract vehicle data (supplier-specific logic)
     try:
@@ -99,26 +118,27 @@ async def _process_one_parallel(
     # CRITICAL: Round mileage BEFORE any CAP API calls
     rounded_mileage = _round_mileage(mileage)
 
-    # Determine which CAP endpoint to use
-    if capid and registration_date:
-        # Use CAPID endpoint (provides both live and monthly valuations)
-        # Calls: capid_monthly_url + capid_live_url (NOT vrm_url)
-        reg_date_str = registration_date.strftime("%Y-%m-%d") if isinstance(registration_date, datetime.date) else str(registration_date)
-        cap_task = asyncio.create_task(cap.capid(capid, rounded_mileage, reg_date_str))
-        # Removed verbose logging
+    # CAP API call (skip for vans)
+    if is_van:
+        log.debug(f"Row {idx}: Skipping CAP API for van")
+        cap_data = {}  # Empty CAP data
     else:
-        # Use VRM endpoint (provides monthly valuation, and live if database=='CAR')
-        # Calls: vrm_url (and possibly capid_live_url if database=='CAR')
-        cap_task = asyncio.create_task(cap.vrm(vrm, rounded_mileage))
-        # Removed verbose logging
-    
-    # AutoTrader always uses VRM (with ORIGINAL mileage, not rounded)
-    atv_task = asyncio.create_task(at.vehicles(vrm, mileage))
-    
-    # **PARALLEL EXECUTION** - Wait for both to complete
-    cap_data, atv = await asyncio.gather(cap_task, atv_task)
+        # Determine which CAP endpoint to use
+        if capid and registration_date:
+            # Use CAPID endpoint (provides both live and monthly valuations)
+            # Calls: capid_monthly_url + capid_live_url (NOT vrm_url)
+            reg_date_str = registration_date.strftime("%Y-%m-%d") if isinstance(registration_date, datetime.date) else str(registration_date)
+            cap_data = await cap.capid(capid, rounded_mileage, reg_date_str)
+        else:
+            # Use VRM endpoint (provides monthly valuation, and live if database=='CAR')
+            # Calls: vrm_url (and possibly capid_live_url if database=='CAR')
+            cap_data = await cap.vrm(vrm, rounded_mileage)
     
     result.update(cap_data)
+
+    # AutoTrader always uses VRM (with ORIGINAL mileage, not rounded)
+    # ALWAYS call AutoTrader, even for vans
+    atv = await at.vehicles(vrm, mileage)
     result.update(atv)
 
     # AutoTrader valuations (sequential - requires derivative from vehicles call)
@@ -145,6 +165,7 @@ async def _process_batch_optimized(
     at: AutoTraderClient,
     cap: CAPClient,
     mapper: BaseColumnsMapper,
+    supplier_name: str,
     max_workers: int,
 ) -> List[Dict[str, Any]]:
     """
@@ -154,7 +175,7 @@ async def _process_batch_optimized(
 
     async def _wrap(i: int, r: Dict[str, Any]):
         async with sem:
-            return await _process_one_parallel(i, r, at, cap, mapper)
+            return await _process_one_parallel(i, r, at, cap, mapper, supplier_name)
 
     # Create all tasks at once for better scheduling
     tasks = [_wrap(i, r) for i, r in rows]
@@ -217,8 +238,8 @@ async def process_dataframe_async(
     
     log.info(f"Processing {len(rows)} vehicles with {MAX_WORKERS} workers")
     
-    # Process with optimized batching
-    results = await _process_batch_optimized(rows, at, cap, mapper, MAX_WORKERS)
+    # Process with optimized batching (pass supplier_name for skip logic)
+    results = await _process_batch_optimized(rows, at, cap, mapper, supplier_name, MAX_WORKERS)
     
     log.info(f"Completed processing {len(results)} vehicles")
     return results
@@ -226,14 +247,36 @@ async def process_dataframe_async(
 
 def process_dataframe(df: pd.DataFrame, supplier_name: str) -> List[Dict[str, Any]]:
     """
-    Sync wrapper - CREATES NEW EVENT LOOP.
+    Sync wrapper - CREATES NEW EVENT LOOP (FIXED FOR THREADING).
     
     Args:
         df: Input dataframe
         supplier_name: Supplier name for columns_mapper
     """
-    # Always create a new event loop for sync calls
-    return asyncio.run(process_dataframe_async(df, supplier_name))
+    # CRITICAL FIX: When called from a thread, need to create a new event loop
+    # The old event loop from the main thread may be closed
+    try:
+        # Try to get the current event loop
+        loop = asyncio.get_event_loop()
+        if loop.is_closed():
+            # Loop is closed, create a new one
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            result = loop.run_until_complete(process_dataframe_async(df, supplier_name))
+            return result
+        else:
+            # Loop exists and is open, but we're in a different thread
+            # Create a new loop for this thread
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            result = loop.run_until_complete(process_dataframe_async(df, supplier_name))
+            return result
+    except RuntimeError:
+        # No event loop exists, create one
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        result = loop.run_until_complete(process_dataframe_async(df, supplier_name))
+        return result
 
 
 # ---------- Fast XLSX Writing with Correct Column Order ----------

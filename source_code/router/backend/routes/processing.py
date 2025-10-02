@@ -26,11 +26,50 @@ s3_bucketname = "aa-raw-sources-uk"
 
 
 def _run_elaborate_background(task_id: int):
-    """Run elaborate_task in a background thread with its own event loop."""
+    """
+    Run elaborate_task in a background thread with its own event loop.
+    
+    CRITICAL FIX: Must create a completely new event loop for the background thread.
+    """
+    new_loop = None
     try:
-        asyncio.run(elaborate_task({"task_id": task_id}))
+        # Create a brand new event loop for this thread
+        new_loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(new_loop)
+        
+        # Run the async task
+        new_loop.run_until_complete(elaborate_task({"task_id": task_id}))
+        
     except Exception as e:
         logger.error("Processing failed for task %s: %s", task_id, e)
+        logger.error("Traceback: %s", traceback.format_exc())
+    finally:
+        # Clean shutdown: cancel pending tasks and close loop properly
+        if new_loop:
+            try:
+                # Cancel all pending tasks
+                pending = asyncio.all_tasks(new_loop)
+                for task in pending:
+                    task.cancel()
+                
+                # Wait for cancellations to complete (with timeout)
+                if pending:
+                    new_loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+                
+                # Shutdown async generators
+                new_loop.run_until_complete(new_loop.shutdown_asyncgens())
+                
+                # Shutdown default executor (thread pool)
+                new_loop.run_until_complete(new_loop.shutdown_default_executor())
+                
+            except Exception as cleanup_error:
+                logger.warning(f"Error during event loop cleanup: {cleanup_error}")
+            finally:
+                # Close the loop
+                try:
+                    new_loop.close()
+                except Exception as close_error:
+                    logger.warning(f"Error closing event loop: {close_error}")
 
 
 async def elaborate_task(data: Dict[str, Any]):
@@ -93,7 +132,7 @@ async def elaborate_task(data: Dict[str, Any]):
             
             logger.info(f"Task {data['task_id']}: Loaded {total_rows} rows from {local_in}")
 
-            # CRITICAL: Pass supplier_name to use columns_mapper
+            # CRITICAL: Call async function directly (we're already in an async context)
             results = await process_dataframe_async(input_df, supplier_name)
             
             logger.info(f"Task {data['task_id']}: API enrichment completed")

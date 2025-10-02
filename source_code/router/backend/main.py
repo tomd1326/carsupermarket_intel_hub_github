@@ -73,7 +73,6 @@ class BasePathMiddleware(BaseHTTPMiddleware):
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("Application starting up")
-    # Announce URLs on startup (no docs URL)
     url = f"http://{APP_HOST}:{APP_PORT}"
     logger.info("Server ready: %s", url)
     print(f"Server ready: {url}", flush=True)
@@ -81,12 +80,12 @@ async def lifespan(app: FastAPI):
     logger.info("Application shutting down")
 
 # ---------- app ----------
-# DISABLE DOCS: Set docs_url, redoc_url, and openapi_url to None
+# Disable docs in production
 app = FastAPI(
     lifespan=lifespan,
-    docs_url=None,      # Disables /docs
-    redoc_url=None,     # Disables /redoc
-    openapi_url=None    # Disables /openapi.json
+    docs_url=None,
+    redoc_url=None,
+    openapi_url=None
 )
 
 # Sessions - MUST be added before routers
@@ -169,4 +168,5 @@ lambda_requests_manager.init(mangum_handler=handler)
 # ---------- local dev ----------
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("main:app", host=APP_HOST, port=APP_PORT, reload=True, workers=1)
+    # CRITICAL: reload=False to prevent event loop issues with background threads
+    uvicorn.run("main:app", host=APP_HOST, port=APP_PORT, reload=False, workers=1)

@@ -12,6 +12,7 @@
         .status-success { background-color: #067921; }
         .status-created { background-color: #777777; }
         .status-pending { background-color: #b79011; }
+        .status-processing { background-color: #0056b3; }
         .status-error { background-color: #c71829; }
         .countdown-label { margin-right: 10px; font-size: 1.2rem; text-align: left; }
         #countdown { width: 30px; display: inline-block; }
@@ -20,9 +21,6 @@
 <body>
     <div class="container mt-4">
         <h2>Create Task</h2>
-
-        <!-- hidden iframe to keep upload alive; no visual impact -->
-        <iframe name="upload_iframe" id="upload_iframe" style="display:none;"></iframe>
 
         <!-- relative action avoids base-path issues locally -->
         <form id="uploadForm" action="upload-task-multipart" method="post" enctype="multipart/form-data">
@@ -40,12 +38,8 @@
                 <input class="form-control" type="file" id="fileUpload" name="filename">
                 <input type="hidden" id="fileBase64" name="fileBase64">
             </div>
-            <div class="mb-3">
-                <label for="previousFileUpload" class="form-label">PREVIOUS file:</label>
-                <input class="form-control" type="file" id="previousFileUpload" name="previousfilename">
-                <input type="hidden" id="previousFileBase64" name="previousFileBase64">
-            </div>
-            <button type="submit" class="btn btn-primary">Submit</button>
+            <!-- REMOVED: Previous file upload section -->
+            <button type="submit" class="btn btn-primary" id="submitBtn">Submit</button>
         </form>
 
         <div class="d-flex justify-content-between align-items-center mt-5">
@@ -77,7 +71,7 @@
             </thead>
             <tbody>
                 {% for task in tasks %}
-                <tr>
+                <tr data-task-id="{{ task.task_id }}" data-status="{{ task.status }}">
                     <td>{{ task.task_id }}</td>
                     <td>{{ task.created.strftime("%Y-%m-%d %H:%M:%S") }}</td>
                     <td>{{ task.supplier_name }}</td>
@@ -89,14 +83,14 @@
                             {{ task.total_rows }} rows, {{ "-" if task.execution_time is none else "%.1f" | format(task.execution_time) }} sec
                         {% endif %}
                     </td>
-                    <td><span class="status-label {% if task.status == 'success' %}status-success{% elif task.status == 'created' %}status-created{% elif task.status == 'pending' %}status-pending{% else %}status-error{% endif %}" title="{% if task.message %}{{ task.message }}{% endif %}">{{ task.status }}</span></td>
+                    <td><span class="status-label {% if task.status == 'success' %}status-success{% elif task.status == 'created' %}status-created{% elif task.status == 'pending' %}status-pending{% elif task.status == 'processing' %}status-processing{% else %}status-error{% endif %}" title="{% if task.message %}{{ task.message }}{% endif %}">{{ task.status }}</span></td>
                     <td>
                         {% if task.status == 'success' %}
                             <a href="{{ BASE_URL }}/download/{{ task.task_id }}" class="btn btn-primary download-link" data-filename="{{ task.filename }}" title="Download"><i class="fa fa-download"></i></a>
                         {% else %}
                             <a href="#" class="btn btn-secondary disabled" aria-disabled="true"><i class="fa fa-download"></i></a>
                         {% endif %}
-                        {% if task.status != 'pending' %}
+                        {% if task.status != 'pending' and task.status != 'processing' %}
                             <a href="{{ BASE_URL }}/trigger-elaborate-task?task_id={{ task.task_id }}" class="btn btn-outline-dark reprocess-link" data-task_id="{{ task.task_id }}" title="Re-process"><i class="fa fa-redo"></i></a>
                         {% else %}
                             <a href="#" class="btn btn-outline-dark disabled" aria-disabled="true"><i class="fa fa-redo"></i></a>
@@ -119,41 +113,138 @@
     </div>
 
     <script>
+        // SSE connections for processing tasks
+        const sseConnections = new Map();
+        let countdownTimer = null;
+
+        // Connect to SSE for each processing/pending task
+        function connectTaskSSE(taskId) {
+            if (sseConnections.has(taskId)) {
+                console.log(`Task ${taskId}: SSE already connected`);
+                return; // Already connected
+            }
+
+            console.log(`Task ${taskId}: Connecting SSE...`);
+            const eventSource = new EventSource(`/task-events/${taskId}`);
+            sseConnections.set(taskId, eventSource);
+
+            eventSource.onopen = function() {
+                console.log(`Task ${taskId}: SSE connection established`);
+            };
+
+            eventSource.onmessage = function(event) {
+                console.log(`Task ${taskId}: Received SSE message:`, event.data);
+                try {
+                    const data = JSON.parse(event.data);
+                    if (data.status === 'complete') {
+                        console.log(`Task ${taskId}: COMPLETE - Refreshing page NOW`);
+                        eventSource.close();
+                        sseConnections.delete(taskId);
+                        
+                        // Stop countdown timer if running
+                        if (countdownTimer) {
+                            clearInterval(countdownTimer);
+                        }
+                        
+                        // Force immediate reload
+                        window.location.reload(true);
+                    }
+                } catch (e) {
+                    console.error(`Task ${taskId}: Error parsing SSE data:`, e);
+                }
+            };
+
+            eventSource.onerror = function(err) {
+                console.error(`Task ${taskId}: SSE connection error`, err);
+                eventSource.close();
+                sseConnections.delete(taskId);
+            };
+        }
+
+        // Connect SSE for all processing/pending tasks on page load
+        document.addEventListener('DOMContentLoaded', function() {
+            console.log('Page loaded, checking for pending/processing tasks...');
+            
+            // Connect to both 'processing' and 'pending' tasks
+            const pendingTasks = document.querySelectorAll('tr[data-status="processing"], tr[data-status="pending"]');
+            console.log(`Found ${pendingTasks.length} pending/processing tasks`);
+            
+            pendingTasks.forEach(row => {
+                const taskId = row.dataset.taskId;
+                connectTaskSSE(taskId);
+            });
+
+            // Fallback: Auto-refresh countdown if any tasks are pending/processing
+            const autoRefresh = document.documentElement.dataset.autoRefresh === '1';
+            if (autoRefresh) {
+                console.log('Starting countdown fallback (10 seconds)');
+                startCountdown();
+            }
+        });
+
         function startCountdown() {
             var countdownElement = document.getElementById('countdown');
+            if (!countdownElement) return;
+            
             var timeLeft = 10;
             function decrease() {
                 var box = document.getElementById('auto-refresh-checkbox');
-                if (box && !box.checked) return;
-                if (timeLeft <= 0) { clearInterval(timer); location.reload(); }
-                else { countdownElement.textContent = timeLeft; timeLeft -= 1; }
+                if (box && !box.checked) {
+                    console.log('Auto-refresh disabled by user');
+                    return;
+                }
+                if (timeLeft <= 0) { 
+                    clearInterval(countdownTimer); 
+                    console.log('Countdown reached 0, refreshing...');
+                    location.reload(); 
+                }
+                else { 
+                    countdownElement.textContent = timeLeft; 
+                    timeLeft -= 1; 
+                }
             }
             decrease();
-            var timer = setInterval(decrease, 1000);
+            countdownTimer = setInterval(decrease, 1000);
         }
 
+        // Upload form handler - INSTANT RELOAD after submission
         document.addEventListener("DOMContentLoaded", function() {
             var form = document.getElementById('uploadForm');
+            var submitBtn = document.getElementById('submitBtn');
 
             form.addEventListener('submit', function (event) {
                 event.preventDefault();
 
                 var supplier = document.getElementById('supplierName').value;
-                if (supplier === 'None') { alert('Please select a supplier.'); return; }
+                if (supplier === 'None') { 
+                    alert('Please select a supplier.'); 
+                    return; 
+                }
 
-                try { sessionStorage.setItem('last_status', 'pending'); } catch(e) {}
+                // Disable submit button to prevent double-submit
+                submitBtn.disabled = true;
+                submitBtn.textContent = 'Uploading...';
 
-                // stream to server; no Base64 reads
-                form.setAttribute('target', 'upload_iframe');
-                form.submit();
+                // Get form data
+                var formData = new FormData(form);
 
-                // reload immediately
-                setTimeout(function(){ location.replace(location.href); }, 50);
+                // Submit via fetch so we can reload immediately after
+                fetch(form.action, {
+                    method: 'POST',
+                    body: formData
+                })
+                .then(response => {
+                    console.log('Upload complete, reloading page...');
+                    // Reload immediately after upload completes
+                    window.location.reload();
+                })
+                .catch(error => {
+                    console.error('Upload error:', error);
+                    alert('Upload failed. Please try again.');
+                    submitBtn.disabled = false;
+                    submitBtn.textContent = 'Submit';
+                });
             });
-
-            if (document.documentElement.getAttribute('data-auto-refresh') === '1') {
-                startCountdown();
-            }
         });
     </script>
 </body>
