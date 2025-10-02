@@ -29,7 +29,7 @@ def _run_elaborate_background(task_id: int):
     """
     Run elaborate_task in a background thread with its own event loop.
     
-    CRITICAL FIX: Must create a completely new event loop for the background thread.
+    CRITICAL FIX: Don't wait for executor shutdown - let daemon thread die naturally.
     """
     new_loop = None
     try:
@@ -44,32 +44,19 @@ def _run_elaborate_background(task_id: int):
         logger.error("Processing failed for task %s: %s", task_id, e)
         logger.error("Traceback: %s", traceback.format_exc())
     finally:
-        # Clean shutdown: cancel pending tasks and close loop properly
+        # CRITICAL FIX: Don't wait for threads to finish
+        # Since this is a daemon thread, just close the loop immediately
         if new_loop:
             try:
-                # Cancel all pending tasks
+                # Cancel pending tasks only (don't wait)
                 pending = asyncio.all_tasks(new_loop)
                 for task in pending:
                     task.cancel()
                 
-                # Wait for cancellations to complete (with timeout)
-                if pending:
-                    new_loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
-                
-                # Shutdown async generators
-                new_loop.run_until_complete(new_loop.shutdown_asyncgens())
-                
-                # Shutdown default executor (thread pool)
-                new_loop.run_until_complete(new_loop.shutdown_default_executor())
-                
+                # Close immediately without waiting for executor
+                new_loop.close()
             except Exception as cleanup_error:
                 logger.warning(f"Error during event loop cleanup: {cleanup_error}")
-            finally:
-                # Close the loop
-                try:
-                    new_loop.close()
-                except Exception as close_error:
-                    logger.warning(f"Error closing event loop: {close_error}")
 
 
 async def elaborate_task(data: Dict[str, Any]):
