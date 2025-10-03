@@ -1,6 +1,7 @@
 # FILE PATH: source_code/router/backend/routes/processing.py
 # Async AT/CAP pipeline with stable threading, progress logging, fast XLSX
 # ENHANCED: Better logging for CloudWatch debugging
+# FIXED: Async function for Lambda (no event loop conflict)
 
 import os
 import time
@@ -27,31 +28,15 @@ logger = logging.getLogger(__name__)
 s3_bucketname = "aa-raw-sources-uk"
 
 
-def _run_elaborate_background(task_id: int, buying_target: int = 500):
+async def _run_elaborate_background(task_id: int, buying_target: int = 500):
     """
-    Run elaborate_task in a background thread with its own event loop.
+    Run elaborate_task directly (async, no new event loop).
+    Works in both Lambda (existing loop) and local threaded contexts.
     """
-    loop = None
     try:
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        loop.run_until_complete(
-            elaborate_task({"task_id": task_id, "buying_target": buying_target})
-        )
+        await elaborate_task({"task_id": task_id, "buying_target": buying_target})
     except Exception as e:
         logger.exception("Processing failed for task %s", task_id)
-    finally:
-        if loop:
-            try:
-                # Cancel pending tasks (don't wait on executors)
-                for t in asyncio.all_tasks(loop):
-                    t.cancel()
-            except Exception:
-                pass
-            try:
-                loop.close()
-            except Exception:
-                pass
 
 
 async def elaborate_task(data: Dict[str, Any]):
