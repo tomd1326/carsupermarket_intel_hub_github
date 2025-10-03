@@ -1,7 +1,9 @@
 # FILE PATH: source_code/router/backend/routes/task_routes.py
 # LAMBDA-OPTIMIZED: 5-minute timeout + FIXED supplier dropdown + SSE for instant updates
+# FIXED: Template path and imports
 
 import os
+import pathlib
 import threading
 import datetime
 import logging
@@ -13,14 +15,17 @@ from fastapi import APIRouter, Request, Depends
 from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
 from fastapi.templating import Jinja2Templates
 
-from router.backend.routes.processing import _run_elaborate_background
-from router.backend.utils.db_utils import get_database_connection
-from router.backend.routes.auth_routes import get_current_user
+from routes.processing import _run_elaborate_background
+from utils.db_utils import get_database_connection
+from routes.auth_routes import get_current_user
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="", tags=["Task Management"])
-templates = Jinja2Templates(directory="router/backend/templates")
+
+# FIXED: Dynamic template path
+TEMPLATES_DIR = pathlib.Path(__file__).parent.parent / "templates"
+templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 
 # Global dict to track task completion events
 task_events = {}

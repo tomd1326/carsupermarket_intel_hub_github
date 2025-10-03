@@ -1,14 +1,15 @@
-# FILE PATH: source_code/router/backend/router.py
+# FILE PATH: source_code/router/backend/api_router.py
+# TRIPLE-CHECKED: All imports corrected for Lambda runtime structure
 
 import logging
 from fastapi import APIRouter
 from fastapi.responses import JSONResponse
 
-# Import all route modules
-from router.backend.routes.auth_routes import router as auth_router
-from router.backend.routes.task_routes import router as task_router
-from router.backend.routes.upload_routes import router as upload_router
-from router.backend.routes.download_routes import router as download_router
+# FIXED: Removed "router.backend." prefix - all modules are in Lambda root
+from routes.auth_routes import router as auth_router
+from routes.task_routes import router as task_router
+from routes.upload_routes import router as upload_router
+from routes.download_routes import router as download_router
 
 logger = logging.getLogger(__name__)
 
@@ -29,7 +30,8 @@ router.include_router(download_router)
 # -------- Direct Processing Endpoint --------
 # This one stays here since it's called by background threads, not web requests
 
-from router.backend.routes.processing import elaborate_task
+# FIXED: Direct import from routes module
+from routes.processing import elaborate_task
 
 @router.post("/elaborate-task")
 async def elaborate_task_endpoint(data: dict):

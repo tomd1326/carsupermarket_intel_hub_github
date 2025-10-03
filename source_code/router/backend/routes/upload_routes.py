@@ -11,8 +11,8 @@ from typing import Optional
 from fastapi import APIRouter, Request, Form, Depends
 from fastapi.responses import RedirectResponse
 
-from router.backend.utils.db_utils import get_database_connection
-from router.backend.utils.s3_tools import upload_file
+from utils.db_utils import get_database_connection
+from utils.s3_tools import upload_file
 from .auth_routes import get_current_user
 from .processing import _run_elaborate_background
 

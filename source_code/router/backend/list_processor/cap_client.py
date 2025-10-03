@@ -8,9 +8,9 @@ import logging
 
 import httpx
 
-from router.backend.utils.config import CAP_RPS, HTTP_TOTAL_RETRIES, HTTP_BACKOFF_BASE
-from router.backend.utils.rate_limiter import AsyncTokenBucket
-from router.backend.utils.lambda_http import get_http_client
+from utils.config import CAP_RPS, HTTP_TOTAL_RETRIES, HTTP_BACKOFF_BASE
+from utils.rate_limiter import AsyncTokenBucket
+from utils.lambda_http import get_http_client
 
 logger = logging.getLogger(__name__)
 

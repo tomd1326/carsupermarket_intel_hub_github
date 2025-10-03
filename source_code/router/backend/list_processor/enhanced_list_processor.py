@@ -11,9 +11,9 @@ import pandas as pd
 from .autotrader_client import AutoTraderClient
 from .cap_client import CAPClient
 from .columns_mapper import get_columns_mapper, BaseColumnsMapper
-from ..utils.config import MAX_WORKERS, PROGRESS_UPDATE_INTERVAL
-from ..utils.secrets_manager_client import get_secret
-from ..utils.lambda_http import get_http_client
+from utils.config import MAX_WORKERS, PROGRESS_UPDATE_INTERVAL
+from utils.secrets_manager_client import get_secret
+from utils.lambda_http import get_http_client
 
 log = logging.getLogger(__name__)
 

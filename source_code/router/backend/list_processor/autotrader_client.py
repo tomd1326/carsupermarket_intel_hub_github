@@ -6,14 +6,14 @@ from typing import Any, Dict, List, Optional
 
 import httpx
 
-from router.backend.utils.config import (
+from utils.config import (
     AT_VEHICLES_RPS,
     AT_VALUATIONS_RPS,
     HTTP_TOTAL_RETRIES,
     HTTP_BACKOFF_BASE,
 )
-from router.backend.utils.rate_limiter import AsyncTokenBucket
-from router.backend.utils.lambda_http import get_http_client
+from utils.rate_limiter import AsyncTokenBucket
+from utils.lambda_http import get_http_client
 
 
 class AutoTraderClient:

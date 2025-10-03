@@ -1,6 +1,8 @@
 # FILE PATH: source_code/router/backend/routes/auth_routes.py
+# FIXED: Template path using pathlib
 
 import os
+import pathlib
 import hashlib
 from fastapi import APIRouter, Request, Form, Depends
 from fastapi.responses import HTMLResponse, RedirectResponse
@@ -8,11 +10,9 @@ from fastapi.templating import Jinja2Templates
 
 BASE_URL = os.getenv("BASE_URL", "/dev")
 
-# Set up templates
-import os
-cur_dir = os.path.dirname(__file__)
-templates_dir = os.path.join(cur_dir, "../templates")
-templates = Jinja2Templates(directory=templates_dir)
+# FIXED: Dynamic template path
+TEMPLATES_DIR = pathlib.Path(__file__).parent.parent / "templates"
+templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 
 router = APIRouter(prefix="", tags=["Authentication"])
 

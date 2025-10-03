@@ -11,16 +11,16 @@ from typing import Dict, Any
 
 import pandas as pd
 
-from router.backend.utils.db_utils import get_database_connection
-from router.backend.utils.s3_tools import upload_file, download_file
-from router.backend.utils.file_handler import read_dataframe_file
-from router.backend.list_processor.columns_mapper import get_columns_mapper
-from router.backend.list_processor.snowflake_enrichment import enrich_with_stock_sales
-from router.backend.list_processor.enhanced_list_processor import (
+from utils.db_utils import get_database_connection
+from utils.s3_tools import upload_file, download_file
+from utils.file_handler import read_dataframe_file
+from list_processor.columns_mapper import get_columns_mapper
+from list_processor.snowflake_enrichment import enrich_with_stock_sales
+from list_processor.enhanced_list_processor import (
     process_dataframe_async,
     write_results_to_xlsx,
 )
-from router.backend.utils.config import PROGRESS_UPDATE_INTERVAL
+from utils.config import PROGRESS_UPDATE_INTERVAL
 
 logger = logging.getLogger(__name__)
 s3_bucketname = "aa-raw-sources-uk"
