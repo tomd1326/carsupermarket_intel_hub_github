@@ -3,6 +3,7 @@
 import asyncio
 import datetime as dt
 from typing import Any, Dict, List, Optional
+import logging
 
 import httpx
 
@@ -15,20 +16,12 @@ from utils.config import (
 from utils.rate_limiter import AsyncTokenBucket
 from utils.lambda_http import get_http_client
 
+logger = logging.getLogger(__name__)
+
 
 class AutoTraderClient:
     """
-    Auto Trader API client.
-
-    Endpoints:
-      - POST {base_url}/authenticate
-      - GET  {base_url}/vehicles
-      - POST {base_url}/valuations?advertiserId=...
-
-    Notes:
-      - HTTP client is thread-local (via get_http_client)
-      - Token cached for 15 minutes (conservative)
-      - Vehicles and Valuations have separate token buckets
+    Auto Trader API client with enhanced logging for debugging.
     """
 
     def __init__(
@@ -82,19 +75,15 @@ class AutoTraderClient:
     # ---------- Authentication ----------
 
     async def _authenticate(self) -> str:
-        """
-        Authenticate and cache token with ~15 min expiry.
-        Safe to call concurrently; only one will actually set the token.
-        """
-        # Fast path if token is still valid
+        """Authenticate and cache token with ~15 min expiry."""
         if self._token and self._token_expiry and dt.datetime.now(dt.timezone.utc) < self._token_expiry:
             return self._token
 
         async with self._token_lock:
-            # Double-check inside lock
             if self._token and self._token_expiry and dt.datetime.now(dt.timezone.utc) < self._token_expiry:
                 return self._token
 
+            logger.debug("AT: Authenticating...")
             client = get_http_client()
             url = f"{self.base_url}/authenticate"
 
@@ -108,10 +97,10 @@ class AutoTraderClient:
             if not token:
                 raise ValueError("No access_token in auth response")
 
-            # Cache token
             expiry = dt.datetime.now(dt.timezone.utc) + dt.timedelta(minutes=15)
             self._token = token
             self._token_expiry = expiry
+            logger.debug("AT: Authentication successful")
             return token
 
     async def _get_token(self) -> str:
@@ -120,18 +109,9 @@ class AutoTraderClient:
     # ---------- API calls ----------
 
     async def vehicles(self, vrm: str, mileage_miles: int) -> Dict[str, Any]:
-        """
-        GET /vehicles — vehicle details, metrics, first registration date, features.
-
-        Returns:
-          {
-            at_success: bool,
-            at_make, at_model, at_derivative, at_derivative_id,
-            at_first_reg_date, at_rating, at_days_to_sell, at_market_condition,
-            at_factory_features, at_response_code,
-            at_error (if failed)
-          }
-        """
+        """GET /vehicles — vehicle details, metrics, first registration date, features."""
+        logger.debug(f"AT Vehicles: vrm={vrm}, mileage={mileage_miles}")
+        
         await self._veh_rl.acquire()
         client = get_http_client()
         token = await self._get_token()
@@ -168,12 +148,15 @@ class AutoTraderClient:
                 if f.get("factoryFitted")
             ]
 
+            derivative_id = vehicle.get("derivativeId", "")
+            logger.debug(f"AT Vehicles: {vrm} success - derivative_id={derivative_id}")
+
             return {
                 "at_success": True,
                 "at_make": vehicle.get("make", ""),
                 "at_model": vehicle.get("model", ""),
                 "at_derivative": vehicle.get("derivative", ""),
-                "at_derivative_id": vehicle.get("derivativeId", ""),
+                "at_derivative_id": derivative_id,
                 "at_first_reg_date": vehicle.get("firstRegistrationDate", ""),
                 "at_rating": (metrics_retail.get("rating") or {}).get("value", ""),
                 "at_days_to_sell": (metrics_retail.get("daysToSell") or {}).get("value", ""),
@@ -182,12 +165,14 @@ class AutoTraderClient:
                 "at_response_code": resp.status_code,
             }
         except httpx.HTTPStatusError as e:
+            logger.error(f"AT Vehicles HTTP {e.response.status_code} for {vrm}: {e.response.text[:200]}")
             return {
                 "at_success": False,
                 "at_error": f"Status {e.response.status_code}",
                 "at_response_code": e.response.status_code,
             }
         except Exception as e:
+            logger.exception(f"AT Vehicles failed for {vrm}")
             return {
                 "at_success": False,
                 "at_error": str(e),
@@ -202,14 +187,12 @@ class AutoTraderClient:
         mileage_miles: int,
         features: List[str],
     ) -> Dict[str, Any]:
-        """
-        POST /valuations — retail valuation for given derivative and options.
-
-        Returns:
-          { at_valuation, at_valuation_success }
-        """
+        """POST /valuations — retail valuation for given derivative and options."""
         if not derivative_id:
+            logger.warning(f"AT Valuations: No derivative_id for {vrm}")
             return {"at_valuation": "No derivative ID", "at_valuation_success": False}
+
+        logger.debug(f"AT Valuations: vrm={vrm}, derivative_id={derivative_id}, features={len(features)}")
 
         await self._val_rl.acquire()
         client = get_http_client()
@@ -225,7 +208,6 @@ class AutoTraderClient:
                 "firstRegistrationDate": first_reg_date,
                 "odometerReadingMiles": mileage_miles,
             },
-            # API spec: max 10 features
             "features": [{"name": f} for f in features if f][:10],
         }
 
@@ -239,17 +221,21 @@ class AutoTraderClient:
             data = resp.json()
             valuation = (((data.get("valuations") or {}).get("retail")) or {}).get("amountGBP", "")
 
+            logger.debug(f"AT Valuations: {vrm} success - valuation={valuation}")
+
             return {
                 "at_valuation": valuation,
                 "at_valuation_success": True,
             }
         except httpx.HTTPStatusError as e:
             status = e.response.status_code
+            logger.error(f"AT Valuations HTTP {status} for {vrm}: {e.response.text[:200]}")
             return {
                 "at_valuation": f"Error {status}",
                 "at_valuation_success": False,
             }
         except Exception as e:
+            logger.exception(f"AT Valuations failed for {vrm}")
             return {
                 "at_valuation": f"Error: {str(e)}",
                 "at_valuation_success": False,

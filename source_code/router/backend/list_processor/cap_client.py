@@ -17,26 +17,14 @@ logger = logging.getLogger(__name__)
 
 class CAPClient:
     """
-    CAP API client.
-
-    Transport:
-      - Use HTTP POST (application/x-www-form-urlencoded) for speed and reliability.
-
-    Endpoints:
-      - VRMValuation (monthly via VRM + CAPID/regDate discovery)
-      - CAPIDValuation (monthly via CAPID) — expects RegisteredDate in yyyy-MM-dd format
-      - GetUsedLive_IdRegDate (live valuations; returns multiple mileage bands)
-
-    Rules:
-      - When CAPID is present from source: call CAPIDValuation + GetUsedLive_IdRegDate (in parallel)
-      - When CAPID not present: call VRMValuation (gets monthly + CAPID/regDate), then live if possible
+    CAP API client with enhanced logging for debugging.
     """
 
     def __init__(self, subscriber_id: str, password: str) -> None:
         self.subscriber_id = subscriber_id
         self.password = password
 
-        # HTTP endpoints (method-specific)
+        # HTTP endpoints
         self.vrm_url = "https://soap.cap.co.uk/vrm/capvrm.asmx/VRMValuation"
         self.capid_monthly_url = "https://soap.cap.co.uk/vrm/capvrm.asmx/CAPIDValuation"
         self.capid_live_url = "https://soap.cap.co.uk/usedvalueslive/capusedvalueslive.asmx/GetUsedLive_IdRegDate"
@@ -128,6 +116,8 @@ class CAPClient:
 
     async def _fetch_live_valuation(self, capid: int, rounded_mileage: int, reg_date_yyyy_mm_dd: str) -> List[Tuple[int, int, int]]:
         """Return list of (mileage, retail, clean) bands for a vehicle."""
+        logger.debug(f"CAP Live: CAPID={capid}, mileage={rounded_mileage}, reg_date={reg_date_yyyy_mm_dd}")
+        
         await self._rl.acquire()
         client = get_http_client()
 
@@ -163,21 +153,22 @@ class CAPClient:
                     out.append((int(mile.text) * 1000, int(ret.text), int(cle.text)))
                 except Exception:
                     continue
+            
+            logger.debug(f"CAP Live: CAPID={capid} returned {len(out)} valuation bands")
             return out
+        except httpx.HTTPStatusError as e:
+            logger.error(f"CAP Live HTTP {e.response.status_code} for CAPID {capid}: {e.response.text[:200]}")
+            return []
         except Exception as e:
-            logger.exception(f"Live valuation failed for CAPID {capid}")
+            logger.exception(f"CAP Live failed for CAPID {capid}")
             return []
 
     async def _fetch_monthly_capid(self, capid: int, rounded_mileage: int, reg_date_yyyy_mm_dd: str) -> Dict[str, Any]:
-        """
-        Monthly valuation by CAPID.
+        """Monthly valuation by CAPID."""
+        logger.debug(f"CAP Monthly: CAPID={capid}, mileage={rounded_mileage}, reg_date={reg_date_yyyy_mm_dd}")
         
-        IMPORTANT: When using HTTP POST (not SOAP XML), CAPIDValuation expects
-        RegisteredDate in yyyy-MM-dd format (ISO 8601), NOT dd/mm/yyyy.
-        """
-        # Validate registration date presence
         if not reg_date_yyyy_mm_dd:
-            logger.warning(f"Missing RegisteredDate for CAPID {capid} — skipping CAPIDValuation")
+            logger.warning(f"CAP Monthly: Missing RegisteredDate for CAPID {capid}")
             return {}
 
         await self._rl.acquire()
@@ -188,7 +179,7 @@ class CAPClient:
             "Password": self.password,
             "Database": self.database,
             "CAPID": str(capid),
-            "RegisteredDate": reg_date_yyyy_mm_dd,  # yyyy-MM-dd format required
+            "RegisteredDate": reg_date_yyyy_mm_dd,
             "Mileage": str(rounded_mileage),
             "StandardEquipmentRequired": "false",
         }
@@ -204,33 +195,34 @@ class CAPClient:
             root = ET.fromstring(resp.text)
         except httpx.HTTPStatusError as e:
             status = e.response.status_code
-            # Log body for diagnostics
             try:
-                body = e.response.text[:500]  # first 500 chars
+                body = e.response.text[:500]
             except Exception:
                 body = "<no response body>"
             logger.exception(
-                f"CAPIDValuation HTTP {status} for CAPID {capid}. "
-                f"Payload: {payload}. Response body: {body}"
+                f"CAP Monthly HTTP {status} for CAPID {capid}. Payload: {payload}. Response: {body}"
             )
             return {}
         except Exception as e:
-            logger.exception(f"Monthly CAPID valuation failed for CAPID {capid}")
+            logger.exception(f"CAP Monthly failed for CAPID {capid}")
             return {}
 
         # Parse XML response
         ns = self._ns_vrm
         success = root.find(".//ns:Success", ns)
         if not (success is not None and success.text == "true"):
+            logger.warning(f"CAP Monthly: Success=false for CAPID {capid}")
             return {}
 
         capid_lookup = root.find(".//ns:CAPIDLookup", ns)
         valuation = root.find(".//ns:Valuation", ns)
         if capid_lookup is None or valuation is None:
+            logger.warning(f"CAP Monthly: Missing CAPIDLookup/Valuation for CAPID {capid}")
             return {}
 
         val_success = valuation.find("ns:Success", ns)
         if not (val_success is not None and val_success.text == "true"):
+            logger.warning(f"CAP Monthly: Valuation Success=false for CAPID {capid}")
             return {}
 
         # Parse monthly values
@@ -242,6 +234,8 @@ class CAPClient:
 
         retail = _to_int(valuation.find("ns:Retail", ns))
         clean = _to_int(valuation.find("ns:Clean", ns))
+
+        logger.debug(f"CAP Monthly: CAPID={capid} retail={retail}, clean={clean}")
 
         return {
             "Retail": retail,
@@ -255,10 +249,9 @@ class CAPClient:
     # ---------- Public API ----------
 
     async def vrm(self, vrm: str, mileage: int) -> Dict[str, Any]:
-        """
-        VRM-based monthly valuation. Returns monthly and (if database=='CAR' and CAPID present)
-        fetches live valuations using the returned CAPID/regDate.
-        """
+        """VRM-based monthly valuation."""
+        logger.debug(f"CAP VRM: vrm={vrm}, mileage={mileage}")
+        
         rounded_mileage = self._round_to_nearest_thousand(mileage)
 
         await self._rl.acquire()
@@ -287,7 +280,9 @@ class CAPClient:
             vehicle_found = root.find(".//ns:VRMLookup/ns:VehicleFound", ns)
             if vehicle_found is not None and vehicle_found.text == "false":
                 fail_reason = root.find(".//ns:VRMLookup/ns:FailReason", ns)
-                return {"cap_success": False, "cap_error": fail_reason.text if fail_reason is not None else "Vehicle not found"}
+                reason = fail_reason.text if fail_reason is not None else "Vehicle not found"
+                logger.warning(f"CAP VRM: {vrm} not found - {reason}")
+                return {"cap_success": False, "cap_error": reason}
 
             # Extract fields
             database = root.find(".//ns:VRMLookup/ns:Database", ns)
@@ -315,7 +310,6 @@ class CAPClient:
             reg_date_obj = None
             if registered_date is not None and registered_date.text:
                 try:
-                    # Example: 2021-06-30T00:00:00
                     reg_date_obj = datetime.datetime.strptime(registered_date.text, "%Y-%m-%dT%H:%M:%S")
                     reg_date_formatted = reg_date_obj.strftime("%d/%m/%Y")
                 except Exception:
@@ -337,6 +331,8 @@ class CAPClient:
                 "cap_live_retail": "",
             }
 
+            logger.debug(f"CAP VRM: {vrm} success - CAPID={capid_node.text if capid_node is not None else 'N/A'}")
+
             # Live valuation if we have CAPID + reg date and in CAR DB
             if (
                 database is not None and database.text == "CAR" and
@@ -353,24 +349,23 @@ class CAPClient:
                             result["cap_live_retail"] = self._round_to_nearest_25(float(r))
                             result["cap_live_clean"] = self._round_to_nearest_25(float(c))
                 except Exception as e:
-                    logger.exception(f"Live valuation after VRM lookup failed for {vrm}")
+                    logger.exception(f"CAP VRM: Live valuation failed for {vrm}")
 
             return result
 
+        except httpx.HTTPStatusError as e:
+            logger.error(f"CAP VRM HTTP {e.response.status_code} for {vrm}: {e.response.text[:200]}")
+            return {"cap_success": False, "cap_error": f"HTTP {e.response.status_code}"}
         except Exception as e:
-            logger.exception(f"VRM valuation failed for {vrm}")
+            logger.exception(f"CAP VRM failed for {vrm}")
             return {"cap_success": False, "cap_error": str(e)}
 
     async def capid(self, capid: int, mileage: int, registration_date: str) -> Dict[str, Any]:
-        """
-        CAPID-based path (monthly + live), when CAPID and reg date are known.
-        registration_date: 'YYYY-MM-DD' (ISO format)
+        """CAPID-based path (monthly + live)."""
+        logger.debug(f"CAP CAPID: capid={capid}, mileage={mileage}, reg_date={registration_date}")
         
-        Both CAPIDValuation and GetUsedLive_IdRegDate expect yyyy-MM-dd format.
-        """
-        # If reg date missing, still return monthly fields with blanks
         if not registration_date:
-            logger.warning(f"Missing registration_date for CAPID {capid} — returning empty monthly/live values")
+            logger.warning(f"CAP CAPID: Missing registration_date for CAPID {capid}")
             return {
                 "cap_success": True,
                 "cap_capid": str(capid),
@@ -387,12 +382,12 @@ class CAPClient:
 
         rounded_mileage = self._round_to_nearest_thousand(mileage)
 
-        # Validate date format (should be yyyy-MM-dd from source)
+        # Validate date format
         try:
             reg_dt = datetime.datetime.strptime(registration_date, "%Y-%m-%d").date()
-            reg_date_iso = reg_dt.strftime("%Y-%m-%d")  # Already in correct format
+            reg_date_iso = reg_dt.strftime("%Y-%m-%d")
         except Exception:
-            logger.warning(f"Invalid registration_date format for CAPID {capid}: {registration_date}")
+            logger.warning(f"CAP CAPID: Invalid registration_date format for CAPID {capid}: {registration_date}")
             return {
                 "cap_success": True,
                 "cap_capid": str(capid),
@@ -407,8 +402,7 @@ class CAPClient:
                 "cap_live_retail": "",
             }
 
-        # Monthly (CAPIDValuation) and live (GetUsedLive_IdRegDate) in parallel
-        # Both now use yyyy-MM-dd format
+        # Monthly and live in parallel
         monthly_task = asyncio.create_task(self._fetch_monthly_capid(capid, rounded_mileage, reg_date_iso))
         live_task = asyncio.create_task(self._fetch_live_valuation(capid, rounded_mileage, reg_date_iso))
 
@@ -421,6 +415,8 @@ class CAPClient:
             if r is not None and c is not None:
                 live_retail = self._round_to_nearest_25(float(r))
                 live_clean = self._round_to_nearest_25(float(c))
+
+        logger.debug(f"CAP CAPID: {capid} complete - monthly_retail={monthly_data.get('Retail', '')}, live_retail={live_retail}")
 
         return {
             "cap_success": True,

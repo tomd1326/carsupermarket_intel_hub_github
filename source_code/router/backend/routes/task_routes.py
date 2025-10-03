@@ -1,6 +1,7 @@
 # FILE PATH: source_code/router/backend/routes/task_routes.py
 # LAMBDA-OPTIMIZED: 5-minute timeout + FIXED supplier dropdown + SSE for instant updates
 # FIXED: Template path and imports
+# FIXED: Synchronous processing on Lambda (no background threads)
 
 import os
 import pathlib
@@ -95,17 +96,25 @@ def process_task(task_id: int, username: str = Depends(get_current_user)):
     """Trigger processing for a specific task."""
     logger.info(f"Processing task {task_id}")
     
-    # Create event for SSE notifications
-    with task_events_lock:
-        task_events[task_id] = threading.Event()
+    # Check if running on Lambda
+    is_lambda = bool(os.environ.get("AWS_LAMBDA_FUNCTION_NAME"))
     
-    # Start background processing
-    thread = threading.Thread(
-        target=_run_elaborate_background_with_notification,
-        args=(task_id,),
-        daemon=True
-    )
-    thread.start()
+    if is_lambda:
+        # Lambda: run synchronously (no thread, Lambda waits for completion)
+        logger.info(f"Lambda environment detected - running task {task_id} synchronously")
+        _run_elaborate_background(task_id)
+    else:
+        # Local: use thread for fast UI response
+        logger.info(f"Local environment detected - running task {task_id} in background thread")
+        with task_events_lock:
+            task_events[task_id] = threading.Event()
+        
+        thread = threading.Thread(
+            target=_run_elaborate_background_with_notification,
+            args=(task_id,),
+            daemon=True
+        )
+        thread.start()
     
     return RedirectResponse(url="/tasks", status_code=303)
 
@@ -115,23 +124,31 @@ def trigger_elaborate_task(task_id: int, username: str = Depends(get_current_use
     """Trigger re-processing for a task (legacy endpoint)."""
     logger.info(f"Re-processing task {task_id}")
     
-    # Create event for SSE notifications
-    with task_events_lock:
-        task_events[task_id] = threading.Event()
+    # Check if running on Lambda
+    is_lambda = bool(os.environ.get("AWS_LAMBDA_FUNCTION_NAME"))
     
-    # Start background processing
-    thread = threading.Thread(
-        target=_run_elaborate_background_with_notification,
-        args=(task_id,),
-        daemon=True
-    )
-    thread.start()
+    if is_lambda:
+        # Lambda: run synchronously (no thread, Lambda waits for completion)
+        logger.info(f"Lambda environment detected - running task {task_id} synchronously")
+        _run_elaborate_background(task_id)
+    else:
+        # Local: use thread for fast UI response
+        logger.info(f"Local environment detected - running task {task_id} in background thread")
+        with task_events_lock:
+            task_events[task_id] = threading.Event()
+        
+        thread = threading.Thread(
+            target=_run_elaborate_background_with_notification,
+            args=(task_id,),
+            daemon=True
+        )
+        thread.start()
     
     return RedirectResponse(url="/tasks", status_code=303)
 
 
 def _run_elaborate_background_with_notification(task_id: int):
-    """Run processing and notify when complete."""
+    """Run processing and notify when complete (for local/threaded execution)."""
     try:
         _run_elaborate_background(task_id)
     finally:
