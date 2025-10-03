@@ -8,7 +8,7 @@ logger = logging.getLogger(__name__)
 
 
 async def unhandled_exception_handler(request: Request, exc: Exception):
-    tb = "".join(traceback.format_exception(exc))
+    tb = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
     content = {
         "message": "An internal server error occurred.",
         "details": str(exc),

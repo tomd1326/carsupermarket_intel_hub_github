@@ -1,6 +1,9 @@
+# source_code/router/Dockerfile
+
 ARG BUILD_DIR="backend"
 
-FROM python:3.9-slim as build-image
+# FIXED: Use Lambda base image for building too - ensures GLIBC compatibility
+FROM public.ecr.aws/lambda/python:3.9 as build-image
    
 ARG PKG_URL
 ARG LAST_PKG_VERSION
@@ -14,10 +17,15 @@ ENV TZ=Europe/Paris
 # Configuring tzdata
 RUN ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone
 
-# Install aws-lambda-cpp build dependencies, git, python3, pip3
-RUN apt-get update -y && \
-  apt-get install -y \
-  git-all
+# Install build dependencies for Lambda environment
+RUN yum update -y && \
+    yum install -y \
+    git \
+    gcc \
+    gcc-c++ \
+    make \
+    openssl-devel \
+    libffi-devel
 
 # Include global arg in this stage of the build
 ARG BUILD_DIR
@@ -25,7 +33,7 @@ ARG LOCAL_ENV
 
 RUN mkdir -p ${BUILD_DIR}
 
-COPy ./pyproject.toml .
+COPY ./pyproject.toml .
 COPY ./backend ${BUILD_DIR}/
 
 # Upgrade pip
@@ -40,8 +48,7 @@ RUN if [ "$LOCAL_ENV" = "1" ]; then \
         poetry export -f requirements.txt --output requirements.txt; \
     fi
 
-#RUN pip install --target ${BUILD_DIR} pricing-toolbox==${LAST_PKG_VERSION} --extra-index-url ${PKG_URL}
-
+# Install dependencies in Lambda-compatible environment
 RUN pip3 install \
       --target /python_build \
       -r requirements.txt
