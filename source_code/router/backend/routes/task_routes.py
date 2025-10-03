@@ -1,7 +1,7 @@
 # FILE PATH: source_code/router/backend/routes/task_routes.py
 # LAMBDA-OPTIMIZED: 5-minute timeout + FIXED supplier dropdown + SSE for instant updates
 # FIXED: Template path and imports
-# FIXED: Synchronous processing on Lambda (no background threads)
+# FIXED: Async processing on Lambda (no event loop conflict)
 
 import os
 import pathlib
@@ -92,7 +92,7 @@ def get_tasks(request: Request, page: int = 1, username: str = Depends(get_curre
 
 
 @router.post("/process/{task_id}")
-def process_task(task_id: int, username: str = Depends(get_current_user)):
+async def process_task(task_id: int, username: str = Depends(get_current_user)):
     """Trigger processing for a specific task."""
     logger.info(f"Processing task {task_id}")
     
@@ -100,27 +100,32 @@ def process_task(task_id: int, username: str = Depends(get_current_user)):
     is_lambda = bool(os.environ.get("AWS_LAMBDA_FUNCTION_NAME"))
     
     if is_lambda:
-        # Lambda: run synchronously (no thread, Lambda waits for completion)
+        # Lambda: run synchronously (await directly, uses existing event loop)
         logger.info(f"Lambda environment detected - running task {task_id} synchronously")
-        _run_elaborate_background(task_id)
+        await _run_elaborate_background(task_id, 500)
     else:
         # Local: use thread for fast UI response
         logger.info(f"Local environment detected - running task {task_id} in background thread")
         with task_events_lock:
             task_events[task_id] = threading.Event()
         
-        thread = threading.Thread(
-            target=_run_elaborate_background_with_notification,
-            args=(task_id,),
-            daemon=True
-        )
+        def _thread_wrapper():
+            loop = asyncio.new_event_loop()
+            try:
+                asyncio.set_event_loop(loop)
+                loop.run_until_complete(_run_elaborate_background(task_id, 500))
+            finally:
+                notify_task_complete(task_id)
+                loop.close()
+        
+        thread = threading.Thread(target=_thread_wrapper, daemon=True)
         thread.start()
     
     return RedirectResponse(url="/tasks", status_code=303)
 
 
 @router.get("/trigger-elaborate-task")
-def trigger_elaborate_task(task_id: int, username: str = Depends(get_current_user)):
+async def trigger_elaborate_task(task_id: int, username: str = Depends(get_current_user)):
     """Trigger re-processing for a task (legacy endpoint)."""
     logger.info(f"Re-processing task {task_id}")
     
@@ -128,39 +133,28 @@ def trigger_elaborate_task(task_id: int, username: str = Depends(get_current_use
     is_lambda = bool(os.environ.get("AWS_LAMBDA_FUNCTION_NAME"))
     
     if is_lambda:
-        # Lambda: run synchronously (no thread, Lambda waits for completion)
+        # Lambda: run synchronously (await directly, uses existing event loop)
         logger.info(f"Lambda environment detected - running task {task_id} synchronously")
-        _run_elaborate_background(task_id)
+        await _run_elaborate_background(task_id, 500)
     else:
         # Local: use thread for fast UI response
         logger.info(f"Local environment detected - running task {task_id} in background thread")
         with task_events_lock:
             task_events[task_id] = threading.Event()
         
-        thread = threading.Thread(
-            target=_run_elaborate_background_with_notification,
-            args=(task_id,),
-            daemon=True
-        )
+        def _thread_wrapper():
+            loop = asyncio.new_event_loop()
+            try:
+                asyncio.set_event_loop(loop)
+                loop.run_until_complete(_run_elaborate_background(task_id, 500))
+            finally:
+                notify_task_complete(task_id)
+                loop.close()
+        
+        thread = threading.Thread(target=_thread_wrapper, daemon=True)
         thread.start()
     
     return RedirectResponse(url="/tasks", status_code=303)
-
-
-def _run_elaborate_background_with_notification(task_id: int):
-    """Run processing and notify when complete (for local/threaded execution)."""
-    try:
-        _run_elaborate_background(task_id)
-    finally:
-        # Notify SSE listeners
-        notify_task_complete(task_id)
-        # Clean up event after 60 seconds
-        def cleanup():
-            import time
-            time.sleep(60)
-            with task_events_lock:
-                task_events.pop(task_id, None)
-        threading.Thread(target=cleanup, daemon=True).start()
 
 
 @router.get("/task-events/{task_id}")

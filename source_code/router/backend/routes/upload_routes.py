@@ -96,13 +96,23 @@ async def _process_upload(main_content: bytes, supplier_id: str, filename: str,
     is_lambda = bool(os.environ.get("AWS_LAMBDA_FUNCTION_NAME"))
     
     if is_lambda:
-        # Lambda: run synchronously (no thread, Lambda waits for completion)
+        # Lambda: run synchronously (await directly, uses existing event loop)
         logger.info(f"Lambda environment detected - running task {task_id} synchronously")
-        _run_elaborate_background(task_id, buying_target)
+        await _run_elaborate_background(task_id, buying_target)
     else:
         # Local: use thread for fast UI response
         logger.info(f"Local environment detected - running task {task_id} in background thread")
-        t = threading.Thread(target=_run_elaborate_background, args=(task_id, buying_target), daemon=True)
+        
+        def _thread_wrapper():
+            import asyncio
+            loop = asyncio.new_event_loop()
+            try:
+                asyncio.set_event_loop(loop)
+                loop.run_until_complete(_run_elaborate_background(task_id, buying_target))
+            finally:
+                loop.close()
+        
+        t = threading.Thread(target=_thread_wrapper, daemon=True)
         t.start()
 
     # 6) Redirect to dashboard
