@@ -6,7 +6,7 @@ import time
 from typing import Optional, List, Dict, Any, Tuple
 import pandas as pd
 import numpy as np
-from router.backend.utils.snowflake_client import SnowflakeClient
+from utils.snowflake_client import SnowflakeClient
 
 logger = logging.getLogger(__name__)
 

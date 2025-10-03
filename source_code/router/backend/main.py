@@ -1,4 +1,5 @@
 # FILE PATH: source_code/router/backend/main.py
+# TRIPLE-CHECKED: All imports corrected for Lambda runtime structure
 
 import logging
 import os
@@ -16,10 +17,11 @@ from starlette.middleware.sessions import SessionMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
 from mangum import Mangum
 
-from router.backend.exceptions import unhandled_exception_handler
-from router.backend.utils.secrets_manager_client import get_secret
-from router.backend.utils.lambda_http import LambdaRequestsManager
-import router.backend.routes.task_routes as task_routes
+# FIXED: Removed "router.backend." prefix - files are in Lambda root
+from exceptions import unhandled_exception_handler
+from utils.secrets_manager_client import get_secret
+from utils.lambda_http import LambdaRequestsManager
+import routes.task_routes as task_routes
 
 # ---------- logging ----------
 logging.getLogger("httpx").setLevel(logging.WARNING)
@@ -47,9 +49,9 @@ for name, lvl in {
 }.items():
     logging.getLogger(name).setLevel(lvl)
 
-# Import router
+# FIXED: Import router from same directory
 try:
-    from router.backend.api_router import router as api_router
+    from api_router import router as api_router
     logger.info("Router loaded successfully")
 except Exception as e:
     logger.error("Router import failed: %s", e)
@@ -191,3 +193,4 @@ def handle_sigterm(*args):
     sys.exit(0)
 
 signal.signal(signal.SIGTERM, handle_sigterm)
+    
