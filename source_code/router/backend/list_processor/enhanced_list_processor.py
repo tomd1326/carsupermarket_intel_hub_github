@@ -74,8 +74,12 @@ def _is_van(row: Dict[str, Any], supplier_name: str) -> bool:
     - 1link: Check "Body Style" column for "Van"
     """
     if supplier_name.lower() == "1link":
-        body_style = row.get("Body Style", "").strip().lower()
-        return body_style == "van"
+        body_style_raw = row.get("Body Style", "")
+        body_style = body_style_raw.strip().lower()
+        is_van = body_style == "van"
+        if is_van:
+            log.info(f"Van detected: Body Style='{body_style_raw}' - SKIPPING CAP")
+        return is_van
     return False
 
 
@@ -128,6 +132,7 @@ async def _process_one_parallel(
 
     Always call Auto Trader (vehicles -> valuations).
     CAP rules:
+      - Skip vans entirely (no CAP call)
       - If CAPID present: use CAPIDValuation (monthly) + GetUsedLive_IdRegDate (live)
       - Else: VRMValuation (monthly + CAPID/regDate), AND if database=='CAR' call live
     """
@@ -156,10 +161,11 @@ async def _process_one_parallel(
 
     rounded_mileage = _round_mileage(mileage)
 
-    # CAP (skip for vans only)
+    # CAP - Check if van FIRST, then skip CAP entirely
     if _is_van(row, supplier_name):
         cap_data: Dict[str, Any] = {}
     else:
+        # Non-van: call CAP based on CAPID presence
         if capid and registration_date:
             # Cache on (CAPID, reg_date, rounded_mileage)
             reg_date_str = (

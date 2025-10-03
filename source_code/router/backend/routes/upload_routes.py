@@ -86,15 +86,24 @@ async def _process_upload(main_content: bytes, supplier_id: str, filename: str,
         except Exception as e:
             logger.warning(f"Previous file provided but failed to store: {e}")
 
-    # 4) Mark 'pending' BEFORE returning
+    # 4) Mark 'pending' BEFORE starting processing
     with get_database_connection() as conn:
         with conn.cursor() as cursor:
             cursor.execute("UPDATE tasks SET status = 'pending', message = NULL WHERE task_id = %s", (task_id,))
             conn.commit()
 
-    # 5) Kick off processing in background thread WITH buying_target
-    t = threading.Thread(target=_run_elaborate_background, args=(task_id, buying_target), daemon=True)
-    t.start()
+    # 5) Check if running on Lambda
+    is_lambda = bool(os.environ.get("AWS_LAMBDA_FUNCTION_NAME"))
+    
+    if is_lambda:
+        # Lambda: run synchronously (no thread, Lambda waits for completion)
+        logger.info(f"Lambda environment detected - running task {task_id} synchronously")
+        _run_elaborate_background(task_id, buying_target)
+    else:
+        # Local: use thread for fast UI response
+        logger.info(f"Local environment detected - running task {task_id} in background thread")
+        t = threading.Thread(target=_run_elaborate_background, args=(task_id, buying_target), daemon=True)
+        t.start()
 
     # 6) Redirect to dashboard
     return RedirectResponse(url=BASE_URL + "/tasks", status_code=303)
@@ -194,5 +203,5 @@ async def upload_task_multipart(
         return await _process_upload(main_content, supplier_id, main_file.filename, buying_target, prev_content, prev_filename)
 
     except Exception as e:
-        logger.error(f"Error in upload_task_multipart: {e}")
+        logger.exception(f"Error in upload_task_multipart")
         return {"error": f"Server error: {str(e)}"}
