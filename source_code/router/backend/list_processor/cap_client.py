@@ -165,7 +165,7 @@ class CAPClient:
                     continue
             return out
         except Exception as e:
-            logger.error(f"Live valuation failed for CAPID {capid}: {e}")
+            logger.exception(f"Live valuation failed for CAPID {capid}")
             return []
 
     async def _fetch_monthly_capid(self, capid: int, rounded_mileage: int, reg_date_yyyy_mm_dd: str) -> Dict[str, Any]:
@@ -209,13 +209,13 @@ class CAPClient:
                 body = e.response.text[:500]  # first 500 chars
             except Exception:
                 body = "<no response body>"
-            logger.error(
+            logger.exception(
                 f"CAPIDValuation HTTP {status} for CAPID {capid}. "
                 f"Payload: {payload}. Response body: {body}"
             )
             return {}
         except Exception as e:
-            logger.error(f"Monthly CAPID valuation failed for CAPID {capid}: {e}")
+            logger.exception(f"Monthly CAPID valuation failed for CAPID {capid}")
             return {}
 
         # Parse XML response
@@ -353,12 +353,12 @@ class CAPClient:
                             result["cap_live_retail"] = self._round_to_nearest_25(float(r))
                             result["cap_live_clean"] = self._round_to_nearest_25(float(c))
                 except Exception as e:
-                    logger.error(f"Live valuation after VRM lookup failed for {vrm}: {e}")
+                    logger.exception(f"Live valuation after VRM lookup failed for {vrm}")
 
             return result
 
         except Exception as e:
-            logger.error(f"VRM valuation failed for {vrm}: {e}")
+            logger.exception(f"VRM valuation failed for {vrm}")
             return {"cap_success": False, "cap_error": str(e)}
 
     async def capid(self, capid: int, mileage: int, registration_date: str) -> Dict[str, Any]:
