@@ -38,8 +38,7 @@ def _run_elaborate_background(task_id: int, buying_target: int = 500):
             elaborate_task({"task_id": task_id, "buying_target": buying_target})
         )
     except Exception as e:
-        logger.error("Processing failed for task %s: %s", task_id, e)
-        logger.error("Traceback: %s", traceback.format_exc())
+        logger.exception("Processing failed for task %s", task_id)
     finally:
         if loop:
             try:
@@ -181,8 +180,7 @@ async def elaborate_task(data: Dict[str, Any]):
         except Exception as e:
             execution_time = time.time() - t0
             status, message = "error", f"{e}"
-            logger.error("Task %s failed: %s", data["task_id"], message)
-            logger.debug("Traceback:\n%s", traceback.format_exc())
+            logger.exception("Task %s failed", data["task_id"])
 
         # 8) Update DB
         with get_database_connection() as conn:
