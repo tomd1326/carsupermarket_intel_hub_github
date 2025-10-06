@@ -1,46 +1,21 @@
 # -------------------------------------------------
-# -- provider
+# -- operational variables
 # -------------------------------------------------
 
-variable "provider_credentials" {
-  default = "var .HOME/.aws/.credentials"
+variable "company" {
+  type        = string
+  description = "the company name"
+  default     = "carsupermarket"
 }
 
-variable "user_profile" {
-  default = "default"
+locals {
+  env                 = terraform.workspace == "prod" ? "prod" : "dev"
+  provider_region     = terraform.workspace == "prod" ? "eu-west-1" : "us-east-2"
+  private_subnet_id_1 = terraform.workspace == "prod" ? "subnet-0bd39ab9470f22c9e" : "subnet-02ff6f9ea16628639"
+  private_subnet_id_2 = terraform.workspace == "prod" ? "subnet-0c9410ed3601a0eca" : "subnet-0398fc4aea95ec60c"
+
+  api_gateway_custom_domain_name = terraform.workspace == "prod" ? var.api_gateway_custom_domain_name_prod : var.api_gateway_custom_domain_name_dev
 }
-
-# # -------------------------------------------------
-# # -- aws secret manager
-# # -------------------------------------------------
-
-# variable "aws_secret_manager_secret_name_1" {
-#   type        = string
-#   description = "secret name"
-#   default     = "car_pricer/autotrader/api_access"
-# }
-
-# variable "aws_secret_manager_secret_name_2" {
-#   type        = string
-#   description = "secret name"
-#   default     = "car_pricer/cat/api_access"
-# }
-
-# variable "aws_secret_manager_secret_value_1" {
-#   type        = string
-#   description = "secret value"
-#   default     = <<EOF
-#     {
-#       "key": "value"
-#     }
-#     EOF
-
-#   # default = {
-#   #   key           = "key",
-#   #   secret        = "secret",
-#   #   advertiser_id = "advertiser_id"
-#   # }
-# }
 
 # -------------------------------------------------
 # -- aws security group
@@ -81,7 +56,7 @@ variable "aws_lambda_iam_policy_name_1" {
 variable "aws_rds_cluster_identifier" {
   type        = string
   description = "rds cluster identifier"
-  default     = "car-pricer-rds-cluster"
+  default     = "aurora-pg-core-cluster"
 }
 
 # -------------------------------------------------
