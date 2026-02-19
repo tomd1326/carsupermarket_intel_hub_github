@@ -105,9 +105,6 @@ class MotabilityColumnsMapper(BaseColumnsMapper):
 # Mapper for 1Link
 class OneLinkColumnsMapper(BaseColumnsMapper):
     def map_row(self, row: Dict) -> Optional[VehicleRow]:
-        # DON'T skip vans - return vehicle data so AutoTrader can be called
-        # The skip logic for CAP is handled in enhanced_list_processor.py
-        
         try:
             capid = row.get("CAP ID", float('nan'))
             capid = int(capid)
@@ -147,7 +144,7 @@ class UniversalColumnsMapper(BaseColumnsMapper):
 
         # Match CAP ID
         capid = None
-        for pattern in [r"cap[\s_-]?(id|code)"]:
+        for pattern in ["cap[\s_-]?(id|code)"]:
             for col in row.keys():
                 if pd.isnull(row[col]):
                     continue

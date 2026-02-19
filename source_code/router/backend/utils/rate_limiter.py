@@ -1,63 +1,75 @@
-import asyncio
+import contextlib
+import collections
+import threading
 import time
-from typing import Optional
+from typing import Dict, Optional, Type
 
-class AsyncTokenBucket:
+
+class RateLimiter(contextlib.AbstractContextManager):
+    """A leaky bucket rate limiter.
+    Allows up to max_rate / time_period acquisitions before blocking.
+    time_period is measured in seconds; the default is 60.
     """
-    Optimized async token bucket with batching support.
-    
-    Key improvements:
-    - Batch token grants to reduce lock contention
-    - Pre-computed wait times
-    - Minimal lock hold duration
-    """
-    def __init__(self, rate: float, capacity: Optional[float] = None):
-        self.rate = float(rate)
-        self.capacity = float(capacity or rate)
-        self.tokens = self.capacity
-        self.ts = time.monotonic()
-        self._lock = asyncio.Lock()
-        # Optimization: pre-compute minimum wait to reduce attempts
-        self._min_wait = 1.0 / self.rate if self.rate > 0 else 0.001
+    def __init__(
+        self,
+        rate_limit: float,
+        time_window: float = 60
+    ) -> None:
+        self._max_level = rate_limit
+        self._rate_per_sec = rate_limit / time_window
+        self._level = 0.0
+        self._last_check = time.time()
+        self._waiters: Dict[int, threading.Event] = collections.OrderedDict()
+        self._lock = threading.Lock()
 
-    async def acquire(self, cost: float = 1.0):
-        """Acquire tokens with optimized fast-path."""
-        while True:
-            async with self._lock:
-                now = time.monotonic()
-                elapsed = now - self.ts
-                self.ts = now
-                # Refill tokens
-                self.tokens = min(self.capacity, self.tokens + elapsed * self.rate)
-                
-                if self.tokens >= cost:
-                    self.tokens -= cost
-                    return
-                
-                # Calculate precise wait time
-                need = cost - self.tokens
-                wait = need / self.rate if self.rate > 0 else self._min_wait
-            
-            # Sleep outside lock - use adaptive wait
-            await asyncio.sleep(min(wait * 0.95, 0.1))  # 95% of needed time, max 100ms
+    def _leak(self) -> None:
+        """Drip out capacity from the bucket."""
+        if self._level:
+            elapsed = time.time() - self._last_check
+            decrement = elapsed * self._rate_per_sec
+            self._level = max(self._level - decrement, 0)
+        self._last_check = time.time()
 
-    async def acquire_many(self, cost: float = 1.0, count: int = 1):
+    def has_capacity(self, amount: float = 1) -> bool:
+        """Check if there is enough space remaining in the bucket"""
+        with self._lock:
+            self._leak()
+            requested = self._level + amount
+            if requested < self._max_level:
+                for event in self._waiters.values():
+                    if not event.is_set():
+                        event.set()
+                        break
+            return self._level + amount <= self._max_level
+
+    def acquire(self, amount: float = 1) -> None:
+        """Acquire space in the bucket.
+
+        If the bucket is full, block until there is space.
+
         """
-        Batch acquisition for multiple tokens at once.
-        More efficient than multiple acquire() calls.
-        """
-        total_cost = cost * count
-        
-        async with self._lock:
-            now = time.monotonic()
-            elapsed = now - self.ts
-            self.ts = now
-            self.tokens = min(self.capacity, self.tokens + elapsed * self.rate)
-            
-            if self.tokens >= total_cost:
-                self.tokens -= total_cost
-                return 0.0
-            
-            # Return wait time for caller to handle
-            need = total_cost - self.tokens
-            return need / self.rate if self.rate > 0 else 0.0
+        if amount > self._max_level:
+            raise ValueError("Can't acquire more than the bucket capacity")
+
+        while not self.has_capacity(amount):
+            event = threading.Event()
+            thread_id = threading.get_ident()
+            self._waiters[thread_id] = event
+            event.wait(timeout=1 / self._rate_per_sec * amount)
+            with self._lock:
+                self._waiters.pop(thread_id, None)
+
+        with self._lock:
+            self._level += amount
+
+    def __enter__(self) -> None:
+        self.acquire()
+        return None
+
+    def __exit__(
+        self,
+        exc_type: Optional[Type[BaseException]],
+        exc: Optional[BaseException],
+        tb: Optional
+    ) -> None:
+        return None
