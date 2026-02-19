@@ -1,9 +1,9 @@
-# source_code/router/pyproject.toml
-
 [tool.poetry]
 name = "uk-list-evaluator"
 version = "0.1.0"
 description = ""
+authors = ["Your Name <you@example.com>"]
+readme = "README.md"
 
 [tool.poetry.dependencies]
 python = "^3.9"
@@ -21,10 +21,6 @@ openpyxl = "^3.1.2"
 redis = "^5.0.4"
 urllib3 = "==1.26.*"
 python-calamine = "^0.2.0"
-httpx = { version = "^0.27.0", extras = ["http2"] }
-snowflake-connector-python = "^3.0.0"
-numpy = "^1.24.0"
-pydantic = "^2.0.0"
 
 [tool.poetry.group.dev.dependencies]
 uvicorn = "^0.15.0"
