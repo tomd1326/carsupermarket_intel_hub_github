@@ -1,7 +1,7 @@
 ARG BUILD_DIR="backend"
 
-FROM python:3.9-slim as build-image
-   
+FROM public.ecr.aws/lambda/python:3.9 as build-image
+
 ARG PKG_URL
 ARG LAST_PKG_VERSION
 ARG DOMAIN_ML
@@ -14,10 +14,10 @@ ENV TZ=Europe/Paris
 # Configuring tzdata
 RUN ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone
 
-# Install aws-lambda-cpp build dependencies, git, python3, pip3
-RUN apt-get update -y && \
-  apt-get install -y \
-  git-all
+# Install build dependencies
+RUN yum update -y && \
+  yum install -y \
+  git
 
 # Include global arg in this stage of the build
 ARG BUILD_DIR
@@ -25,7 +25,7 @@ ARG LOCAL_ENV
 
 RUN mkdir -p ${BUILD_DIR}
 
-COPy ./pyproject.toml .
+COPY ./pyproject.toml .
 COPY ./backend ${BUILD_DIR}/
 
 # Upgrade pip
