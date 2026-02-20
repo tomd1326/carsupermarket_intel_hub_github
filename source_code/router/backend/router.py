@@ -20,6 +20,7 @@ import datetime
 from utils.lambda_http import LambdaRequestsManager
 from utils.s3_tools import upload_file, download_file
 from utils.db_utils import (get_database_connection)
+from utils.snowflake_client import SnowflakeClient  # NEW
 from list_processor.autotrader_client import AutoTraderClient
 from list_processor.cap_client import CAPClient
 from list_processor.columns_mapper import get_columns_mapper, BaseColumnsMapper
@@ -62,7 +63,7 @@ def root(request: Request, user: str = Depends(get_current_user)):
     if not user:
         return RedirectResponse(url=BASE_URL + "/login", status_code=303)
     #
-    return RedirectResponse(url=BASE_URL + "/tasks", status_code=303)
+    return RedirectResponse(url=BASE_URL + "/home", status_code=303)  # CHANGED: was /tasks
     # return templates.TemplateResponse("dashboard.html", {"request": request, "user": user})
 
 
@@ -77,7 +78,7 @@ def login(request: Request, username: str = Form(...), password: str = Form(...)
     pwd_hash = hashlib.sha256(password.encode()).hexdigest()
     if username == 'admin' and pwd_hash == "a05ef593239b0ff678c3bb69731e785c470d781a121692302912550aa2459b74":
         request.session['user'] = username
-        return RedirectResponse(url=BASE_URL + "/tasks", status_code=303)
+        return RedirectResponse(url=BASE_URL + "/home", status_code=303)  # CHANGED: was /tasks
     return templates.TemplateResponse(
         "login.html",
         {
@@ -92,6 +93,57 @@ def login(request: Request, username: str = Form(...), password: str = Form(...)
 def logout(request: Request):
     request.session.pop('user', None)
     return RedirectResponse(url=BASE_URL + "/login", status_code=303)
+
+
+# NEW
+@router.get("/home", response_class=HTMLResponse)
+def home(request: Request, user: str = Depends(get_current_user)):
+    if not user:
+        return RedirectResponse(url=BASE_URL + "/login", status_code=303)
+    return templates.TemplateResponse("home.html", {"request": request, "user": user, "BASE_URL": BASE_URL})
+
+
+# NEW
+@router.get("/buying-requirements", response_class=HTMLResponse)
+def buying_requirements(request: Request, user: str = Depends(get_current_user)):
+    if not user:
+        return RedirectResponse(url=BASE_URL + "/login", status_code=303)
+    return templates.TemplateResponse("buying_requirements.html", {"request": request, "user": user, "BASE_URL": BASE_URL})
+
+
+# NEW
+@router.get("/buying-requirements/test-snowflake")
+def test_snowflake(request: Request, user: str = Depends(get_current_user)):
+    if not user:
+        return RedirectResponse(url=BASE_URL + "/login", status_code=303)
+
+    TARGET_DB = "PROD_CARSUPERMARKET_DB"
+    TARGET_SCHEMA = "product_vehicle_journey"
+    TARGET_TABLE_NAME = "buying_requirements"
+    TARGET_TABLE = f"{TARGET_DB}.{TARGET_SCHEMA}.{TARGET_TABLE_NAME}"
+
+    try:
+        with SnowflakeClient() as sf:
+            rows, _ = sf.execute("SELECT CURRENT_WAREHOUSE()")
+            warehouse = rows[0][0]
+
+            # Use metadata — no table scan
+            meta_rows, _ = sf.execute(
+                "SELECT ROW_COUNT FROM information_schema.tables "
+                "WHERE table_catalog = %s AND table_schema = %s AND table_name = %s",
+                [TARGET_DB, TARGET_SCHEMA.upper(), TARGET_TABLE_NAME.upper()]
+            )
+            row_count = meta_rows[0][0] if meta_rows else None
+
+        return {
+            "status": "ok",
+            "warehouse": warehouse,
+            "target_table": TARGET_TABLE,
+            "row_count": row_count,
+        }
+    except Exception as e:
+        logger.error(f"Snowflake test failed: {e}")
+        return {"status": "error", "message": str(e)}
 
 
 @router.get("/tasks", response_class=HTMLResponse, name="read_tasks")
