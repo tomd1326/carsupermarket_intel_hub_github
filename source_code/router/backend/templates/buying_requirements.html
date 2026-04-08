@@ -761,8 +761,9 @@
                 [minGS,  maxGS]  = track(r[10], minGS,  maxGS);
                 [minGMS, maxGMS] = track(r[11], minGMS, maxGMS);
                 [minATR, maxATR] = track(r[16], minATR, maxATR);
-                if ((r[6] || 0) > max7d) max7d = Number(r[6]);
             });
+            // max7d from aggregated tableData (r[7] is summed 7d sales per group)
+            tableData.forEach(r => { if ((r[7] || 0) > max7d) max7d = Number(r[7]); });
 
             tableData.forEach(row => {
                 const sales = Number(row[4]) || 0;
