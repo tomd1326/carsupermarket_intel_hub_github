@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import base64
 import tempfile
 import threading
@@ -29,7 +31,6 @@ from list_processor.cap_client import CAPClient
 from list_processor.columns_mapper import get_columns_mapper, BaseColumnsMapper
 from utils.secrets_manager_client import get_secret
 from utils.file_handler import read_dataframe_file, write_dataframe_file
-from typing import Optional
 import pandas as pd
 
 
