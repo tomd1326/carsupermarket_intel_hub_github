@@ -851,4 +851,80 @@ function exportXLSX() {
     })();
 }
 
+/* ── Vehicle popup ───────────────────────────────────────── */
+function openVehicleModal(capId, label) {
+    // rawData rows: [0:cap_id, 1:label, 2:fuel, 3:price_band, 4:stock, 5:sales90,
+    //                6:sales7, 7:dis, 8:dts, 9:gpu_m, ..., 17:ack_date,
+    //                18:vrm, 19:supplier_name, 20:vehicle_url]
+    const maxDIS  = getMaxDIS();
+    const maxDTS  = getMaxDTS();
+    const minGPUM = getMinGPUM();
+    const todayMs = Date.now();
+
+    const vehicles = rawData.filter(r => {
+        if (r[0] !== capId || r[1] !== label) return false;
+        const isStock = Number(r[4]) === 1;
+        if (isStock) return true;
+        // Sales row — apply same filters as aggregation
+        const ackDate = r[17] ? new Date(r[17]) : null;
+        const daysSinceAck = ackDate ? Math.floor((todayMs - ackDate.getTime()) / 86400000) : null;
+        const dts   = r[8] != null ? Number(r[8]) : null;
+        const gpu_m = r[9] != null ? Number(r[9]) : null;
+        const passDIS  = maxDIS  === null || daysSinceAck === null || daysSinceAck <= maxDIS;
+        const passDTS  = maxDTS  === null || dts  === null || dts  <= maxDTS;
+        const passGPUM = minGPUM === null || gpu_m === null || gpu_m >= minGPUM;
+        return passDIS && passDTS && passGPUM;
+    });
+
+    // Sort: stock rows first, then sales
+    vehicles.sort((a, b) => Number(b[4]) - Number(a[4]));
+
+    const tbody = document.getElementById('vehicle-modal-body');
+    tbody.innerHTML = '';
+    vehicles.forEach(r => {
+        const tr = document.createElement('tr');
+        const deriv = r[1].split(' / ').slice(0, -1).join(' / ');
+        [deriv, r[18] || '—', r[19] || '—'].forEach(val => {
+            const td = document.createElement('td');
+            td.textContent = val;
+            tr.appendChild(td);
+        });
+        // Apex link column
+        const tdApex = document.createElement('td');
+        if (r[20]) {
+            const a = document.createElement('a');
+            a.href = r[20];
+            a.target = '_blank';
+            a.textContent = 'Apex';
+            a.className = 'apex-link';
+            tdApex.appendChild(a);
+        }
+        tr.appendChild(tdApex);
+        // Dim sold rows
+        if (Number(r[4]) !== 1) tr.classList.add('vehicle-row-sold');
+        tbody.appendChild(tr);
+    });
+    document.getElementById('vehicle-modal-title').textContent = label.split(' / ').slice(0, -1).join(' / ');
+    document.getElementById('vehicle-modal-backdrop').style.display = '';
+    document.getElementById('vehicle-modal').style.display = '';
+}
+
+function closeVehicleModal() {
+    document.getElementById('vehicle-modal-backdrop').style.display = 'none';
+    document.getElementById('vehicle-modal').style.display = 'none';
+}
+
+document.addEventListener('keydown', e => {
+    if (e.key === 'Escape') closeVehicleModal();
+});
+
+document.getElementById('table-body').addEventListener('click', e => {
+    const btn = e.target.closest('.view-btn');
+    if (!btn) return;
+    const tr = btn.closest('tr');
+    const idx = Array.from(document.getElementById('table-body').children).indexOf(tr);
+    const row = tableData[idx];
+    if (row) openVehicleModal(row[0], row[1]);
+});
+
 document.addEventListener('DOMContentLoaded', () => loadFromServer(true));

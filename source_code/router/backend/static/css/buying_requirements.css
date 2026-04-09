@@ -192,3 +192,85 @@ body, button, input, select, textarea {
 .controls-area .filter-btn {
     padding: 2px 8px !important;
 }
+
+/* Vehicle popup modal */
+.vehicle-modal-backdrop {
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.35);
+    z-index: 1000;
+}
+.vehicle-modal {
+    position: fixed;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    z-index: 1001;
+    background: #fff;
+    border-radius: 6px;
+    box-shadow: 0 8px 32px rgba(0,0,0,0.22);
+    min-width: 480px;
+    max-width: 90vw;
+    max-height: 80vh;
+    display: flex;
+    flex-direction: column;
+    font-size: 12px;
+}
+.vehicle-modal-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 14px 8px;
+    border-bottom: 1px solid #e5e7eb;
+    background: #dbeafe;
+    border-radius: 6px 6px 0 0;
+    flex-shrink: 0;
+}
+.vehicle-modal-title {
+    font-weight: 600;
+    font-size: 13px;
+    color: #1e3a5f;
+}
+.vehicle-modal-close {
+    background: none;
+    border: none;
+    font-size: 20px;
+    line-height: 1;
+    cursor: pointer;
+    color: #6b7280;
+    padding: 0 2px;
+}
+.vehicle-modal-close:hover { color: #111; }
+.vehicle-modal-body {
+    overflow-y: auto;
+    padding: 10px 14px;
+}
+#vehicle-modal-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 12px;
+}
+#vehicle-modal-table th {
+    background: #dbeafe;
+    text-align: left;
+    padding: 5px 8px;
+    font-weight: 600;
+    border: 1px solid #b0b0b0;
+    white-space: nowrap;
+}
+#vehicle-modal-table td {
+    padding: 4px 8px;
+    border: 1px solid #b0b0b0;
+    white-space: nowrap;
+}
+.vehicle-row-sold td { color: #9ca3af; }
+.apex-link {
+    font-size: 11px;
+    padding: 1px 6px;
+    border: 1px solid #0d6efd;
+    border-radius: 3px;
+    color: #0d6efd;
+    text-decoration: none;
+    display: inline-block;
+}
+.apex-link:hover { background: #0d6efd; color: #fff; }

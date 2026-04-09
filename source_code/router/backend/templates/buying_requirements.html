@@ -161,6 +161,28 @@
         </div>
     </div>
 
+    <!-- Vehicle popup -->
+    <div id="vehicle-modal-backdrop" class="vehicle-modal-backdrop" style="display:none" onclick="closeVehicleModal()"></div>
+    <div id="vehicle-modal" class="vehicle-modal" style="display:none" role="dialog" aria-modal="true">
+        <div class="vehicle-modal-header">
+            <span id="vehicle-modal-title" class="vehicle-modal-title"></span>
+            <button class="vehicle-modal-close" onclick="closeVehicleModal()" aria-label="Close">&times;</button>
+        </div>
+        <div class="vehicle-modal-body">
+            <table id="vehicle-modal-table">
+                <thead>
+                    <tr>
+                        <th>Make / Model / Derivative</th>
+                        <th>VRM</th>
+                        <th>Supplier</th>
+                        <th></th>
+                    </tr>
+                </thead>
+                <tbody id="vehicle-modal-body"></tbody>
+            </table>
+        </div>
+    </div>
+
     <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
     <script>window.BASE_URL = "{{ BASE_URL }}";</script>
