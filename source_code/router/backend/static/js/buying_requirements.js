@@ -95,7 +95,30 @@ function applyColWidths() {
 window.addEventListener('resize', applyColWidths);
 
 /* ── Filters ─────────────────────────────────────────────── */
-let filterBand = new Set(['All']), filterFuel = new Set(['All']);
+let filterBand = new Set(['All']), filterFuel = new Set(['All']), filterCapId = null;
+
+function applyCapIdFilter() {
+    const val = parseInt(document.getElementById('capIdSearch').value, 10);
+    filterCapId = isNaN(val) ? null : val;
+    const clearBtn = document.getElementById('capIdClearBtn');
+    if (clearBtn) clearBtn.style.display = filterCapId !== null ? '' : 'none';
+    if (tableData.length) applyFilter();
+}
+
+function clearCapIdFilter() {
+    filterCapId = null;
+    const inp = document.getElementById('capIdSearch');
+    if (inp) inp.value = '';
+    const clearBtn = document.getElementById('capIdClearBtn');
+    if (clearBtn) clearBtn.style.display = 'none';
+    if (tableData.length) applyFilter();
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+    const inp = document.getElementById('capIdSearch');
+    if (inp) inp.addEventListener('keydown', e => { if (e.key === 'Enter') applyCapIdFilter(); });
+});
+
 const ALL_BANDS = new Set(['<10k','10-12.5k','12.5-15k','15-20k','20-25k','25-30k','30k+','interest_free']);
 const ALL_FUELS = new Set(['Diesel','Electric','Hybrid','Other','Petrol']);
 
@@ -111,8 +134,8 @@ function applyFilter() {
     const filteredSales = rawData.reduce((s, r) => {
         const ackDate      = r[17] ? new Date(r[17]) : null;
         const daysSinceAck = ackDate ? Math.floor((nowMs - ackDate.getTime()) / 86400000) : null;
-        const dts   = r[8] != null ? Number(r[8]) : null;
-        const gpu_m = r[9] != null ? Number(r[9]) : null;
+        const dts   = r[8]  != null ? Number(r[8])  : null;
+        const gpu_m = r[22] != null ? Number(r[22]) : null;
         const passDIS  = maxDIS  === null || daysSinceAck === null || daysSinceAck <= maxDIS;
         const passDTS  = maxDTS  === null || dts   === null || dts  <= maxDTS;
         const passGPUM = minGPUM === null || gpu_m === null || gpu_m >= minGPUM;
@@ -125,7 +148,8 @@ function applyFilter() {
         const band = row[22] ?? String(row[1] ?? '').split(' / ').pop().trim();
         const fuel = normFuel(row[2]);
         const visible = (filterBand.has('All') || filterBand.has(band)) &&
-                        (filterFuel.has('All') || filterFuel.has(fuel));
+                        (filterFuel.has('All') || filterFuel.has(fuel)) &&
+                        (filterCapId === null || Number(row[0]) === filterCapId);
         tr.style.display = visible ? '' : 'none';
         if (visible) visibleRows.push(row);
     });
@@ -180,7 +204,9 @@ function getMinGPUM() { const v = parseFloat(document.getElementById('minGPUM')?
  * Raw row layout (from Snowflake):
  *   [0:cap_id, 1:label, 2:fuel, 3:price_band, 4:stock, 5:sales90, 6:sales7,
  *    7:dis, 8:dts, 9:gpu_m, 10:gpu_s, 11:gpu_ms,
- *    12:purchase_price, 13:sell_price, 14:at_val, 15:at_pct, 16:at_rating]
+ *    12:purchase_price, 13:sell_price, 14:at_val, 15:at_pct, 16:at_rating,
+ *    17:ack_date, 18:vrm, 19:supplier_name, 20:vehicle_url, 21:vehicle_status,
+ *    22:gpu_m_resolved (COALESCE of sales gpu_m and stock_evolution gpu_m)]
  *
  * Output tableData row layout (same indices used throughout the rest of the JS):
  *   [0:cap_id, 1:label, 2:fuel, 3:stock, 4:sales90, 5:pct(set later),
@@ -221,7 +247,7 @@ function aggregateRawData() {
         const sales7  = Number(r[6]) || 0;
         const dis     = r[7] != null ? Number(r[7]) : null;
         const dts     = r[8] != null ? Number(r[8]) : null;
-        const gpu_m   = r[9]  != null ? Number(r[9])  : null;
+        const gpu_m   = r[22] != null ? Number(r[22]) : null;
         const gpu_s   = r[10] != null ? Number(r[10]) : null;
         const gpu_ms  = r[11] != null ? Number(r[11]) : null;
         const sell    = r[13] != null ? Number(r[13]) : null;
@@ -363,47 +389,45 @@ function renderTotalsRow(visibleRows) {
         });
         return;
     }
-    // tfoot rows: cell[0]=colspan-3 blank, cell[1]=label, cell[2..17]=data
     const DATA_COLS = [
-        [4,  'sum', fmtInt],          // Total Sales
-        [7,  'sum', fmtInt],          // 7d Sales
-        [3,  'sum', fmtInt],          // Stock
-        [18, 'sum', v => fmt(v, 1)],  // Ideal Stock
-        [19, 'sum', v => fmt(v, 1)],  // Required
-        [6,  'sum', fmtInt],          // Today's Buying
-        null,                          // Remaining — computed below, not summed from r[21]
-        [8,  'avg', v => fmt(v, 1)],  // Avg DIS
-        [9,  'avg', v => fmt(v, 1)],  // Avg DTS
-        [14, 'avg', fmtGBP],          // Avg Sell Price
-        [15, 'avg', fmtGBP],          // Avg AT PTM
-        [16, 'avg', fmtPct],          // Avg AT PTM %
-        [17, 'avg', fmtInt],          // Avg AT Rating
-        [10, 'avg', fmtGBP],          // Avg GPU-M
-        [11, 'avg', fmtGBP],          // Avg GPU-S
-        [12, 'avg', fmtGBP],          // Avg GPU-MS
+        [4,  'sum', fmtInt],
+        [7,  'sum', fmtInt],
+        [3,  'sum', fmtInt],
+        [18, 'sum', v => fmt(v, 1)],
+        [19, 'sum', v => fmt(v, 1)],
+        [6,  'sum', fmtInt],
+        null,
+        [8,  'avg', v => fmt(v, 1)],
+        [9,  'avg', v => fmt(v, 1)],
+        [14, 'avg', fmtGBP],
+        [15, 'avg', fmtGBP],
+        [16, 'avg', fmtPct],
+        [17, 'avg', fmtInt],
+        [10, 'avg', fmtGBP],
+        [11, 'avg', fmtGBP],
+        [12, 'avg', fmtGBP],
     ];
-    const REMAINING_CELL_IDX = 6; // DATA_COLS index (0-based): 0=TotalSales…6=Remaining
+    const TODAY_CELL_IDX     = 5;
+    const REMAINING_CELL_IDX = 6;
 
     function fillRow(trEl, rows, label) {
         if (!trEl) return;
         const cells = Array.from(trEl.cells);
-        // cell 0 = colspan blank — leave empty
         cells[0].textContent = '';
-        // cell 1 = label
         if (cells[1]) { cells[1].style.background = ''; cells[1].textContent = label; }
-        // cells 2+ = data
-        // Pre-compute Required and Today's Buying sums for Remaining
         const reqSum   = rows.reduce((s, r) => s + (Number(r[19]) || 0), 0);
-        const todaySum = rows.reduce((s, r) => s + (Number(r[6])  || 0), 0);
-
+        const spReady  = rows.some(r => r[6] !== null);
+        const todaySum = spReady ? rows.reduce((s, r) => s + (Number(r[6]) || 0), 0) : null;
         DATA_COLS.forEach((def, i) => {
             const td = cells[i + 2];
             if (!td) return;
             td.style.background = '';
             if (i === REMAINING_CELL_IDX) {
-                td.textContent = fmtInt(Math.round(reqSum) - todaySum);
-                td.style.background = '#fef08a';
+                td.textContent = spReady ? fmtInt(Math.round(reqSum) - todaySum) : '';
                 return;
+            }
+            if (i === TODAY_CELL_IDX) {
+                td.style.background = spReady ? '#fef08a' : '';
             }
             if (!def) { td.textContent = ''; return; }
             const [di, agg, formatter] = def;
@@ -416,9 +440,9 @@ function renderTotalsRow(visibleRows) {
 
     const rateRows = visibleRows.filter(r => !isInterestFree(r));
     const ifRows   = visibleRows.filter(r =>  isInterestFree(r));
-    fillRow(document.getElementById('totals-row-rate'),  rateRows,     'Rate');
-    fillRow(document.getElementById('totals-row-if'),    ifRows,       '0%');
-    fillRow(document.getElementById('totals-row-total'), visibleRows,  'Total');
+    fillRow(document.getElementById('totals-row-rate'),  rateRows,    'Rate');
+    fillRow(document.getElementById('totals-row-if'),    ifRows,      '0%');
+    fillRow(document.getElementById('totals-row-total'), visibleRows, 'Total');
     requestAnimationFrame(() => {
         const totalTr = document.getElementById('totals-row-total');
         const ifTr    = document.getElementById('totals-row-if');
@@ -451,16 +475,20 @@ function renderTable() {
     let minGM  = Infinity,  maxGM  = -Infinity;
     let minGMS = Infinity,  maxGMS = -Infinity;
     let minATR = Infinity,  maxATR = -Infinity;
-    let max7d  = 0;
+    let max7d     = 0;
+    let maxSales  = 0;
 
     const track = (v, mn, mx) =>
         v != null && v !== '' && !isNaN(Number(v)) ? [Math.min(mn, Number(v)), Math.max(mx, Number(v))] : [mn, mx];
     rawData.forEach(r => {
-        [minGM,  maxGM]  = track(r[9],  minGM,  maxGM);
+        [minGM,  maxGM]  = track(r[22], minGM,  maxGM);
         [minGMS, maxGMS] = track(r[11], minGMS, maxGMS);
         [minATR, maxATR] = track(r[16], minATR, maxATR);
     });
-    tableData.forEach(r => { if ((r[7] || 0) > max7d) max7d = Number(r[7]); });
+    tableData.forEach(r => {
+        if ((r[7] || 0) > max7d)    max7d    = Number(r[7]);
+        if ((r[4] || 0) > maxSales) maxSales = Number(r[4]);
+    });
 
     tableData.forEach(row => {
         const sales = Number(row[4]) || 0;
@@ -504,13 +532,23 @@ function renderTable() {
             tr.appendChild(td);
         }
         add(normFuel(row[2]));
-        { const td = add(fmtInt(row[4])); if ((row[4] || 0) === 0) td.style.background = '#d8d8d8'; }
+        {
+            const td = add(fmtInt(row[4]));
+            const v = Number(row[4]) || 0;
+            if (maxSales > 0) {
+                const t = v / maxSales;
+                const r = Math.round(255 - t * (255 - 0));
+                const g = Math.round(255 - t * (255 - 188));
+                const b = Math.round(255 - t * (255 - 18));
+                td.style.background = `rgb(${r},${g},${b})`;
+            }
+        }
         { const td = add(row[7] != null ? fmtInt(row[7]) : ''); if ((row[7] || 0) === 0) td.style.background = '#d8d8d8'; }
         { const td = add(fmtInt(row[3])); if ((row[3] || 0) === 0) td.style.background = '#d8d8d8'; }
         add(row[18] != null ? fmt(row[18], 1) : '');
         add(row[19] != null ? fmt(row[19], 1) : '');
         const tdToday = add(row[6] != null ? fmtInt(row[6]) : '');
-        if ((row[6] || 0) > 0) tdToday.style.background = '#fff3cd';
+        if ((row[6] || 0) > 0) tdToday.style.background = '#fef08a';
         add(fmtInt(row[21]));
         add(row[8]  != null ? fmt(row[8],  1) : '');
         add(row[9]  != null ? fmt(row[9],  1) : '');
@@ -527,7 +565,7 @@ function renderTable() {
     Array.from(fragment.children).forEach((tr, i) => {
         const r = tableData[i];
         if ((r[7] || 0) > 0) tr.cells[5].style.background = greenScale(r[7], max7d);
-        tr.cells[10].style.background  = redGreenScale(r[21], minRem, maxRem);
+        tr.cells[10].style.background = redGreenScale(r[21], minRem, maxRem);
         if (r[9] != null) tr.cells[12].style.background = dtsScale(r[9]);
         if (r[10] != null) tr.cells[17].style.background = fwdScale(Number(r[10]), minGM,  maxGM);
         if (r[12] != null) tr.cells[19].style.background = fwdScale(Number(r[12]), minGMS, maxGMS);
@@ -852,44 +890,73 @@ function exportXLSX() {
 }
 
 /* ── Vehicle popup ───────────────────────────────────────── */
-function openVehicleModal(capId, label) {
-    // rawData rows: [0:cap_id, 1:label, 2:fuel, 3:price_band, 4:stock, 5:sales90,
-    //                6:sales7, 7:dis, 8:dts, 9:gpu_m, ..., 17:ack_date,
-    //                18:vrm, 19:supplier_name, 20:vehicle_url]
-    const maxDIS  = getMaxDIS();
-    const maxDTS  = getMaxDTS();
-    const minGPUM = getMinGPUM();
-    const todayMs = Date.now();
+let _modalVehicles = [];
+let _modalSortCol = 'deriv';
+let _modalSortAsc = true;
 
-    const vehicles = rawData.filter(r => {
-        if (r[0] !== capId || r[1] !== label) return false;
-        const isStock = Number(r[4]) === 1;
-        if (isStock) return true;
-        // Sales row — apply same filters as aggregation
-        const ackDate = r[17] ? new Date(r[17]) : null;
-        const daysSinceAck = ackDate ? Math.floor((todayMs - ackDate.getTime()) / 86400000) : null;
-        const dts   = r[8] != null ? Number(r[8]) : null;
-        const gpu_m = r[9] != null ? Number(r[9]) : null;
-        const passDIS  = maxDIS  === null || daysSinceAck === null || daysSinceAck <= maxDIS;
-        const passDTS  = maxDTS  === null || dts  === null || dts  <= maxDTS;
-        const passGPUM = minGPUM === null || gpu_m === null || gpu_m >= minGPUM;
-        return passDIS && passDTS && passGPUM;
+function _modalStatus(r) {
+    const s = String(r[21] ?? '').toUpperCase();
+    if (s === 'ORDERED') return 'Ordered';
+    if (s === 'SOLD')    return 'Delivered';
+    return 'Stock';
+}
+
+function _getModalSortValue(r, col) {
+    if (col === 'deriv') return (r[1].split(' / ').slice(0, -1).join(' / ') || '').toLowerCase();
+    if (col === 'vrm') return (r[18] || '').toLowerCase();
+    if (col === 'supplier') return (r[19] || '').toLowerCase();
+    if (col === 'status') return _modalStatus(r);
+    return '';
+}
+
+function _sortModalVehicles() {
+    _modalVehicles.sort((a, b) => {
+        const av = _getModalSortValue(a, _modalSortCol);
+        const bv = _getModalSortValue(b, _modalSortCol);
+        let cmp = 0;
+        if (av < bv) cmp = -1;
+        if (av > bv) cmp = 1;
+        if (cmp === 0 && _modalSortCol !== 'deriv') {
+            const ad = (a[1].split(' / ').slice(0, -1).join(' / ') || '').toLowerCase();
+            const bd = (b[1].split(' / ').slice(0, -1).join(' / ') || '').toLowerCase();
+            if (ad < bd) cmp = -1;
+            if (ad > bd) cmp = 1;
+        }
+        if (cmp === 0 && _modalSortCol !== 'status') {
+            cmp = Number(b[4]) - Number(a[4]);
+        }
+        return _modalSortAsc ? cmp : -cmp;
     });
+}
 
-    // Sort: stock rows first, then sales
-    vehicles.sort((a, b) => Number(b[4]) - Number(a[4]));
+function _updateModalSortIndicators() {
+    document.querySelectorAll('#vehicle-modal-table thead th[data-sort]').forEach(th => {
+        const col = th.getAttribute('data-sort');
+        const label = th.getAttribute('data-label');
+        if (col === _modalSortCol) {
+            th.textContent = label + ' ' + (_modalSortAsc ? '\u25b2' : '\u25bc');
+        } else {
+            th.textContent = label;
+        }
+    });
+}
 
+function _renderModalRows() {
     const tbody = document.getElementById('vehicle-modal-body');
     tbody.innerHTML = '';
-    vehicles.forEach(r => {
+    _modalVehicles.forEach(r => {
         const tr = document.createElement('tr');
+        const status = _modalStatus(r);
         const deriv = r[1].split(' / ').slice(0, -1).join(' / ');
-        [deriv, r[18] || '—', r[19] || '—'].forEach(val => {
+        const addTd = (text, align) => {
             const td = document.createElement('td');
-            td.textContent = val;
+            td.textContent = text;
+            if (align) td.style.textAlign = align;
             tr.appendChild(td);
-        });
-        // Apex link column
+            return td;
+        };
+        addTd(deriv);
+        addTd(r[18] || '—');
         const tdApex = document.createElement('td');
         if (r[20]) {
             const a = document.createElement('a');
@@ -900,13 +967,67 @@ function openVehicleModal(capId, label) {
             tdApex.appendChild(a);
         }
         tr.appendChild(tdApex);
-        // Dim sold rows
-        if (Number(r[4]) !== 1) tr.classList.add('vehicle-row-sold');
+        const tdPortal = document.createElement('td');
+        if (r[26]) {
+            const a = document.createElement('a');
+            a.href = r[26];
+            a.target = '_blank';
+            a.textContent = 'Portal';
+            a.className = 'apex-link';
+            tdPortal.appendChild(a);
+        }
+        tr.appendChild(tdPortal);
+        addTd(r[23] || '—');
+        addTd(status);
+        addTd(r[27] ? r[27].slice(0, 10).split('-').reverse().join('/') : '');
+        addTd(r[19] || '—');
+        addTd(r[24] ? r[24].slice(0, 10).split('-').reverse().join('/') : '—');
+        addTd(r[25] != null ? Number(r[25]).toLocaleString() : '—', 'right');
+        addTd(r[7]  != null ? fmtInt(r[7])  : '—', 'right');
+        addTd(r[8]  != null ? fmtInt(r[8])  : '—', 'right');
+        addTd(r[13] != null ? fmtGBP(r[13]) : '—', 'right');
+        addTd(r[14] != null ? fmtGBP(r[14]) : '—', 'right');
+        addTd(r[15] != null ? fmtPct(r[15] * 100) : '—', 'right');
+        addTd(r[16] != null ? fmtInt(r[16]) : '—', 'right');
+        addTd(r[22] != null ? fmtGBP(r[22]) : '—', 'right');
+        if (status === 'Delivered') tr.classList.add('vehicle-row-sold');
         tbody.appendChild(tr);
     });
-    document.getElementById('vehicle-modal-title').textContent = label.split(' / ').slice(0, -1).join(' / ');
+}
+
+function openVehicleModal(capId, label) {
+    // rawData rows: [0:cap_id, 1:label, 2:fuel, 3:price_band, 4:stock, 5:sales90,
+    //                6:sales7, 7:dis, 8:dts, 9:gpu_m(sales), ..., 17:ack_date,
+    //                18:vrm, 19:supplier_name, 20:vehicle_url, 21:vehicle_status,
+    //                22:gpu_m_resolved, 23:vehicle_location, 24:date_first_registered, 25:mileage,
+    //                26:autotrader_portal_link, 27:invoice_posted_date]
+    const maxDIS = getMaxDIS();
+    const maxDTS = getMaxDTS();
+    const minGPUM = getMinGPUM();
+    const todayMs = Date.now();
+    _modalVehicles = rawData.filter(r => {
+        if (r[0] !== capId || r[1] !== label) return false;
+        const isStock = Number(r[4]) === 1;
+        if (isStock) return true;
+        const ackDate = r[17] ? new Date(r[17]) : null;
+        const daysSinceAck = ackDate ? Math.floor((todayMs - ackDate.getTime()) / 86400000) : null;
+        const dts = r[8] != null ? Number(r[8]) : null;
+        const gpu_m = r[22] != null ? Number(r[22]) : null;
+        const passDIS = maxDIS === null || daysSinceAck === null || daysSinceAck <= maxDIS;
+        const passDTS = maxDTS === null || dts === null || dts <= maxDTS;
+        const passGPUM = minGPUM === null || gpu_m === null || gpu_m >= minGPUM;
+        return passDIS && passDTS && passGPUM;
+    });
+    _modalSortCol = 'deriv';
+    _modalSortAsc = true;
+    _sortModalVehicles();
+    _updateModalSortIndicators();
+    _renderModalRows();
+    document.getElementById('vehicle-modal-title').textContent = label.split(' / ').slice(0, -1).join(' / ') + ' — CAP ID: ' + capId;
     document.getElementById('vehicle-modal-backdrop').style.display = '';
-    document.getElementById('vehicle-modal').style.display = '';
+    const modal = document.getElementById('vehicle-modal');
+    modal.style.fontSize = currentFontPx + 'px';
+    modal.style.display = '';
 }
 
 function closeVehicleModal() {
@@ -916,6 +1037,21 @@ function closeVehicleModal() {
 
 document.addEventListener('keydown', e => {
     if (e.key === 'Escape') closeVehicleModal();
+});
+
+document.getElementById('vehicle-modal-table').addEventListener('click', e => {
+    const th = e.target.closest('th[data-sort]');
+    if (!th) return;
+    const col = th.getAttribute('data-sort');
+    if (col === _modalSortCol) {
+        _modalSortAsc = !_modalSortAsc;
+    } else {
+        _modalSortCol = col;
+        _modalSortAsc = true;
+    }
+    _sortModalVehicles();
+    _updateModalSortIndicators();
+    _renderModalRows();
 });
 
 document.getElementById('table-body').addEventListener('click', e => {

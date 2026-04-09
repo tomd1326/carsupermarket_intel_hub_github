@@ -1,12 +1,12 @@
 body, button, input, select, textarea {
-    font-family: 'Inter', system-ui, sans-serif;
+    font-family: 'DM Sans', system-ui, sans-serif;
 }
 
 #data-section { display: none; }
 
 .data-table-wrap {
     overflow-x: auto;
-    max-height: 70vh;
+    max-height: 71vh;
     overflow-y: auto;
     width: 100%;
 }
@@ -85,7 +85,7 @@ body, button, input, select, textarea {
 #data-table tbody td {
     border-bottom: 1px solid #b0b0b0;
     border-right: 1px solid #b0b0b0;
-    padding: 0.18em 0.45em;
+    padding: 0.32em 0.45em;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -214,7 +214,6 @@ body, button, input, select, textarea {
     max-height: 80vh;
     display: flex;
     flex-direction: column;
-    font-size: 12px;
 }
 .vehicle-modal-header {
     display: flex;
@@ -248,7 +247,6 @@ body, button, input, select, textarea {
 #vehicle-modal-table {
     width: 100%;
     border-collapse: collapse;
-    font-size: 12px;
 }
 #vehicle-modal-table th {
     background: #dbeafe;
@@ -274,3 +272,8 @@ body, button, input, select, textarea {
     display: inline-block;
 }
 .apex-link:hover { background: #0d6efd; color: #fff; }
+/* Sortable popup header columns */
+#vehicle-modal-table th[data-sort] {
+    cursor: pointer;
+    user-select: none;
+}

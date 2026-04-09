@@ -264,7 +264,7 @@ _SP_TTL_SECONDS = 60          # in-process TTL
 _SP_S3_TTL_SECONDS = 24 * 3600  # S3 TTL — survives cold starts across the day
 _S3_BUCKET      = "aa-raw-sources-uk"
 _S3_ENV         = 'prod' if os.getenv('AWS_REGION') == 'eu-west-1' else 'dev'
-_SF_S3_KEY      = f"applications/pricing/uk-vehicle-list-evaluator/{_S3_ENV}/cache/buying_requirements_v6.json"
+_SF_S3_KEY      = f"applications/pricing/uk-vehicle-list-evaluator/{_S3_ENV}/cache/buying_requirements_v12.json"
 _SP_S3_KEY      = f"applications/pricing/uk-vehicle-list-evaluator/{_S3_ENV}/cache/sp_purchases_v4.json"
 
 
@@ -355,7 +355,14 @@ def _get_sf_rows(force: bool = False) -> list:
                     ORDER_ACKNOWLEDGED_DATE,
                     COALESCE(VRM, '') AS VRM,
                     COALESCE(SUPPLIER_NAME, '') AS SUPPLIER_NAME,
-                    VEHICLE_URL
+                    VEHICLE_URL,
+                    COALESCE(VEHICLE_STATUS, '') AS VEHICLE_STATUS,
+                    COALESCE(GPU_M, STOCK_EVOLUTION_GPU_M) AS GPU_M_RESOLVED,
+                    COALESCE(VEHICLE_LOCATION, '') AS VEHICLE_LOCATION,
+                    DATE_FIRST_REGISTERED,
+                    MILEAGE,
+                    AUTOTRADER_PORTAL_LINK,
+                    INVOICE_POSTED_DATE
                 FROM PROD_CARSUPERMARKET_DB.product_vehicle_journey.buying_requirements
                 ORDER BY CAP_ID
             """)
@@ -363,9 +370,14 @@ def _get_sf_rows(force: bool = False) -> list:
         # [0:cap_id, 1:label, 2:fuel, 3:price_band, 4:stock, 5:sales90, 6:sales7,
         #  7:dis, 8:dts, 9:gpu_m, 10:gpu_s, 11:gpu_ms,
         #  12:purchase_price, 13:sell_price, 14:at_val, 15:at_pct, 16:at_rating,
-        #  17:order_acknowledged_date (ISO string), 18:vrm, 19:supplier_name, 20:vehicle_url]
+        #  17:order_acknowledged_date (ISO string), 18:vrm, 19:supplier_name, 20:vehicle_url,
+        #  21:vehicle_status, 22:gpu_m_resolved, 23:vehicle_location,
+        #  24:date_first_registered, 25:mileage, 26:autotrader_portal_link,
+        #  27:invoice_posted_date]
         result = [[r[0], r[1], r[2], r[3], r[4], r[5], r[6], r[7], r[8], r[9], r[10], r[11], r[12], r[13], r[14], r[15], r[16],
-                   str(r[17]) if r[17] is not None else None, r[18], r[19], r[20]] for r in rows]
+                   str(r[17]) if r[17] is not None else None, r[18], r[19], r[20], r[21], r[22], r[23],
+                   str(r[24]) if r[24] is not None else None, r[25], r[26],
+                   str(r[27]) if r[27] is not None else None] for r in rows]
         _save_sf_cache_to_s3(result)
 
     with _cache_lock:
