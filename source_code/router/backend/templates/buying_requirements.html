@@ -41,7 +41,7 @@
         </div>
 
         <div id="data-section" style="display:none">
-            <div id="sf-summary" class="text-muted small mb-2">
+            <div id="sf-summary" class="text-muted small mb-3">
                 Total Stock: <strong id="sf-total-stock">—</strong>
                 &nbsp;|&nbsp;
                 <span id="sf-summary-sales-label">90d Sales:</span> <strong id="sf-total-sales">—</strong>
@@ -62,6 +62,7 @@
                 <button id="refreshTableBtn" class="btn btn-primary btn-sm" onclick="refreshTable()">
                     <i class="fas fa-filter me-1"></i>Apply Filters
                 </button>
+                <button class="btn btn-outline-secondary btn-sm" onclick="resetApplyFilters()">Reset to Default</button>
                 <span id="filtered-sales-label" class="small text-muted"></span>
             </div>
 
@@ -104,7 +105,7 @@
                     <button class="btn btn-sm btn-outline-secondary" onclick="applyCapIdFilter()">Search</button>
                     <button class="btn btn-sm btn-outline-secondary" id="capIdClearBtn" style="display:none" onclick="clearCapIdFilter()">Clear</button>
                     <div class="filter-divider"></div>
-                    <button class="btn btn-sm btn-outline-secondary" onclick="resetTableFilters()">Reset Filters</button>
+                    <button class="btn btn-sm btn-outline-secondary" onclick="resetTableFilters()">Clear Filters</button>
                     <button class="btn btn-outline-secondary btn-sm ms-2" onclick="resetColWidths()">
                         <i class="fas fa-columns me-1"></i>Reset Columns
                     </button>

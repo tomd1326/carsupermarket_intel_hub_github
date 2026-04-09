@@ -865,6 +865,14 @@ function applyRawDataToTable(fetchSP) {
     else loadSPFromCache();
 }
 
+function resetApplyFilters() {
+    document.getElementById('numberToBuy').value = 200;
+    document.getElementById('maxDIS').value = 90;
+    document.getElementById('maxDTS').value = 45;
+    document.getElementById('minGPUM').value = 0;
+    refreshTable();
+}
+
 function refreshTable() {
     if (!rawData.length) return;
     const btn = document.getElementById('refreshTableBtn');
