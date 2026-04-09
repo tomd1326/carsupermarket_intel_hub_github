@@ -7,6 +7,8 @@
     <link rel="icon" type="image/png" href="/static/icon.png">
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <style>
         body, button, input, select, textarea {
@@ -34,10 +36,7 @@
             border-bottom: 1px solid #b0b0b0;
             border-right: 1px solid #b0b0b0;
             padding: 3px 14px 3px 5px;
-            white-space: normal;
-            overflow-wrap: break-word;
-            word-break: normal;
-            hyphens: none;
+            white-space: nowrap;
             overflow: hidden;
             user-select: none;
             cursor: pointer;
@@ -111,6 +110,14 @@
             z-index: 4;
         }
         .resize-handle:hover { background: #0d6efd44; }
+        #data-table thead th .th-label {
+            display: -webkit-box;
+            -webkit-line-clamp: 3;
+            -webkit-box-orient: vertical;
+            overflow: hidden;
+            white-space: normal;
+            word-break: break-word;
+        }
 
         #resize-ghost {
             position: fixed;
@@ -196,7 +203,7 @@
             <div id="sf-summary" class="text-muted small mb-2">
                 Total Stock: <strong id="sf-total-stock">—</strong>
                 &nbsp;|&nbsp;
-                90-Day Sales: <strong id="sf-total-sales">—</strong>
+                <span id="sf-summary-sales-label">90d Sales:</span> <strong id="sf-total-sales">—</strong>
             </div>
             <div class="d-flex align-items-center gap-2 mb-3 flex-wrap">
                 <label for="numberToBuy" class="form-label mb-0 fw-semibold small">Number to Buy</label>
@@ -251,39 +258,40 @@
                 <div class="d-flex align-items-center gap-1">
                     <span class="small text-muted">Font Size</span>
                     <button class="btn btn-outline-secondary btn-sm px-2 py-0" onclick="changeFontSize(-1)">−</button>
-                    <span id="fontSizeLabel" class="small text-muted" style="min-width:28px;text-align:center">11px</span>
+                    <span id="fontSizeLabel" class="small text-muted" style="min-width:28px;text-align:center"></span>
                     <button class="btn btn-outline-secondary btn-sm px-2 py-0" onclick="changeFontSize(1)">+</button>
                 </div>
+                <button class="btn btn-outline-success btn-sm" onclick="exportXLSX()">
+                    <i class="fas fa-file-excel me-1"></i>Export XLSX
+                </button>
             </div>
         </div><!-- /.controls-area -->
             <div id="table-error" class="alert alert-danger d-none"></div>
-            <div id="table-loading" class="text-muted d-none">
-                <span class="spinner-border spinner-border-sm me-2"></span>Loading data...
-            </div>
             <div class="data-table-wrap d-none" id="table-wrap">
                 <table id="data-table">
                     <colgroup></colgroup>
                     <thead>
                         <tr>
-                            <th data-col="0"  data-type="num">CAP ID<span class="sort-icon"><i class="fas fa-sort"></i></span><div class="resize-handle"></div></th>
-                            <th data-col="1"  data-type="str" id="th-label">Make / Model / Derivative / Price Band<span class="sort-icon"><i class="fas fa-sort"></i></span><div class="resize-handle"></div></th>
-                            <th data-col="2"  data-type="str">Fuel<span class="sort-icon"><i class="fas fa-sort"></i></span><div class="resize-handle"></div></th>
-                            <th data-col="4"  data-type="num">Total Sales<span class="sort-icon"><i class="fas fa-sort"></i></span><div class="resize-handle"></div></th>
-                            <th data-col="7"  data-type="num">7d Sales<span class="sort-icon"><i class="fas fa-sort"></i></span><div class="resize-handle"></div></th>
-                            <th data-col="3"  data-type="num">Stock<span class="sort-icon"><i class="fas fa-sort"></i></span><div class="resize-handle"></div></th>
-                            <th data-col="18" data-type="num">Ideal Stock<span class="sort-icon"><i class="fas fa-sort"></i></span><div class="resize-handle"></div></th>
-                            <th data-col="19" data-type="num">Required<span class="sort-icon"><i class="fas fa-sort"></i></span><div class="resize-handle"></div></th>
-                            <th data-col="6"  data-type="num">Today's Buying<span class="sort-icon"><i class="fas fa-sort"></i></span><div class="resize-handle"></div></th>
-                            <th data-col="21" data-type="num" style="background:#fef08a">Remaining<span class="sort-icon"><i class="fas fa-sort"></i></span><div class="resize-handle"></div></th>
-                            <th data-col="8"  data-type="num">Avg Days in Stock<span class="sort-icon"><i class="fas fa-sort"></i></span><div class="resize-handle"></div></th>
-                            <th data-col="9"  data-type="num">Avg Days to Sell<span class="sort-icon"><i class="fas fa-sort"></i></span><div class="resize-handle"></div></th>
-                            <th data-col="14" data-type="num">Avg Sell Price<span class="sort-icon"><i class="fas fa-sort"></i></span><div class="resize-handle"></div></th>
-                            <th data-col="15" data-type="num">Avg AT PTM<span class="sort-icon"><i class="fas fa-sort"></i></span><div class="resize-handle"></div></th>
-                            <th data-col="16" data-type="num">Avg AT PTM %<span class="sort-icon"><i class="fas fa-sort"></i></span><div class="resize-handle"></div></th>
-                            <th data-col="17" data-type="num">Avg AT Rating<span class="sort-icon"><i class="fas fa-sort"></i></span><div class="resize-handle"></div></th>
-                            <th data-col="10" data-type="num">Avg GPU-M<span class="sort-icon"><i class="fas fa-sort"></i></span><div class="resize-handle"></div></th>
-                            <th data-col="11" data-type="num">Avg GPU-S<span class="sort-icon"><i class="fas fa-sort"></i></span><div class="resize-handle"></div></th>
-                            <th data-col="12" data-type="num">Avg GPU-MS<span class="sort-icon"><i class="fas fa-sort"></i></span><div class="resize-handle"></div></th>
+                            <th data-col="0"  data-type="num"><span class="th-label">CAP ID</span><span class="sort-icon"><i class="fas fa-sort"></i></span><div class="resize-handle"></div></th>
+                            <th data-col="1"  data-type="str" id="th-label"><span class="th-label">Make / Model / Derivative / Price Band</span><span class="sort-icon"><i class="fas fa-sort"></i></span><div class="resize-handle"></div></th>
+                            <th style="width:44px;cursor:default"><span class="th-label">View</span></th>
+                            <th data-col="2"  data-type="str"><span class="th-label">Fuel</span><span class="sort-icon"><i class="fas fa-sort"></i></span><div class="resize-handle"></div></th>
+                            <th data-col="4"  data-type="num" id="th-total-sales"><span class="th-label">Total Sales</span><span class="sort-icon"><i class="fas fa-sort"></i></span><div class="resize-handle"></div></th>
+                            <th data-col="7"  data-type="num"><span class="th-label">7d Sales</span><span class="sort-icon"><i class="fas fa-sort"></i></span><div class="resize-handle"></div></th>
+                            <th data-col="3"  data-type="num"><span class="th-label">Stock</span><span class="sort-icon"><i class="fas fa-sort"></i></span><div class="resize-handle"></div></th>
+                            <th data-col="18" data-type="num"><span class="th-label">Ideal Stock</span><span class="sort-icon"><i class="fas fa-sort"></i></span><div class="resize-handle"></div></th>
+                            <th data-col="19" data-type="num"><span class="th-label">Required</span><span class="sort-icon"><i class="fas fa-sort"></i></span><div class="resize-handle"></div></th>
+                            <th data-col="6"  data-type="num"><span class="th-label">Today's Buying</span><span class="sort-icon"><i class="fas fa-sort"></i></span><div class="resize-handle"></div></th>
+                            <th data-col="21" data-type="num" style="background:#fef08a"><span class="th-label">Remaining</span><span class="sort-icon"><i class="fas fa-sort"></i></span><div class="resize-handle"></div></th>
+                            <th data-col="8"  data-type="num"><span class="th-label">Avg Days in Stock</span><span class="sort-icon"><i class="fas fa-sort"></i></span><div class="resize-handle"></div></th>
+                            <th data-col="9"  data-type="num"><span class="th-label">Avg Days to Sell</span><span class="sort-icon"><i class="fas fa-sort"></i></span><div class="resize-handle"></div></th>
+                            <th data-col="14" data-type="num"><span class="th-label">Avg Sell Price</span><span class="sort-icon"><i class="fas fa-sort"></i></span><div class="resize-handle"></div></th>
+                            <th data-col="15" data-type="num"><span class="th-label">Avg AT PTM</span><span class="sort-icon"><i class="fas fa-sort"></i></span><div class="resize-handle"></div></th>
+                            <th data-col="16" data-type="num"><span class="th-label">Avg AT PTM %</span><span class="sort-icon"><i class="fas fa-sort"></i></span><div class="resize-handle"></div></th>
+                            <th data-col="17" data-type="num"><span class="th-label">Avg AT Rating</span><span class="sort-icon"><i class="fas fa-sort"></i></span><div class="resize-handle"></div></th>
+                            <th data-col="10" data-type="num"><span class="th-label">Avg GPU-M</span><span class="sort-icon"><i class="fas fa-sort"></i></span><div class="resize-handle"></div></th>
+                            <th data-col="11" data-type="num"><span class="th-label">Avg GPU-S</span><span class="sort-icon"><i class="fas fa-sort"></i></span><div class="resize-handle"></div></th>
+                            <th data-col="12" data-type="num"><span class="th-label">Avg GPU-MS</span><span class="sort-icon"><i class="fas fa-sort"></i></span><div class="resize-handle"></div></th>
                         </tr>
                     </thead>
                     <tbody id="table-body"></tbody>
@@ -329,24 +337,25 @@
         /* ── Column widths ───────────────────────────────────────── */
         const COL_UNITS = [
             0.7,  // 0  CAP ID
-            2.45,  // 1  Make/Model/Deriv/Price Band
-            0.7,  // 2  Fuel
-            0.7,  // 3  Total Sales
-            0.7,  // 4  7d Sales
-            0.7,  // 5  Stock
-            0.7,  // 6  Ideal Stock
-            0.7,  // 7  Required
-            0.7,  // 8  Today's Purchases
-            0.7,  // 9  Remaining
-            0.7,  // 10 Avg Days in Stock
-            0.7,  // 11 Avg Days to Sell
-            0.7,  // 12 Avg Sell Price
-            0.7,  // 13 Avg AT PTM
-            0.7,  // 14 Avg AT PTM %
-            0.7,  // 15 Avg AT Rating
-            0.7,  // 16 Avg GPU-M
-            0.7,  // 17 Avg GPU-S
-            0.7,  // 18 Avg GPU-MS
+            2.45, // 1  Make/Model/Deriv/Price Band
+            0.55, // 2  View Vehicles
+            0.7,  // 3  Fuel
+            0.7,  // 4  Total Sales
+            0.7,  // 5  7d Sales
+            0.7,  // 6  Stock
+            0.7,  // 7  Ideal Stock
+            0.7,  // 8  Required
+            0.7,  // 9  Today's Purchases
+            0.7,  // 10 Remaining
+            0.7,  // 11 Avg Days in Stock
+            0.7,  // 12 Avg Days to Sell
+            0.7,  // 13 Avg Sell Price
+            0.7,  // 14 Avg AT PTM
+            0.7,  // 15 Avg AT PTM %
+            0.7,  // 16 Avg AT Rating
+            0.7,  // 17 Avg GPU-M
+            0.7,  // 18 Avg GPU-S
+            0.7,  // 19 Avg GPU-MS
         ];
         const TOTAL_UNITS = COL_UNITS.reduce((a, b) => a + b, 0);
 
@@ -354,7 +363,7 @@
         const BASE_FONT_PX  = 11;
         const BASE_FIXED_PX = 70;
         const BASE_DESC_PX  = 611;
-        const BASE_OVERRIDE = { 7: 76, 9: 87 }; // Required and Remaining wider
+        const BASE_OVERRIDE = { 2: 56, 8: 90, 10: 90 }; // View, Required, Remaining wider
         const FONT_STEP     = 1;  // px per click
         const FONT_MIN      = 8;
         const FONT_MAX      = 16;
@@ -387,6 +396,8 @@
             const table = document.getElementById('data-table');
             if (!table) return;
             table.style.fontSize = currentFontPx + 'px';
+            const lbl = document.getElementById('fontSizeLabel');
+            if (lbl) lbl.textContent = currentFontPx + 'px';
             let cg = table.querySelector('colgroup');
             if (!cg) { cg = document.createElement('colgroup'); table.prepend(cg); }
             cg.innerHTML = '';
@@ -440,7 +451,7 @@
                 if (visible) visibleRows.push(row);
             });
             const lbl = document.getElementById('filtered-sales-label');
-            if (lbl) lbl.textContent = `Filtered Total Sales: ${filteredSales.toLocaleString()} / ${totalSales.toLocaleString()}`;
+            if (lbl) lbl.textContent = `Filtered ${getMaxDIS() ?? 90}d Sales: ${filteredSales.toLocaleString()} / ${totalSales.toLocaleString()}`;
             renderTotalsRow(visibleRows);
         }
 
@@ -468,6 +479,20 @@
         let rawData = [], tableData = [], spPurchases = {}, sortCol = null, sortDir = 1;
 
         function getMaxDIS()  { const v = parseFloat(document.getElementById('maxDIS')?.value);  return isNaN(v) ? null : v; }
+
+        function updateSalesColumnLabel() {
+            const days = getMaxDIS() ?? 90;
+            const label = `${days}d Sales`;
+            const th = document.getElementById('th-total-sales');
+            if (th) th.childNodes[0].textContent = label;
+            const summary = document.getElementById('sf-summary-sales-label');
+            if (summary) summary.textContent = label + ':';
+            const flbl = document.getElementById('filtered-sales-label');
+            if (flbl && flbl.textContent) {
+                flbl.textContent = flbl.textContent.replace(/Filtered \S+ Sales:/, `Filtered ${label}:`);
+            }
+        }
+        document.getElementById('maxDIS')?.addEventListener('change', updateSalesColumnLabel);
         function getMaxDTS()  { const v = parseFloat(document.getElementById('maxDTS')?.value);  return isNaN(v) ? null : v; }
         function getMinGPUM() { const v = parseFloat(document.getElementById('minGPUM')?.value); return isNaN(v) ? null : v; }
 
@@ -675,7 +700,7 @@
             }
             // [col index] -> [data index, agg, formatter]
             const COL_MAP = [
-                null, null, null,
+                null, null, null, null,
                 [4,  'sum', fmtInt],
                 [7,  'sum', fmtInt],
                 [3,  'sum', fmtInt],
@@ -698,7 +723,7 @@
                 if (!trEl) return;
                 Array.from(trEl.cells).forEach((td, col) => {
                     td.style.background = '';
-                    if (col === 2) { td.textContent = label; return; }
+                    if (col === 3) { td.textContent = label; return; }
                     const def = COL_MAP[col];
                     if (!def) { td.textContent = ''; return; }
                     const [di, agg, formatter] = def;
@@ -748,7 +773,7 @@
             let maxVar = -Infinity, minVar = Infinity;
             let maxRem = -Infinity, minRem = Infinity;
             let minGM  = Infinity,  maxGM  = -Infinity;
-            let minGS  = Infinity,  maxGS  = -Infinity;
+
             let minGMS = Infinity,  maxGMS = -Infinity;
             let minATR = Infinity,  maxATR = -Infinity;
             let max7d  = 0;
@@ -758,7 +783,6 @@
                 v != null && v !== '' && !isNaN(Number(v)) ? [Math.min(mn, Number(v)), Math.max(mx, Number(v))] : [mn, mx];
             rawData.forEach(r => {
                 [minGM,  maxGM]  = track(r[9],  minGM,  maxGM);
-                [minGS,  maxGS]  = track(r[10], minGS,  maxGS);
                 [minGMS, maxGMS] = track(r[11], minGMS, maxGMS);
                 [minATR, maxATR] = track(r[16], minATR, maxATR);
             });
@@ -784,7 +808,7 @@
 
             /* Pass 2: Remaining = Required - Today's Purchases */
             tableData.forEach(r => {
-                r[21] = (r[19] || 0) - (r[6] || 0);
+                r[21] = Math.round(r[19] || 0) - (r[6] || 0);
                 if (r[21] > maxRem) maxRem = r[21];
                 if (r[21] < minRem) minRem = r[21];
             });
@@ -801,6 +825,7 @@
                 };
                 add(row[0] ?? '');
                 add(row[1] ?? '');
+                { const td = document.createElement('td'); td.style.cssText = 'padding:2px 3px;text-align:center;line-height:0;vertical-align:middle'; const sp = document.createElement('span'); sp.textContent = 'View'; sp.style.cssText = 'font-size:0.55rem;line-height:1;border:1px solid #0d6efd;border-radius:2px;color:#0d6efd;padding:0 2px;cursor:pointer;display:inline-block;vertical-align:middle'; td.appendChild(sp); tr.appendChild(td); }
                 add(normFuel(row[2]));
                 { const td = add(fmtInt(row[4])); if ((row[4] || 0) === 0) td.style.background = '#d8d8d8'; }
                 { const td = add(row[7] != null ? fmtInt(row[7]) : ''); if ((row[7] || 0) === 0) td.style.background = '#d8d8d8'; }
@@ -825,13 +850,12 @@
             /* Colour pass */
             Array.from(fragment.children).forEach((tr, i) => {
                 const r = tableData[i];
-                if ((r[7] || 0) > 0) tr.cells[4].style.background = greenScale(r[7], max7d);
-                tr.cells[9].style.background  = redGreenScale(r[21], minRem, maxRem);
-                if (r[9] != null) tr.cells[11].style.background = dtsScale(r[9]);
-                if (r[10] != null) tr.cells[16].style.background = fwdScale(Number(r[10]), minGM,  maxGM);
-                if (r[11] != null) tr.cells[17].style.background = fwdScale(Number(r[11]), minGS,  maxGS);
-                if (r[12] != null) tr.cells[18].style.background = fwdScale(Number(r[12]), minGMS, maxGMS);
-                if (r[17] != null) tr.cells[15].style.background = fwdScale(Number(r[17]), minATR, maxATR);
+                if ((r[7] || 0) > 0) tr.cells[5].style.background = greenScale(r[7], max7d);
+                tr.cells[10].style.background  = redGreenScale(r[21], minRem, maxRem);
+                if (r[9] != null) tr.cells[12].style.background = dtsScale(r[9]);
+                if (r[10] != null) tr.cells[17].style.background = fwdScale(Number(r[10]), minGM,  maxGM);
+                if (r[12] != null) tr.cells[19].style.background = fwdScale(Number(r[12]), minGMS, maxGMS);
+                if (r[17] != null) tr.cells[16].style.background = fwdScale(Number(r[17]), minATR, maxATR);
                 if (isInterestFree(r)) { tr.cells[0].style.background = '#bfdbfe'; tr.cells[1].style.background = '#bfdbfe'; }
             });
 
@@ -840,6 +864,7 @@
             const reqSum = tableData.reduce((s, r) => s + (r[19] > 0 ? r[19] : 0), 0);
             document.getElementById('required-sum-inline').textContent = Math.round(reqSum).toLocaleString();
 
+            updateSalesColumnLabel();
             applyFilter(); // also calls renderTotalsRow with visible rows
         }
 
@@ -1077,7 +1102,7 @@
                 if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spinner-border spinner-border-sm me-2"></span>Loading...'; }
                 document.getElementById('fetch-loading').style.display = 'block';
             }
-            document.getElementById('table-loading').classList.remove('d-none');
+
             document.getElementById('table-wrap').classList.add('d-none');
             document.getElementById('table-error').classList.add('d-none');
 
@@ -1086,7 +1111,7 @@
             fetch(sfUrl)
                 .then(r => r.json())
                 .then(resp => {
-                    document.getElementById('table-loading').classList.add('d-none');
+
                     document.getElementById('fetch-loading').style.display = 'none';
                     if (resp.status !== 'ok') {
                         document.getElementById('data-section').style.display = 'block';
@@ -1099,7 +1124,7 @@
                     applyRawDataToTable(fetchSP);
                 })
                 .catch(err => {
-                    document.getElementById('table-loading').classList.add('d-none');
+
                     document.getElementById('fetch-loading').style.display = 'none';
                     document.getElementById('table-error').textContent = 'Failed to load data: ' + err;
                     document.getElementById('table-error').classList.remove('d-none');
@@ -1118,6 +1143,54 @@
                     renderTable();
                 })
                 .catch(() => {});
+        }
+
+        function exportXLSX() {
+            const headers = Array.from(document.querySelectorAll('#data-table thead tr:last-child th'))
+                .map(th => th.childNodes[0].textContent.trim());
+
+            const visibleRows = Array.from(document.querySelectorAll('#table-body tr'))
+                .filter(tr => tr.style.display !== 'none');
+
+            const rows = visibleRows.map(tr =>
+                Array.from(tr.cells).map(td => {
+                    const text = td.textContent.trim();
+                    const num = Number(text.replace(/[£,%]/g, '').replace(/,/g, ''));
+                    return text !== '' && !isNaN(num) ? num : text;
+                })
+            );
+
+            const ws = XLSX.utils.aoa_to_sheet([headers, ...rows]);
+            const wb = XLSX.utils.book_new();
+            XLSX.utils.book_append_sheet(wb, ws, 'Buying Requirements');
+
+            // Write to array buffer, then patch xl/styles.xml inside the zip to force Calibri 11pt
+            const wbArray = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
+
+            // Re-open as a zip, replace styles.xml, re-pack and download
+            (async () => {
+                const zip = await JSZip.loadAsync(wbArray);
+                const styleXml =
+                    `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>` +
+                    `<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">` +
+                    `<fonts count="1"><font><sz val="11"/><name val="Aptos"/></font></fonts>` +
+                    `<fills count="2">` +
+                      `<fill><patternFill patternType="none"/></fill>` +
+                      `<fill><patternFill patternType="gray125"/></fill>` +
+                    `</fills>` +
+                    `<borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders>` +
+                    `<cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>` +
+                    `<cellXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/></cellXfs>` +
+                    `<cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles>` +
+                    `</styleSheet>`;
+                zip.file('xl/styles.xml', styleXml);
+                const blob = await zip.generateAsync({ type: 'blob', mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+                const a = document.createElement('a');
+                a.href = URL.createObjectURL(blob);
+                a.download = 'buying_requirements.xlsx';
+                a.click();
+                URL.revokeObjectURL(a.href);
+            })();
         }
 
         document.addEventListener('DOMContentLoaded', () => loadFromServer(true));
