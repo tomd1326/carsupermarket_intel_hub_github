@@ -12,6 +12,13 @@ function setStatus(elId, label, state) {
         error:   `${label} <i class="fas fa-times-circle text-danger ms-1"></i>`,
     };
     el.innerHTML = icons[state] ?? icons.idle;
+    if (elId === 'sp-status') {
+        if (state === 'running') {
+            el.style.cssText = 'background:#fde047;color:#000;font-weight:700;padding:2px 8px;border-radius:4px;';
+        } else {
+            el.style.cssText = '';
+        }
+    }
 }
 
 /* ── Column widths ───────────────────────────────────────── */
@@ -94,8 +101,71 @@ function applyColWidths() {
 
 window.addEventListener('resize', applyColWidths);
 
+function _setApexUpdatedAt(rows) {
+    let max = null;
+    rows.forEach(r => { if (r[28] && (!max || r[28] > max)) max = r[28]; });
+    const el = document.getElementById('apex-updated-at');
+    const val = document.getElementById('apex-updated-at-val');
+    if (!el || !val || !max) return;
+    const d = new Date(max);
+    const dd = String(d.getDate()).padStart(2, '0');
+    const mm = String(d.getMonth() + 1).padStart(2, '0');
+    const yyyy = d.getFullYear();
+    const hh = String(d.getHours()).padStart(2, '0');
+    const min = String(d.getMinutes()).padStart(2, '0');
+    const ss = String(d.getSeconds()).padStart(2, '0');
+    val.textContent = `${dd}/${mm}/${yyyy} ${hh}:${min}:${ss}`;
+    el.style.display = '';
+}
+
 /* ── Filters ─────────────────────────────────────────────── */
-let filterBand = new Set(['All']), filterFuel = new Set(['All']), filterCapId = null;
+let filterBand = new Set(['All']), filterFuel = new Set(['All']), filterCapId = null, filterMinReq = null;
+
+function resetTableFilters() {
+    // Reset band
+    filterBand.clear(); filterBand.add('All');
+    document.querySelectorAll('.filter-btn[data-group="band"]').forEach(b => {
+        b.classList.toggle('btn-dark', b.dataset.value === 'All');
+        b.classList.toggle('btn-outline-secondary', b.dataset.value !== 'All');
+    });
+    // Reset fuel
+    filterFuel.clear(); filterFuel.add('All');
+    document.querySelectorAll('.filter-btn[data-group="fuel"]').forEach(b => {
+        b.classList.toggle('btn-dark', b.dataset.value === 'All');
+        b.classList.toggle('btn-outline-secondary', b.dataset.value !== 'All');
+    });
+    // Reset CAP ID
+    filterCapId = null;
+    const capInp = document.getElementById('capIdSearch');
+    if (capInp) capInp.value = '';
+    const capClear = document.getElementById('capIdClearBtn');
+    if (capClear) capClear.style.display = 'none';
+    // Reset Min Req
+    filterMinReq = null;
+    const reqInp = document.getElementById('minReqInput');
+    if (reqInp) reqInp.value = '';
+    const reqClear = document.getElementById('minReqClearBtn');
+    if (reqClear) reqClear.style.display = 'none';
+
+    if (tableData.length) applyFilter();
+}
+
+function applyMinReqFilter() {
+    const val = parseInt(document.getElementById('minReqInput').value, 10);
+    filterMinReq = isNaN(val) ? null : val;
+    const clearBtn = document.getElementById('minReqClearBtn');
+    if (clearBtn) clearBtn.style.display = filterMinReq !== null ? '' : 'none';
+    if (tableData.length) applyFilter();
+}
+
+function clearMinReqFilter() {
+    filterMinReq = null;
+    const inp = document.getElementById('minReqInput');
+    if (inp) inp.value = '';
+    const clearBtn = document.getElementById('minReqClearBtn');
+    if (clearBtn) clearBtn.style.display = 'none';
+    if (tableData.length) applyFilter();
+}
 
 function applyCapIdFilter() {
     const val = parseInt(document.getElementById('capIdSearch').value, 10);
@@ -120,10 +190,12 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 
 const ALL_BANDS = new Set(['<10k','10-12.5k','12.5-15k','15-20k','20-25k','25-30k','30k+','interest_free']);
-const ALL_FUELS = new Set(['Diesel','Electric','Hybrid','Other','Petrol']);
+const ALL_FUELS = new Set(['Diesel','Electric','Hybrid','Petrol']);
 
-const FUEL_NORM = { p:'P', petrol:'P', d:'D', diesel:'D', e:'E', electric:'E', ev:'E', h:'H', hybrid:'H', phev:'H', mhev:'H' };
-function normFuel(v) { return FUEL_NORM[String(v ?? '').trim().toLowerCase()] || 'O'; }
+const FUEL_NORM = { p:'Petrol', petrol:'Petrol', d:'Diesel', diesel:'Diesel', e:'Electric', electric:'Electric', ev:'Electric', h:'Hybrid', hybrid:'Hybrid', phev:'Hybrid', mhev:'Hybrid' };
+function normFuel(v) { return FUEL_NORM[String(v ?? '').trim().toLowerCase()] || 'Petrol'; }
+const FUEL_ABBR = { Petrol:'P', Diesel:'D', Electric:'E', Hybrid:'H' };
+function fuelAbbr(v) { return FUEL_ABBR[normFuel(v)] || 'P'; }
 
 function applyFilter() {
     const maxDIS  = getMaxDIS();
@@ -147,14 +219,24 @@ function applyFilter() {
         if (!row) return;
         const band = row[22] ?? String(row[1] ?? '').split(' / ').pop().trim();
         const fuel = normFuel(row[2]);
-        const visible = (filterBand.has('All') || filterBand.has(band)) &&
-                        (filterFuel.has('All') || filterFuel.has(fuel)) &&
-                        (filterCapId === null || Number(row[0]) === filterCapId);
+        const req = row[19] != null ? Math.round(Number(row[19])) : null;
+        const visible = filterCapId !== null
+            ? Number(row[0]) === filterCapId
+            : (filterBand.has('All') || filterBand.has(band)) &&
+              (filterFuel.has('All') || filterFuel.has(fuel)) &&
+              (filterMinReq === null || (req !== null && req >= filterMinReq));
         tr.style.display = visible ? '' : 'none';
         if (visible) visibleRows.push(row);
     });
     const lbl = document.getElementById('filtered-sales-label');
     if (lbl) lbl.textContent = `Filtered ${getMaxDIS() ?? 90}d Sales: ${filteredSales.toLocaleString()} / ${totalSales.toLocaleString()}`;
+    const capLbl = document.getElementById('filtered-cap-count');
+    if (capLbl) {
+        capLbl.textContent = `Filtered CAP IDs: ${visibleRows.length}`;
+        capLbl.classList.remove('flash');
+        void capLbl.offsetWidth; // force reflow so re-adding the class restarts the animation
+        capLbl.classList.add('flash');
+    }
     renderTotalsRow(visibleRows);
 }
 
@@ -272,9 +354,9 @@ function aggregateRawData() {
         if (gpu_m   != null) { g.gpu_m_sum  += gpu_m;  g.gpu_m_n++;  }
         if (gpu_s   != null) { g.gpu_s_sum  += gpu_s;  g.gpu_s_n++;  }
         if (gpu_ms  != null) { g.gpu_ms_sum += gpu_ms; g.gpu_ms_n++; }
-        if (sell    != null && sales90 === 1) { g.sell_sum += sell; g.sell_n++; }
+        if (sell    != null && sell !== 0 && sales90 === 1) { g.sell_sum += sell; g.sell_n++; }
         if (at_val  != null && sales90 === 1) { g.at_val_sum  += at_val;  g.at_val_n++;  }
-        if (at_pct  != null && sales90 === 1) { g.at_pct_sum  += at_pct;  g.at_pct_n++;  }
+        if (at_pct  != null && sales90 === 1 && sell != null && sell !== 0) { g.at_pct_sum  += at_pct;  g.at_pct_n++;  }
         if (at_rate != null && sales90 === 1) { g.at_rating_sum += at_rate; g.at_rating_n++; }
     }
 
@@ -531,7 +613,7 @@ function renderTable() {
             td.appendChild(sp);
             tr.appendChild(td);
         }
-        add(normFuel(row[2]));
+        add(fuelAbbr(row[2]));
         {
             const td = add(fmtInt(row[4]));
             const v = Number(row[4]) || 0;
@@ -820,6 +902,7 @@ function loadFromServer(fetchSP = false, fromFetchData = false) {
             }
             rawData = resp.rows;
             setStatus('sf-status', SF_LABEL, 'done');
+            _setApexUpdatedAt(rawData);
             applyRawDataToTable(fetchSP);
         })
         .catch(err => {
@@ -891,8 +974,16 @@ function exportXLSX() {
 
 /* ── Vehicle popup ───────────────────────────────────────── */
 let _modalVehicles = [];
-let _modalSortCol = 'deriv';
+let _modalSortCol = 'default';
 let _modalSortAsc = true;
+
+function _statusRank(r) {
+    const s = _modalStatus(r);
+    if (s === 'Stock')     return 0;
+    if (s === 'Ordered')   return 1;
+    if (s === 'Delivered') return 2;
+    return 3;
+}
 
 function _modalStatus(r) {
     const s = String(r[21] ?? '').toUpperCase();
@@ -902,15 +993,31 @@ function _modalStatus(r) {
 }
 
 function _getModalSortValue(r, col) {
-    if (col === 'deriv') return (r[1].split(' / ').slice(0, -1).join(' / ') || '').toLowerCase();
-    if (col === 'vrm') return (r[18] || '').toLowerCase();
-    if (col === 'supplier') return (r[19] || '').toLowerCase();
-    if (col === 'status') return _modalStatus(r);
+    if (col === 'deriv')     return (r[1].split(' / ').slice(0, -1).join(' / ') || '').toLowerCase();
+    if (col === 'vrm')       return (r[18] || '').toLowerCase();
+    if (col === 'supplier')  return (r[19] || '').toLowerCase();
+    if (col === 'status')    return _statusRank(r);
+    if (col === 'location')  return (r[23] || '').toLowerCase();
+    if (col === 'delivered') return r[27] || '';
+    if (col === 'dfr')       return r[24] || '';
+    if (col === 'mileage')   return Number(r[25]) || 0;
+    if (col === 'dis')       return Number(r[7]) || 0;
+    if (col === 'dts')       return Number(r[8]) || 0;
+    if (col === 'sell_price')  return Number(r[13]) || 0;
+    if (col === 'at_ptm')      return Number(r[14]) || 0;
+    if (col === 'at_ptm_pct')  return Number(r[15]) || 0;
+    if (col === 'at_rating')   return Number(r[16]) || 0;
+    if (col === 'gpu_m')       return Number(r[22]) || 0;
     return '';
 }
 
 function _sortModalVehicles() {
     _modalVehicles.sort((a, b) => {
+        if (_modalSortCol === 'default') {
+            const rankCmp = _statusRank(a) - _statusRank(b);
+            if (rankCmp !== 0) return rankCmp;
+            return Number(b[7]) - Number(a[7]); // DIS high to low
+        }
         const av = _getModalSortValue(a, _modalSortCol);
         const bv = _getModalSortValue(b, _modalSortCol);
         let cmp = 0;
@@ -957,6 +1064,7 @@ function _renderModalRows() {
         };
         addTd(deriv);
         addTd(r[18] || '—');
+        addTd(status);
         const tdApex = document.createElement('td');
         if (r[20]) {
             const a = document.createElement('a');
@@ -978,19 +1086,19 @@ function _renderModalRows() {
         }
         tr.appendChild(tdPortal);
         addTd(r[23] || '—');
-        addTd(status);
         addTd(r[27] ? r[27].slice(0, 10).split('-').reverse().join('/') : '');
         addTd(r[19] || '—');
         addTd(r[24] ? r[24].slice(0, 10).split('-').reverse().join('/') : '—');
         addTd(r[25] != null ? Number(r[25]).toLocaleString() : '—', 'right');
         addTd(r[7]  != null ? fmtInt(r[7])  : '—', 'right');
         addTd(r[8]  != null ? fmtInt(r[8])  : '—', 'right');
-        addTd(r[13] != null ? fmtGBP(r[13]) : '—', 'right');
+        addTd(r[13] != null && r[13] !== 0 ? fmtGBP(r[13]) : '—', 'right');
         addTd(r[14] != null ? fmtGBP(r[14]) : '—', 'right');
-        addTd(r[15] != null ? fmtPct(r[15] * 100) : '—', 'right');
+        addTd(r[15] != null && r[13] !== 0 ? fmtPct(r[15] * 100) : '—', 'right');
         addTd(r[16] != null ? fmtInt(r[16]) : '—', 'right');
         addTd(r[22] != null ? fmtGBP(r[22]) : '—', 'right');
         if (status === 'Delivered') tr.classList.add('vehicle-row-sold');
+        if (status === 'Ordered') tr.classList.add('vehicle-row-ordered');
         tbody.appendChild(tr);
     });
 }
@@ -1018,7 +1126,7 @@ function openVehicleModal(capId, label) {
         const passGPUM = minGPUM === null || gpu_m === null || gpu_m >= minGPUM;
         return passDIS && passDTS && passGPUM;
     });
-    _modalSortCol = 'deriv';
+    _modalSortCol = 'default';
     _modalSortAsc = true;
     _sortModalVehicles();
     _updateModalSortIndicators();

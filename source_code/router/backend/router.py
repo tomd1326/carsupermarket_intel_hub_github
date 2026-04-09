@@ -264,7 +264,7 @@ _SP_TTL_SECONDS = 60          # in-process TTL
 _SP_S3_TTL_SECONDS = 24 * 3600  # S3 TTL — survives cold starts across the day
 _S3_BUCKET      = "aa-raw-sources-uk"
 _S3_ENV         = 'prod' if os.getenv('AWS_REGION') == 'eu-west-1' else 'dev'
-_SF_S3_KEY      = f"applications/pricing/uk-vehicle-list-evaluator/{_S3_ENV}/cache/buying_requirements_v12.json"
+_SF_S3_KEY      = f"applications/pricing/uk-vehicle-list-evaluator/{_S3_ENV}/cache/buying_requirements_v13.json"
 _SP_S3_KEY      = f"applications/pricing/uk-vehicle-list-evaluator/{_S3_ENV}/cache/sp_purchases_v4.json"
 
 
@@ -362,7 +362,8 @@ def _get_sf_rows(force: bool = False) -> list:
                     DATE_FIRST_REGISTERED,
                     MILEAGE,
                     AUTOTRADER_PORTAL_LINK,
-                    INVOICE_POSTED_DATE
+                    INVOICE_POSTED_DATE,
+                    VEHICLE_UPDATED_AT
                 FROM PROD_CARSUPERMARKET_DB.product_vehicle_journey.buying_requirements
                 ORDER BY CAP_ID
             """)
@@ -377,7 +378,8 @@ def _get_sf_rows(force: bool = False) -> list:
         result = [[r[0], r[1], r[2], r[3], r[4], r[5], r[6], r[7], r[8], r[9], r[10], r[11], r[12], r[13], r[14], r[15], r[16],
                    str(r[17]) if r[17] is not None else None, r[18], r[19], r[20], r[21], r[22], r[23],
                    str(r[24]) if r[24] is not None else None, r[25], r[26],
-                   str(r[27]) if r[27] is not None else None] for r in rows]
+                   str(r[27]) if r[27] is not None else None,
+                   str(r[28]) if r[28] is not None else None] for r in rows]
         _save_sf_cache_to_s3(result)
 
     with _cache_lock:

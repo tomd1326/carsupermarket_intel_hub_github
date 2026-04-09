@@ -4,6 +4,38 @@ body, button, input, select, textarea {
 
 #data-section { display: none; }
 
+.filter-group {
+    border-left: 1.5px solid #94a3b8;
+    padding-left: 10px;
+    margin-left: 10px;
+    align-self: stretch;
+}
+.filter-group:first-child {
+    border-left: none;
+    padding-left: 0;
+    margin-left: 0;
+}
+.filter-divider {
+    width: 1.5px;
+    background: #94a3b8;
+    align-self: stretch;
+    margin: 0 10px;
+    flex-shrink: 0;
+}
+
+#filtered-cap-count {
+    min-width: 160px;
+    display: inline-block;
+}
+#filtered-cap-count.flash {
+    animation: cap-flash 0.9s ease-out forwards;
+}
+@keyframes cap-flash {
+    0%   { color: #000; background: #fde047; border-radius: 4px; padding: 1px 6px; }
+    50%  { color: #000; background: #fde047; border-radius: 4px; padding: 1px 6px; }
+    100% { color: inherit; background: transparent; border-radius: 4px; padding: 1px 6px; }
+}
+
 .data-table-wrap {
     overflow-x: auto;
     max-height: 71vh;
@@ -255,13 +287,17 @@ body, button, input, select, textarea {
     font-weight: 600;
     border: 1px solid #b0b0b0;
     white-space: nowrap;
+    position: sticky;
+    top: 0;
+    z-index: 1;
 }
 #vehicle-modal-table td {
     padding: 4px 8px;
     border: 1px solid #b0b0b0;
     white-space: nowrap;
 }
-.vehicle-row-sold td { color: #9ca3af; }
+#vehicle-modal-table .vehicle-row-sold td { background: #F8CBAD; color: #000; }
+#vehicle-modal-table .vehicle-row-ordered td { background: #d1d5db; color: #000; }
 .apex-link {
     font-size: 11px;
     padding: 1px 6px;
