@@ -50,7 +50,7 @@ const TOTAL_UNITS = COL_UNITS.reduce((a, b) => a + b, 0);
 const BASE_FONT_PX  = 12;
 const BASE_FIXED_PX = 70;
 const BASE_DESC_PX  = 575;
-const BASE_OVERRIDE = { 2: 56, 3: 46, 8: 72, 10: 82 }; // View, Fuel narrow, Required, Remaining wider
+const BASE_OVERRIDE = { 2: 60, 3: 46, 8: 72, 10: 82 }; // View, Fuel narrow, Required, Remaining wider
 const FONT_STEP     = 1;  // px per click
 const FONT_MIN      = 8;
 const FONT_MAX      = 16;
