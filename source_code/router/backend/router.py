@@ -611,15 +611,17 @@ async def upload_task(request: Request, fileBase64: str = Form(...), supplier_id
         upload_file(temp_input_file_path, s3_bucketname, s3_location)
 
         # Execute the task elaboration
-        LambdaRequestsManager().simulate_http(
-            # lambda_requests_manager.simulate_http(
-            aws_context=request.scope["aws.context"] if "aws.context" in request.scope else None,
-            path=BASE_URL + "/elaborate-task",
-            method="POST",
-            data={
-                'task_id': task_id,
-            }
-        )
+        aws_context = request.scope["aws.context"] if "aws.context" in request.scope else None
+        if aws_context is None:
+            import asyncio
+            asyncio.create_task(elaborate_task({'task_id': task_id}))
+        else:
+            LambdaRequestsManager().simulate_http(
+                aws_context=aws_context,
+                path=BASE_URL + "/elaborate-task",
+                method="POST",
+                data={'task_id': task_id},
+            )
     finally:
         os.remove(temp_input_file_path)
 
@@ -687,17 +689,19 @@ async def elaborate_task(data: dict):
     s3_location = f'applications/pricing/uk-vehicle-list-evaluator/{env}/raw/{data["task_id"]}.{file_ext}'
     total_rows = None
     execution_time = None
-    with tempfile.NamedTemporaryFile(suffix='.' + file_ext) as temp_input_file, \
-         tempfile.NamedTemporaryFile(suffix='.' + file_ext) as temp_output_file:
-
+    fd_in,  tmp_in  = tempfile.mkstemp(suffix='.' + file_ext)
+    fd_out, tmp_out = tempfile.mkstemp(suffix='.' + file_ext)
+    os.close(fd_in);  os.unlink(tmp_in)
+    os.close(fd_out); os.unlink(tmp_out)
+    try:
         t = time.time()
 
         # Download the file from S3
-        download_file(temp_input_file.name, s3_bucketname, s3_location)
+        download_file(tmp_in, s3_bucketname, s3_location)
 
         try:
             # Elaborate the file
-            input_df = read_dataframe_file(temp_input_file.name)
+            input_df = read_dataframe_file(tmp_in)
             total_rows = len(input_df)
 
             autotrader = AutoTraderClient()
@@ -718,11 +722,11 @@ async def elaborate_task(data: dict):
 
             processed_df = pd.concat([input_df, *results], axis=1)
 
-            write_dataframe_file(processed_df, temp_output_file.name)
+            write_dataframe_file(processed_df, tmp_out)
 
             # Upload the elaborated file to S3
             s3_location = f'applications/pricing/uk-vehicle-list-evaluator/{env}/elaborated/{data["task_id"]}.{file_ext}'
-            upload_file(temp_output_file.name, s3_bucketname, s3_location)
+            upload_file(tmp_out, s3_bucketname, s3_location)
 
             execution_time = time.time() - t
             status = 'success'
@@ -737,5 +741,8 @@ async def elaborate_task(data: dict):
             with conn.cursor() as cursor:
                 cursor.execute("UPDATE tasks SET status = %s, message = %s, total_rows = %s, execution_time = %s WHERE task_id = %s", (status, message, total_rows, execution_time, data['task_id'],))
                 conn.commit()
+    finally:
+        if os.path.exists(tmp_in):  os.remove(tmp_in)
+        if os.path.exists(tmp_out): os.remove(tmp_out)
 
     return {}

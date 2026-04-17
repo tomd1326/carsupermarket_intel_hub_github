@@ -47,15 +47,15 @@ const COL_UNITS = [
 const TOTAL_UNITS = COL_UNITS.reduce((a, b) => a + b, 0);
 
 // Font / column sizing — scale together
-const BASE_FONT_PX  = 11;
+const BASE_FONT_PX  = 12;
 const BASE_FIXED_PX = 70;
-const BASE_DESC_PX  = 605;
+const BASE_DESC_PX  = 575;
 const BASE_OVERRIDE = { 2: 56, 3: 46, 8: 72, 10: 82 }; // View, Fuel narrow, Required, Remaining wider
 const FONT_STEP     = 1;  // px per click
 const FONT_MIN      = 8;
 const FONT_MAX      = 16;
 
-let currentFontPx = BASE_FONT_PX; // 11px default
+let currentFontPx = BASE_FONT_PX; // 12px default
 
 function scaledFixed()    { return Math.round(BASE_FIXED_PX * currentFontPx / BASE_FONT_PX); }
 function scaledDesc()     { return Math.round(BASE_DESC_PX  * currentFontPx / BASE_FONT_PX); }
@@ -187,6 +187,8 @@ function clearCapIdFilter() {
 document.addEventListener('DOMContentLoaded', () => {
     const inp = document.getElementById('capIdSearch');
     if (inp) inp.addEventListener('keydown', e => { if (e.key === 'Enter') applyCapIdFilter(); });
+    const lbl = document.getElementById('fontSizeLabel');
+    if (lbl) lbl.textContent = currentFontPx + 'px';
 });
 
 const ALL_BANDS = new Set(['<10k','10-12.5k','12.5-15k','15-20k','20-25k','25-30k','30k+','interest_free']);
