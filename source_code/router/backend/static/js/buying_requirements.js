@@ -654,7 +654,10 @@ function renderTable() {
         if (r[10] != null) tr.cells[17].style.background = fwdScale(Number(r[10]), minGM,  maxGM);
         if (r[12] != null) tr.cells[19].style.background = fwdScale(Number(r[12]), minGMS, maxGMS);
         if (r[17] != null) tr.cells[16].style.background = fwdScale(Number(r[17]), minATR, maxATR);
-        if (isInterestFree(r)) { tr.cells[0].style.background = '#bfdbfe'; tr.cells[1].style.background = '#bfdbfe'; }
+        if (isInterestFree(r)) {
+            const ifSkip = new Set([4, 5, 9, 10, 12, 16, 17, 19]);
+            Array.from(tr.cells).forEach((td, ci) => { if (!ifSkip.has(ci)) td.style.background = '#bfdbfe'; });
+        }
     });
 
     body.appendChild(fragment);
