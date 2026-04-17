@@ -156,4 +156,4 @@ lambda_requests_manager.init(mangum_handler=handler)
 if __name__ == '__main__':
     import uvicorn
     print('Running local server')
-    uvicorn.run('main:app', host="0.0.0.0", port=8080, reload=True, workers=1)
+    uvicorn.run('main:app', host="127.0.0.1", port=8080, reload=True, workers=1)
