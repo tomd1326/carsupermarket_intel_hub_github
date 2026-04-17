@@ -4,7 +4,7 @@ import re
 
 from fastapi import FastAPI, Request, Form, Depends, HTTPException
 from fastapi.templating import Jinja2Templates
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.sessions import SessionMiddleware
@@ -145,6 +145,10 @@ def test_execution(data: dict):
 app.include_router(router.router)
 app.add_exception_handler(Exception, unhandled_exception_handler)
 app.mount("/static", StaticFiles(directory=os.path.join(os.path.dirname(__file__), "static")), name="static")
+
+@app.get("/favicon.ico", include_in_schema=False)
+async def favicon():
+    return FileResponse(os.path.join(os.path.dirname(__file__), "static", "icon.png"))
 
 # TODO: probably it's more correct to put api_gateway_base_path="/dev" here
 handler = Mangum(app, lifespan="auto")
