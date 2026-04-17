@@ -61,7 +61,7 @@
             {% if at_least_one_pending %}
                 <div class="form-check me-2">
                     <input type="checkbox" class="form-check-input" id="auto-refresh-checkbox" checked>
-                    <label class="form-check-label countdown-label" for="auto-refresh-checkbox">Auto-refresh in <span id="countdown">10</span></label>
+                    <label class="form-check-label countdown-label" for="auto-refresh-checkbox">Auto-refresh in <span id="countdown">5</span></label>
                 </div>
             {% endif %}
             <button class="btn btn-outline-secondary" onclick="location.reload()">
@@ -126,7 +126,7 @@
     <script>
         function startCountdown() {
             var countdownElement = document.getElementById('countdown');
-            var timeLeft = 10;
+            var timeLeft = 5;
             var decrease = function() {
                 // CHeck the auto-refresh-checkbox status
                 var autoRefreshCheckbox = document.getElementById('auto-refresh-checkbox');
