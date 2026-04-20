@@ -295,7 +295,7 @@ const THEAD_COLS = [
     { capOnly: true,  html: '<span class="th-label">CAP ID</span><span class="sort-icon"><i class="fas fa-sort"></i></span><div class="resize-handle"></div>', attrs: 'data-col="0" data-type="num"' },
     { capOnly: false, html: '<span class="th-label" id="th-label-span">Make / Model / Derivative / Price Band</span><span class="sort-icon"><i class="fas fa-sort"></i></span><div class="resize-handle"></div>', attrs: 'data-col="1" data-type="str" id="th-label" class="col-left"' },
     { capOnly: true,  html: '<span class="th-label">View Vehicles</span>', attrs: 'class="col-view"' },
-    { capOnly: false, html: '<span class="th-label">Fuel</span><span class="sort-icon"><i class="fas fa-sort"></i></span><div class="resize-handle"></div>', attrs: 'data-col="2" data-type="str"' },
+    { capOnly: false, html: '<span class="th-label">Fuel</span><span class="sort-icon"><i class="fas fa-sort"></i></span><div class="resize-handle"></div>', attrs: 'data-col="2" data-type="str" class="col-center"' },
     { capOnly: false, html: '<span class="th-label">Total Sales</span><span class="sort-icon"><i class="fas fa-sort"></i></span><div class="resize-handle"></div>', attrs: 'data-col="4" data-type="num" id="th-total-sales"' },
     { capOnly: false, html: '<span class="th-label">7d Sales</span><span class="sort-icon"><i class="fas fa-sort"></i></span><div class="resize-handle"></div>', attrs: 'data-col="7" data-type="num"' },
     { capOnly: false, html: '<span class="th-label">Stock</span><span class="sort-icon"><i class="fas fa-sort"></i></span><div class="resize-handle"></div>', attrs: 'data-col="3" data-type="num"' },
@@ -415,7 +415,6 @@ function aggregateRawData() {
                 gpu_ms_sum: 0, gpu_ms_n: 0,
                 sell_sum: 0, sell_n: 0,
                 at_val_sum: 0, at_val_n: 0,
-                at_pct_sum: 0, at_pct_n: 0,
                 at_rating_sum: 0, at_rating_n: 0,
             });
         }
@@ -430,7 +429,6 @@ function aggregateRawData() {
         const gpu_ms  = r[11] != null ? Number(r[11]) : null;
         const sell    = r[13] != null ? Number(r[13]) : null;
         const at_val  = r[14] != null ? Number(r[14]) : null;
-        const at_pct  = r[15] != null ? Number(r[15]) : null;
         const at_rate = r[16] != null ? Number(r[16]) : null;
         const ackDate    = r[17] ? new Date(r[17]) : null;
         const daysSinceAck = ackDate ? Math.floor((todayMs - ackDate.getTime()) / 86400000) : null;
@@ -445,20 +443,21 @@ function aggregateRawData() {
         g.sales90 += sales90;
         g.sales7  += sales7;
 
-        if (dis     != null) { g.dis_sum      += dis;    g.dis_n++;      }
-        if (dts     != null) { g.dts_sum      += dts;    g.dts_n++;      }
+        if (dis     != null && sales90 === 1) { g.dis_sum      += dis;    g.dis_n++;      }
+        if (dts     != null && sales90 === 1) { g.dts_sum      += dts;    g.dts_n++;      }
         if (gpu_m   != null) { g.gpu_m_sum  += gpu_m;  g.gpu_m_n++;  }
         if (gpu_s   != null) { g.gpu_s_sum  += gpu_s;  g.gpu_s_n++;  }
         if (gpu_ms  != null) { g.gpu_ms_sum += gpu_ms; g.gpu_ms_n++; }
         if (sell    != null && sell !== 0 && sales90 === 1) { g.sell_sum += sell; g.sell_n++; }
         if (at_val  != null && sales90 === 1) { g.at_val_sum  += at_val;  g.at_val_n++;  }
-        if (at_pct  != null && sales90 === 1 && sell != null && sell !== 0) { g.at_pct_sum  += at_pct;  g.at_pct_n++;  }
         if (at_rate != null && sales90 === 1) { g.at_rating_sum += at_rate; g.at_rating_n++; }
     }
 
     const avg = (sum, n) => n > 0 ? sum / n : null;
     tableData = [];
     for (const g of groups.values()) {
+        const avgSell  = avg(g.sell_sum,   g.sell_n);
+        const avgAtVal = avg(g.at_val_sum, g.at_val_n);
         tableData.push([
             g.cap_id,                                   // 0
             g.label,                                    // 1
@@ -474,9 +473,9 @@ function aggregateRawData() {
             avg(g.gpu_s_sum,  g.gpu_s_n),               // 11 avg GPU-S
             avg(g.gpu_ms_sum, g.gpu_ms_n),              // 12 avg GPU-MS
             null,                                       // 13 purchase_price (not displayed)
-            avg(g.sell_sum,      g.sell_n),             // 14 avg sell price
-            avg(g.at_val_sum,    g.at_val_n),           // 15 avg AT val
-            avg(g.at_pct_sum,    g.at_pct_n) != null ? avg(g.at_pct_sum, g.at_pct_n) * 100 : null, // 16 avg AT pct %
+            avgSell,                                    // 14 avg sell price
+            avgAtVal,                                   // 15 avg AT val
+            (avgSell != null && avgAtVal != null && avgAtVal !== 0) ? ((avgSell + 199) / avgAtVal) * 100 : null, // 16 AT pct %
             avg(g.at_rating_sum, g.at_rating_n),        // 17 avg AT rating
             // 18, 19, 20, 21 set in renderTable (ideal, required, -, remaining)
             // 22: price_band
@@ -509,7 +508,6 @@ function aggregateModelData() {
                 gpu_ms_sum: 0, gpu_ms_n: 0,
                 sell_sum: 0, sell_n: 0,
                 at_val_sum: 0, at_val_n: 0,
-                at_pct_sum: 0, at_pct_n: 0,
                 at_rating_sum: 0, at_rating_n: 0,
             });
         }
@@ -524,7 +522,6 @@ function aggregateModelData() {
         const gpu_ms  = r[11] != null ? Number(r[11]) : null;
         const sell    = r[13] != null ? Number(r[13]) : null;
         const at_val  = r[14] != null ? Number(r[14]) : null;
-        const at_pct  = r[15] != null ? Number(r[15]) : null;
         const at_rate = r[16] != null ? Number(r[16]) : null;
         const ackDate      = r[17] ? new Date(r[17]) : null;
         const daysSinceAck = ackDate ? Math.floor((todayMs - ackDate.getTime()) / 86400000) : null;
@@ -539,20 +536,21 @@ function aggregateModelData() {
         g.sales90 += sales90;
         g.sales7  += sales7;
 
-        if (dis    != null) { g.dis_sum     += dis;    g.dis_n++;     }
-        if (dts    != null) { g.dts_sum     += dts;    g.dts_n++;     }
+        if (dis    != null && sales90 === 1) { g.dis_sum     += dis;    g.dis_n++;     }
+        if (dts    != null && sales90 === 1) { g.dts_sum     += dts;    g.dts_n++;     }
         if (gpu_m  != null) { g.gpu_m_sum  += gpu_m;  g.gpu_m_n++;  }
         if (gpu_s  != null) { g.gpu_s_sum  += gpu_s;  g.gpu_s_n++;  }
         if (gpu_ms != null) { g.gpu_ms_sum += gpu_ms; g.gpu_ms_n++; }
         if (sell   != null && sell !== 0 && sales90 === 1) { g.sell_sum += sell; g.sell_n++; }
         if (at_val != null && sales90 === 1) { g.at_val_sum  += at_val;  g.at_val_n++;  }
-        if (at_pct != null && sales90 === 1 && sell != null && sell !== 0) { g.at_pct_sum += at_pct; g.at_pct_n++; }
         if (at_rate!= null && sales90 === 1) { g.at_rating_sum += at_rate; g.at_rating_n++; }
     }
 
     const avg = (sum, n) => n > 0 ? sum / n : null;
     tableData = [];
     for (const g of groups.values()) {
+        const avgSell  = avg(g.sell_sum,   g.sell_n);
+        const avgAtVal = avg(g.at_val_sum, g.at_val_n);
         tableData.push([
             g.cap_id,
             g.label,
@@ -568,9 +566,9 @@ function aggregateModelData() {
             avg(g.gpu_s_sum,     g.gpu_s_n),
             avg(g.gpu_ms_sum,    g.gpu_ms_n),
             null,
-            avg(g.sell_sum,      g.sell_n),
-            avg(g.at_val_sum,    g.at_val_n),
-            avg(g.at_pct_sum,    g.at_pct_n) != null ? avg(g.at_pct_sum, g.at_pct_n) * 100 : null,
+            avgSell,
+            avgAtVal,
+            (avgSell != null && avgAtVal != null && avgAtVal !== 0) ? ((avgSell + 199) / avgAtVal) * 100 : null,
             avg(g.at_rating_sum, g.at_rating_n),
             // 18, 19, 20, 21 set in renderTable
             g.price_band,  // 22

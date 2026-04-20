@@ -130,6 +130,9 @@ body, button, input, select, textarea {
 #data-table thead th.col-left {
     text-align: left;
 }
+#data-table thead th.col-center {
+    text-align: center;
+}
 #data-table tbody td:first-child { border-left: 1px solid #b0b0b0; }
 
 .view-btn {
