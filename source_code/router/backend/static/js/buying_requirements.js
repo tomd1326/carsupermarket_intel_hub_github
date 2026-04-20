@@ -1330,7 +1330,7 @@ function _renderModalRows() {
         addTd(r[8]  != null ? fmtInt(r[8])  : '—', 'right');
         addTd(r[13] != null && r[13] !== 0 ? fmtGBP(r[13]) : '—', 'right');
         addTd(r[14] != null ? fmtGBP(r[14]) : '—', 'right');
-        addTd(r[15] != null && r[13] !== 0 ? fmtPct(r[15] * 100) : '—', 'right');
+        addTd(r[13] != null && r[13] !== 0 && r[14] != null && r[14] !== 0 ? fmtPct(((r[13] + 199) / r[14]) * 100) : '—', 'right');
         addTd(r[16] != null ? fmtInt(r[16]) : '—', 'right');
         addTd(r[22] != null ? fmtGBP(r[22]) : '—', 'right');
         if (status === 'Delivered') tr.classList.add('vehicle-row-sold');
