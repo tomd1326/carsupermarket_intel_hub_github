@@ -13,16 +13,16 @@
 <body>
     <div id="resize-ghost"></div>
 
-    <div class="container-fluid mt-3 px-4">
+    <div class="container-fluid mt-4 px-4">
     <div class="controls-area">
-        <div class="d-flex align-items-center gap-3 mb-3">
+        <div class="d-flex align-items-center gap-3 mb-2">
             <h2 class="mb-0">Buying Requirements</h2>
             <a href="{{ BASE_URL }}/home" class="btn btn-outline-secondary btn-sm">
                 <i class="fas fa-arrow-left me-1"></i>Back
             </a>
         </div>
 
-        <div class="d-flex align-items-center gap-3 mb-3 flex-wrap">
+        <div class="d-flex align-items-center gap-3 mb-2 flex-wrap">
             <button id="fetchBtn" class="btn btn-primary btn-sm" onclick="fetchData()">
                 <i class="fas fa-sync-alt me-1"></i>Refresh Data
             </button>
@@ -36,17 +36,17 @@
             </a>
             <span id="sp-total-badge" class="text-muted small"></span>
         </div>
-        <div id="fetch-loading" class="text-muted small mb-3" style="display:block">
+        <div id="fetch-loading" class="text-muted small mb-2" style="display:block">
             <span class="spinner-border spinner-border-sm me-2"></span>Loading&hellip;
         </div>
 
         <div id="data-section" style="display:none">
-            <div id="sf-summary" class="text-muted small mb-3">
+            <div id="sf-summary" class="text-muted small mb-2">
                 Total Stock: <strong id="sf-total-stock">—</strong>
                 &nbsp;|&nbsp;
                 <span id="sf-summary-sales-label">90d Sales:</span> <strong id="sf-total-sales">—</strong>
             </div>
-            <div class="d-flex align-items-center gap-2 mb-3 flex-wrap">
+            <div class="d-flex align-items-center gap-2 mb-2 flex-wrap">
                 <label for="numberToBuy" class="form-label mb-0 fw-semibold small">Number to Buy</label>
                 <input type="number" id="numberToBuy" class="form-control form-control-sm" style="width:90px"
                        min="0" step="1" value="200" onclick="this.select()">
@@ -66,12 +66,13 @@
                 <span id="filtered-sales-label" class="small text-muted"></span>
             </div>
 
-            <div class="mb-3 small text-muted">
+            <div class="mb-2 small text-muted">
                 <span id="idealTotalLabel"></span>
                 &nbsp;&nbsp;|&nbsp;&nbsp;
                 Sum of Positives: <strong id="required-sum-inline">—</strong>
             </div>
 
+            <div id="filtered-cap-count" class="small text-muted mb-2"></div>
             <div id="filter-bar" class="d-flex flex-wrap mb-2 align-items-center" style="gap:0">
                 <div class="d-flex align-items-center gap-1 flex-wrap filter-group">
                     <span class="fw-semibold small me-1">Price Band</span>
@@ -120,58 +121,25 @@
                     </button>
                 </div>
             </div>
-            <div class="small text-muted mb-1" id="filtered-cap-count"></div>
+        <div class="mb-2 d-flex align-items-center gap-2" id="view-toggle">
+            <div class="btn-group">
+                <button id="view-btn-cap" class="btn btn-dark btn-sm" onclick="setView('cap')">CAP ID View</button>
+                <button id="view-btn-model" class="btn btn-outline-secondary btn-sm" onclick="setView('model')">Model View</button>
+            </div>
+            <button class="btn btn-primary btn-sm" onclick="applyView()">Apply</button>
+        </div>
         </div><!-- /#data-section -->
         </div><!-- /.controls-area -->
-
         <div id="table-error" class="alert alert-danger d-none"></div>
         <div class="data-table-wrap d-none" id="table-wrap">
             <table id="data-table">
                 <colgroup></colgroup>
-                <thead>
-                    <tr>
-                        <th data-col="0"  data-type="num"><span class="th-label">CAP ID</span><span class="sort-icon"><i class="fas fa-sort"></i></span><div class="resize-handle"></div></th>
-                        <th data-col="1"  data-type="str" id="th-label"><span class="th-label">Make / Model / Derivative / Price Band</span><span class="sort-icon"><i class="fas fa-sort"></i></span><div class="resize-handle"></div></th>
-                        <th style="cursor:default"><span class="th-label">View Vehicles</span></th>
-                        <th data-col="2"  data-type="str"><span class="th-label">Fuel</span><span class="sort-icon"><i class="fas fa-sort"></i></span><div class="resize-handle"></div></th>
-                        <th data-col="4"  data-type="num" id="th-total-sales"><span class="th-label">Total Sales</span><span class="sort-icon"><i class="fas fa-sort"></i></span><div class="resize-handle"></div></th>
-                        <th data-col="7"  data-type="num"><span class="th-label">7d Sales</span><span class="sort-icon"><i class="fas fa-sort"></i></span><div class="resize-handle"></div></th>
-                        <th data-col="3"  data-type="num"><span class="th-label">Stock</span><span class="sort-icon"><i class="fas fa-sort"></i></span><div class="resize-handle"></div></th>
-                        <th data-col="18" data-type="num"><span class="th-label">Ideal Stock</span><span class="sort-icon"><i class="fas fa-sort"></i></span><div class="resize-handle"></div></th>
-                        <th data-col="19" data-type="num"><span class="th-label">Required</span><span class="sort-icon"><i class="fas fa-sort"></i></span><div class="resize-handle"></div></th>
-                        <th data-col="6"  data-type="num" style="background:#fef08a"><span class="th-label">Today's Buying</span><span class="sort-icon"><i class="fas fa-sort"></i></span><div class="resize-handle"></div></th>
-                        <th data-col="21" data-type="num"><span class="th-label">Remaining</span><span class="sort-icon"><i class="fas fa-sort"></i></span><div class="resize-handle"></div></th>
-                        <th data-col="8"  data-type="num"><span class="th-label">Avg Days in Stock</span><span class="sort-icon"><i class="fas fa-sort"></i></span><div class="resize-handle"></div></th>
-                        <th data-col="9"  data-type="num"><span class="th-label">Avg Days to Sell</span><span class="sort-icon"><i class="fas fa-sort"></i></span><div class="resize-handle"></div></th>
-                        <th data-col="14" data-type="num"><span class="th-label">Avg Sell Price</span><span class="sort-icon"><i class="fas fa-sort"></i></span><div class="resize-handle"></div></th>
-                        <th data-col="15" data-type="num"><span class="th-label">Avg AT PTM</span><span class="sort-icon"><i class="fas fa-sort"></i></span><div class="resize-handle"></div></th>
-                        <th data-col="16" data-type="num"><span class="th-label">Avg AT PTM %</span><span class="sort-icon"><i class="fas fa-sort"></i></span><div class="resize-handle"></div></th>
-                        <th data-col="17" data-type="num"><span class="th-label">Avg AT Rating</span><span class="sort-icon"><i class="fas fa-sort"></i></span><div class="resize-handle"></div></th>
-                        <th data-col="10" data-type="num"><span class="th-label">Avg GPU-M</span><span class="sort-icon"><i class="fas fa-sort"></i></span><div class="resize-handle"></div></th>
-                        <th data-col="11" data-type="num"><span class="th-label">Avg GPU-S</span><span class="sort-icon"><i class="fas fa-sort"></i></span><div class="resize-handle"></div></th>
-                        <th data-col="12" data-type="num"><span class="th-label">Avg GPU-MS</span><span class="sort-icon"><i class="fas fa-sort"></i></span><div class="resize-handle"></div></th>
-                    </tr>
-                </thead>
+                <thead><tr></tr></thead>
                 <tbody id="table-body"></tbody>
                 <tfoot>
-                    <tr id="totals-row-rate">
-                        <td class="tfoot-blank" colspan="3"></td>
-                        <td></td><td></td><td></td><td></td><td></td><td></td>
-                        <td></td><td></td><td></td><td></td><td></td><td></td>
-                        <td></td><td></td><td></td><td></td><td></td>
-                    </tr>
-                    <tr id="totals-row-if">
-                        <td class="tfoot-blank" colspan="3"></td>
-                        <td></td><td></td><td></td><td></td><td></td><td></td>
-                        <td></td><td></td><td></td><td></td><td></td><td></td>
-                        <td></td><td></td><td></td><td></td><td></td>
-                    </tr>
-                    <tr id="totals-row-total">
-                        <td class="tfoot-blank" colspan="3"></td>
-                        <td></td><td></td><td></td><td></td><td></td><td></td>
-                        <td></td><td></td><td></td><td></td><td></td><td></td>
-                        <td></td><td></td><td></td><td></td><td></td>
-                    </tr>
+                    <tr id="totals-row-rate"></tr>
+                    <tr id="totals-row-if"></tr>
+                    <tr id="totals-row-total"></tr>
                 </tfoot>
             </table>
         </div>

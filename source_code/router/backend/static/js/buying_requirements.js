@@ -50,7 +50,7 @@ const TOTAL_UNITS = COL_UNITS.reduce((a, b) => a + b, 0);
 const BASE_FONT_PX  = 12;
 const BASE_FIXED_PX = 70;
 const BASE_DESC_PX  = 575;
-const BASE_OVERRIDE = { 2: 60, 3: 46, 8: 72, 10: 82 }; // View, Fuel narrow, Required, Remaining wider
+const BASE_OVERRIDE = { 2: 60, 3: 46, 8: 79, 10: 82 }; // View, Fuel narrow, Required wider, Remaining wider
 const FONT_STEP     = 1;  // px per click
 const FONT_MIN      = 8;
 const FONT_MAX      = 16;
@@ -79,6 +79,8 @@ function resetColWidths() {
     requestAnimationFrame(applyColWidths);
 }
 
+const CAP_ONLY_COL_INDICES = new Set([0, 2, 8, 9]); // CAP ID, View Vehicles, Required (cap only), Today's Buying
+
 function applyColWidths() {
     const table = document.getElementById('data-table');
     if (!table) return;
@@ -90,6 +92,7 @@ function applyColWidths() {
     cg.innerHTML = '';
     let totalW = 0;
     COL_UNITS.forEach((_, i) => {
+        if (currentView === 'model' && CAP_ONLY_COL_INDICES.has(i)) return;
         const w = colWidths[i] !== null ? colWidths[i] : (i === 1 ? scaledDesc() : scaledOverride(i));
         totalW += w;
         const col = document.createElement('col');
@@ -283,6 +286,97 @@ document.getElementById('maxDIS')?.addEventListener('change', updateSalesColumnL
 function getMaxDTS()  { const v = parseFloat(document.getElementById('maxDTS')?.value);  return isNaN(v) ? null : v; }
 function getMinGPUM() { const v = parseFloat(document.getElementById('minGPUM')?.value); return isNaN(v) ? null : v; }
 
+/* ── View toggle ─────────────────────────────────────────── */
+let currentView = 'cap'; // 'cap' | 'model'
+let pendingView = 'cap'; // selection not yet applied
+
+
+const THEAD_COLS = [
+    { capOnly: true,  html: '<span class="th-label">CAP ID</span><span class="sort-icon"><i class="fas fa-sort"></i></span><div class="resize-handle"></div>', attrs: 'data-col="0" data-type="num"' },
+    { capOnly: false, html: '<span class="th-label" id="th-label-span">Make / Model / Derivative / Price Band</span><span class="sort-icon"><i class="fas fa-sort"></i></span><div class="resize-handle"></div>', attrs: 'data-col="1" data-type="str" id="th-label" class="col-left"' },
+    { capOnly: true,  html: '<span class="th-label">View Vehicles</span>', attrs: 'class="col-view"' },
+    { capOnly: false, html: '<span class="th-label">Fuel</span><span class="sort-icon"><i class="fas fa-sort"></i></span><div class="resize-handle"></div>', attrs: 'data-col="2" data-type="str"' },
+    { capOnly: false, html: '<span class="th-label">Total Sales</span><span class="sort-icon"><i class="fas fa-sort"></i></span><div class="resize-handle"></div>', attrs: 'data-col="4" data-type="num" id="th-total-sales"' },
+    { capOnly: false, html: '<span class="th-label">7d Sales</span><span class="sort-icon"><i class="fas fa-sort"></i></span><div class="resize-handle"></div>', attrs: 'data-col="7" data-type="num"' },
+    { capOnly: false, html: '<span class="th-label">Stock</span><span class="sort-icon"><i class="fas fa-sort"></i></span><div class="resize-handle"></div>', attrs: 'data-col="3" data-type="num"' },
+    { capOnly: false, html: '<span class="th-label">Ideal Stock</span><span class="sort-icon"><i class="fas fa-sort"></i></span><div class="resize-handle"></div>', attrs: 'data-col="18" data-type="num"' },
+    { capOnly: true, html: '<span class="th-label">Required</span><span class="sort-icon"><i class="fas fa-sort"></i></span><div class="resize-handle"></div>', attrs: 'data-col="19" data-type="num"' },
+    { capOnly: true,  html: '<span class="th-label">Today\'s Buying</span><span class="sort-icon"><i class="fas fa-sort"></i></span><div class="resize-handle"></div>', attrs: 'data-col="6" data-type="num" style="background:#fef08a"' },
+    { capOnly: false, html: '<span class="th-label">Remaining</span><span class="sort-icon"><i class="fas fa-sort"></i></span><div class="resize-handle"></div>', attrs: 'data-col="21" data-type="num"' },
+    { capOnly: false, html: '<span class="th-label">Avg Days in Stock</span><span class="sort-icon"><i class="fas fa-sort"></i></span><div class="resize-handle"></div>', attrs: 'data-col="8" data-type="num"' },
+    { capOnly: false, html: '<span class="th-label">Avg Days to Sell</span><span class="sort-icon"><i class="fas fa-sort"></i></span><div class="resize-handle"></div>', attrs: 'data-col="9" data-type="num"' },
+    { capOnly: false, html: '<span class="th-label">Avg Sell Price</span><span class="sort-icon"><i class="fas fa-sort"></i></span><div class="resize-handle"></div>', attrs: 'data-col="14" data-type="num"' },
+    { capOnly: false, html: '<span class="th-label">Avg AT PTM</span><span class="sort-icon"><i class="fas fa-sort"></i></span><div class="resize-handle"></div>', attrs: 'data-col="15" data-type="num"' },
+    { capOnly: false, html: '<span class="th-label">Avg AT PTM %</span><span class="sort-icon"><i class="fas fa-sort"></i></span><div class="resize-handle"></div>', attrs: 'data-col="16" data-type="num"' },
+    { capOnly: false, html: '<span class="th-label">Avg AT Rating</span><span class="sort-icon"><i class="fas fa-sort"></i></span><div class="resize-handle"></div>', attrs: 'data-col="17" data-type="num"' },
+    { capOnly: false, html: '<span class="th-label">Avg GPU-M</span><span class="sort-icon"><i class="fas fa-sort"></i></span><div class="resize-handle"></div>', attrs: 'data-col="10" data-type="num"' },
+    { capOnly: false, html: '<span class="th-label">Avg GPU-S</span><span class="sort-icon"><i class="fas fa-sort"></i></span><div class="resize-handle"></div>', attrs: 'data-col="11" data-type="num"' },
+    { capOnly: false, html: '<span class="th-label">Avg GPU-MS</span><span class="sort-icon"><i class="fas fa-sort"></i></span><div class="resize-handle"></div>', attrs: 'data-col="12" data-type="num"' },
+];
+
+function rebuildTheadTfoot() {
+    const isCap = currentView === 'cap';
+    const cols = THEAD_COLS.filter(c => isCap || !c.capOnly);
+    const nCols = cols.length;
+
+    // thead
+    const thead = document.querySelector('#data-table thead tr');
+    if (thead) {
+        thead.innerHTML = cols.map(c => `<th ${c.attrs}>${c.html}</th>`).join('');
+        // re-attach sort listeners
+        thead.querySelectorAll('th').forEach(th => {
+            th.addEventListener('click', e => {
+                if (e.target.closest('.resize-handle') || e.target.closest('button')) return;
+                sortTable(+th.dataset.col, th.dataset.type);
+            });
+            th.addEventListener('dblclick', e => {
+                if (!e.target.closest('.resize-handle') && !e.target.closest('button')) autoFitCol(+th.dataset.col, th);
+            });
+        });
+        // re-attach resize handles
+        thead.querySelectorAll('.resize-handle').forEach(handle => attachResizeHandle(handle));
+    }
+
+    // tfoot — rebuild each row with correct number of cells
+    // cap:   blank(colspan=3) | label-cell(fuel col) | data cells × (nCols-4)
+    // model: blank(colspan=1) | label-cell(fuel col) | data cells × (nCols-2)
+    ['totals-row-rate','totals-row-if','totals-row-total'].forEach(id => {
+        const tr = document.getElementById(id);
+        if (!tr) return;
+        const blankColspan = isCap ? 3 : 1;
+        let html = `<td class="tfoot-blank" colspan="${blankColspan}"></td><td></td>`;
+        const dataCells = nCols - blankColspan - 1;
+        for (let i = 0; i < dataCells; i++) html += '<td></td>';
+        tr.innerHTML = html;
+    });
+}
+
+function setView(view) {
+    pendingView = view;
+    document.getElementById('view-btn-cap').classList.toggle('btn-dark', view === 'cap');
+    document.getElementById('view-btn-cap').classList.toggle('btn-outline-secondary', view !== 'cap');
+    document.getElementById('view-btn-model').classList.toggle('btn-dark', view === 'model');
+    document.getElementById('view-btn-model').classList.toggle('btn-outline-secondary', view !== 'model');
+}
+
+function applyView() {
+    if (!rawData.length) return;
+    currentView = pendingView;
+    rebuildTheadTfoot();
+    colWidths = new Array(COL_UNITS.length).fill(null);
+    applyColWidths();
+    if (currentView === 'cap') aggregateRawData(); else aggregateModelData();
+    if (Object.keys(spPurchases).length) applySpPurchases(spPurchases);
+    renderTable();
+    if (currentView === 'model') {
+        sortCol = 21; sortDir = 1; // sortTable toggles to -1 → descending
+        sortTable(21, 'num');
+    } else {
+        sortCol = null; sortDir = 1;
+        sortTable(21, 'num');
+    }
+}
+
 /* ── Aggregate raw per-vehicle rows into per-derivative rows ─
  *
  * Raw row layout (from Snowflake):
@@ -290,7 +384,7 @@ function getMinGPUM() { const v = parseFloat(document.getElementById('minGPUM')?
  *    7:dis, 8:dts, 9:gpu_m, 10:gpu_s, 11:gpu_ms,
  *    12:purchase_price, 13:sell_price, 14:at_val, 15:at_pct, 16:at_rating,
  *    17:ack_date, 18:vrm, 19:supplier_name, 20:vehicle_url, 21:vehicle_status,
- *    22:gpu_m_resolved (COALESCE of sales gpu_m and stock_evolution gpu_m)]
+ *    22:gpu_m_resolved, 29:make_model]
  *
  * Output tableData row layout (same indices used throughout the rest of the JS):
  *   [0:cap_id, 1:label, 2:fuel, 3:stock, 4:sales90, 5:pct(set later),
@@ -391,6 +485,99 @@ function aggregateRawData() {
     }
 }
 
+function aggregateModelData() {
+    const maxDIS  = getMaxDIS();
+    const maxDTS  = getMaxDTS();
+    const minGPUM = getMinGPUM();
+    const todayMs = Date.now();
+
+    const groups = new Map();
+    for (const r of rawData) {
+        const makeModel  = r[29] || '';
+        const fuel       = normFuel(r[2]);
+        const price_band = r[3] || '';
+        const key = makeModel + '|' + fuel + '|' + price_band;
+        if (!groups.has(key)) {
+            const label = makeModel + ' / ' + normFuel(r[2]) + ' / ' + price_band;
+            groups.set(key, {
+                cap_id: null, label, fuel: r[2], price_band,
+                stock: 0, sales90: 0, sales7: 0,
+                dis_sum: 0, dis_n: 0,
+                dts_sum: 0, dts_n: 0,
+                gpu_m_sum: 0, gpu_m_n: 0,
+                gpu_s_sum: 0, gpu_s_n: 0,
+                gpu_ms_sum: 0, gpu_ms_n: 0,
+                sell_sum: 0, sell_n: 0,
+                at_val_sum: 0, at_val_n: 0,
+                at_pct_sum: 0, at_pct_n: 0,
+                at_rating_sum: 0, at_rating_n: 0,
+            });
+        }
+        const g = groups.get(key);
+        const stock   = Number(r[4]) || 0;
+        const sales90 = Number(r[5]) || 0;
+        const sales7  = Number(r[6]) || 0;
+        const dis     = r[7]  != null ? Number(r[7])  : null;
+        const dts     = r[8]  != null ? Number(r[8])  : null;
+        const gpu_m   = r[22] != null ? Number(r[22]) : null;
+        const gpu_s   = r[10] != null ? Number(r[10]) : null;
+        const gpu_ms  = r[11] != null ? Number(r[11]) : null;
+        const sell    = r[13] != null ? Number(r[13]) : null;
+        const at_val  = r[14] != null ? Number(r[14]) : null;
+        const at_pct  = r[15] != null ? Number(r[15]) : null;
+        const at_rate = r[16] != null ? Number(r[16]) : null;
+        const ackDate      = r[17] ? new Date(r[17]) : null;
+        const daysSinceAck = ackDate ? Math.floor((todayMs - ackDate.getTime()) / 86400000) : null;
+
+        g.stock += stock;
+
+        const passDIS  = maxDIS  === null || daysSinceAck === null || daysSinceAck <= maxDIS;
+        const passDTS  = maxDTS  === null || dts  === null || dts  <= maxDTS;
+        const passGPUM = minGPUM === null || gpu_m === null || gpu_m >= minGPUM;
+        if (!passDIS || !passDTS || !passGPUM) continue;
+
+        g.sales90 += sales90;
+        g.sales7  += sales7;
+
+        if (dis    != null) { g.dis_sum     += dis;    g.dis_n++;     }
+        if (dts    != null) { g.dts_sum     += dts;    g.dts_n++;     }
+        if (gpu_m  != null) { g.gpu_m_sum  += gpu_m;  g.gpu_m_n++;  }
+        if (gpu_s  != null) { g.gpu_s_sum  += gpu_s;  g.gpu_s_n++;  }
+        if (gpu_ms != null) { g.gpu_ms_sum += gpu_ms; g.gpu_ms_n++; }
+        if (sell   != null && sell !== 0 && sales90 === 1) { g.sell_sum += sell; g.sell_n++; }
+        if (at_val != null && sales90 === 1) { g.at_val_sum  += at_val;  g.at_val_n++;  }
+        if (at_pct != null && sales90 === 1 && sell != null && sell !== 0) { g.at_pct_sum += at_pct; g.at_pct_n++; }
+        if (at_rate!= null && sales90 === 1) { g.at_rating_sum += at_rate; g.at_rating_n++; }
+    }
+
+    const avg = (sum, n) => n > 0 ? sum / n : null;
+    tableData = [];
+    for (const g of groups.values()) {
+        tableData.push([
+            g.cap_id,
+            g.label,
+            g.fuel,
+            g.stock,
+            g.sales90,
+            null,
+            0,
+            g.sales7,
+            avg(g.dis_sum,       g.dis_n),
+            avg(g.dts_sum,       g.dts_n),
+            avg(g.gpu_m_sum,     g.gpu_m_n),
+            avg(g.gpu_s_sum,     g.gpu_s_n),
+            avg(g.gpu_ms_sum,    g.gpu_ms_n),
+            null,
+            avg(g.sell_sum,      g.sell_n),
+            avg(g.at_val_sum,    g.at_val_n),
+            avg(g.at_pct_sum,    g.at_pct_n) != null ? avg(g.at_pct_sum, g.at_pct_n) * 100 : null,
+            avg(g.at_rating_sum, g.at_rating_n),
+            // 18, 19, 20, 21 set in renderTable
+            g.price_band,  // 22
+        ]);
+    }
+}
+
 const BAND_RANK = { '<10k':0,'10-12.5k':1,'12.5-15k':2,'15-20k':3,'20-25k':4,'25-30k':5,'30k+':6,'interest_free':7 };
 function bandRank(label) {
     return BAND_RANK[String(label ?? '').split(' / ').pop().trim()] ?? 99;
@@ -473,14 +660,17 @@ function renderTotalsRow(visibleRows) {
         });
         return;
     }
-    const DATA_COLS = [
+    // cap view:   blank(3) | fuel(label) | sales | 7d | stock | ideal | req | today | remaining | avgDIS | avgDTS | sell | ATPTM | ATPTM% | ATRating | GPUM | GPUS | GPUMS
+    // model view: blank(1) | fuel(label) | sales | 7d | stock | ideal | req |                    avgDIS | avgDTS | sell | ATPTM | ATPTM% | ATRating | GPUM | GPUS | GPUMS
+    const isCap = currentView === 'cap';
+    const CAP_DATA_COLS = [
         [4,  'sum', fmtInt],
         [7,  'sum', fmtInt],
         [3,  'sum', fmtInt],
         [18, 'sum', v => fmt(v, 1)],
         [19, 'sum', v => fmt(v, 1)],
-        [6,  'sum', fmtInt],
-        null,
+        [6,  'sum', fmtInt],   // Today's Buying (cap only)
+        null,                  // Remaining (cap only, computed)
         [8,  'avg', v => fmt(v, 1)],
         [9,  'avg', v => fmt(v, 1)],
         [14, 'avg', fmtGBP],
@@ -491,8 +681,25 @@ function renderTotalsRow(visibleRows) {
         [11, 'avg', fmtGBP],
         [12, 'avg', fmtGBP],
     ];
-    const TODAY_CELL_IDX     = 5;
-    const REMAINING_CELL_IDX = 6;
+    const MODEL_DATA_COLS = [
+        [4,  'sum', fmtInt],
+        [7,  'sum', fmtInt],
+        [3,  'sum', fmtInt],
+        [18, 'sum', v => fmt(v, 1)],
+        [21, 'sum', fmtInt],
+        [8,  'avg', v => fmt(v, 1)],
+        [9,  'avg', v => fmt(v, 1)],
+        [14, 'avg', fmtGBP],
+        [15, 'avg', fmtGBP],
+        [16, 'avg', fmtPct],
+        [17, 'avg', fmtInt],
+        [10, 'avg', fmtGBP],
+        [11, 'avg', fmtGBP],
+        [12, 'avg', fmtGBP],
+    ];
+    const DATA_COLS = isCap ? CAP_DATA_COLS : MODEL_DATA_COLS;
+    const TODAY_CELL_IDX     = 5;  // only used in cap view
+    const REMAINING_CELL_IDX = 6;  // only used in cap view
 
     function fillRow(trEl, rows, label) {
         if (!trEl) return;
@@ -500,17 +707,22 @@ function renderTotalsRow(visibleRows) {
         cells[0].textContent = '';
         if (cells[1]) { cells[1].style.background = ''; cells[1].textContent = label; }
         const reqSum   = rows.reduce((s, r) => s + (Number(r[19]) || 0), 0);
-        const spReady  = rows.some(r => r[6] !== null);
+        const spReady  = isCap && rows.some(r => r[6] !== null);
         const todaySum = spReady ? rows.reduce((s, r) => s + (Number(r[6]) || 0), 0) : null;
+        const MODEL_REM_IDX = 4; // index in MODEL_DATA_COLS for Remaining
         DATA_COLS.forEach((def, i) => {
             const td = cells[i + 2];
             if (!td) return;
             td.style.background = '';
-            if (i === REMAINING_CELL_IDX) {
+            if (isCap && i === REMAINING_CELL_IDX) {
                 td.textContent = spReady ? fmtInt(Math.round(reqSum) - todaySum) : '';
                 return;
             }
-            if (i === TODAY_CELL_IDX) {
+            if (!isCap && i === MODEL_REM_IDX) {
+                td.textContent = fmtInt(Math.round(reqSum));
+                return;
+            }
+            if (isCap && i === TODAY_CELL_IDX) {
                 td.style.background = spReady ? '#fef08a' : '';
             }
             if (!def) { td.textContent = ''; return; }
@@ -604,9 +816,9 @@ function renderTable() {
             tr.appendChild(td);
             return td;
         };
-        add(row[0] ?? '');
-        add(row[1] ?? '');
-        {
+        if (currentView === 'cap') add(row[0] ?? '');
+        { const td = add(row[1] ?? ''); td.classList.add('col-left'); }
+        if (currentView === 'cap') {
             const td = document.createElement('td');
             td.style.cssText = 'padding:0.18em 0.3em;text-align:center;vertical-align:middle';
             const sp = document.createElement('span');
@@ -630,9 +842,11 @@ function renderTable() {
         { const td = add(row[7] != null ? fmtInt(row[7]) : ''); if ((row[7] || 0) === 0) td.style.background = '#d8d8d8'; }
         { const td = add(fmtInt(row[3])); if ((row[3] || 0) === 0) td.style.background = '#d8d8d8'; }
         add(row[18] != null ? fmt(row[18], 1) : '');
-        add(row[19] != null ? fmt(row[19], 1) : '');
-        const tdToday = add(row[6] != null ? fmtInt(row[6]) : '');
-        if ((row[6] || 0) > 0) tdToday.style.background = '#fef08a';
+        if (currentView === 'cap') add(row[19] != null ? fmt(row[19], 1) : '');
+        if (currentView === 'cap') {
+            const tdToday = add(row[6] != null ? fmtInt(row[6]) : '');
+            if ((row[6] || 0) > 0) tdToday.style.background = '#fef08a';
+        }
         add(fmtInt(row[21]));
         add(row[8]  != null ? fmt(row[8],  1) : '');
         add(row[9]  != null ? fmt(row[9],  1) : '');
@@ -646,17 +860,33 @@ function renderTable() {
         fragment.appendChild(tr);
     });
 
+    // DOM cell indices depend on view
+    // cap:   CAP_ID(0) label(1) View(2) fuel(3) sales(4) 7d(5) stock(6) ideal(7) req(8) today(9) rem(10) DIS(11) DTS(12) sell(13) ATPTM(14) ATPTM%(15) ATR(16) GPUM(17) GPUS(18) GPUMS(19)
+    // model: label(0) fuel(1) sales(2) 7d(3) stock(4) ideal(5) req(6) DIS(7) DTS(8) sell(9) ATPTM(10) ATPTM%(11) ATR(12) GPUM(13) GPUS(14) GPUMS(15)
+    const isCap = currentView === 'cap';
+    // cap:   CAP_ID(0) label(1) View(2) fuel(3) sales(4) 7d(5) stock(6) ideal(7) req(8) today(9) rem(10) DIS(11) DTS(12) sell(13) ATPTM(14) ATPTM%(15) ATR(16) GPUM(17) GPUS(18) GPUMS(19)
+    // model: label(0) fuel(1) sales(2) 7d(3) stock(4) ideal(5) rem(6) DIS(7) DTS(8) sell(9) ATPTM(10) ATPTM%(11) ATR(12) GPUM(13) GPUS(14) GPUMS(15)
+    const CI = {
+        sales7:    isCap ? 5  : 3,
+        required:  isCap ? 8  : null,
+        remaining: isCap ? 10 : 6,
+        dts:       isCap ? 12 : 8,
+        gpuM:      isCap ? 17 : 13,
+        gpuMS:     isCap ? 19 : 15,
+        atRating:  isCap ? 16 : 12,
+        ifSkip:    isCap ? new Set([4,5,9,10,12,16,17,19]) : new Set([2,3,6,8,12,13,15]),
+    };
     Array.from(fragment.children).forEach((tr, i) => {
         const r = tableData[i];
-        if ((r[7] || 0) > 0) tr.cells[5].style.background = greenScale(r[7], max7d);
-        tr.cells[10].style.background = redGreenScale(r[21], minRem, maxRem);
-        if (r[9] != null) tr.cells[12].style.background = dtsScale(r[9]);
-        if (r[10] != null) tr.cells[17].style.background = fwdScale(Number(r[10]), minGM,  maxGM);
-        if (r[12] != null) tr.cells[19].style.background = fwdScale(Number(r[12]), minGMS, maxGMS);
-        if (r[17] != null) tr.cells[16].style.background = fwdScale(Number(r[17]), minATR, maxATR);
+        if ((r[7] || 0) > 0 && tr.cells[CI.sales7])   tr.cells[CI.sales7].style.background   = greenScale(r[7], max7d);
+        if (r[19] != null && tr.cells[CI.required])    tr.cells[CI.required].style.background  = redGreenScale(r[19], minVar, maxVar);
+        if (CI.remaining !== null && tr.cells[CI.remaining]) tr.cells[CI.remaining].style.background = redGreenScale(r[21], minRem, maxRem);
+        if (r[9]  != null && tr.cells[CI.dts])         tr.cells[CI.dts].style.background       = dtsScale(r[9]);
+        if (r[10] != null && tr.cells[CI.gpuM])        tr.cells[CI.gpuM].style.background      = fwdScale(Number(r[10]), minGM,  maxGM);
+        if (r[12] != null && tr.cells[CI.gpuMS])       tr.cells[CI.gpuMS].style.background     = fwdScale(Number(r[12]), minGMS, maxGMS);
+        if (r[17] != null && tr.cells[CI.atRating])    tr.cells[CI.atRating].style.background  = fwdScale(Number(r[17]), minATR, maxATR);
         if (isInterestFree(r)) {
-            const ifSkip = new Set([4, 5, 9, 10, 12, 16, 17, 19]);
-            Array.from(tr.cells).forEach((td, ci) => { if (!ifSkip.has(ci)) td.style.background = '#bfdbfe'; });
+            Array.from(tr.cells).forEach((td, ci) => { if (!CI.ifSkip.has(ci)) td.style.background = '#bfdbfe'; });
         }
     });
 
@@ -732,7 +962,7 @@ function getThColIndex(th) {
     return Array.from(th.parentElement.children).indexOf(th);
 }
 
-document.querySelectorAll('.resize-handle').forEach(handle => {
+function attachResizeHandle(handle) {
     handle.addEventListener('mousedown', e => {
         e.preventDefault();
         e.stopPropagation();
@@ -773,7 +1003,9 @@ document.querySelectorAll('.resize-handle').forEach(handle => {
         colWidths[colIdx] = null;
         autoFitCol(+th.dataset.col, th);
     });
-});
+}
+
+document.querySelectorAll('.resize-handle').forEach(handle => attachResizeHandle(handle));
 
 function autoFitCol(col, th) {
     const ctx = _fitCanvas.getContext('2d');
@@ -790,18 +1022,15 @@ function autoFitCol(col, th) {
 
 function applySpPurchases(p) {
     spPurchases = p;
-    const exact = {};
     let spTotal = 0;
-    for (const [k, v] of Object.entries(p)) {
-        exact[k] = v;
-        spTotal += v;
-    }
+    for (const v of Object.values(p)) spTotal += v;
     const badge = document.getElementById('sp-total-badge');
     if (badge) badge.textContent = spTotal + ' purchases';
+    if (currentView === 'model') return;
     tableData.forEach(r => {
         const band = r[22] ?? String(r[1] ?? '').split(' / ').pop().trim();
         const key  = r[0] + '|' + band;
-        r[6] = exact[key] || 0;
+        r[6] = p[key] || 0;
     });
 }
 
@@ -849,18 +1078,14 @@ function fetchData() {
 }
 
 function applyRawDataToTable(fetchSP) {
-    aggregateRawData();
+    if (currentView === 'model') aggregateModelData(); else aggregateRawData();
     document.getElementById('sf-total-stock').textContent =
         rawData.reduce((s, r) => s + (Number(r[4]) || 0), 0).toLocaleString();
     document.getElementById('sf-total-sales').textContent =
         rawData.reduce((s, r) => s + (Number(r[5]) || 0), 0).toLocaleString();
     document.getElementById('data-section').style.display = 'block';
     sortCol = null; sortDir = 1;
-    document.querySelectorAll('#data-table thead tr:last-child th').forEach(th => {
-        th.classList.remove('sort-asc', 'sort-desc');
-        const icon = th.querySelector('.sort-icon i');
-        if (icon) icon.className = 'fas fa-sort';
-    });
+    rebuildTheadTfoot();
     applyColWidths();
     renderTable();
     sortCol = null; sortDir = 1;
@@ -883,7 +1108,7 @@ function refreshTable() {
     const btn = document.getElementById('refreshTableBtn');
     if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spinner-border spinner-border-sm me-2"></span>Loading...'; }
     requestAnimationFrame(() => setTimeout(() => {
-        aggregateRawData();
+        if (currentView === 'model') aggregateModelData(); else aggregateRawData();
         if (Object.keys(spPurchases).length) applySpPurchases(spPurchases);
         renderTable();
         sortCol = 21; sortDir = 1;

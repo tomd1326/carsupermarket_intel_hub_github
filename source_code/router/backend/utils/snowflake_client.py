@@ -6,7 +6,7 @@
 #
 # PURPOSE:
 #   A reusable Snowflake connection wrapper used by both tools:
-#     - Vehicle List Evaluator (this project)
+#     - Supplier Stock Evaluator (this project)
 #     - Buying Requirements (separate project, same table)
 #
 #   Credentials are pulled from AWS Secrets Manager using the get_secret()
