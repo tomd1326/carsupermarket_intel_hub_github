@@ -68,7 +68,7 @@ def root(request: Request, user: str = Depends(get_current_user)):
         return RedirectResponse(url=BASE_URL + "/login", status_code=303)
     #
     return RedirectResponse(url=BASE_URL + "/home", status_code=303)  # CHANGED: was /tasks
-    # return templates.TemplateResponse("dashboard.html", {"request": request, "user": user})
+    # return templates.TemplateResponse("supplier_stock_evaluator.html", {"request": request, "user": user})
 
 
 @router.get("/login", response_class=HTMLResponse)
@@ -264,7 +264,7 @@ _SP_TTL_SECONDS = 60          # in-process TTL
 _SP_S3_TTL_SECONDS = 24 * 3600  # S3 TTL — survives cold starts across the day
 _S3_BUCKET      = "aa-raw-sources-uk"
 _S3_ENV         = 'prod' if os.getenv('AWS_REGION') == 'eu-west-1' else 'dev'
-_SF_S3_KEY      = f"applications/pricing/uk-vehicle-list-evaluator/{_S3_ENV}/cache/buying_requirements_v13.json"
+_SF_S3_KEY      = f"applications/pricing/uk-vehicle-list-evaluator/{_S3_ENV}/cache/buying_requirements_v14.json"
 _SP_S3_KEY      = f"applications/pricing/uk-vehicle-list-evaluator/{_S3_ENV}/cache/sp_purchases_v4.json"
 
 
@@ -363,7 +363,8 @@ def _get_sf_rows(force: bool = False) -> list:
                     MILEAGE,
                     AUTOTRADER_PORTAL_LINK,
                     INVOICE_POSTED_DATE,
-                    VEHICLE_UPDATED_AT
+                    VEHICLE_UPDATED_AT,
+                    COALESCE(MAKE_MODEL, '') AS MAKE_MODEL
                 FROM PROD_CARSUPERMARKET_DB.product_vehicle_journey.buying_requirements
                 ORDER BY CAP_ID
             """)
@@ -374,12 +375,13 @@ def _get_sf_rows(force: bool = False) -> list:
         #  17:order_acknowledged_date (ISO string), 18:vrm, 19:supplier_name, 20:vehicle_url,
         #  21:vehicle_status, 22:gpu_m_resolved, 23:vehicle_location,
         #  24:date_first_registered, 25:mileage, 26:autotrader_portal_link,
-        #  27:invoice_posted_date]
+        #  27:invoice_posted_date, 28:vehicle_updated_at, 29:make_model]
         result = [[r[0], r[1], r[2], r[3], r[4], r[5], r[6], r[7], r[8], r[9], r[10], r[11], r[12], r[13], r[14], r[15], r[16],
                    str(r[17]) if r[17] is not None else None, r[18], r[19], r[20], r[21], r[22], r[23],
                    str(r[24]) if r[24] is not None else None, r[25], r[26],
                    str(r[27]) if r[27] is not None else None,
-                   str(r[28]) if r[28] is not None else None] for r in rows]
+                   str(r[28]) if r[28] is not None else None,
+                   r[29]] for r in rows]
         _save_sf_cache_to_s3(result)
 
     with _cache_lock:
@@ -396,8 +398,16 @@ def _get_sp_purchases(force: bool = False) -> dict:
             return _sp_cache["purchases"]
 
     values = SharePointClient().get_worksheet_values(_SP_SUBFOLDER, _SP_FILENAME, _SP_SHEET)
-    headers = values[0] if values else []
     purchases: dict = {}
+
+    # Find the header row — search first 5 rows for the one containing "CAP ID"
+    header_row_idx = None
+    headers = []
+    for i, row in enumerate(values[:5]):
+        if row and "CAP ID" in [str(c).strip() for c in row]:
+            header_row_idx = i
+            headers = [str(c).strip() for c in row]
+            break
 
     if headers:
         try:
@@ -407,9 +417,10 @@ def _get_sp_purchases(force: bool = False) -> dict:
         except ValueError:
             pass
         else:
-            for row in values[1:]:
+            for row in values[header_row_idx + 1:]:
                 try:
-                    cap_id = int(row[cap_idx]) if row[cap_idx] not in (None, '') else None
+                    raw_cap = str(row[cap_idx]).strip().replace(',', '') if row[cap_idx] not in (None, '') else ''
+                    cap_id = int(float(raw_cap)) if raw_cap else None
                 except (TypeError, ValueError):
                     cap_id = None
                 if cap_id is None:
@@ -430,7 +441,8 @@ def _get_sp_purchases(force: bool = False) -> dict:
                 key = (cap_id, band)
                 purchases[key] = purchases.get(key, 0) + 1
 
-    logger.info(f"SP: {len(purchases)} purchase keys from {len(values)-1 if values else 0} data rows")
+    data_rows = len(values) - (header_row_idx + 1) if header_row_idx is not None else 0
+    logger.info(f"SP: header on row {header_row_idx}, {len(purchases)} purchase keys from {data_rows} data rows")
     with _cache_lock:
         _sp_cache["purchases"] = purchases
         _sp_cache["expires"] = time.monotonic() + _SP_TTL_SECONDS
@@ -558,7 +570,7 @@ def read_tasks(request: Request, page: Optional[int] = 1, page_size: Optional[in
 
     total_pages = (total_tasks + page_size - 1) // page_size  # Calculate the total number of pages
 
-    return templates.TemplateResponse("dashboard.html", {
+    return templates.TemplateResponse("supplier_stock_evaluator.html", {
         "request": request,
         "tasks": tasks,
         "at_least_one_pending": at_least_one_pending,

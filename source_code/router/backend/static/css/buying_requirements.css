@@ -25,15 +25,16 @@ body, button, input, select, textarea {
 
 #filtered-cap-count {
     min-width: 160px;
-    display: inline-block;
+    display: block;
+    width: fit-content;
 }
 #filtered-cap-count.flash {
     animation: cap-flash 0.9s ease-out forwards;
 }
 @keyframes cap-flash {
-    0%   { color: #000; background: #fde047; border-radius: 4px; padding: 1px 6px; }
-    50%  { color: #000; background: #fde047; border-radius: 4px; padding: 1px 6px; }
-    100% { color: inherit; background: transparent; border-radius: 4px; padding: 1px 6px; }
+    0%   { color: #000; background: #fde047; border-radius: 4px; }
+    50%  { color: #000; background: #fde047; border-radius: 4px; }
+    100% { color: inherit; background: transparent; }
 }
 
 .data-table-wrap {
@@ -125,12 +126,9 @@ body, button, input, select, textarea {
     text-align: center;
     line-height: 1.4;
 }
-#data-table tbody td:nth-child(2),
-#data-table thead th:nth-child(2) {
+#data-table tbody td.col-left,
+#data-table thead th.col-left {
     text-align: left;
-}
-#data-table thead th:not(:nth-child(2)) {
-    text-align: center;
 }
 #data-table tbody td:first-child { border-left: 1px solid #b0b0b0; }
 
@@ -167,9 +165,9 @@ body, button, input, select, textarea {
     white-space: normal;
     word-break: break-word;
 }
-#data-table thead th:nth-child(2) .th-label { text-align: left; }
+#data-table thead th.col-left .th-label { text-align: left; }
 /* View column header — no sort cursor, centred */
-#data-table thead th:nth-child(3) {
+#data-table thead th.col-view {
     cursor: default;
     text-align: center;
     padding: 5px 5px;
@@ -272,30 +270,51 @@ body, button, input, select, textarea {
     padding: 0 2px;
 }
 .vehicle-modal-close:hover { color: #111; }
+
+/* --- FIXES APPLIED BELOW --- */
+
 .vehicle-modal-body {
     overflow-y: auto;
-    padding: 10px 14px;
+    padding: 0 14px 10px 14px; /* Fix: removed top padding so the table header sits flush against the modal header */
 }
+
 #vehicle-modal-table {
     width: 100%;
-    border-collapse: collapse;
+    border-collapse: separate; /* Fix: 'collapse' breaks z-index with position sticky in Chrome/Safari */
+    border-spacing: 0;         /* Removes gaps so it still looks collapsed */
 }
+
 #vehicle-modal-table th {
     background: #dbeafe;
     text-align: left;
     padding: 5px 8px;
     font-weight: 600;
-    border: 1px solid #b0b0b0;
     white-space: nowrap;
     position: sticky;
     top: 0;
-    z-index: 1;
+    z-index: 10;
+    /* Manually draw top, bottom, and right borders since collapse is off */
+    border-top: 1px solid #b0b0b0;
+    border-bottom: 1px solid #b0b0b0;
+    border-right: 1px solid #b0b0b0;
 }
+
 #vehicle-modal-table td {
     padding: 4px 8px;
-    border: 1px solid #b0b0b0;
     white-space: nowrap;
+    /* Manually draw bottom and right borders */
+    border-bottom: 1px solid #b0b0b0;
+    border-right: 1px solid #b0b0b0;
 }
+
+/* Close the box by adding a left border to the first column */
+#vehicle-modal-table th:first-child,
+#vehicle-modal-table td:first-child {
+    border-left: 1px solid #b0b0b0;
+}
+
+/* --------------------------- */
+
 #vehicle-modal-table .vehicle-row-sold td { background: #F8CBAD; color: #000; }
 #vehicle-modal-table .vehicle-row-ordered td { background: #d1d5db; color: #000; }
 .apex-link {
