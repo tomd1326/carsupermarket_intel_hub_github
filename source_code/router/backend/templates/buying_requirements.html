@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Buying Requirements</title>
+    <link rel="icon" type="image/png" href="{{ BASE_URL }}/static/icon.png">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link href="{{ BASE_URL }}/static/css/buying_requirements.css" rel="stylesheet">
+</head>
+<body>
+    <div id="resize-ghost"></div>
+
+    <div class="container-fluid mt-4 px-4">
+    <div class="controls-area">
+        <div class="d-flex align-items-center gap-3 mb-2">
+            <h2 class="mb-0">Buying Requirements</h2>
+            <a href="{{ BASE_URL }}/home" class="btn btn-outline-secondary btn-sm">
+                <i class="fas fa-arrow-left me-1"></i>Back
+            </a>
+        </div>
+
+        <div class="d-flex align-items-center gap-3 mb-2 flex-wrap">
+            <button id="fetchBtn" class="btn btn-primary btn-sm" onclick="fetchData()">
+                <i class="fas fa-sync-alt me-1"></i>Refresh Data
+            </button>
+            <span id="sf-status" class="text-muted small"><i class="fas fa-snowflake me-1 text-info"></i>Snowflake</span>
+            <span id="apex-updated-at" class="text-muted small" style="display:none">Apex data updated at: <strong id="apex-updated-at-val"></strong></span>
+            <span id="sp-status" class="text-muted small"><i class="fas fa-file-excel me-1 text-success"></i>SharePoint</span>
+            <a href="https://carsmkt.sharepoint.com/:x:/r/sites/BuyingDrive/Documents/Department/Buying/B2B/NEW%20DAILY%20BUYERS%20SHEET.xlsx?web=1"
+               target="_blank"
+               class="btn btn-outline-success btn-sm">
+                <i class="fas fa-file-excel me-1"></i>Open Buyers Sheet
+            </a>
+            <span id="sp-total-badge" class="text-muted small"></span>
+        </div>
+        <div id="fetch-loading" class="text-muted small mb-2" style="display:block">
+            <span class="spinner-border spinner-border-sm me-2"></span>Loading&hellip;
+        </div>
+
+        <div id="data-section" style="display:none">
+            <div id="sf-summary" class="text-muted small mb-2">
+                Total Stock: <strong id="sf-total-stock">—</strong>
+                &nbsp;|&nbsp;
+                <span id="sf-summary-sales-label">90d Sales:</span> <strong id="sf-total-sales">—</strong>
+            </div>
+            <div class="d-flex align-items-center gap-2 mb-2 flex-wrap">
+                <label for="numberToBuy" class="form-label mb-0 fw-semibold small">Number to Buy</label>
+                <input type="number" id="numberToBuy" class="form-control form-control-sm" style="width:90px"
+                       min="0" step="1" value="200" onclick="this.select()">
+                <label for="maxDIS" class="form-label mb-0 fw-semibold small">Max Days Sales</label>
+                <input type="number" id="maxDIS" class="form-control form-control-sm no-spin" style="width:80px"
+                       min="1" max="90" step="1" value="90" onclick="this.select()">
+                <label for="maxDTS" class="form-label mb-0 fw-semibold small">Max DTS</label>
+                <input type="number" id="maxDTS" class="form-control form-control-sm no-spin" style="width:80px"
+                       min="1" step="1" value="45" onclick="this.select()">
+                <label for="minGPUM" class="form-label mb-0 fw-semibold small">Min GPU-M</label>
+                <input type="number" id="minGPUM" class="form-control form-control-sm no-spin" style="width:90px"
+                       min="0" step="1" value="0" onclick="this.select()">
+                <button id="refreshTableBtn" class="btn btn-primary btn-sm" onclick="refreshTable()">
+                    <i class="fas fa-filter me-1"></i>Apply Filters
+                </button>
+                <button class="btn btn-outline-secondary btn-sm" onclick="resetApplyFilters()">Reset to Default</button>
+                <span id="filtered-sales-label" class="small text-muted"></span>
+            </div>
+
+            <div class="mb-2 small text-muted">
+                <span id="idealTotalLabel"></span>
+                &nbsp;&nbsp;|&nbsp;&nbsp;
+                Sum of Positives: <strong id="required-sum-inline">—</strong>
+            </div>
+
+            <div id="filtered-cap-count" class="small text-muted mb-2"></div>
+            <div id="filter-bar" class="d-flex flex-wrap mb-2 align-items-center" style="gap:0">
+                <div class="d-flex align-items-center gap-1 flex-wrap filter-group">
+                    <span class="fw-semibold small me-1">Price Band</span>
+                    <button class="btn btn-sm btn-dark filter-btn" data-group="band" data-value="All">All</button>
+                    <button class="btn btn-sm btn-outline-secondary filter-btn" data-group="band" data-value="<10k">&lt;10k</button>
+                    <button class="btn btn-sm btn-outline-secondary filter-btn" data-group="band" data-value="10-12.5k">10-12.5k</button>
+                    <button class="btn btn-sm btn-outline-secondary filter-btn" data-group="band" data-value="12.5-15k">12.5-15k</button>
+                    <button class="btn btn-sm btn-outline-secondary filter-btn" data-group="band" data-value="15-20k">15-20k</button>
+                    <button class="btn btn-sm btn-outline-secondary filter-btn" data-group="band" data-value="20-25k">20-25k</button>
+                    <button class="btn btn-sm btn-outline-secondary filter-btn" data-group="band" data-value="25-30k">25-30k</button>
+                    <button class="btn btn-sm btn-outline-secondary filter-btn" data-group="band" data-value="30k+">30k+</button>
+                    <button class="btn btn-sm btn-outline-secondary filter-btn" data-group="band" data-value="interest_free">interest_free</button>
+                </div>
+                <div class="d-flex align-items-center gap-1 flex-wrap filter-group">
+                    <span class="fw-semibold small me-1">Fuel Type</span>
+                    <button class="btn btn-sm btn-dark filter-btn" data-group="fuel" data-value="All">All</button>
+                    <button class="btn btn-sm btn-outline-secondary filter-btn" data-group="fuel" data-value="Diesel">Diesel</button>
+                    <button class="btn btn-sm btn-outline-secondary filter-btn" data-group="fuel" data-value="Electric">Electric</button>
+                    <button class="btn btn-sm btn-outline-secondary filter-btn" data-group="fuel" data-value="Hybrid">Hybrid</button>
+                    <button class="btn btn-sm btn-outline-secondary filter-btn" data-group="fuel" data-value="Petrol">Petrol</button>
+                </div>
+                <div class="d-flex align-items-center gap-1 filter-group">
+                    <span class="fw-semibold small me-1">Min Req</span>
+                    <input type="number" id="minReqInput" class="form-control form-control-sm no-spin" style="width:70px" min="0" step="1" placeholder="0" onclick="this.select()">
+                    <button class="btn btn-sm btn-outline-secondary" onclick="applyMinReqFilter()">Apply</button>
+                    <button class="btn btn-sm btn-outline-secondary" id="minReqClearBtn" style="display:none" onclick="clearMinReqFilter()">Clear</button>
+                </div>
+                <div class="d-flex align-items-center gap-1 filter-group">
+                    <span class="fw-semibold small me-1">CAP ID</span>
+                    <input type="number" id="capIdSearch" class="form-control form-control-sm no-spin" style="width:90px" placeholder="CAP ID" onclick="this.select()">
+                    <button class="btn btn-sm btn-outline-secondary" onclick="applyCapIdFilter()">Search</button>
+                    <button class="btn btn-sm btn-outline-secondary" id="capIdClearBtn" style="display:none" onclick="clearCapIdFilter()">Clear</button>
+                    <div class="filter-divider"></div>
+                    <button class="btn btn-sm btn-outline-secondary" onclick="resetTableFilters()">Clear Filters</button>
+                    <button class="btn btn-outline-secondary btn-sm ms-2" onclick="resetColWidths()">
+                        <i class="fas fa-columns me-1"></i>Reset Columns
+                    </button>
+                    <div class="d-flex align-items-center gap-1 ms-1">
+                        <span class="small text-muted">Font</span>
+                        <button class="btn btn-outline-secondary btn-sm px-2 py-0" onclick="changeFontSize(-1)">−</button>
+                        <span id="fontSizeLabel" class="small text-muted" style="min-width:28px;text-align:center"></span>
+                        <button class="btn btn-outline-secondary btn-sm px-2 py-0" onclick="changeFontSize(1)">+</button>
+                    </div>
+                    <button class="btn btn-outline-success btn-sm ms-1" onclick="exportXLSX()">
+                        <i class="fas fa-file-excel me-1"></i>Export XLSX
+                    </button>
+                </div>
+            </div>
+        <div class="mb-2 d-flex align-items-center gap-2" id="view-toggle">
+            <div class="btn-group">
+                <button id="view-btn-cap" class="btn btn-dark btn-sm" onclick="setView('cap')">CAP ID View</button>
+                <button id="view-btn-model" class="btn btn-outline-secondary btn-sm" onclick="setView('model')">Model View</button>
+            </div>
+            <button class="btn btn-primary btn-sm" onclick="applyView()">Apply</button>
+        </div>
+        </div><!-- /#data-section -->
+        </div><!-- /.controls-area -->
+        <div id="table-error" class="alert alert-danger d-none"></div>
+        <div class="data-table-wrap d-none" id="table-wrap">
+            <table id="data-table">
+                <colgroup></colgroup>
+                <thead><tr></tr></thead>
+                <tbody id="table-body"></tbody>
+                <tfoot>
+                    <tr id="totals-row-rate"></tr>
+                    <tr id="totals-row-if"></tr>
+                    <tr id="totals-row-total"></tr>
+                </tfoot>
+            </table>
+        </div>
+    </div>
+
+    <!-- Vehicle popup -->
+    <div id="vehicle-modal-backdrop" class="vehicle-modal-backdrop" style="display:none" onclick="closeVehicleModal()"></div>
+    <div id="vehicle-modal" class="vehicle-modal" style="display:none" role="dialog" aria-modal="true">
+        <div class="vehicle-modal-header">
+            <span id="vehicle-modal-title" class="vehicle-modal-title"></span>
+            <button class="vehicle-modal-close" onclick="closeVehicleModal()" aria-label="Close">&times;</button>
+        </div>
+        <div class="vehicle-modal-body">
+            <table id="vehicle-modal-table">
+                <thead>
+                    <tr>
+                        <th data-sort="deriv" data-label="Make / Model / Derivative" style="cursor:pointer">Make / Model / Derivative</th>
+                        <th data-sort="vrm" data-label="VRM" style="cursor:pointer">VRM</th>
+                        <th data-sort="status" data-label="Status" style="cursor:pointer">Status</th>
+                        <th>Apex</th>
+                        <th>Portal</th>
+                        <th data-sort="location" data-label="Location" style="cursor:pointer">Location</th>
+                        <th data-sort="delivered" data-label="Delivered" style="cursor:pointer">Delivered</th>
+                        <th data-sort="supplier" data-label="Supplier" style="cursor:pointer">Supplier</th>
+                        <th data-sort="dfr" data-label="DFR" style="cursor:pointer">DFR</th>
+                        <th data-sort="mileage" data-label="Mileage" style="cursor:pointer">Mileage</th>
+                        <th data-sort="dis" data-label="DIS" style="cursor:pointer">DIS</th>
+                        <th data-sort="dts" data-label="DTS" style="cursor:pointer">DTS</th>
+                        <th data-sort="sell_price" data-label="Sell Price" style="cursor:pointer">Sell Price</th>
+                        <th data-sort="at_ptm" data-label="AT PTM" style="cursor:pointer">AT PTM</th>
+                        <th data-sort="at_ptm_pct" data-label="AT PTM %" style="cursor:pointer">AT PTM %</th>
+                        <th data-sort="at_rating" data-label="AT Rating" style="cursor:pointer">AT Rating</th>
+                        <th data-sort="gpu_m" data-label="GPU-M" style="cursor:pointer">GPU-M</th>
+                    </tr>
+                </thead>
+                <tbody id="vehicle-modal-body"></tbody>
+            </table>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
+    <script>window.BASE_URL = "{{ BASE_URL }}";</script>
+    <script src="{{ BASE_URL }}/static/js/buying_requirements.js"></script>
+</body>
+</html>
