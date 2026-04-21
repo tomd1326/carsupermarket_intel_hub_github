@@ -3,14 +3,13 @@ import openpyxl as xl
 
 
 def read_excel_safe(file_path: str) -> pd.DataFrame:
-    wb = xl.load_workbook(file_path, read_only=True)
-    try:
-        sheet = wb.active
-        data = list(sheet.values)
-    finally:
-        wb.close()
-    cols = data[0]
-    return pd.DataFrame(data[1:], columns=cols)
+    wb = xl.load_workbook(file_path)
+    sheet = wb.active
+    data = sheet.values
+    cols = next(data)
+    data = list(data)
+    wb.close()
+    return pd.DataFrame(data, columns=cols)
 
 
 def read_dataframe_file(input_file_path: str) -> pd.DataFrame:
