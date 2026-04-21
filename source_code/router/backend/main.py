@@ -4,9 +4,8 @@ import re
 
 from fastapi import FastAPI, Request, Form, Depends, HTTPException
 from fastapi.templating import Jinja2Templates
-from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
-from fastapi.staticfiles import StaticFiles
 from starlette.middleware.sessions import SessionMiddleware
 from starlette.status import HTTP_401_UNAUTHORIZED
 from mangum import Mangum
@@ -37,7 +36,6 @@ logging.getLogger('s3transfer').setLevel(logging.CRITICAL)
 logging.getLogger('urllib3').setLevel(logging.CRITICAL)
 logging.getLogger('asyncio').setLevel(logging.CRITICAL)
 logging.getLogger('multipart').setLevel(logging.CRITICAL)
-logging.getLogger('snowflake').setLevel(logging.WARNING)
 
 
 class BasePathMiddleware(BaseHTTPMiddleware):
@@ -144,11 +142,6 @@ def test_execution(data: dict):
 
 app.include_router(router.router)
 app.add_exception_handler(Exception, unhandled_exception_handler)
-app.mount("/static", StaticFiles(directory=os.path.join(os.path.dirname(__file__), "static")), name="static")
-
-@app.get("/favicon.ico", include_in_schema=False)
-async def favicon():
-    return FileResponse(os.path.join(os.path.dirname(__file__), "static", "icon.png"))
 
 # TODO: probably it's more correct to put api_gateway_base_path="/dev" here
 handler = Mangum(app, lifespan="auto")
@@ -160,4 +153,4 @@ lambda_requests_manager.init(mangum_handler=handler)
 if __name__ == '__main__':
     import uvicorn
     print('Running local server')
-    uvicorn.run('main:app', host="127.0.0.1", port=8080, reload=True, workers=1)
+    uvicorn.run('main:app', host="0.0.0.0", port=8080, reload=True, workers=1)

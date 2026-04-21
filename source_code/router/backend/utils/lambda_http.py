@@ -71,7 +71,7 @@ class LambdaRequestsManager(metaclass=Singleton):
         print(f"Simulating HTTP request: {event}")
 
         # If we are locally testing the Lambda function, we can invoke it directly
-        if os.getenv('LOCAL_ENV') == '1' or aws_context is None:
+        if os.getenv('LOCAL_ENV') == '1':
             logger.info('Running locally')
             print('Running locally')
             loop = asyncio.new_event_loop()
