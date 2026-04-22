@@ -577,12 +577,13 @@ def read_tasks(request: Request, page: Optional[int] = 1, page_size: Optional[in
         'suppliers': suppliers,
         "total_pages": total_pages,
         "current_page": page,
-        'BASE_URL': BASE_URL
+        'BASE_URL': BASE_URL,
+        'is_dev': os.getenv('AWS_REGION') != 'eu-west-1'
     })
 
 
 @router.post("/upload-task")
-async def upload_task(request: Request, fileBase64: str = Form(...), supplier_id: str = Form(...), filename: str = Form(...), user: str = Depends(get_current_user)):
+async def upload_task(request: Request, fileBase64: str = Form(...), supplier_id: str = Form(...), filename: str = Form(...), cap_workers: int = Form(20), cap_rate_limit: int = Form(100), user: str = Depends(get_current_user)):
     if not user:
         return RedirectResponse(url=BASE_URL + "/login", status_code=303)
 
@@ -626,13 +627,13 @@ async def upload_task(request: Request, fileBase64: str = Form(...), supplier_id
         aws_context = request.scope["aws.context"] if "aws.context" in request.scope else None
         if aws_context is None:
             import asyncio
-            asyncio.create_task(elaborate_task({'task_id': task_id}))
+            asyncio.create_task(elaborate_task({'task_id': task_id, 'cap_workers': cap_workers, 'cap_rate_limit': cap_rate_limit}))
         else:
             LambdaRequestsManager().simulate_http(
                 aws_context=aws_context,
                 path=BASE_URL + "/elaborate-task",
                 method="POST",
-                data={'task_id': task_id},
+                data={'task_id': task_id, 'cap_workers': cap_workers, 'cap_rate_limit': cap_rate_limit},
             )
     finally:
         try:
@@ -648,12 +649,17 @@ def download_task_file(task_id: str):
     # Get task info from the db
     with get_database_connection() as conn:
         with conn.cursor() as cursor:
-            cursor.execute("SELECT * FROM tasks WHERE task_id = %s", (task_id,))
+            cursor.execute("SELECT t.*, s.supplier_name FROM tasks t LEFT JOIN suppliers s ON s.supplier_id = t.supplier_id WHERE t.task_id = %s", (task_id,))
             cols = [desc[0] for desc in cursor.description]
             task = dict(zip(cols, cursor.fetchone()))
 
     if not task:
         return {"message": "Task not found"}
+
+    _supplier_prefixes = {'enterprise': 'Enterprise', '1link': '1link', 'motability': 'Motability'}
+    supplier_name = (task.get('supplier_name') or '').strip()
+    prefix = _supplier_prefixes.get(supplier_name.lower(), '')
+    prefix = f'{prefix}_' if prefix else ''
 
     file_ext = task['filename'].split('.')[-1]
     fd, tmp_path = tempfile.mkstemp(suffix='.' + file_ext)
@@ -661,8 +667,16 @@ def download_task_file(task_id: str):
     env = 'prod' if os.getenv('AWS_REGION') == 'eu-west-1' else 'dev'
     s3_location = f'applications/pricing/uk-vehicle-list-evaluator/{env}/elaborated/{task["task_id"]}.{file_ext}'
     download_file(tmp_path, s3_bucketname, s3_location)
-    output_filename = task['filename'].split('.')[0] + '_output.' + file_ext
+    output_filename = prefix + task['filename'].split('.')[0] + '_output.' + file_ext
     return FileResponse(tmp_path, filename=output_filename, media_type='application/octet-stream')
+
+@router.get("/delete-task/{task_id}")
+def delete_task(task_id: str, user: str = Depends(get_current_user)):
+    with get_database_connection() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute("DELETE FROM tasks WHERE task_id = %s AND status = 'pending'", (task_id,))
+        conn.commit()
+    return RedirectResponse(url=BASE_URL + "/tasks", status_code=303)
 
 @router.get("/trigger-elaborate-task")
 async def trigger_elaborate_task(request: Request, user: str = Depends(get_current_user)):
@@ -717,17 +731,21 @@ async def elaborate_task(data: dict):
             input_df = read_dataframe_file(tmp_in)
             total_rows = len(input_df)
 
+            cap_workers = int(data.get('cap_workers', 20))
+            cap_rate_limit = int(data.get('cap_rate_limit', 100))
+            logger.info(f"CAP settings: workers={cap_workers}, rate_limit={cap_rate_limit}")
+
             autotrader = AutoTraderClient()
             cap_client = CAPClient()
             columns_mapper = get_columns_mapper(task['supplier_name'])
 
             def process_df(args):
-                processor_obj, input_df, columns_mapper = args
-                return processor_obj.process_file(input_df, columns_mapper)
+                processor_obj, input_df, columns_mapper, *kwargs = args
+                return processor_obj.process_file(input_df, columns_mapper, *kwargs)
 
             with ThreadPoolExecutor(max_workers=2) as executor:
                 futures = [executor.submit(process_df, (autotrader, input_df, columns_mapper)),
-                           executor.submit(process_df, (cap_client, input_df, columns_mapper))]
+                           executor.submit(process_df, (cap_client, input_df, columns_mapper, cap_workers, cap_rate_limit))]
                 results = [future.result() for future in futures]
 
             processed_df = pd.concat([input_df, *results], axis=1)

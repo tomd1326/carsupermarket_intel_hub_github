@@ -48,21 +48,21 @@ const TOTAL_UNITS = COL_UNITS.reduce((a, b) => a + b, 0);
 
 // Font / column sizing — scale together
 const BASE_FONT_PX  = 12;
-const BASE_FIXED_PX = 70;
-const BASE_DESC_PX  = 575;
-const BASE_OVERRIDE = { 2: 60, 3: 46, 8: 79, 10: 82 }; // View, Fuel narrow, Required wider, Remaining wider
-const FONT_STEP     = 1;  // px per click
+const BASE_FIXED_PX = 65;
+const BASE_DESC_PX  = 552;
+const BASE_OVERRIDE = { 2: 60, 3: 46, 8: 78, 9: 65.5, 10: 79.5 }; // View, Fuel narrow, Required wider, Remaining wider
+const FONT_STEP     = 0.5; // px per click
 const FONT_MIN      = 8;
 const FONT_MAX      = 16;
 
-let currentFontPx = BASE_FONT_PX; // 12px default
+let currentFontPx = BASE_FONT_PX; // 11.5px default
 
 function scaledFixed()    { return Math.round(BASE_FIXED_PX * currentFontPx / BASE_FONT_PX); }
 function scaledDesc()     { return Math.round(BASE_DESC_PX  * currentFontPx / BASE_FONT_PX); }
 function scaledOverride(i){ return Math.round((BASE_OVERRIDE[i] ?? BASE_FIXED_PX) * currentFontPx / BASE_FONT_PX); }
 
 function changeFontSize(delta) {
-    currentFontPx = Math.min(FONT_MAX, Math.max(FONT_MIN, currentFontPx + delta));
+    currentFontPx = Math.min(FONT_MAX, Math.max(FONT_MIN, Math.round((currentFontPx + delta * FONT_STEP) * 10) / 10));
     document.getElementById('fontSizeLabel').textContent = currentFontPx + 'px';
     colWidths = new Array(COL_UNITS.length).fill(null); // reset manual resizes
     applyColWidths();
@@ -465,7 +465,7 @@ function aggregateRawData() {
             g.stock,                                    // 3
             g.sales90,                                  // 4
             null,                                       // 5 pct — set in renderTable
-            0,                                          // 6 today's buying — set by SP
+            null,                                       // 6 today's buying — set by SP
             g.sales7,                                   // 7
             avg(g.dis_sum,       g.dis_n),              // 8  avg DIS
             avg(g.dts_sum,       g.dts_n),              // 9  avg DTS
@@ -558,7 +558,7 @@ function aggregateModelData() {
             g.stock,
             g.sales90,
             null,
-            0,
+            null,
             g.sales7,
             avg(g.dis_sum,       g.dis_n),
             avg(g.dts_sum,       g.dts_n),

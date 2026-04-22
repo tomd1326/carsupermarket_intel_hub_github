@@ -2,7 +2,6 @@ import datetime
 import io
 import logging
 import os
-import time
 from concurrent.futures import ThreadPoolExecutor
 from threading import Lock
 import functools
@@ -107,9 +106,7 @@ class AutoTraderClient(metaclass=Singleton):
         }
 
         with self.limiter:
-            s = time.time()
             valuations_response = session.post(valuations_url, json=valuations_payload, headers=headers)
-            logger.info(f"Valuations API call for VRM {vrm} took {round(time.time() - s, 4)} seconds")
 
             if valuations_response.status_code == 200:
                 return valuations_response.json()
@@ -143,7 +140,6 @@ class AutoTraderClient(metaclass=Singleton):
                          extra={'extra_vrm': vrm})
 
     def process_row(self, row: dict, session, column_mapper: BaseColumnsMapper) -> dict:
-        start_time = time.time()
         # Initialize VRM and Mileage with default values
         # vrm = ''
         # mileage = ''
@@ -163,7 +159,6 @@ class AutoTraderClient(metaclass=Singleton):
         #     if 'mile' in lower_key and not mileage:
         #         mileage = row[key]
 
-        logger.debug(f'Processing row with VRM {vehicle.vrm} and Mileage {vehicle.mileage}')
 
         try:
             # Initialize all variables to default values
@@ -188,9 +183,7 @@ class AutoTraderClient(metaclass=Singleton):
 
             headers = {'Authorization': f'Bearer {access_token}'}
 
-            s = time.time()
             vehicles_data = self.send_vehicles_post_request(session, headers, vehicle.vrm, vehicle.mileage)
-            logger.info(f"Vehicles API call for VRM {vehicle.vrm} took {round(time.time() - s, 4)} seconds")
 
             # Check if vehicles_data is None and handle it without logging an error
             if vehicles_data is not None:
@@ -260,8 +253,6 @@ class AutoTraderClient(metaclass=Singleton):
             else:
                 logger.error(f'Error processing row with VRM {vehicle.vrm}: valuations_data is None or Valuations API call failed',
                               extra={'extra_vrm': vehicle.vrm})
-
-            processing_time = time.time() - start_time
 
             return {
                 'description': description,  # Vehicle description

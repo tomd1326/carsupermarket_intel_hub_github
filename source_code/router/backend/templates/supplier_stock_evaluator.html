@@ -52,21 +52,33 @@
                 <input class="form-control" type="file" id="fileUpload" name="filename">
                 <input type="hidden" id="fileBase64" name="fileBase64">
             </div>
+            {% if is_dev %}
+            <div class="mb-3 d-flex gap-4">
+                <div>
+                    <label for="capWorkers" class="form-label">CAP workers <small class="text-muted">(dev only)</small></label>
+                    <input class="form-control" type="number" id="capWorkers" name="cap_workers" value="20" min="1" max="40" style="width: 100px;">
+                </div>
+                <div>
+                    <label for="capRateLimit" class="form-label">Rate limit (req/s) <small class="text-muted">(dev only)</small></label>
+                    <input class="form-control" type="number" id="capRateLimit" name="cap_rate_limit" value="100" min="1" max="500" style="width: 100px;">
+                </div>
+            </div>
+            {% endif %}
             <button type="submit" class="btn btn-primary">Submit</button>
         </form>
 
         <div class="d-flex justify-content-between align-items-center mt-5">
-        <h2>Task List</h2>
-        <div class="d-flex align-items-center">
+        <div class="d-flex align-items-center gap-2">
+            <h2 class="mb-0">Task List</h2>
+            <button class="btn btn-outline-secondary" onclick="location.reload()">
+                <i class="fas fa-sync-alt"></i>
+            </button>
             {% if at_least_one_pending %}
-                <div class="form-check me-2">
+                <div class="form-check ms-1">
                     <input type="checkbox" class="form-check-input" id="auto-refresh-checkbox" checked>
                     <label class="form-check-label countdown-label" for="auto-refresh-checkbox">Auto-refresh in <span id="countdown">5</span></label>
                 </div>
             {% endif %}
-            <button class="btn btn-outline-secondary" onclick="location.reload()">
-                <i class="fas fa-sync-alt"></i>
-            </button>
         </div>
     </div>
 
@@ -108,6 +120,7 @@
                             <a href="{{ BASE_URL }}/trigger-elaborate-task?task_id={{ task.task_id }}" class="btn btn-outline-dark reprocess-link" data-task_id="{{ task.task_id }}" title="Re-process"><i class="fa fa-redo"></i></a>
                         {% else %}
                             <a href="#" class="btn btn-outline-dark disabled" aria-disabled="true"><i class="fa fa-redo"></i></a>
+                            <a href="{{ BASE_URL }}/delete-task/{{ task.task_id }}" class="btn btn-outline-danger" title="Delete pending task" onclick="return confirm('Delete this pending task?')"><i class="fa fa-trash"></i></a>
                         {% endif %}
                 </tr>
                 {% endfor %}

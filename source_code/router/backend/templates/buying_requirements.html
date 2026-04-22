@@ -13,7 +13,7 @@
 <body>
     <div id="resize-ghost"></div>
 
-    <div class="container-fluid mt-4 px-4">
+    <div class="container-fluid mt-3 px-4">
     <div class="controls-area">
         <div class="d-flex align-items-center gap-3 mb-2">
             <h2 class="mb-0">Buying Requirements</h2>
@@ -64,15 +64,10 @@
                 </button>
                 <button class="btn btn-outline-secondary btn-sm" onclick="resetApplyFilters()">Reset to Default</button>
                 <span id="filtered-sales-label" class="small text-muted"></span>
+                <div style="width:1.5px;height:1em;background:#94a3b8;align-self:center;flex-shrink:0"></div>
+                <span class="small text-muted"><span id="idealTotalLabel"></span>&nbsp;&nbsp;|&nbsp;&nbsp;Sum of Positives: <strong id="required-sum-inline">—</strong></span>
             </div>
 
-            <div class="mb-2 small text-muted">
-                <span id="idealTotalLabel"></span>
-                &nbsp;&nbsp;|&nbsp;&nbsp;
-                Sum of Positives: <strong id="required-sum-inline">—</strong>
-            </div>
-
-            <div id="filtered-cap-count" class="small text-muted mb-2"></div>
             <div id="filter-bar" class="d-flex flex-wrap mb-2 align-items-center" style="gap:0">
                 <div class="d-flex align-items-center gap-1 flex-wrap filter-group">
                     <span class="fw-semibold small me-1">Price Band</span>
@@ -106,19 +101,8 @@
                     <button class="btn btn-sm btn-outline-secondary" onclick="applyCapIdFilter()">Search</button>
                     <button class="btn btn-sm btn-outline-secondary" id="capIdClearBtn" style="display:none" onclick="clearCapIdFilter()">Clear</button>
                     <div class="filter-divider"></div>
+                    <span id="filtered-cap-count" class="small text-muted"></span>
                     <button class="btn btn-sm btn-outline-secondary" onclick="resetTableFilters()">Clear Filters</button>
-                    <button class="btn btn-outline-secondary btn-sm ms-2" onclick="resetColWidths()">
-                        <i class="fas fa-columns me-1"></i>Reset Columns
-                    </button>
-                    <div class="d-flex align-items-center gap-1 ms-1">
-                        <span class="small text-muted">Font</span>
-                        <button class="btn btn-outline-secondary btn-sm px-2 py-0" onclick="changeFontSize(-1)">−</button>
-                        <span id="fontSizeLabel" class="small text-muted" style="min-width:28px;text-align:center"></span>
-                        <button class="btn btn-outline-secondary btn-sm px-2 py-0" onclick="changeFontSize(1)">+</button>
-                    </div>
-                    <button class="btn btn-outline-success btn-sm ms-1" onclick="exportXLSX()">
-                        <i class="fas fa-file-excel me-1"></i>Export XLSX
-                    </button>
                 </div>
             </div>
         <div class="mb-2 d-flex align-items-center gap-2" id="view-toggle">
@@ -127,11 +111,23 @@
                 <button id="view-btn-model" class="btn btn-outline-secondary btn-sm" onclick="setView('model')">Model View</button>
             </div>
             <button class="btn btn-primary btn-sm" onclick="applyView()">Apply</button>
+            <button class="btn btn-outline-secondary btn-sm" onclick="resetColWidths()">
+                <i class="fas fa-columns me-1"></i>Reset Columns
+            </button>
+            <div class="d-flex align-items-center gap-1">
+                <span class="small text-muted">Font</span>
+                <button class="btn btn-outline-secondary btn-sm px-2 py-0" onclick="changeFontSize(-1)">−</button>
+                <span id="fontSizeLabel" class="small text-muted" style="min-width:28px;text-align:center"></span>
+                <button class="btn btn-outline-secondary btn-sm px-2 py-0" onclick="changeFontSize(1)">+</button>
+            </div>
+            <button class="btn btn-outline-success btn-sm" onclick="exportXLSX()">
+                <i class="fas fa-file-excel me-1"></i>Export XLSX
+            </button>
         </div>
         </div><!-- /#data-section -->
         </div><!-- /.controls-area -->
         <div id="table-error" class="alert alert-danger d-none"></div>
-        <div class="data-table-wrap d-none" id="table-wrap">
+        <div class="data-table-wrap d-none mt-3" id="table-wrap">
             <table id="data-table">
                 <colgroup></colgroup>
                 <thead><tr></tr></thead>

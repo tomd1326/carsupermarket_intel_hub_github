@@ -124,7 +124,6 @@ class CAPClient(metaclass=Singleton):
 
     def fetch_and_parse_data(self, url, payload, vrm=''):
         endpoint = url.split('/')[-1]
-        logger.debug(f"Fetching {endpoint} for {vrm}")
         response = self._post_with_retry(url, payload, label=f"{vrm} {endpoint}")
         response.raise_for_status()
 
@@ -379,11 +378,12 @@ class CAPClient(metaclass=Singleton):
 
         return output.dict()
 
-    def process_file(self, input_df: pd.DataFrame, column_mapper: BaseColumnsMapper) -> pd.DataFrame:
+    def process_file(self, input_df: pd.DataFrame, column_mapper: BaseColumnsMapper, max_workers: int = 20, rate_limit: int = 100) -> pd.DataFrame:
         processed_rows = []
         self._retry_count = 0
+        self.limiter = RateLimiter(rate_limit=rate_limit, time_window=1)
 
-        with ThreadPoolExecutor(max_workers=20) as executor:
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
             for index, row in input_df.iterrows():
                 processed_rows.append(executor.submit(self.process_row, row, column_mapper))
 
