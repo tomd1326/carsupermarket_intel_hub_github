@@ -50,6 +50,7 @@ logger = logging.getLogger(__name__)
 
 # Generic initialization
 s3_bucketname = 'aa-raw-sources-uk'
+s3_bucket_region = 'eu-west-1'  # bucket is always in eu-west-1 regardless of Lambda region
 
 
 def get_current_user(request: Request):
@@ -906,7 +907,7 @@ def enterprise_email_create_task(
             conn.commit()
     import boto3
     s3_key = f"applications/pricing/uk-vehicle-list-evaluator/{_S3_ENV}/raw/{task_id}.{file_ext}"
-    presigned_url = boto3.client('s3').generate_presigned_url(
+    presigned_url = boto3.client('s3', region_name=s3_bucket_region).generate_presigned_url(
         'put_object',
         Params={'Bucket': s3_bucketname, 'Key': s3_key},
         ExpiresIn=300
