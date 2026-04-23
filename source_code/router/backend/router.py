@@ -908,7 +908,7 @@ def enterprise_email_create_task(
     s3_key = f"applications/pricing/uk-vehicle-list-evaluator/{_S3_ENV}/raw/{task_id}.{file_ext}"
     presigned_url = boto3.client('s3').generate_presigned_url(
         'put_object',
-        Params={'Bucket': s3_bucketname, 'Key': s3_key, 'ContentType': 'application/octet-stream'},
+        Params={'Bucket': s3_bucketname, 'Key': s3_key},
         ExpiresIn=300
     )
     logger.info(f"Enterprise email: created task_id={task_id}, file={filename}")
