@@ -49,7 +49,7 @@ const TOTAL_UNITS = COL_UNITS.reduce((a, b) => a + b, 0);
 // Font / column sizing — scale together
 const BASE_FONT_PX  = 12;
 const BASE_FIXED_PX = 65;
-const BASE_DESC_PX  = 552;
+const BASE_DESC_PX  = 541;
 const BASE_OVERRIDE = { 2: 60, 3: 46, 8: 78, 9: 65.5, 10: 79.5 }; // View, Fuel narrow, Required wider, Remaining wider
 const FONT_STEP     = 0.5; // px per click
 const FONT_MIN      = 8;
@@ -122,7 +122,7 @@ function _setApexUpdatedAt(rows) {
 }
 
 /* ── Filters ─────────────────────────────────────────────── */
-let filterBand = new Set(['All']), filterFuel = new Set(['All']), filterCapId = null, filterMinReq = null;
+let filterBand = new Set(['All']), filterFuel = new Set(['All']), filterCapId = null, filterMinReq = null, filterModel = null;
 
 function resetTableFilters() {
     // Reset band
@@ -143,6 +143,12 @@ function resetTableFilters() {
     if (capInp) capInp.value = '';
     const capClear = document.getElementById('capIdClearBtn');
     if (capClear) capClear.style.display = 'none';
+    // Reset Model
+    filterModel = null;
+    const modelInp = document.getElementById('modelSearch');
+    if (modelInp) modelInp.value = '';
+    const modelClear = document.getElementById('modelClearBtn');
+    if (modelClear) modelClear.style.display = 'none';
     // Reset Min Req
     filterMinReq = null;
     const reqInp = document.getElementById('minReqInput');
@@ -187,9 +193,31 @@ function clearCapIdFilter() {
     if (tableData.length) applyFilter();
 }
 
+function applyModelFilter() {
+    const val = document.getElementById('modelSearch').value.trim().toLowerCase();
+    filterModel = val.length > 0 ? val : null;
+const clearBtn = document.getElementById('modelClearBtn');
+    if (clearBtn) clearBtn.style.display = filterModel !== null ? '' : 'none';
+    if (tableData.length) applyFilter();
+}
+
+function clearModelFilter() {
+    filterModel = null;
+    const inp = document.getElementById('modelSearch');
+    if (inp) inp.value = '';
+    const clearBtn = document.getElementById('modelClearBtn');
+    if (clearBtn) clearBtn.style.display = 'none';
+    if (tableData.length) applyFilter();
+}
+
+document.addEventListener('keydown', e => {
+    if (e.key !== 'Enter') return;
+    const id = e.target.id;
+    if (id === 'capIdSearch') applyCapIdFilter();
+    else if (id === 'modelSearch') applyModelFilter();
+});
+
 document.addEventListener('DOMContentLoaded', () => {
-    const inp = document.getElementById('capIdSearch');
-    if (inp) inp.addEventListener('keydown', e => { if (e.key === 'Enter') applyCapIdFilter(); });
     const lbl = document.getElementById('fontSizeLabel');
     if (lbl) lbl.textContent = currentFontPx + 'px';
 });
@@ -225,11 +253,12 @@ function applyFilter() {
         const band = row[22] ?? String(row[1] ?? '').split(' / ').pop().trim();
         const fuel = normFuel(row[2]);
         const req = row[19] != null ? Math.round(Number(row[19])) : null;
-        const visible = filterCapId !== null
+        const passModel = filterModel === null || String(row[1] ?? '').toLowerCase().includes(filterModel);
+        const visible = passModel && (filterCapId !== null
             ? Number(row[0]) === filterCapId
             : (filterBand.has('All') || filterBand.has(band)) &&
               (filterFuel.has('All') || filterFuel.has(fuel)) &&
-              (filterMinReq === null || (req !== null && req >= filterMinReq));
+              (filterMinReq === null || (req !== null && req >= filterMinReq)));
         tr.style.display = visible ? '' : 'none';
         if (visible) visibleRows.push(row);
     });
@@ -361,6 +390,9 @@ function setView(view) {
 
 function applyView() {
     if (!rawData.length) return;
+    const btn = document.getElementById('applyViewBtn');
+    if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spinner-border spinner-border-sm me-2"></span>Loading...'; }
+    requestAnimationFrame(() => setTimeout(() => {
     currentView = pendingView;
     rebuildTheadTfoot();
     colWidths = new Array(COL_UNITS.length).fill(null);
@@ -375,6 +407,8 @@ function applyView() {
         sortCol = null; sortDir = 1;
         sortTable(21, 'num');
     }
+    if (btn) { btn.disabled = false; btn.innerHTML = 'Apply'; }
+    }, 0));
 }
 
 /* ── Aggregate raw per-vehicle rows into per-derivative rows ─
@@ -815,7 +849,7 @@ function renderTable() {
             return td;
         };
         if (currentView === 'cap') add(row[0] ?? '');
-        { const td = add(row[1] ?? ''); td.classList.add('col-left'); }
+        { const td = add((row[1] ?? '').replace('interest_free', '0%')); td.classList.add('col-left'); }
         if (currentView === 'cap') {
             const td = document.createElement('td');
             td.style.cssText = 'padding:0.18em 0.3em;text-align:center;vertical-align:middle';

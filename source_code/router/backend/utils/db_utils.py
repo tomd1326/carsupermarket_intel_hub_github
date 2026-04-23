@@ -1,8 +1,13 @@
+import logging
 import os
 import psycopg2
 import psycopg2.extras
 from contextlib import contextmanager
+from botocore.exceptions import UnauthorizedSSOTokenError
+from fastapi import HTTPException
 from utils.secrets_manager_client import get_secret
+
+logger = logging.getLogger(__name__)
 
 
 def get_db_credentials():
@@ -29,8 +34,11 @@ def get_db_credentials():
 
 @contextmanager
 def get_database_connection():
-
-    db_credentials = get_db_credentials()
+    try:
+        db_credentials = get_db_credentials()
+    except UnauthorizedSSOTokenError:
+        logger.error("AWS SSO session has expired. Run: aws sso login")
+        raise HTTPException(status_code=503, detail="AWS SSO session has expired. Run: aws sso login")
 
     connection = psycopg2.connect(
         host=db_credentials['host'],
