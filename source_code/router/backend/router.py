@@ -140,7 +140,7 @@ def read_tasks(request: Request, page: Optional[int] = 1, page_size: Optional[in
 
 
 @router.post("/upload-task")
-async def upload_task(request: Request, fileBase64: str = Form(...), supplier_id: str = Form(...), filename: str = Form(...), user: str = Depends(get_current_user)):
+async def upload_task(request: Request, fileBase64: str = Form(...), supplier_id: str = Form(...), filename: str = Form(...), cap_workers: int = Form(25), cap_rate_limit: int = Form(100), user: str = Depends(get_current_user)):
     if not user:
         return RedirectResponse(url=BASE_URL + "/login", status_code=303)
 
@@ -188,6 +188,8 @@ async def upload_task(request: Request, fileBase64: str = Form(...), supplier_id
             method="POST",
             data={
                 'task_id': task_id,
+                'cap_workers': cap_workers,
+                'cap_rate_limit': cap_rate_limit,
             }
         )
     finally:
@@ -273,17 +275,21 @@ async def elaborate_task(data: dict):
             autotrader = AutoTraderClient()
             cap_client = CAPClient()
 
+            cap_workers = int(data.get('cap_workers', 25))
+            cap_rate_limit = int(data.get('cap_rate_limit', 100))
+            logger.info(f"CAP settings: workers={cap_workers}, rate_limit={cap_rate_limit}")
+
             # Columns mapper
             columns_mapper = get_columns_mapper(task['supplier_name'])
 
             def process_df(args):
-                processor_obj, input_df, columns_mapper = args
-                return processor_obj.process_file(input_df, columns_mapper)
+                processor_obj, input_df, columns_mapper, *kwargs = args
+                return processor_obj.process_file(input_df, columns_mapper, *kwargs)
 
             # Using ThreadPoolExecutor
             with ThreadPoolExecutor(max_workers=2) as executor:
                 futures = [executor.submit(process_df, (autotrader, input_df, columns_mapper)),
-                           executor.submit(process_df, (cap_client, input_df, columns_mapper))]
+                           executor.submit(process_df, (cap_client, input_df, columns_mapper, cap_workers, cap_rate_limit))]
                 results = [future.result() for future in futures]
 
             processed_df = pd.concat([input_df, *results], axis=1)

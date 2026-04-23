@@ -1,4 +1,5 @@
 from concurrent.futures import ThreadPoolExecutor
+import threading
 
 import logging
 import xml.etree.ElementTree as ET
@@ -10,6 +11,7 @@ from list_processor.structs import VehicleRow
 from list_processor.columns_mapper import BaseColumnsMapper
 from typing import Optional, Tuple
 import datetime
+import time
 import requests
 import os
 import re
@@ -66,6 +68,10 @@ class CAPClient(metaclass=Singleton):
         # Rate limiter
         self.limiter = RateLimiter(rate_limit=100, time_window=1)
 
+        self._retry_count = 0
+        self._retry_lock = threading.Lock()
+        self._local = threading.local()
+
     @classmethod
     def is_excel_date_format(cls, date_str):
         try:
@@ -90,15 +96,35 @@ class CAPClient(metaclass=Singleton):
     def round_to_nearest_25(cls, value):
         return round(value / 25) * 25
 
-    def fetch_and_parse_data(self, url, payload):
-        with self.limiter:
-            logger.debug(f"Fetching data from {url}")
-            response = requests.post(
-                url,
-                headers={'Content-Type': 'application/x-www-form-urlencoded'},
-                data=payload,
-                timeout=15
-            )
+    @property
+    def _session(self):
+        if not hasattr(self._local, 'session'):
+            self._local.session = requests.Session()
+        return self._local.session
+
+    def _post_with_retry(self, url, payload, label='', retries=3, timeout=20):
+        _RETRYABLE = (requests.exceptions.ReadTimeout, requests.exceptions.ConnectionError)
+        for attempt in range(retries):
+            try:
+                with self.limiter:
+                    return self._session.post(
+                        url,
+                        headers={'Content-Type': 'application/x-www-form-urlencoded'},
+                        data=payload,
+                        timeout=timeout,
+                    )
+            except _RETRYABLE as e:
+                if attempt == retries - 1:
+                    raise
+                with self._retry_lock:
+                    self._retry_count += 1
+                wait = 2 ** attempt
+                logger.warning(f"CAP request failed [{label}] ({type(e).__name__}, attempt {attempt + 1}/{retries}), retrying in {wait}s")
+                time.sleep(wait)
+
+    def fetch_and_parse_data(self, url, payload, vrm=''):
+        endpoint = url.split('/')[-1]
+        response = self._post_with_retry(url, payload, label=f"{vrm} {endpoint}")
         response.raise_for_status()
 
         # Parse the XML content
@@ -176,7 +202,7 @@ class CAPClient(metaclass=Singleton):
             'regDate': vehicle.registration_date.strftime('%Y-%m-%d'),
         }
 
-        current_valuations = self.fetch_and_parse_data(self.live_valuation_url, live_payload)
+        current_valuations = self.fetch_and_parse_data(self.live_valuation_url, live_payload, vrm=vehicle.vrm)
         if not current_valuations:
             return None, None
 
@@ -201,7 +227,7 @@ class CAPClient(metaclass=Singleton):
             'StandardEquipmentRequired': False
         }
 
-        monthly_valuation_data = self.fetch_and_parse_data(self.monthly_valuation_url, old_payload)
+        monthly_valuation_data = self.fetch_and_parse_data(self.monthly_valuation_url, old_payload, vrm=vehicle.vrm)
         return monthly_valuation_data
 
     def extract_vrm_values(self, response):
@@ -262,14 +288,7 @@ class CAPClient(metaclass=Singleton):
             'StandardEquipmentRequired': 'false'
         }
 
-        with self.limiter:
-            logger.debug(f"Fetching VRM valuation for {vehicle.vrm}")
-            response = requests.post(
-                self.vrm_url,
-                headers={'Content-Type': 'application/x-www-form-urlencoded'},
-                data=vrm_payload,
-                timeout=15
-            )
+        response = self._post_with_retry(self.vrm_url, vrm_payload, label=f"{vehicle.vrm} VRMValuation")
 
         cap_vrm_response = self.extract_vrm_values(response.text)
         return {
@@ -293,6 +312,13 @@ class CAPClient(metaclass=Singleton):
             return None
 
     def process_row(self, row: pd.Series, column_mapper: BaseColumnsMapper) -> Optional[dict]:
+        try:
+            return self._process_row(row, column_mapper)
+        except (requests.exceptions.ReadTimeout, requests.exceptions.ConnectionError) as e:
+            logger.error(f"CAP request failed after all retries for {row.get('VRM', row.name)}: {type(e).__name__}")
+            return CAPOutput(note=f"CAP API error: {type(e).__name__}").dict()
+
+    def _process_row(self, row: pd.Series, column_mapper: BaseColumnsMapper) -> Optional[dict]:
 
         vehicle = column_mapper.map_row(row)
         if not vehicle:
@@ -352,15 +378,20 @@ class CAPClient(metaclass=Singleton):
 
         return output.dict()
 
-    def process_file(self, input_df: pd.DataFrame, column_mapper: BaseColumnsMapper) -> pd.DataFrame:
+    def process_file(self, input_df: pd.DataFrame, column_mapper: BaseColumnsMapper, max_workers: int = 25, rate_limit: int = 100) -> pd.DataFrame:
         processed_rows = []
+        self._retry_count = 0
+        self.limiter = RateLimiter(rate_limit=rate_limit, time_window=1)
 
-        with ThreadPoolExecutor(max_workers=40) as executor:
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
             for index, row in input_df.iterrows():
                 processed_rows.append(executor.submit(self.process_row, row, column_mapper))
 
             # Wait for all threads to finish
             processed_rows = [future.result() for future in processed_rows]
+
+        if self._retry_count:
+            logger.warning(f"CAP retries this batch: {self._retry_count}")
 
         # Filter None values
         processed_rows = [row if row is not None else {} for row in processed_rows]
