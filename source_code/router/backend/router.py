@@ -882,6 +882,59 @@ async def trigger_elaborate_task(request: Request, user: str = Depends(get_curre
 
     return RedirectResponse(url=BASE_URL + "/tasks", status_code=303)
 
+# ── Enterprise email inbox ────────────────────────────────────────────────────
+@router.post("/api/enterprise-email/create-task")
+def enterprise_email_create_task(
+    filename: str = Form(...),
+):
+    """Called by Power Automate step 1: creates a DB task and returns a presigned S3 PUT URL."""
+    file_ext = filename.split('.')[-1].lower()
+    if file_ext not in ['xlsx', 'xls']:
+        raise HTTPException(status_code=400, detail="Expected xlsx or xls")
+    with get_database_connection() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute("SELECT supplier_id FROM suppliers WHERE supplier_name = 'Enterprise' LIMIT 1")
+            row = cursor.fetchone()
+            if not row:
+                raise HTTPException(status_code=500, detail="Enterprise supplier not found in DB")
+            supplier_id = row[0]
+            cursor.execute(
+                "INSERT INTO tasks (created, status, supplier_id, filename) VALUES (%s, %s, %s, %s) RETURNING task_id",
+                (datetime.datetime.now(), 'created', supplier_id, filename)
+            )
+            task_id = cursor.fetchone()[0]
+            conn.commit()
+    import boto3
+    s3_key = f"applications/pricing/uk-vehicle-list-evaluator/{_S3_ENV}/raw/{task_id}.{file_ext}"
+    presigned_url = boto3.client('s3').generate_presigned_url(
+        'put_object',
+        Params={'Bucket': s3_bucketname, 'Key': s3_key, 'ContentType': 'application/octet-stream'},
+        ExpiresIn=300
+    )
+    logger.info(f"Enterprise email: created task_id={task_id}, file={filename}")
+    return {"task_id": task_id, "upload_url": presigned_url}
+
+
+@router.post("/api/enterprise-email/start-task")
+async def enterprise_email_start_task(
+    request: Request,
+    task_id: int = Form(...),
+):
+    """Called by Power Automate step 3: fires async elaboration after file is uploaded to S3."""
+    aws_context = request.scope["aws.context"] if "aws.context" in request.scope else None
+    if aws_context is None:
+        import asyncio
+        asyncio.create_task(elaborate_task({'task_id': task_id, 'cap_workers': 20, 'cap_rate_limit': 100}))
+    else:
+        LambdaRequestsManager().simulate_http(
+            aws_context=aws_context,
+            path=BASE_URL + "/elaborate-task",
+            method="POST",
+            data={'task_id': task_id, 'cap_workers': 20, 'cap_rate_limit': 100},
+        )
+    logger.info(f"Enterprise email: started elaborate for task_id={task_id}")
+    return {"status": "started", "task_id": task_id}
+
 @router.post("/elaborate-task")
 async def elaborate_task(data: dict):
     tmp_in = tmp_out = None
