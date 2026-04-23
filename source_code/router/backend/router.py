@@ -21,6 +21,8 @@ import hashlib
 import logging
 import datetime
 
+from botocore.config import Config
+
 from utils.lambda_http import LambdaRequestsManager
 from utils.s3_tools import upload_file, download_file
 from utils.db_utils import (get_database_connection)
@@ -907,7 +909,11 @@ def enterprise_email_create_task(
             conn.commit()
     import boto3
     s3_key = f"applications/pricing/uk-vehicle-list-evaluator/{_S3_ENV}/raw/{task_id}.{file_ext}"
-    presigned_url = boto3.client('s3', region_name=s3_bucket_region).generate_presigned_url(
+    presigned_url = boto3.client(
+        's3',
+        region_name=s3_bucket_region,
+        config=Config(signature_version='s3v4'),
+    ).generate_presigned_url(
         'put_object',
         Params={'Bucket': s3_bucketname, 'Key': s3_key},
         ExpiresIn=300
