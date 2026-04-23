@@ -10,6 +10,27 @@
     <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
     <style>
         body, button, input, select, textarea { font-family: 'DM Sans', system-ui, sans-serif; }
+        .settings-cog {
+            position: fixed;
+            top: 16px;
+            right: 20px;
+            z-index: 1050;
+            background: none;
+            border: none;
+            color: #6c757d;
+            font-size: 1.4rem;
+            cursor: pointer;
+            padding: 4px 6px;
+            border-radius: 6px;
+            transition: color 0.2s, background 0.2s;
+        }
+        .settings-cog:hover { color: #343a40; background: #e9ecef; }
+        .upload-row { font-size: 1rem; }
+        .upload-row .form-select, .upload-row .form-control { font-size: 1rem; }
+        .req-row { font-size: 0.95rem; }
+        .req-row label { font-size: 0.95rem; }
+        .req-row .form-control { font-size: 0.95rem; }
+        h4.task-list-heading { font-size: 1.1rem; font-weight: 600; }
         .status-label {
             padding: 2px 8px;
             color: white;
@@ -35,41 +56,81 @@
     </style>
 </head>
 <body>
+
+    <!-- Settings cog button -->
+    <button class="settings-cog" title="Settings" data-bs-toggle="modal" data-bs-target="#settingsModal">
+        <i class="fas fa-cog"></i>
+    </button>
+
+    <!-- Settings modal -->
+    <div class="modal fade" id="settingsModal" tabindex="-1" aria-labelledby="settingsModalLabel" aria-hidden="true">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title" id="settingsModalLabel">Settings</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="mb-3">
+                        <label for="settingsCapWorkers" class="form-label">CAP workers</label>
+                        <input class="form-control" type="number" id="settingsCapWorkers" value="20" min="1" max="40" style="width: 120px;">
+                        <div class="form-text">Default: 20 &mdash; Max: 40</div>
+                    </div>
+                    <div class="mb-3">
+                        <label for="settingsCapRateLimit" class="form-label">Rate limit (req/s)</label>
+                        <input class="form-control" type="number" id="settingsCapRateLimit" value="100" min="1" max="500" style="width: 120px;">
+                        <div class="form-text">Default: 100 &mdash; Max: 500</div>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-outline-secondary" id="settingsReset">Reset to Default</button>
+                    <button type="button" class="btn btn-primary" id="settingsApply" data-bs-dismiss="modal">Apply</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <div class="container mt-4">
         <h2>Supplier Stock Evaluator</h2>
         <form id="uploadForm" action="{{ BASE_URL }}/upload-task" method="post">
-            <div class="mb-3">
-                <label for="supplierName" class="form-label">Supplier Name:</label>
-                <select class="form-select" id="supplierName" name="supplier_id">
-                    <option selected value="None">Choose...</option>
+            <div class="upload-row d-flex align-items-center gap-3 mb-3 flex-wrap">
+                <select class="form-select" id="supplierName" name="supplier_id" style="width:200px">
+                    <option selected value="None">Supplier...</option>
                     {% for supplier in suppliers %}
                         <option value="{{ supplier.supplier_id }}">{{ supplier.supplier_name }}</option>
                     {% endfor %}
                 </select>
-            </div>
-            <div class="mb-3">
-                <label for="fileUpload" class="form-label">Upload file:</label>
-                <input class="form-control" type="file" id="fileUpload" name="filename">
+                <input class="form-control" type="file" id="fileUpload" name="filename" style="width:300px">
                 <input type="hidden" id="fileBase64" name="fileBase64">
+                <input type="hidden" id="capWorkers" name="cap_workers" value="20">
+                <input type="hidden" id="capRateLimit" name="cap_rate_limit" value="100">
+                <button type="submit" class="btn btn-primary">Submit</button>
             </div>
-            {% if is_dev %}
-            <div class="mb-3 d-flex gap-4">
-                <div>
-                    <label for="capWorkers" class="form-label">CAP workers <small class="text-muted">(dev only)</small></label>
-                    <input class="form-control" type="number" id="capWorkers" name="cap_workers" value="20" min="1" max="40" style="width: 100px;">
-                </div>
-                <div>
-                    <label for="capRateLimit" class="form-label">Rate limit (req/s) <small class="text-muted">(dev only)</small></label>
-                    <input class="form-control" type="number" id="capRateLimit" name="cap_rate_limit" value="100" min="1" max="500" style="width: 100px;">
-                </div>
-            </div>
-            {% endif %}
-            <button type="submit" class="btn btn-primary">Submit</button>
         </form>
+        <div class="req-row d-flex align-items-center gap-4 flex-wrap mb-4">
+            <a href="{{ BASE_URL }}/buying-requirements" class="btn btn-primary">Buying Requirements</a>
+            <div class="d-flex align-items-center gap-2">
+                <label for="reqNumberToBuy" class="form-label mb-0">Number to Buy</label>
+                <input class="form-control" type="number" id="reqNumberToBuy" value="200" min="0" style="width:90px" onclick="this.select()">
+            </div>
+            <div class="d-flex align-items-center gap-2">
+                <label for="reqMaxDaysSales" class="form-label mb-0">Max Days Sales</label>
+                <input class="form-control" type="number" id="reqMaxDaysSales" value="90" min="1" max="90" style="width:80px" onclick="this.select()">
+            </div>
+            <div class="d-flex align-items-center gap-2">
+                <label for="reqMaxDts" class="form-label mb-0">Max DTS</label>
+                <input class="form-control" type="number" id="reqMaxDts" value="45" min="1" style="width:80px" onclick="this.select()">
+            </div>
+            <div class="d-flex align-items-center gap-2">
+                <label for="reqMinGpuM" class="form-label mb-0">Min GPU-M</label>
+                <input class="form-control" type="number" id="reqMinGpuM" value="0" style="width:80px" onclick="this.select()">
+            </div>
+            <button class="btn btn-outline-secondary btn-sm" id="reqReset">Reset to Default</button>
+        </div>
 
-        <div class="d-flex justify-content-between align-items-center mt-5">
+        <div class="d-flex justify-content-between align-items-center mt-4">
         <div class="d-flex align-items-center gap-2">
-            <h2 class="mb-0">Task List</h2>
+            <h4 class="task-list-heading mb-0">Task List</h4>
             <button class="btn btn-outline-secondary" onclick="location.reload()">
                 <i class="fas fa-sync-alt"></i>
             </button>
@@ -85,14 +146,14 @@
         <table class="table">
             <thead>
                 <tr>
-                    <th scope="col">ID</th>
-                    <th scope="col">Created Date</th>
+                    <th scope="col">Task ID</th>
+                    <th scope="col">Created At</th>
                     <th scope="col">Supplier</th>
-                    <th scope="col">Name of the File</th>
-                    <th scope="col">Total rows, Exec. time</th>
+                    <th scope="col">Filename</th>
+                    <th scope="col">Rows</th>
+                    <th scope="col">Exec. Time</th>
                     <th scope="col">Status</th>
                     <th scope="col">Download</th>
-<!--                    <th scope="col">Re-process</th>-->
                 </tr>
             </thead>
             <tbody>
@@ -102,24 +163,26 @@
                     <td>{{ task.created.strftime("%Y-%m-%d %H:%M:%S") }}</td>
                     <td>{{ task.supplier_name }}</td>
                     <td>{{ task.filename }}</td>
-                    <td>
-                        {% if task.total_rows is none %}
-                            -
-                        {% else %}
-                            {{ task.total_rows }} rows, {{ "-" if task.execution_time is none else "%.1f" | format(task.execution_time) }} sec
-                        {% endif %}
-                    </td>
-                    <td><span class="status-label {% if task.status == 'success' %}status-success{% elif task.status == 'created' %}status-created{% elif task.status == 'pending' %}status-pending{% else %}status-error{% endif %}" title="{% if task.message %}{{ task.message }}{% endif %}">{{ task.status }}</span></td>
+                    <td>{{ task.total_rows if task.total_rows is not none else "-" }}</td>
+                    <td>{{ "%.1f" | format(task.execution_time) ~ "s" if task.execution_time is not none else "-" }}</td>
                     <td>
                         {% if task.status == 'success' %}
-                            <a href="{{ BASE_URL }}/download/{{ task.task_id }}" class="btn btn-primary download-link" data-filename="{{ task.filename }}" title="Download"><i class="fa fa-download"></i></a>
+                            <span class="status-label status-success" title="{% if task.message %}{{ task.message }}{% endif %}">Success</span>
+                        {% elif task.status == 'created' %}
+                            <span class="status-label status-created">Created</span>
+                        {% elif task.status == 'pending' %}
+                            <span class="status-label status-pending">Pending</span>
+                        {% else %}
+                            <span class="status-label status-error" title="{% if task.message %}{{ task.message }}{% endif %}">Error</span>
+                        {% endif %}
+                    </td>
+                    <td>
+                        {% if task.status == 'success' %}
+                            <a href="#" class="btn btn-primary req-btn" data-task-id="{{ task.task_id }}" title="Download with Requirements"><i class="fa fa-download"></i></a>
                         {% else %}
                             <a href="#" class="btn btn-secondary disabled" aria-disabled="true"><i class="fa fa-download"></i></a>
                         {% endif %}
-                        {% if task.status != 'pending' %}
-                            <a href="{{ BASE_URL }}/trigger-elaborate-task?task_id={{ task.task_id }}" class="btn btn-outline-dark reprocess-link" data-task_id="{{ task.task_id }}" title="Re-process"><i class="fa fa-redo"></i></a>
-                        {% else %}
-                            <a href="#" class="btn btn-outline-dark disabled" aria-disabled="true"><i class="fa fa-redo"></i></a>
+                        {% if task.status == 'pending' %}
                             <a href="{{ BASE_URL }}/delete-task/{{ task.task_id }}" class="btn btn-outline-danger" title="Delete pending task" onclick="return confirm('Delete this pending task?')"><i class="fa fa-trash"></i></a>
                         {% endif %}
                 </tr>
@@ -136,7 +199,23 @@
           </ul>
         </nav>
     </div>
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
     <script>
+        var DEFAULTS = { capWorkers: 20, capRateLimit: 100 };
+
+        function applySettings() {
+            var workers = parseInt(document.getElementById('settingsCapWorkers').value, 10);
+            var rateLimit = parseInt(document.getElementById('settingsCapRateLimit').value, 10);
+            document.getElementById('capWorkers').value = workers;
+            document.getElementById('capRateLimit').value = rateLimit;
+        }
+
+        function resetSettings() {
+            document.getElementById('settingsCapWorkers').value = DEFAULTS.capWorkers;
+            document.getElementById('settingsCapRateLimit').value = DEFAULTS.capRateLimit;
+            applySettings();
+        }
+
         function startCountdown() {
             var countdownElement = document.getElementById('countdown');
             var timeLeft = 5;
@@ -159,7 +238,32 @@
             var countdownTimer = setInterval(decrease, 1000);
         }
 
+        var REQ_DEFAULTS = { numberToBuy: 200, maxDaysSales: 90, maxDts: 45, minGpuM: 0 };
+
         document.addEventListener("DOMContentLoaded", function() {
+            document.getElementById('settingsApply').addEventListener('click', applySettings);
+            document.getElementById('settingsReset').addEventListener('click', resetSettings);
+
+            document.getElementById('reqReset').addEventListener('click', function() {
+                document.getElementById('reqNumberToBuy').value  = REQ_DEFAULTS.numberToBuy;
+                document.getElementById('reqMaxDaysSales').value = REQ_DEFAULTS.maxDaysSales;
+                document.getElementById('reqMaxDts').value       = REQ_DEFAULTS.maxDts;
+                document.getElementById('reqMinGpuM').value      = REQ_DEFAULTS.minGpuM;
+            });
+
+            document.querySelectorAll('.req-btn').forEach(function(el) {
+                el.addEventListener('click', function(e) {
+                    e.preventDefault();
+                    var params = new URLSearchParams({
+                        number_to_buy:  document.getElementById('reqNumberToBuy').value,
+                        max_days_sales: document.getElementById('reqMaxDaysSales').value,
+                        max_dts:        document.getElementById('reqMaxDts').value,
+                        min_gpu_m:      document.getElementById('reqMinGpuM').value,
+                    });
+                    window.location.href = '{{ BASE_URL }}/tasks/' + el.dataset.taskId + '/buying-requirements-download?' + params.toString();
+                });
+            });
+
             document.getElementById('uploadForm').addEventListener('submit', function (event) {
                 event.preventDefault();
 

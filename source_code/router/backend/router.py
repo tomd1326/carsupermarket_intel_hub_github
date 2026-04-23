@@ -536,6 +536,192 @@ def stream_sharepoint(request: Request, user: str = Depends(get_current_user)):
     return StreamingResponse(generate(), media_type="text/event-stream")
 
 
+@router.get("/tasks/{task_id}/buying-requirements-download")
+def task_buying_requirements_download(
+    task_id: str,
+    number_to_buy: int = 200,
+    max_days_sales: int = 90,
+    max_dts: int = 45,
+    min_gpu_m: int = 0,
+    user: str = Depends(get_current_user),
+):
+    if not user:
+        return RedirectResponse(url=BASE_URL + "/login", status_code=303)
+
+    # ── 1. Fetch task info ────────────────────────────────────────────────────
+    with get_database_connection() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                "SELECT t.*, s.supplier_name FROM tasks t "
+                "LEFT JOIN suppliers s ON s.supplier_id = t.supplier_id "
+                "WHERE t.task_id = %s",
+                (task_id,),
+            )
+            cols = [desc[0] for desc in cursor.description]
+            row = cursor.fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Task not found")
+    task = dict(zip(cols, row))
+    if task["status"] != "success":
+        raise HTTPException(status_code=400, detail="Task not complete")
+
+    # ── 2. Download elaborated file from S3 ───────────────────────────────────
+    env = "prod" if os.getenv("AWS_REGION") == "eu-west-1" else "dev"
+    file_ext = task["filename"].split(".")[-1]
+    fd, tmp_path = tempfile.mkstemp(suffix="." + file_ext)
+    os.close(fd)
+    try:
+        s3_key = f"applications/pricing/uk-vehicle-list-evaluator/{env}/elaborated/{task_id}.{file_ext}"
+        download_file(tmp_path, s3_bucketname, s3_key)
+        elaborated_df = read_dataframe_file(tmp_path)
+    finally:
+        try:
+            os.remove(tmp_path)
+        except OSError:
+            pass
+
+    # ── 3. Build per-CAP-ID requirements lookup from SF data ─────────────────
+    # SF row indices:
+    #   0:cap_id  4:stock  5:sales90  6:sales7  8:dts  22:gpu_m_resolved
+    sf_rows = _get_sf_rows()
+
+    # Aggregate per CAP ID — same logic as JS aggregateRawData
+    # SF row indices:
+    #   0:cap_id  4:stock  5:sales90  6:sales7  7:dis  8:dts  9:gpu_m  10:gpu_s  11:gpu_ms
+    #   13:sell_price  14:at_val  15:at_pct  16:at_rating  22:gpu_m_resolved
+    # DIS/DTS/sell/AT averaged only when sales90==1 (sold vehicles), GPU averaged across all passing
+    cap_data: dict = {}
+    for r in sf_rows:
+        cap_id  = r[0]
+        stock   = float(r[4]  or 0)
+        sales90 = float(r[5]  or 0)
+        sales7  = float(r[6]  or 0)
+        dis     = float(r[7])  if r[7]  is not None else None
+        dts     = float(r[8])  if r[8]  is not None else None
+        gpu_m   = float(r[22]) if r[22] is not None else None
+        gpu_s   = float(r[10]) if r[10] is not None else None
+        gpu_ms  = float(r[11]) if r[11] is not None else None
+        sell    = float(r[13]) if r[13] is not None else None
+        at_val  = float(r[14]) if r[14] is not None else None
+        at_rate = float(r[16]) if r[16] is not None else None
+
+        if cap_id not in cap_data:
+            cap_data[cap_id] = {
+                "stock": 0.0, "sales_xxd": 0.0, "sales_7": 0.0,
+                "dis_sum": 0.0, "dis_n": 0,
+                "dts_sum": 0.0, "dts_n": 0,
+                "sell_sum": 0.0, "sell_n": 0,
+                "at_val_sum": 0.0, "at_val_n": 0,
+                "at_rate_sum": 0.0, "at_rate_n": 0,
+                "gpu_m_sum": 0.0, "gpu_m_n": 0,
+                "gpu_s_sum": 0.0, "gpu_s_n": 0,
+                "gpu_ms_sum": 0.0, "gpu_ms_n": 0,
+            }
+        g = cap_data[cap_id]
+
+        g["stock"] += stock
+
+        pass_dts  = dts   is None or dts   <= max_dts
+        pass_gpum = gpu_m is None or gpu_m >= min_gpu_m
+        if not (pass_dts and pass_gpum):
+            continue
+
+        g["sales_xxd"] += sales90 * max_days_sales / 90.0
+        g["sales_7"]   += sales7
+
+        sold = sales90 == 1
+        if dis    is not None and sold:
+            g["dis_sum"]     += dis;    g["dis_n"]     += 1
+        if dts    is not None and sold:
+            g["dts_sum"]     += dts;    g["dts_n"]     += 1
+        if sell   is not None and sell != 0 and sold:
+            g["sell_sum"]    += sell;   g["sell_n"]    += 1
+        if at_val is not None and sold:
+            g["at_val_sum"]  += at_val; g["at_val_n"]  += 1
+        if at_rate is not None and sold:
+            g["at_rate_sum"] += at_rate; g["at_rate_n"] += 1
+        if gpu_m  is not None:
+            g["gpu_m_sum"]   += gpu_m;  g["gpu_m_n"]   += 1
+        if gpu_s  is not None:
+            g["gpu_s_sum"]   += gpu_s;  g["gpu_s_n"]   += 1
+        if gpu_ms is not None:
+            g["gpu_ms_sum"]  += gpu_ms; g["gpu_ms_n"]  += 1
+
+    # Fleet-wide totals
+    total_current_stock = sum(g["stock"]     for g in cap_data.values())
+    total_xxd_sales     = sum(g["sales_xxd"] for g in cap_data.values())
+    ideal_total         = total_current_stock + number_to_buy
+
+    def _avg(s, n):
+        return round(s / n, 1) if n > 0 else None
+
+    def _avg_gbp(s, n):
+        return round(s / n) if n > 0 else None
+
+    # Per-CAP-ID derived columns
+    cap_requirements: dict = {}
+    for cap_id, g in cap_data.items():
+        xxd_sales   = g["sales_xxd"]
+        stock       = g["stock"]
+        ideal_stock = (ideal_total * xxd_sales / total_xxd_sales) if total_xxd_sales > 0 and xxd_sales > 0 else 0.0
+        avg_sell    = _avg_gbp(g["sell_sum"],   g["sell_n"])
+        avg_at_val  = _avg_gbp(g["at_val_sum"], g["at_val_n"])
+        at_pct      = round(((avg_sell + 199) / avg_at_val) * 100, 1) if avg_sell is not None and avg_at_val and avg_at_val != 0 else None
+        cap_requirements[cap_id] = {
+            f"{max_days_sales}d Sales":  round(xxd_sales,          1),
+            "7d Sales":                  round(g["sales_7"],        1),
+            "Stock":                     round(stock,               0),
+            "Ideal Stock":               round(ideal_stock,         1),
+            "Required":                  round(ideal_stock - stock, 1),
+            "Avg Days in Stock":         _avg(g["dis_sum"],     g["dis_n"]),
+            "Avg Days to Sell":          _avg(g["dts_sum"],     g["dts_n"]),
+            "Avg Sell Price":            avg_sell,
+            "Avg AT PTM":                avg_at_val,
+            "Avg AT PTM %":              at_pct,
+            "Avg AT Rating":             _avg(g["at_rate_sum"], g["at_rate_n"]),
+            "Avg GPU-M":                 _avg_gbp(g["gpu_m_sum"],  g["gpu_m_n"]),
+            "Avg GPU-S":                 _avg_gbp(g["gpu_s_sum"],  g["gpu_s_n"]),
+            "Avg GPU-MS":                _avg_gbp(g["gpu_ms_sum"], g["gpu_ms_n"]),
+        }
+
+    # ── 4. Join to elaborated file ────────────────────────────────────────────
+    req_cols = [
+        f"{max_days_sales}d Sales", "7d Sales", "Stock", "Ideal Stock", "Required",
+        "Avg Days in Stock", "Avg Days to Sell", "Avg Sell Price",
+        "Avg AT PTM", "Avg AT PTM %", "Avg AT Rating",
+        "Avg GPU-M", "Avg GPU-S", "Avg GPU-MS",
+    ]
+
+    def lookup(cap_id_val, col):
+        try:
+            cid = int(float(cap_id_val))
+        except (TypeError, ValueError):
+            return None
+        return cap_requirements.get(cid, {}).get(col)
+
+    cap_col = "cap_capid" if "cap_capid" in elaborated_df.columns else None
+    for col in req_cols:
+        if cap_col:
+            elaborated_df[col] = elaborated_df[cap_col].apply(lambda v, c=col: lookup(v, c))
+        else:
+            elaborated_df[col] = None
+
+    # ── 5. Write and return ───────────────────────────────────────────────────
+    fd2, tmp_out = tempfile.mkstemp(suffix="." + file_ext)
+    os.close(fd2)
+    try:
+        write_dataframe_file(elaborated_df, tmp_out)
+        base_name = task["filename"].rsplit(".", 1)[0]
+        out_filename = f"{base_name}_requirements.{file_ext}"
+        return FileResponse(tmp_out, filename=out_filename, media_type="application/octet-stream")
+    except Exception:
+        try:
+            os.remove(tmp_out)
+        except OSError:
+            pass
+        raise
+
+
 @router.get("/tasks", response_class=HTMLResponse, name="read_tasks")
 def read_tasks(request: Request, page: Optional[int] = 1, page_size: Optional[int] = 25, user: str = Depends(get_current_user)):
     if not user:
