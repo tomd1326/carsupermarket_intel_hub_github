@@ -59,7 +59,7 @@ ENV PYTHONPATH=.:backend:/python_build
 ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 
 # Install Playwright, Chromium, and its system dependencies in the run image
-RUN pip3 install playwright && \
+RUN pip3 install playwright==1.34.0 && \
     python3 -m playwright install chromium && \
     python3 -m playwright install-deps chromium
 

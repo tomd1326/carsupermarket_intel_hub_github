@@ -22,7 +22,7 @@ redis = "^5.0.4"
 urllib3 = "==1.26.*"
 python-calamine = "^0.2.0"
 snowflake-connector-python = ">=3.17"
-playwright = "^1.44.0"
+playwright = "1.34.0"
 
 [tool.poetry.group.dev.dependencies]
 uvicorn = "^0.15.0"
