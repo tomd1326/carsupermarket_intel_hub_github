@@ -25,12 +25,14 @@ from botocore.config import Config
 
 from utils.lambda_http import LambdaRequestsManager
 from utils.s3_tools import upload_file, download_file
-from utils.db_utils import (get_database_connection)
+from utils.db_utils import (get_database_connection, get_settings, save_settings)
 from utils.snowflake_client import SnowflakeClient
 from utils.sharepoint_client import SharePointClient
 from list_processor.autotrader_client import AutoTraderClient
 from list_processor.cap_client import CAPClient
 from list_processor.columns_mapper import get_columns_mapper, BaseColumnsMapper
+from list_processor.motability_client import MotabilityFetchClient
+from list_processor.onelink_client import OneLinkFetchClient
 from utils.secrets_manager_client import get_secret
 from utils.file_handler import read_dataframe_file, write_dataframe_file
 import pandas as pd
@@ -83,7 +85,11 @@ def login(request: Request):
 def login(request: Request, username: str = Form(...), password: str = Form(...)):
     # calculate sha256 hash of the password
     pwd_hash = hashlib.sha256(password.encode()).hexdigest()
-    if username == 'admin' and pwd_hash == "a05ef593239b0ff678c3bb69731e785c470d781a121692302912550aa2459b74":
+    valid_users = {
+        'admin': 'a05ef593239b0ff678c3bb69731e785c470d781a121692302912550aa2459b74',
+        'buyer': 'cd44b3a3d1fb9021db64745df31dce588104bf663952dc84fe6e9cd6140aa3cb',
+    }
+    if pwd_hash == valid_users.get(username):
         request.session['user'] = username
         return RedirectResponse(url=BASE_URL + "/home", status_code=303)  # CHANGED: was /tasks
     return templates.TemplateResponse(
@@ -102,6 +108,40 @@ def logout(request: Request):
     return RedirectResponse(url=BASE_URL + "/login", status_code=303)
 
 
+@router.get("/settings-page", response_class=HTMLResponse)
+def settings_page(request: Request, user: str = Depends(get_current_user)):
+    if user != 'admin':
+        return RedirectResponse(url=BASE_URL + "/home", status_code=303)
+    with get_database_connection() as conn:
+        settings = get_settings(conn)
+    return templates.TemplateResponse("settings.html", {"request": request, "user": user, "BASE_URL": BASE_URL, "settings": settings})
+
+
+@router.post("/settings")
+def update_settings(
+    request: Request,
+    number_to_buy: int = Form(...),
+    max_days_sales: int = Form(...),
+    max_dts: int = Form(...),
+    min_gpu_m: int = Form(...),
+    cap_workers: int = Form(...),
+    cap_rate_limit: int = Form(...),
+    calc_buying_reqs: Optional[str] = Form(None),
+    user: str = Depends(get_current_user),
+):
+    if user != 'admin':
+        raise HTTPException(status_code=403, detail="Forbidden")
+    calc = calc_buying_reqs == 'on'
+    with get_database_connection() as conn:
+        save_settings(conn, number_to_buy, max_days_sales, max_dts, min_gpu_m, cap_workers, cap_rate_limit, calc)
+    logger.info(
+        "Settings updated by %s: number_to_buy=%d, max_days_sales=%d, max_dts=%d, "
+        "min_gpu_m=%d, cap_workers=%d, cap_rate_limit=%d, calc_buying_reqs=%s",
+        user, number_to_buy, max_days_sales, max_dts, min_gpu_m, cap_workers, cap_rate_limit, calc
+    )
+    return RedirectResponse(url=BASE_URL + "/settings-page?saved=1", status_code=303)
+
+
 # NEW
 @router.get("/home", response_class=HTMLResponse)
 def home(request: Request, user: str = Depends(get_current_user)):
@@ -115,7 +155,9 @@ def home(request: Request, user: str = Depends(get_current_user)):
 def buying_requirements(request: Request, user: str = Depends(get_current_user)):
     if not user:
         return RedirectResponse(url=BASE_URL + "/login", status_code=303)
-    return templates.TemplateResponse("buying_requirements.html", {"request": request, "user": user, "BASE_URL": BASE_URL})
+    with get_database_connection() as conn:
+        settings = get_settings(conn)
+    return templates.TemplateResponse("buying_requirements.html", {"request": request, "user": user, "BASE_URL": BASE_URL, "settings": settings})
 
 
 # NEW
@@ -759,15 +801,19 @@ def read_tasks(request: Request, page: Optional[int] = 1, page_size: Optional[in
 
     total_pages = (total_tasks + page_size - 1) // page_size  # Calculate the total number of pages
 
+    with get_database_connection() as conn:
+        settings = get_settings(conn)
     return templates.TemplateResponse("supplier_stock_evaluator.html", {
         "request": request,
+        "user": user,
         "tasks": tasks,
         "at_least_one_pending": at_least_one_pending,
         'suppliers': suppliers,
         "total_pages": total_pages,
         "current_page": page,
         'BASE_URL': BASE_URL,
-        'is_dev': os.getenv('AWS_REGION') != 'eu-west-1'
+        'is_dev': os.getenv('AWS_REGION') != 'eu-west-1',
+        'settings': settings,
     })
 
 
@@ -848,7 +894,7 @@ def download_task_file(task_id: str):
     _supplier_prefixes = {'enterprise': 'Enterprise', '1link': '1link', 'motability': 'Motability'}
     supplier_name = (task.get('supplier_name') or '').strip()
     prefix = _supplier_prefixes.get(supplier_name.lower(), '')
-    prefix = f'{prefix}_' if prefix else ''
+    prefix = f'{prefix}_' if prefix and not task['filename'].startswith(f'{prefix}_') else ''
 
     file_ext = task['filename'].split('.')[-1]
     fd, tmp_path = tempfile.mkstemp(suffix='.' + file_ext)
@@ -941,6 +987,96 @@ async def enterprise_email_start_task(
         )
     logger.info(f"Enterprise email: started elaborate for task_id={task_id}")
     return {"status": "started", "task_id": task_id}
+
+_SUPPLIER_FETCH_ROW_LIMIT = 500
+
+
+@router.post("/api/fetch-supplier-stock")
+async def fetch_supplier_stock(
+    request: Request,
+    supplier: str = Form(...),
+    include_preview: Optional[str] = Form(None),
+    user: str = Depends(get_current_user),
+):
+    if user != 'admin':
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    supplier = supplier.lower()
+    if supplier not in ('motability', '1link'):
+        raise HTTPException(status_code=400, detail="supplier must be 'motability' or '1link'")
+
+    env = 'prod' if os.getenv('AWS_REGION') == 'eu-west-1' else 'dev'
+    # Supplier credentials only exist in prod secret
+    secrets = get_secret('prod/carsupermarket/car_pricer/api_access')
+
+    try:
+        if supplier == 'motability':
+            client = MotabilityFetchClient(
+                username=secrets['MOTABILITY_ID'],
+                password=secrets['MOTABILITY_PASSWORD'],
+            )
+            input_df = client.fetch_dataframe(row_limit=_SUPPLIER_FETCH_ROW_LIMIT)
+            if not include_preview:
+                type_col = input_df.columns[1] if len(input_df.columns) > 1 else None
+                if type_col is not None:
+                    input_df = input_df[input_df[type_col] != 'Preview']
+            filename = f"Motability_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+        else:
+            client = OneLinkFetchClient(
+                username=secrets['1LINK_ID'],
+                password=secrets['1LINK_PASSWORD'],
+            )
+            input_df = client.fetch_dataframe(row_limit=_SUPPLIER_FETCH_ROW_LIMIT)
+            filename = f"1link_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+    except Exception as e:
+        logger.error(f"fetch_supplier_stock failed for {supplier}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+    # Write DataFrame to a temp CSV and upload to S3 as the raw file
+    with get_database_connection() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                "SELECT supplier_id FROM suppliers WHERE LOWER(supplier_name) = %s LIMIT 1",
+                (supplier,)
+            )
+            row = cursor.fetchone()
+            if not row:
+                raise HTTPException(status_code=500, detail=f"Supplier '{supplier}' not found in DB")
+            supplier_id = row[0]
+            cursor.execute(
+                "INSERT INTO tasks (created, status, supplier_id, filename) VALUES (%s, %s, %s, %s) RETURNING task_id",
+                (datetime.datetime.now(), 'created', supplier_id, filename)
+            )
+            task_id = cursor.fetchone()[0]
+            conn.commit()
+
+    fd, tmp_path = tempfile.mkstemp(suffix='.csv')
+    os.close(fd)
+    try:
+        input_df.to_csv(tmp_path, index=False)
+        s3_key = f'applications/pricing/uk-vehicle-list-evaluator/{env}/raw/{task_id}.csv'
+        upload_file(tmp_path, s3_bucketname, s3_key)
+    finally:
+        try:
+            os.remove(tmp_path)
+        except OSError:
+            pass
+
+    aws_context = request.scope["aws.context"] if "aws.context" in request.scope else None
+    if aws_context is None:
+        import asyncio
+        asyncio.create_task(elaborate_task({'task_id': task_id, 'cap_workers': 20, 'cap_rate_limit': 100}))
+    else:
+        LambdaRequestsManager().simulate_http(
+            aws_context=aws_context,
+            path=BASE_URL + "/elaborate-task",
+            method="POST",
+            data={'task_id': task_id, 'cap_workers': 20, 'cap_rate_limit': 100},
+        )
+
+    logger.info(f"fetch_supplier_stock: created task_id={task_id} for {supplier} ({len(input_df)} rows)")
+    return RedirectResponse(url=BASE_URL + "/tasks", status_code=303)
+
 
 @router.post("/elaborate-task")
 async def elaborate_task(data: dict):

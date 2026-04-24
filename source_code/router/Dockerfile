@@ -50,11 +50,39 @@ FROM public.ecr.aws/lambda/python:3.9 as run-image
 
 ENV TZ=Europe/London
 
+# System dependencies required by Chromium on Amazon Linux 2
+RUN yum install -y \
+    atk \
+    cups-libs \
+    gtk3 \
+    libXcomposite \
+    libXcursor \
+    libXdamage \
+    libXext \
+    libXi \
+    libXrandr \
+    libXScrnSaver \
+    libXtst \
+    pango \
+    xorg-x11-fonts-100dpi \
+    xorg-x11-fonts-75dpi \
+    xorg-x11-fonts-cyrillic \
+    xorg-x11-fonts-misc \
+    xorg-x11-fonts-Type1 \
+    xorg-x11-utils \
+    alsa-lib \
+    nss \
+    && yum clean all
+
 COPY --from=build-image ${BUILD_DIR}/ ${LAMBDA_TASK_ROOT}/
 COPY --from=build-image /python_build /python_build
 
 COPY backend/ ${LAMBDA_TASK_ROOT}/
 
 ENV PYTHONPATH=.:backend:/python_build
+
+# Install Playwright and Chromium in the run image so the browser binary is available at runtime
+RUN pip3 install playwright && \
+    playwright install chromium
 
 CMD ["main.handler"]

@@ -266,7 +266,7 @@ function applyFilter() {
     if (lbl) lbl.textContent = `Filtered ${getMaxDIS() ?? 90}d Sales: ${filteredSales.toLocaleString()} / ${totalSales.toLocaleString()}`;
     const capLbl = document.getElementById('filtered-cap-count');
     if (capLbl) {
-        capLbl.textContent = `Filtered CAP IDs: ${visibleRows.length}`;
+        capLbl.textContent = `Filtered ${currentView === 'model' ? 'Models' : 'CAP IDs'}: ${visibleRows.length}`;
         capLbl.classList.remove('flash');
         void capLbl.offsetWidth; // force reflow so re-adding the class restarts the animation
         capLbl.classList.add('flash');
@@ -831,7 +831,7 @@ function renderTable() {
     });
 
     const idealSum = tableData.reduce((s, r) => s + (r[18] || 0), 0);
-    if (lbl) lbl.textContent = `Total current stock: ${totalCurrentStock.toLocaleString()} → Ideal total: ${(totalCurrentStock + numberToBuy).toLocaleString()}`;
+    if (lbl) lbl.textContent = `Ideal total: ${(totalCurrentStock + numberToBuy).toLocaleString()}`;
 
     tableData.forEach(r => {
         r[21] = Math.round(r[19] || 0) - (r[6] || 0);
@@ -1128,10 +1128,11 @@ function applyRawDataToTable(fetchSP) {
 }
 
 function resetApplyFilters() {
-    document.getElementById('numberToBuy').value = 200;
-    document.getElementById('maxDIS').value = 90;
-    document.getElementById('maxDTS').value = 45;
-    document.getElementById('minGPUM').value = 0;
+    const sd = window.SETTINGS_DEFAULTS || {};
+    document.getElementById('numberToBuy').value = sd.numberToBuy ?? 200;
+    document.getElementById('maxDIS').value      = sd.maxDIS      ?? 90;
+    document.getElementById('maxDTS').value      = sd.maxDTS      ?? 45;
+    document.getElementById('minGPUM').value     = sd.minGPUM     ?? 0;
     refreshTable();
 }
 
@@ -1197,19 +1198,34 @@ function loadSPFromCache() {
 }
 
 function exportXLSX() {
-    const headers = Array.from(document.querySelectorAll('#data-table thead tr:last-child th'))
-        .map(th => th.childNodes[0].textContent.trim());
+    const fmt1 = v => v != null ? Math.round(v * 10) / 10 : null;
+    const fmtN = v => v != null ? Math.round(v) : null;
 
-    const visibleRows = Array.from(document.querySelectorAll('#table-body tr'))
-        .filter(tr => tr.style.display !== 'none');
+    const headers = ['CAP ID', 'Label', 'Fuel', 'Stock', `${getMaxDIS() ?? 90}d Sales`, '7d Sales',
+        'Ideal Stock', 'Required', 'Avg DIS', 'Avg DTS',
+        'Avg Sell Price', 'Avg AT PTM', 'Avg AT PTM %', 'Avg AT Rating',
+        'Avg GPU-M', 'Avg GPU-S', 'Avg GPU-MS', 'Price Band'];
 
-    const rows = visibleRows.map(tr =>
-        Array.from(tr.cells).map(td => {
-            const text = td.textContent.trim();
-            const num = Number(text.replace(/[£,%]/g, '').replace(/,/g, ''));
-            return text !== '' && !isNaN(num) ? num : text;
-        })
-    );
+    const rows = tableData.map(row => [
+        row[0],          // CAP ID
+        row[1],          // label
+        normFuel(row[2]),// fuel (normalised)
+        fmtN(row[3]),    // stock
+        fmt1(row[4]),    // sales xxd
+        fmt1(row[7]),    // 7d sales
+        fmt1(row[18]),   // ideal stock
+        fmt1(row[19]),   // required
+        fmt1(row[8]),    // avg DIS
+        fmt1(row[9]),    // avg DTS
+        fmtN(row[14]),   // avg sell price
+        fmtN(row[15]),   // avg AT PTM
+        row[16] != null ? Math.round(row[16] * 10) / 10 : null, // AT PTM %
+        fmt1(row[17]),   // avg AT rating
+        fmtN(row[10]),   // avg GPU-M
+        fmtN(row[11]),   // avg GPU-S
+        fmtN(row[12]),   // avg GPU-MS
+        row[22],         // price band
+    ]);
 
     const ws = XLSX.utils.aoa_to_sheet([headers, ...rows]);
     const wb = XLSX.utils.book_new();
