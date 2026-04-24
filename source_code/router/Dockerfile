@@ -58,9 +58,37 @@ COPY backend/ ${LAMBDA_TASK_ROOT}/
 ENV PYTHONPATH=.:backend:/python_build
 ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 
-# Install Playwright, Chromium, and its system dependencies in the run image
+# Install Chromium system dependencies via dnf (install-deps uses apt-get which is unavailable on Amazon Linux)
+RUN dnf install -y \
+    nss \
+    dbus \
+    dbus-libs \
+    atk \
+    at-spi2-atk \
+    at-spi2-core \
+    cups-libs \
+    libdrm \
+    libxkbcommon \
+    libXcomposite \
+    libXdamage \
+    libXext \
+    libXfixes \
+    libXrandr \
+    libXrender \
+    libX11 \
+    libxcb \
+    mesa-libgbm \
+    pango \
+    cairo \
+    alsa-lib \
+    fontconfig \
+    lsof \
+    libstdc++ \
+    libgcc \
+    && dnf clean all
+
+# Install Playwright and Chromium
 RUN pip3 install "playwright>=1.44.0" && \
-    python3 -m playwright install chromium && \
-    python3 -m playwright install-deps chromium
+    python3 -m playwright install chromium
 
 CMD ["main.handler"]
