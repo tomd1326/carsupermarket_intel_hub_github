@@ -988,7 +988,7 @@ async def enterprise_email_start_task(
     logger.info(f"Enterprise email: started elaborate for task_id={task_id}")
     return {"status": "started", "task_id": task_id}
 
-_SUPPLIER_FETCH_ROW_LIMIT = 500
+_SUPPLIER_FETCH_ROW_LIMIT = 100
 
 
 @router.post("/api/fetch-supplier-stock")

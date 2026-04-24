@@ -72,7 +72,11 @@ class MotabilityFetchClient:
     def fetch_dataframe(self, row_limit: int = 100) -> pd.DataFrame:
         import concurrent.futures
         def _run_in_thread():
-            loop = asyncio.ProactorEventLoop()
+            import sys
+            if sys.platform == 'win32':
+                loop = asyncio.ProactorEventLoop()
+            else:
+                loop = asyncio.new_event_loop()
             try:
                 return loop.run_until_complete(self._run())
             finally:
@@ -95,7 +99,6 @@ class MotabilityFetchClient:
                 await self._login(page)
                 await page.goto(SEARCH_URL)
                 await page.wait_for_load_state("domcontentloaded")
-                await page.wait_for_timeout(2000)
                 return await self._export_csv(page)
             finally:
                 await browser.close()
