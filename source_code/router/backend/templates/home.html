@@ -64,6 +64,24 @@
         .logout-link:hover {
             color: #ffffff !important;
         }
+        .menu-btn-settings {
+            width: 280px;
+            height: 80px;
+            font-size: 1.1rem;
+            font-weight: 600;
+            border-radius: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 12px;
+            background-color: #4a5568;
+            border: none;
+            color: #ffffff;
+        }
+        .menu-btn-settings:hover {
+            background-color: #2d3748;
+            color: #ffffff;
+        }
     </style>
 </head>
 <body>
@@ -80,6 +98,11 @@
             <a href="{{ BASE_URL }}/tasks" class="btn menu-btn">
                 Supplier Stock Evaluator
             </a>
+            {% if user == 'admin' %}
+            <a href="{{ BASE_URL }}/settings-page" class="btn menu-btn-settings">
+                <i class="fas fa-cog"></i> Settings
+            </a>
+            {% endif %}
         </div>
     </div>
 </body>

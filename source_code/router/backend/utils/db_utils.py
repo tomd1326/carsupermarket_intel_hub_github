@@ -32,6 +32,56 @@ def get_db_credentials():
         }
 
 
+SETTINGS_DEFAULTS = {
+    'number_to_buy':       200,
+    'max_days_sales':      90,
+    'max_dts':             45,
+    'min_gpu_m':           0,
+    'cap_workers':         25,
+    'cap_rate_limit':      100,
+    'calc_buying_reqs':    '0',
+}
+
+
+BOOL_SETTINGS = {'calc_buying_reqs'}
+
+
+def get_settings(conn) -> dict:
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT key, value FROM settings")
+            rows = cur.fetchall()
+        result = dict(SETTINGS_DEFAULTS)
+        for key, value in rows:
+            if key in result:
+                result[key] = (value == '1') if key in BOOL_SETTINGS else int(value)
+        return result
+    except Exception:
+        d = dict(SETTINGS_DEFAULTS)
+        d['calc_buying_reqs'] = False
+        return d
+
+
+def save_settings(conn, number_to_buy: int, max_days_sales: int, max_dts: int, min_gpu_m: int, cap_workers: int, cap_rate_limit: int, calc_buying_reqs: bool):
+    values = {
+        'number_to_buy':    number_to_buy,
+        'max_days_sales':   max_days_sales,
+        'max_dts':          max_dts,
+        'min_gpu_m':        min_gpu_m,
+        'cap_workers':      cap_workers,
+        'cap_rate_limit':   cap_rate_limit,
+        'calc_buying_reqs': '1' if calc_buying_reqs else '0',
+    }
+    with conn.cursor() as cur:
+        for key, value in values.items():
+            cur.execute(
+                "INSERT INTO settings (key, value) VALUES (%s, %s) "
+                "ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value",
+                (key, str(value))
+            )
+    conn.commit()
+
+
 @contextmanager
 def get_database_connection():
     try:

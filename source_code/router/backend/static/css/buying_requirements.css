@@ -2,6 +2,34 @@ body, button, input, select, textarea {
     font-family: 'DM Sans', system-ui, sans-serif;
 }
 
+button.settings-cog {
+    position: fixed !important;
+    top: 16px !important;
+    right: 20px !important;
+    z-index: 1050;
+    background: none !important;
+    border: none !important;
+    color: #6c757d !important;
+    font-size: 1.4rem !important;
+    cursor: pointer;
+    padding: 4px 6px !important;
+    border-radius: 6px;
+    transition: color 0.2s, background 0.2s;
+    line-height: 1 !important;
+}
+button.settings-cog:hover { color: #343a40 !important; background: #e9ecef !important; }
+
+a.logout-link {
+    position: fixed;
+    top: 20px;
+    right: 24px;
+    font-size: 0.9rem;
+    color: #6c757d !important;
+    z-index: 1040;
+    text-decoration: none;
+}
+a.logout-link:hover { color: #343a40 !important; }
+
 #data-section { display: none; }
 
 .filter-group {
