@@ -1,6 +1,6 @@
 ARG BUILD_DIR="backend"
 
-FROM public.ecr.aws/lambda/python:3.9 as build-image
+FROM public.ecr.aws/lambda/python:3.12 as build-image
 
 ARG PKG_URL
 ARG LAST_PKG_VERSION
@@ -15,9 +15,9 @@ ENV TZ=Europe/Paris
 RUN ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone
 
 # Install build dependencies
-RUN yum update -y && \
-  yum install -y \
-  git
+RUN dnf update -y && \
+    dnf install -y git && \
+    dnf clean all
 
 # Include global arg in this stage of the build
 ARG BUILD_DIR
@@ -46,7 +46,7 @@ RUN pip3 install \
       --target /python_build \
       -r requirements.txt
 
-FROM public.ecr.aws/lambda/python:3.9 as run-image
+FROM public.ecr.aws/lambda/python:3.12 as run-image
 
 ENV TZ=Europe/London
 
@@ -59,7 +59,7 @@ ENV PYTHONPATH=.:backend:/python_build
 ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 
 # Install Playwright, Chromium, and its system dependencies in the run image
-RUN pip3 install playwright==1.34.0 && \
+RUN pip3 install "playwright>=1.44.0" && \
     python3 -m playwright install chromium && \
     python3 -m playwright install-deps chromium
 
