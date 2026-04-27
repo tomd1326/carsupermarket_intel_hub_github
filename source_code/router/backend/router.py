@@ -1375,9 +1375,12 @@ async def elaborate_task(data: dict):
             def process_df(args):
                 processor_obj, input_df, columns_mapper, *kwargs = args
                 return processor_obj.process_file(input_df, columns_mapper, *kwargs)
+                processor_obj, input_df, columns_mapper, *kwargs = args
+                return processor_obj.process_file(input_df, columns_mapper, *kwargs)
 
             with ThreadPoolExecutor(max_workers=2) as executor:
                 futures = [executor.submit(process_df, (autotrader, input_df, columns_mapper)),
+                           executor.submit(process_df, (cap_client, input_df, columns_mapper, cap_workers, cap_rate_limit))]
                            executor.submit(process_df, (cap_client, input_df, columns_mapper, cap_workers, cap_rate_limit))]
                 results = [future.result() for future in futures]
 
