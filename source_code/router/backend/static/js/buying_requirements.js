@@ -418,7 +418,7 @@ function applyView() {
  *    7:dis, 8:dts, 9:gpu_m, 10:gpu_s, 11:gpu_ms,
  *    12:purchase_price, 13:sell_price, 14:at_val, 15:at_pct, 16:at_rating,
  *    17:ack_date, 18:vrm, 19:supplier_name, 20:vehicle_url, 21:vehicle_status,
- *    22:gpu_m_resolved, 29:make_model]
+ *    22:gpu_m_resolved, 29:make_model, 30:cap_live_clean]
  *
  * Output tableData row layout (same indices used throughout the rest of the JS):
  *   [0:cap_id, 1:label, 2:fuel, 3:stock, 4:sales90, 5:pct(set later),
@@ -980,6 +980,7 @@ function sortTable(col, type) {
 document.querySelectorAll('#data-table thead tr:last-child th').forEach(th => {
     th.addEventListener('click', e => {
         if (e.target.closest('.resize-handle') || e.target.closest('button')) return;
+        if (_resizeDragged) { _resizeDragged = false; return; }
         sortTable(+th.dataset.col, th.dataset.type);
     });
     th.addEventListener('dblclick', e => {
@@ -994,10 +995,13 @@ function getThColIndex(th) {
     return Array.from(th.parentElement.children).indexOf(th);
 }
 
+let _resizeDragged = false;
+
 function attachResizeHandle(handle) {
     handle.addEventListener('mousedown', e => {
         e.preventDefault();
         e.stopPropagation();
+        _resizeDragged = false;
         const th = handle.closest('th');
         const colIdx = getThColIndex(th);
         const startX = e.pageX;
@@ -1011,6 +1015,7 @@ function attachResizeHandle(handle) {
 
         let lastX = startX;
         const onMove = ev => {
+            if (Math.abs(ev.pageX - startX) > 3) _resizeDragged = true;
             lastX = ev.pageX;
             const newRight = thRect.right + (ev.pageX - startX);
             ghost.style.left = Math.max(thRect.left + 40, newRight) + 'px';
@@ -1289,7 +1294,10 @@ function _getModalSortValue(r, col) {
     if (col === 'mileage')   return Number(r[25]) || 0;
     if (col === 'dis')       return Number(r[7]) || 0;
     if (col === 'dts')       return Number(r[8]) || 0;
-    if (col === 'sell_price')  return Number(r[13]) || 0;
+    if (col === 'purchase_price') return Number(r[12]) || 0;
+    if (col === 'cap_clean')  return Number(r[30]) || 0;
+    if (col === 'cap_pct')    return (r[12] && r[30]) ? r[12] / r[30] : 0;
+    if (col === 'sell_price') return Number(r[13]) || 0;
     if (col === 'at_ptm')      return Number(r[14]) || 0;
     if (col === 'at_ptm_pct')  return Number(r[15]) || 0;
     if (col === 'at_rating')   return Number(r[16]) || 0;
@@ -1378,6 +1386,10 @@ function _renderModalRows() {
         addTd(r[25] != null ? Number(r[25]).toLocaleString() : '—', 'right');
         addTd(r[7]  != null ? fmtInt(r[7])  : '—', 'right');
         addTd(r[8]  != null ? fmtInt(r[8])  : '—', 'right');
+        addTd(r[12] != null && r[12] !== 0 ? fmtGBP(r[12]) : '—', 'right');
+        addTd(r[30] != null && r[30] !== 0 ? fmtGBP(r[30]) : '—', 'right');
+        const capPct = (r[12] && r[30]) ? ((r[12] / r[30]) * 100).toFixed(1) + '%' : '—';
+        addTd(capPct, 'right');
         addTd(r[13] != null && r[13] !== 0 ? fmtGBP(r[13]) : '—', 'right');
         addTd(r[14] != null ? fmtGBP(r[14]) : '—', 'right');
         addTd(r[13] != null && r[13] !== 0 && r[14] != null && r[14] !== 0 ? fmtPct(((r[13] + 199) / r[14]) * 100) : '—', 'right');
