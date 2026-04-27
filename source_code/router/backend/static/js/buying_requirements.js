@@ -398,7 +398,7 @@ function applyView() {
     colWidths = new Array(COL_UNITS.length).fill(null);
     applyColWidths();
     if (currentView === 'cap') aggregateRawData(); else aggregateModelData();
-    if (Object.keys(spPurchases).length) applySpPurchases(spPurchases);
+    applySpPurchases(spPurchases);
     renderTable();
     if (currentView === 'model') {
         sortCol = 21; sortDir = 1; // sortTable toggles to -1 → descending
@@ -1142,7 +1142,7 @@ function refreshTable() {
     if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spinner-border spinner-border-sm me-2"></span>Loading...'; }
     requestAnimationFrame(() => setTimeout(() => {
         if (currentView === 'model') aggregateModelData(); else aggregateRawData();
-        if (Object.keys(spPurchases).length) applySpPurchases(spPurchases);
+        applySpPurchases(spPurchases);
         renderTable();
         sortCol = 21; sortDir = 1;
         sortTable(21, 'num');

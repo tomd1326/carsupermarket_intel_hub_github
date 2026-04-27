@@ -48,7 +48,7 @@ class OneLinkFetchClient:
         return token
 
     def _fetch_stocklist(self, token: str) -> str:
-        logger.info("1link: fetching stocklist")
+        logger.info(f"1link: sending stocklist request to {STOCKLIST_URL}")
         resp = requests.get(
             STOCKLIST_URL,
             headers={
@@ -59,9 +59,14 @@ class OneLinkFetchClient:
             },
             timeout=60,
         )
+        logger.info(f"1link: stocklist response status {resp.status_code}, payload size {len(resp.content)} bytes")
         if resp.status_code != 200:
+            logger.error(f"1link: stocklist error body: {resp.text[:500]}")
             raise RuntimeError(f"1link stocklist returned {resp.status_code}: {resp.text[:200]}")
         content = resp.content
         if content.startswith(b'\xef\xbb\xbf'):
             content = content[3:]
-        return content.decode("utf-8")
+        text = content.decode("utf-8")
+        row_count = max(0, text.count('\n') - 1)
+        logger.info(f"1link: CSV received, approximately {row_count} data rows")
+        return text
