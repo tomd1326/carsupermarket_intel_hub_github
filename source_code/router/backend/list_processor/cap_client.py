@@ -378,7 +378,7 @@ class CAPClient(metaclass=Singleton):
 
         return output.dict()
 
-    def process_file(self, input_df: pd.DataFrame, column_mapper: BaseColumnsMapper, max_workers: int = 20, rate_limit: int = 100) -> pd.DataFrame:
+    def process_file(self, input_df: pd.DataFrame, column_mapper: BaseColumnsMapper, max_workers: int = 25, rate_limit: int = 100) -> pd.DataFrame:
         processed_rows = []
         self._retry_count = 0
         self.limiter = RateLimiter(rate_limit=rate_limit, time_window=1)
