@@ -302,10 +302,6 @@ function getMaxDIS()  { const v = parseFloat(document.getElementById('maxDIS')?.
 function updateSalesColumnLabel() {
     const days = getMaxDIS() ?? 90;
     const label = `${days}d Sales`;
-    const th = document.getElementById('th-total-sales');
-    if (th) th.childNodes[0].textContent = label;
-    const summary = document.getElementById('sf-summary-sales-label');
-    if (summary) summary.textContent = label + ':';
     const flbl = document.getElementById('filtered-sales-label');
     if (flbl && flbl.textContent) {
         flbl.textContent = flbl.textContent.replace(/Filtered \S+ Sales:/, `Filtered ${label}:`);
@@ -325,7 +321,7 @@ const THEAD_COLS = [
     { capOnly: false, html: '<span class="th-label" id="th-label-span">Make / Model / Derivative / Price Band</span><span class="sort-icon"><i class="fas fa-sort"></i></span><div class="resize-handle"></div>', attrs: 'data-col="1" data-type="str" id="th-label" class="col-left"' },
     { capOnly: true,  html: '<span class="th-label">View Vehicles</span>', attrs: 'class="col-view"' },
     { capOnly: false, html: '<span class="th-label">Fuel</span><span class="sort-icon"><i class="fas fa-sort"></i></span><div class="resize-handle"></div>', attrs: 'data-col="2" data-type="str" class="col-center"' },
-    { capOnly: false, html: '<span class="th-label">Total Sales</span><span class="sort-icon"><i class="fas fa-sort"></i></span><div class="resize-handle"></div>', attrs: 'data-col="4" data-type="num" id="th-total-sales"' },
+    { capOnly: false, html: '<span class="th-label">90d Sales</span><span class="sort-icon"><i class="fas fa-sort"></i></span><div class="resize-handle"></div>', attrs: 'data-col="4" data-type="num" id="th-total-sales"' },
     { capOnly: false, html: '<span class="th-label">7d Sales</span><span class="sort-icon"><i class="fas fa-sort"></i></span><div class="resize-handle"></div>', attrs: 'data-col="7" data-type="num"' },
     { capOnly: false, html: '<span class="th-label">Stock</span><span class="sort-icon"><i class="fas fa-sort"></i></span><div class="resize-handle"></div>', attrs: 'data-col="3" data-type="num"' },
     { capOnly: false, html: '<span class="th-label">Ideal Stock</span><span class="sort-icon"><i class="fas fa-sort"></i></span><div class="resize-handle"></div>', attrs: 'data-col="18" data-type="num"' },
@@ -437,10 +433,11 @@ function aggregateRawData() {
 
     const groups = new Map();
     for (const r of rawData) {
-        const key = r[0] + '|' + r[1] + '|' + r[2];
+        const key = r[0] + '|' + r[2] + '|' + r[3];
+        const labelNoBand = r[1].split(' / ').slice(0, -1).join(' / ');
         if (!groups.has(key)) {
             groups.set(key, {
-                cap_id: r[0], label: r[1], fuel: r[2], price_band: r[3],
+                cap_id: r[0], label: labelNoBand, fuel: r[2], price_band: r[3],
                 stock: 0, sales90: 0, sales7: 0,
                 dis_sum: 0, dis_n: 0,
                 dts_sum: 0, dts_n: 0,
@@ -494,7 +491,7 @@ function aggregateRawData() {
         const avgAtVal = avg(g.at_val_sum, g.at_val_n);
         tableData.push([
             g.cap_id,                                   // 0
-            g.label,                                    // 1
+            g.label + ' / ' + g.price_band,            // 1 (table: includes price band)
             g.fuel,                                     // 2
             g.stock,                                    // 3
             g.sales90,                                  // 4
@@ -886,9 +883,9 @@ function renderTable() {
         add(row[15] != null ? fmtGBP(row[15]) : '');
         add(row[16] != null ? fmtPct(row[16]) : '');
         add(row[17] != null ? fmtInt(row[17]) : '');
-        add(row[10] != null ? fmtGBP(row[10]) : '');
+        { const td = add(row[10] != null ? fmtGBP(row[10]) : ''); if (row[10] != null && row[10] < 0) td.style.color = '#dc2626'; }
         add(row[11] != null ? fmtGBP(row[11]) : '');
-        add(row[12] != null ? fmtGBP(row[12]) : '');
+        { const td = add(row[12] != null ? fmtGBP(row[12]) : ''); if (row[12] != null && row[12] < 0) td.style.color = '#dc2626'; }
         fragment.appendChild(tr);
     });
 
@@ -1071,6 +1068,26 @@ function applySpPurchases(p) {
     });
 }
 
+const _SP_MAX_AGE_SECS = 30 * 60;
+
+function _setSfCachedAt(cachedAt) {
+    const el = document.getElementById('sf-status');
+    if (!el || !cachedAt) return;
+    const d = new Date(cachedAt * 1000);
+    const hhmm = d.getHours().toString().padStart(2, '0') + ':' + d.getMinutes().toString().padStart(2, '0');
+    el.innerHTML = `${SF_LABEL} <span class="text-muted" style="font-size:0.85em">updated ${hhmm}</span>`;
+}
+
+function _setSpUpdatedAt(fetchedAt) {
+    const el = document.getElementById('sp-status');
+    if (!el) return;
+    if (fetchedAt) {
+        const d = new Date(fetchedAt * 1000);
+        const hhmm = d.getHours().toString().padStart(2, '0') + ':' + d.getMinutes().toString().padStart(2, '0');
+        el.innerHTML = `${SP_LABEL} <span class="text-muted" style="font-size:0.85em">updated ${hhmm}</span>`;
+    }
+}
+
 /* ── SharePoint patch ────────────────────────────────────── */
 function patchSharePoint() {
     setStatus('sp-status', SP_LABEL, 'running');
@@ -1082,6 +1099,7 @@ function patchSharePoint() {
             applySpPurchases(resp.purchases);
             renderTable();
             setStatus('sp-status', SP_LABEL, 'done');
+            _setSpUpdatedAt(resp.fetched_at);
         })
         .catch(() => setStatus('sp-status', SP_LABEL, 'error'));
 }
@@ -1178,6 +1196,7 @@ function loadFromServer(fetchSP = false, fromFetchData = false) {
             }
             rawData = resp.rows;
             setStatus('sf-status', SF_LABEL, 'done');
+            _setSfCachedAt(resp.cached_at);
             _setApexUpdatedAt(rawData);
             applyRawDataToTable(fetchSP);
         })
@@ -1196,8 +1215,14 @@ function loadSPFromCache() {
         .then(r => r.json())
         .then(resp => {
             if (resp.status !== 'ok') return;
+            const ageSeconds = resp.fetched_at ? (Date.now() / 1000 - resp.fetched_at) : Infinity;
+            if (ageSeconds > _SP_MAX_AGE_SECS || !resp.fetched_at) {
+                patchSharePoint();
+                return;
+            }
             applySpPurchases(resp.purchases);
             renderTable();
+            _setSpUpdatedAt(resp.fetched_at);
         })
         .catch(() => {});
 }
@@ -1206,14 +1231,14 @@ function exportXLSX() {
     const fmt1 = v => v != null ? Math.round(v * 10) / 10 : null;
     const fmtN = v => v != null ? Math.round(v) : null;
 
-    const headers = ['CAP ID', 'Label', 'Fuel', 'Stock', `${getMaxDIS() ?? 90}d Sales`, '7d Sales',
+    const headers = ['CAP ID', 'Make Model Derivative', 'Fuel', 'Stock', '90d Sales', '7d Sales',
         'Ideal Stock', 'Required', 'Avg DIS', 'Avg DTS',
         'Avg Sell Price', 'Avg AT PTM', 'Avg AT PTM %', 'Avg AT Rating',
         'Avg GPU-M', 'Avg GPU-S', 'Avg GPU-MS', 'Price Band'];
 
     const rows = tableData.map(row => [
         row[0],          // CAP ID
-        row[1],          // label
+        row[1].split(' / ').slice(0, -1).join(' / '),  // Make / Model / Derivative (strip price band)
         normFuel(row[2]),// fuel (normalised)
         fmtN(row[3]),    // stock
         fmt1(row[4]),    // sales xxd
@@ -1345,6 +1370,18 @@ function _updateModalSortIndicators() {
 function _renderModalRows() {
     const tbody = document.getElementById('vehicle-modal-body');
     tbody.innerHTML = '';
+
+    // accumulators for averages row (mileage onwards)
+    let mileSum = 0, mileN = 0;
+    let disSum  = 0, disN  = 0;
+    let dtsSum  = 0, dtsN  = 0;
+    let ppSum   = 0, ppN   = 0;
+    let capSum  = 0, capN  = 0;
+    let sellSum = 0, sellN = 0;
+    let ptmSum  = 0, ptmN  = 0;
+    let ratingSum = 0, ratingN = 0;
+    let gpumSum = 0, gpumN  = 0;
+
     _modalVehicles.forEach(r => {
         const tr = document.createElement('tr');
         const status = _modalStatus(r);
@@ -1394,10 +1431,75 @@ function _renderModalRows() {
         addTd(r[14] != null ? fmtGBP(r[14]) : '—', 'right');
         addTd(r[13] != null && r[13] !== 0 && r[14] != null && r[14] !== 0 ? fmtPct(((r[13] + 199) / r[14]) * 100) : '—', 'right');
         addTd(r[16] != null ? fmtInt(r[16]) : '—', 'right');
-        addTd(r[22] != null ? fmtGBP(r[22]) : '—', 'right');
+        { const td = addTd(r[22] != null ? fmtGBP(r[22]) : '—', 'right'); if (r[22] != null && r[22] < 0) td.style.color = '#dc2626'; }
         if (status === 'Delivered') tr.classList.add('vehicle-row-sold');
         if (status === 'Ordered') tr.classList.add('vehicle-row-ordered');
         tbody.appendChild(tr);
+
+        // accumulate averages
+        if (r[25] != null)                        { mileSum += Number(r[25]); mileN++; }
+        if (r[7]  != null)                        { disSum  += Number(r[7]);  disN++;  }
+        if (r[8]  != null)                        { dtsSum  += Number(r[8]);  dtsN++;  }
+        if (r[12] != null && r[12] !== 0)         { ppSum   += Number(r[12]); ppN++;   }
+        if (r[30] != null && r[30] !== 0)         { capSum  += Number(r[30]); capN++;  }
+        if (r[13] != null && r[13] !== 0)         { sellSum += Number(r[13]); sellN++; }
+        if (r[14] != null)                        { ptmSum  += Number(r[14]); ptmN++;  }
+        if (r[16] != null)                        { ratingSum += Number(r[16]); ratingN++; }
+        if (r[22] != null)                        { gpumSum += Number(r[22]); gpumN++; }
+    });
+
+    // build averages tfoot row
+    const avgRow = document.getElementById('vehicle-modal-avg-row');
+    avgRow.innerHTML = '';
+    const addAvgTd = (text, align, blank) => {
+        const td = document.createElement('td');
+        td.textContent = blank ? '' : text;
+        if (blank) td.classList.add('tfoot-blank');
+        if (align) td.style.textAlign = align;
+        avgRow.appendChild(td);
+    };
+    const avgMile = mileN ? Math.round(mileSum / mileN) : null;
+    const avgDIS  = disN  ? disSum  / disN  : null;
+    const avgDTS  = dtsN  ? dtsSum  / dtsN  : null;
+    const avgPP   = ppN   ? ppSum   / ppN   : null;
+    const avgCap  = capN  ? capSum  / capN  : null;
+    const avgSell = sellN ? sellSum / sellN : null;
+    const avgPTM  = ptmN  ? ptmSum  / ptmN  : null;
+    const avgRating = ratingN ? ratingSum / ratingN : null;
+    const avgGPUM = gpumN ? gpumSum / gpumN : null;
+    const avgCapPct  = (avgPP  && avgCap)  ? ((avgPP  / avgCap)  * 100) : null;
+    const avgPTMPct  = (avgSell && avgPTM) ? (((avgSell + 199) / avgPTM) * 100) : null;
+
+    addAvgTd('', null, true);   // deriv
+    addAvgTd('', null, true);   // vrm
+    addAvgTd('', null, true);   // status
+    addAvgTd('', null, true);   // apex
+    addAvgTd('', null, true);   // portal
+    addAvgTd('', null, true);   // location
+    addAvgTd('', null, true);   // delivered
+    addAvgTd('', null, true);   // supplier
+    addAvgTd('Avg', 'left');    // dfr — label cell
+    addAvgTd(avgMile != null ? avgMile.toLocaleString() : '—', 'right');
+    addAvgTd(avgDIS  != null ? fmtInt(avgDIS)  : '—', 'right');
+    addAvgTd(avgDTS  != null ? fmtInt(avgDTS)  : '—', 'right');
+    addAvgTd(avgPP   != null ? fmtGBP(avgPP)   : '—', 'right');
+    addAvgTd(avgCap  != null ? fmtGBP(avgCap)  : '—', 'right');
+    addAvgTd(avgCapPct  != null ? avgCapPct.toFixed(1)  + '%' : '—', 'right');
+    addAvgTd(avgSell != null ? fmtGBP(avgSell) : '—', 'right');
+    addAvgTd(avgPTM  != null ? fmtGBP(avgPTM)  : '—', 'right');
+    addAvgTd(avgPTMPct  != null ? fmtPct(avgPTMPct)  : '—', 'right');
+    addAvgTd(avgRating != null ? fmtInt(avgRating) : '—', 'right');
+    { const td = addAvgTd(avgGPUM != null ? fmtGBP(avgGPUM) : '—', 'right'); if (avgGPUM != null && avgGPUM < 0) td.style.color = '#dc2626'; }
+
+    // sync avg table column widths to match the main modal table
+    requestAnimationFrame(() => {
+        const mainThs = document.querySelectorAll('#vehicle-modal-table thead th');
+        const avgTds  = avgRow.querySelectorAll('td');
+        mainThs.forEach((th, i) => {
+            if (avgTds[i]) avgTds[i].style.width = th.offsetWidth + 'px';
+        });
+        const avgTable = document.querySelector('.vehicle-modal-avg-table');
+        if (avgTable) avgTable.style.width = document.getElementById('vehicle-modal-table').offsetWidth + 'px';
     });
 }
 
@@ -1469,4 +1571,4 @@ document.getElementById('table-body').addEventListener('click', e => {
     if (row) openVehicleModal(row[0], row[1]);
 });
 
-document.addEventListener('DOMContentLoaded', () => loadFromServer(true));
+document.addEventListener('DOMContentLoaded', () => loadFromServer(false));

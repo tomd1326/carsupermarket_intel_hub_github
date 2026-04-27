@@ -226,7 +226,9 @@ def buying_requirements_sf_data(request: Request, force: bool = False, user: str
         return RedirectResponse(url=BASE_URL + "/login", status_code=303)
     try:
         sf_rows = _get_sf_rows(force=force)
-        return {"status": "ok", "rows": sf_rows}
+        with _cache_lock:
+            cached_at = _sf_cache.get("cached_at", 0.0)
+        return {"status": "ok", "rows": sf_rows, "cached_at": cached_at}
     except Exception as e:
         logger.error(f"Buying requirements SF data failed: {e}")
         return {"status": "error", "message": str(e)}
@@ -240,7 +242,9 @@ def buying_requirements_sp_purchases(request: Request, user: str = Depends(get_c
     try:
         purchases = _get_sp_purchases(force=True)
         out = {f"{k[0]}|{k[1]}": v for k, v in purchases.items()}
-        return {"status": "ok", "purchases": out}
+        with _cache_lock:
+            fetched_at = _sp_cache.get("fetched_at")
+        return {"status": "ok", "purchases": out, "fetched_at": fetched_at}
     except Exception as e:
         logger.error(f"Buying requirements SP purchases failed: {e}")
         return {"status": "error", "message": str(e)}
@@ -254,11 +258,15 @@ def buying_requirements_sp_purchases_cached(request: Request, user: str = Depend
     try:
         purchases = _get_sp_purchases_cached()
         if purchases is None:
-            return {"status": "ok", "purchases": {}}
+            return {"status": "ok", "purchases": {}, "fetched_at": None}
         # S3 cache already has string keys; in-process cache has tuple keys
         if purchases and isinstance(next(iter(purchases)), tuple):
             purchases = {f"{k[0]}|{k[1]}": v for k, v in purchases.items()}
-        return {"status": "ok", "purchases": purchases}
+        with _cache_lock:
+            fetched_at = _sp_cache.get("fetched_at")
+        if fetched_at is None:
+            fetched_at = _load_sp_fetched_at_from_s3()
+        return {"status": "ok", "purchases": purchases, "fetched_at": fetched_at}
     except Exception as e:
         logger.error(f"Buying requirements SP cached failed: {e}")
         return {"status": "error", "message": str(e)}
@@ -333,22 +341,46 @@ def _safe_float(v):
 
 
 # ── Caches ───────────────────────────────────────────────────────────────────
-# Snowflake: data changes at fixed times (03:20, 08:20, 11:20, 14:20, 17:20).
-#   - Persisted to S3 so Lambda cold starts are instant.
-#   - In-process copy avoids repeated S3 reads within the same Lambda instance.
-#   - TTL = 3h (safely shorter than the minimum gap between refreshes).
-# SharePoint: live buyer activity — 60-second TTL, in-process only.
-_sf_cache: dict = {"rows": None, "expires": 0.0}
-_sp_cache: dict = {"purchases": None, "expires": 0.0}
+# Snowflake: dbt model runs at 03:00, 07:00, 10:00, 13:00, 16:00 UK time.
+#   Data is ready by +15 min. Cache is valid if it was populated after the most
+#   recent scheduled window. Persisted to S3 so Lambda cold starts are instant.
+# SharePoint: live buyer activity — 30-min TTL, in-process + S3.
+_sf_cache: dict = {"rows": None, "cached_at": 0.0}   # cached_at = unix epoch (wall clock)
+_sp_cache: dict = {"purchases": None, "expires": 0.0, "fetched_at": None}
 _cache_lock = threading.Lock()
 
-_SF_TTL_SECONDS = 3 * 3600
-_SP_TTL_SECONDS = 60          # in-process TTL
-_SP_S3_TTL_SECONDS = 24 * 3600  # S3 TTL — survives cold starts across the day
-_S3_BUCKET      = "aa-raw-sources-uk"
-_S3_ENV         = 'prod' if os.getenv('AWS_REGION') == 'eu-west-1' else 'dev'
-_SF_S3_KEY      = f"applications/pricing/uk-vehicle-list-evaluator/{_S3_ENV}/cache/buying_requirements_v15.json"
-_SP_S3_KEY      = f"applications/pricing/uk-vehicle-list-evaluator/{_S3_ENV}/cache/sp_purchases_v4.json"
+# dbt run hours (UK local time) — data available 15 min after each
+_SF_SCHEDULE_HOURS_UK = [3, 7, 10, 13, 16]
+_SF_READY_OFFSET_MIN  = 15
+
+_SP_TTL_SECONDS    = 30 * 60
+_SP_S3_TTL_SECONDS = 30 * 60
+_S3_BUCKET         = "aa-raw-sources-uk"
+_S3_ENV            = 'prod' if os.getenv('AWS_REGION') == 'eu-west-1' else 'dev'
+_SF_S3_KEY         = f"applications/pricing/uk-vehicle-list-evaluator/{_S3_ENV}/cache/buying_requirements_v16.json"
+_SP_S3_KEY         = f"applications/pricing/uk-vehicle-list-evaluator/{_S3_ENV}/cache/sp_purchases_v4.json"
+
+
+def _sf_last_valid_window_utc() -> float:
+    """Return the UTC unix timestamp of the most recent SF schedule window that has passed."""
+    import zoneinfo
+    uk_tz = zoneinfo.ZoneInfo("Europe/London")
+    now_uk = datetime.datetime.now(uk_tz)
+    # Walk schedule hours in descending order to find the most recent one
+    for h in sorted(_SF_SCHEDULE_HOURS_UK, reverse=True):
+        candidate = now_uk.replace(hour=h, minute=_SF_READY_OFFSET_MIN, second=0, microsecond=0)
+        if candidate <= now_uk:
+            return candidate.astimezone(datetime.timezone.utc).timestamp()
+    # All today's windows are in the future — use yesterday's last window
+    yesterday_uk = now_uk - datetime.timedelta(days=1)
+    last_h = max(_SF_SCHEDULE_HOURS_UK)
+    candidate = yesterday_uk.replace(hour=last_h, minute=_SF_READY_OFFSET_MIN, second=0, microsecond=0)
+    return candidate.astimezone(datetime.timezone.utc).timestamp()
+
+
+def _sf_cache_is_fresh(cached_at: float) -> bool:
+    """True if cached_at is after the most recent valid schedule window."""
+    return cached_at >= _sf_last_valid_window_utc()
 
 
 def _s3_load(key: str) -> dict | None:
@@ -378,9 +410,18 @@ def _s3_save(key: str, data: dict, ttl: int) -> None:
         logger.warning(f"Failed to write S3 cache {key}: {e}")
 
 
-def _load_sf_cache_from_s3() -> list | None:
-    payload = _s3_load(_SF_S3_KEY)
-    return payload["rows"] if payload else None
+def _load_sf_cache_from_s3() -> tuple[list, float] | None:
+    """Returns (rows, cached_at) if the S3 payload exists and is schedule-fresh, else None."""
+    try:
+        import boto3
+        obj = boto3.client("s3").get_object(Bucket=_S3_BUCKET, Key=_SF_S3_KEY)
+        payload = json.loads(obj["Body"].read())
+        cached_at = payload.get("cached_at", 0.0)
+        if _sf_cache_is_fresh(cached_at):
+            return payload["rows"], cached_at
+    except Exception:
+        pass
+    return None
 
 
 def _json_default(obj):
@@ -390,8 +431,16 @@ def _json_default(obj):
     raise TypeError(f"Object of type {type(obj)} is not JSON serialisable")
 
 
-def _save_sf_cache_to_s3(rows: list) -> None:
-    _s3_save(_SF_S3_KEY, {"rows": rows}, _SF_TTL_SECONDS)
+def _save_sf_cache_to_s3(rows: list, cached_at: float) -> None:
+    try:
+        import boto3
+        boto3.client("s3").put_object(
+            Bucket=_S3_BUCKET, Key=_SF_S3_KEY,
+            Body=json.dumps({"rows": rows, "cached_at": cached_at}, default=_json_default).encode(),
+            ContentType="application/json",
+        )
+    except Exception as e:
+        logger.warning(f"Failed to write SF S3 cache: {e}")
 
 
 def _load_sp_cache_from_s3() -> dict | None:
@@ -400,90 +449,107 @@ def _load_sp_cache_from_s3() -> dict | None:
 
 
 def _save_sp_cache_to_s3(purchases: dict, ttl: int = _SP_TTL_SECONDS) -> None:
-    _s3_save(_SP_S3_KEY, {"purchases": {f"{k[0]}|{k[1]}": v for k, v in purchases.items()}}, ttl)
+    _s3_save(_SP_S3_KEY, {"purchases": {f"{k[0]}|{k[1]}": v for k, v in purchases.items()}, "fetched_at": time.time()}, ttl)
+
+
+def _load_sp_fetched_at_from_s3() -> float | None:
+    try:
+        import boto3
+        obj = boto3.client("s3").get_object(Bucket=_S3_BUCKET, Key=_SP_S3_KEY)
+        payload = json.loads(obj["Body"].read())
+        if time.time() < payload.get("expires_at", 0):
+            return payload.get("fetched_at")
+    except Exception:
+        pass
+    return None
 
 
 def _get_sf_rows(force: bool = False) -> list:
     """Return Snowflake rows — from in-process cache, S3 cache, or live query."""
-    now = time.monotonic()
     with _cache_lock:
-        if not force and _sf_cache["rows"] is not None and now < _sf_cache["expires"]:
+        if not force and _sf_cache["rows"] is not None and _sf_cache_is_fresh(_sf_cache["cached_at"]):
             return _sf_cache["rows"]
 
     # Try S3 cache before hitting Snowflake (skip on force)
-    result = None if force else _load_sf_cache_from_s3()
+    s3_result = None if force else _load_sf_cache_from_s3()
+    if s3_result is not None:
+        rows, cached_at = s3_result
+        with _cache_lock:
+            _sf_cache["rows"] = rows
+            _sf_cache["cached_at"] = cached_at
+        return rows
 
-    if result is None:
-        # S3 miss — query Snowflake and repopulate both caches
-        with SnowflakeClient() as sf:
-            rows, col_names = sf.execute("""
-                SELECT
-                    CAP_ID,
-                    COALESCE(MAKE_MODEL, '') || ' ' || COALESCE(CAP_DERIVATIVE, '') || ' / ' || COALESCE(PRICE_BAND, '') AS LABEL,
-                    COALESCE(FUEL_TYPE, '')          AS FUEL_TYPE,
-                    COALESCE(PRICE_BAND, '')         AS PRICE_BAND,
-                    STOCK,
-                    SALES_90_DAYS,
-                    SALES_7_DAYS,
-                    DAYS_IN_STOCK_ACKNOWLEDGED,
-                    DAYS_ADVERTISED_ACKNOWLEDGED,
-                    GPU_M,
-                    GPU_S,
-                    GPU_MS,
-                    PURCHASE_PRICE_INC_VAT,
-                    SELLING_PRICE_INC_VAT,
-                    AUTOTRADER_LATEST_RETAIL_VALUATION,
-                    AUTOTRADER_PERCENT,
-                    AUTOTRADER_LATEST_RETAIL_RATING,
-                    ORDER_ACKNOWLEDGED_DATE,
-                    COALESCE(VRM, '') AS VRM,
-                    COALESCE(SUPPLIER_NAME, '') AS SUPPLIER_NAME,
-                    VEHICLE_URL,
-                    COALESCE(VEHICLE_STATUS, '') AS VEHICLE_STATUS,
-                    COALESCE(GPU_M, STOCK_EVOLUTION_GPU_M) AS GPU_M_RESOLVED,
-                    COALESCE(VEHICLE_LOCATION, '') AS VEHICLE_LOCATION,
-                    DATE_FIRST_REGISTERED,
-                    MILEAGE,
-                    AUTOTRADER_PORTAL_LINK,
-                    INVOICE_POSTED_DATE,
-                    VEHICLE_UPDATED_AT,
-                    COALESCE(MAKE_MODEL, '') AS MAKE_MODEL,
-                    CAP_LIVE_CLEAN_LATEST
-                FROM PROD_CARSUPERMARKET_DB.product_vehicle_journey.buying_requirements
-                ORDER BY CAP_ID
-            """)
-        # Build name->index map so missing columns default to None rather than misaligning data
-        # [0:cap_id, 1:label, 2:fuel, 3:price_band, 4:stock, 5:sales90, 6:sales7,
-        #  7:dis, 8:dts, 9:gpu_m, 10:gpu_s, 11:gpu_ms,
-        #  12:purchase_price, 13:sell_price, 14:at_val, 15:at_pct, 16:at_rating,
-        #  17:order_acknowledged_date (ISO string), 18:vrm, 19:supplier_name, 20:vehicle_url,
-        #  21:vehicle_status, 22:gpu_m_resolved, 23:vehicle_location,
-        #  24:date_first_registered, 25:mileage, 26:autotrader_portal_link,
-        #  27:invoice_posted_date, 28:vehicle_updated_at, 29:make_model, 30:cap_live_clean]
-        col_map = {name.upper(): i for i, name in enumerate(col_names)}
-        def _g(r, name): return r[col_map[name]] if name in col_map else None
-        def _s(r, name): v = _g(r, name); return str(v) if v is not None else None
-        result = [[
-            _g(r, 'CAP_ID'), _g(r, 'LABEL'), _g(r, 'FUEL_TYPE'), _g(r, 'PRICE_BAND'),
-            _g(r, 'STOCK'), _g(r, 'SALES_90_DAYS'), _g(r, 'SALES_7_DAYS'),
-            _g(r, 'DAYS_IN_STOCK_ACKNOWLEDGED'), _g(r, 'DAYS_ADVERTISED_ACKNOWLEDGED'),
-            _g(r, 'GPU_M'), _g(r, 'GPU_S'), _g(r, 'GPU_MS'),
-            _g(r, 'PURCHASE_PRICE_INC_VAT'), _g(r, 'SELLING_PRICE_INC_VAT'),
-            _g(r, 'AUTOTRADER_LATEST_RETAIL_VALUATION'), _g(r, 'AUTOTRADER_PERCENT'),
-            _g(r, 'AUTOTRADER_LATEST_RETAIL_RATING'),
-            _s(r, 'ORDER_ACKNOWLEDGED_DATE'),
-            _g(r, 'VRM'), _g(r, 'SUPPLIER_NAME'), _g(r, 'VEHICLE_URL'),
-            _g(r, 'VEHICLE_STATUS'), _g(r, 'GPU_M_RESOLVED'), _g(r, 'VEHICLE_LOCATION'),
-            _s(r, 'DATE_FIRST_REGISTERED'),
-            _g(r, 'MILEAGE'), _g(r, 'AUTOTRADER_PORTAL_LINK'),
-            _s(r, 'INVOICE_POSTED_DATE'), _s(r, 'VEHICLE_UPDATED_AT'),
-            _g(r, 'MAKE_MODEL'), _g(r, 'CAP_LIVE_CLEAN_LATEST'),
-        ] for r in rows]
-        _save_sf_cache_to_s3(result)
+    cached_at = time.time()
+    # S3 miss or stale — query Snowflake and repopulate both caches
+    with SnowflakeClient() as sf:
+        rows, col_names = sf.execute("""
+            SELECT
+                CAP_ID,
+                COALESCE(MAKE_MODEL, '') || ' ' || COALESCE(CAP_DERIVATIVE, '') || ' / ' || COALESCE(PRICE_BAND, '') AS LABEL,
+                COALESCE(FUEL_TYPE, '')          AS FUEL_TYPE,
+                COALESCE(PRICE_BAND, '')         AS PRICE_BAND,
+                STOCK,
+                SALES_90_DAYS,
+                SALES_7_DAYS,
+                DAYS_IN_STOCK_ACKNOWLEDGED,
+                DAYS_ADVERTISED_ACKNOWLEDGED,
+                GPU_M,
+                GPU_S,
+                GPU_MS,
+                PURCHASE_PRICE_INC_VAT,
+                SELLING_PRICE_INC_VAT,
+                AUTOTRADER_LATEST_RETAIL_VALUATION,
+                AUTOTRADER_PERCENT,
+                AUTOTRADER_LATEST_RETAIL_RATING,
+                ORDER_ACKNOWLEDGED_DATE,
+                COALESCE(VRM, '') AS VRM,
+                COALESCE(SUPPLIER_NAME, '') AS SUPPLIER_NAME,
+                VEHICLE_URL,
+                COALESCE(VEHICLE_STATUS, '') AS VEHICLE_STATUS,
+                COALESCE(GPU_M, STOCK_EVOLUTION_GPU_M) AS GPU_M_RESOLVED,
+                COALESCE(VEHICLE_LOCATION, '') AS VEHICLE_LOCATION,
+                DATE_FIRST_REGISTERED,
+                MILEAGE,
+                AUTOTRADER_PORTAL_LINK,
+                INVOICE_POSTED_DATE,
+                VEHICLE_UPDATED_AT,
+                COALESCE(MAKE_MODEL, '') AS MAKE_MODEL,
+                CAP_LIVE_CLEAN_LATEST
+            FROM PROD_CARSUPERMARKET_DB.product_vehicle_journey.buying_requirements
+            ORDER BY CAP_ID
+        """)
+    # Build name->index map so missing columns default to None rather than misaligning data
+    # [0:cap_id, 1:label, 2:fuel, 3:price_band, 4:stock, 5:sales90, 6:sales7,
+    #  7:dis, 8:dts, 9:gpu_m, 10:gpu_s, 11:gpu_ms,
+    #  12:purchase_price, 13:sell_price, 14:at_val, 15:at_pct, 16:at_rating,
+    #  17:order_acknowledged_date (ISO string), 18:vrm, 19:supplier_name, 20:vehicle_url,
+    #  21:vehicle_status, 22:gpu_m_resolved, 23:vehicle_location,
+    #  24:date_first_registered, 25:mileage, 26:autotrader_portal_link,
+    #  27:invoice_posted_date, 28:vehicle_updated_at, 29:make_model, 30:cap_live_clean]
+    col_map = {name.upper(): i for i, name in enumerate(col_names)}
+    def _g(r, name): return r[col_map[name]] if name in col_map else None
+    def _s(r, name): v = _g(r, name); return str(v) if v is not None else None
+    result = [[
+        _g(r, 'CAP_ID'), _g(r, 'LABEL'), _g(r, 'FUEL_TYPE'), _g(r, 'PRICE_BAND'),
+        _g(r, 'STOCK'), _g(r, 'SALES_90_DAYS'), _g(r, 'SALES_7_DAYS'),
+        _g(r, 'DAYS_IN_STOCK_ACKNOWLEDGED'), _g(r, 'DAYS_ADVERTISED_ACKNOWLEDGED'),
+        _g(r, 'GPU_M'), _g(r, 'GPU_S'), _g(r, 'GPU_MS'),
+        _g(r, 'PURCHASE_PRICE_INC_VAT'), _g(r, 'SELLING_PRICE_INC_VAT'),
+        _g(r, 'AUTOTRADER_LATEST_RETAIL_VALUATION'), _g(r, 'AUTOTRADER_PERCENT'),
+        _g(r, 'AUTOTRADER_LATEST_RETAIL_RATING'),
+        _s(r, 'ORDER_ACKNOWLEDGED_DATE'),
+        _g(r, 'VRM'), _g(r, 'SUPPLIER_NAME'), _g(r, 'VEHICLE_URL'),
+        _g(r, 'VEHICLE_STATUS'), _g(r, 'GPU_M_RESOLVED'), _g(r, 'VEHICLE_LOCATION'),
+        _s(r, 'DATE_FIRST_REGISTERED'),
+        _g(r, 'MILEAGE'), _g(r, 'AUTOTRADER_PORTAL_LINK'),
+        _s(r, 'INVOICE_POSTED_DATE'), _s(r, 'VEHICLE_UPDATED_AT'),
+        _g(r, 'MAKE_MODEL'), _g(r, 'CAP_LIVE_CLEAN_LATEST'),
+    ] for r in rows]
+    _save_sf_cache_to_s3(result, cached_at)
 
     with _cache_lock:
         _sf_cache["rows"] = result
-        _sf_cache["expires"] = now + _SF_TTL_SECONDS
+        _sf_cache["cached_at"] = cached_at
     return result
 
 
@@ -494,7 +560,15 @@ def _get_sp_purchases(force: bool = False) -> dict:
         if not force and _sp_cache["purchases"] is not None and now < _sp_cache["expires"]:
             return _sp_cache["purchases"]
 
-    values = SharePointClient().get_worksheet_values(_SP_SUBFOLDER, _SP_FILENAME, _SP_SHEET)
+    for _sp_attempt in range(1, 4):
+        try:
+            values = SharePointClient().get_worksheet_values(_SP_SUBFOLDER, _SP_FILENAME, _SP_SHEET)
+            break
+        except Exception as _sp_exc:
+            logger.warning(f"SharePoint fetch attempt {_sp_attempt}/3 failed: {_sp_exc}")
+            if _sp_attempt == 3:
+                raise
+            time.sleep(3)
     purchases: dict = {}
 
     # Find the header row — search first 5 rows for the one containing "CAP ID"
@@ -540,9 +614,11 @@ def _get_sp_purchases(force: bool = False) -> dict:
 
     data_rows = len(values) - (header_row_idx + 1) if header_row_idx is not None else 0
     logger.info(f"SP: header on row {header_row_idx}, {len(purchases)} purchase keys from {data_rows} data rows")
+    fetched_at = time.time()
     with _cache_lock:
         _sp_cache["purchases"] = purchases
         _sp_cache["expires"] = time.monotonic() + _SP_TTL_SECONDS
+        _sp_cache["fetched_at"] = fetched_at
     _save_sp_cache_to_s3(purchases, _SP_S3_TTL_SECONDS)
     return purchases
 
@@ -720,7 +796,7 @@ def task_buying_requirements_download(
         at_val     = float(r[14]) if r[14] is not None else None
         at_pct_raw = float(r[15]) if r[15] is not None else None
 
-        key = (cap_id, price_band)
+        key = cap_id
         if key not in cap_data:
             cap_data[key] = _empty_bucket()
         g = cap_data[key]
@@ -771,17 +847,17 @@ def task_buying_requirements_download(
     def _avg_gbp(s, n):
         return round(s / n) if n > 0 else None
 
-    # Per-(cap_id, price_band) derived columns
+    # Per-cap_id derived columns (collapsed across all price bands)
     cap_requirements: dict = {}
-    for (cap_id, price_band), g in cap_data.items():
+    for cap_id, g in cap_data.items():
         xxd_sales   = g["sales_xxd"]
         stock       = g["stock"]
         ideal_stock = (ideal_total * xxd_sales / total_xxd_sales) if total_xxd_sales > 0 and xxd_sales > 0 else 0.0
         avg_sell    = _avg_gbp(g["sell_sum"],   g["sell_n"])
         avg_at_val  = _avg_gbp(g["at_val_sum"], g["at_val_n"])
         at_pct      = round(((avg_sell + 199) / avg_at_val) * 100, 1) if avg_sell is not None and avg_at_val and avg_at_val != 0 else None
-        cap_requirements[(cap_id, price_band)] = {
-            f"{max_days_sales}d Sales":  round(xxd_sales,          1),
+        cap_requirements[cap_id] = {
+            "90d Sales":                 round(xxd_sales,          1),
             "7d Sales":                  round(g["sales_7"],        1),
             "Stock":                     round(stock,               0),
             "Ideal Stock":               round(ideal_stock,         1),
@@ -802,7 +878,7 @@ def task_buying_requirements_download(
     # estimate its retail price, derive its price band, then look up
     # (cap_id, derived_price_band) for all requirement columns.
     req_cols = [
-        f"{max_days_sales}d Sales", "7d Sales", "Stock", "Ideal Stock", "Required",
+        "90d Sales", "7d Sales", "Stock", "Ideal Stock", "Required",
         "Avg Days in Stock", "Avg Days to Sell", "Avg Sell Price",
         "Avg AT PTM", "Avg AT PTM %", "Avg AT Rating",
         "Avg GPU-M", "Avg GPU-S", "Avg GPU-MS",
@@ -837,17 +913,17 @@ def task_buying_requirements_download(
         elaborated_df["Estimated Retail Price"] = None
         elaborated_df["Derived Price Band"]     = None
 
-    def lookup(cap_id_val, price_band_val, col):
+    def lookup(cap_id_val, col):
         try:
             cid = int(float(cap_id_val))
         except (TypeError, ValueError):
             return None
-        return cap_requirements.get((cid, price_band_val or ""), {}).get(col)
+        return cap_requirements.get(cid, {}).get(col)
 
     for col in req_cols:
         if cap_col:
             elaborated_df[col] = elaborated_df.apply(
-                lambda row, c=col: lookup(row[cap_col], row.get("Derived Price Band"), c), axis=1
+                lambda row, c=col: lookup(row[cap_col], c), axis=1
             )
         else:
             elaborated_df[col] = None

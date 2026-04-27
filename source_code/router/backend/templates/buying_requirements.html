@@ -132,7 +132,7 @@
             </div>
             <div class="filter-divider"></div>
             <span id="filtered-cap-count" class="small text-muted"></span>
-            <button class="btn btn-sm btn-outline-secondary" onclick="resetTableFilters()">Clear Filters</button>
+            <button class="btn btn-sm btn-primary" onclick="resetTableFilters()">Clear All Filters</button>
         </div>
         </div><!-- /#data-section -->
         </div><!-- /.controls-area -->
@@ -159,33 +159,44 @@
             <button class="vehicle-modal-close" onclick="closeVehicleModal()" aria-label="Close">&times;</button>
         </div>
         <div class="vehicle-modal-body">
-            <table id="vehicle-modal-table">
-                <thead>
-                    <tr>
-                        <th data-sort="deriv" data-label="Make / Model / Derivative" style="cursor:pointer">Make / Model / Derivative</th>
-                        <th data-sort="vrm" data-label="VRM" style="cursor:pointer">VRM</th>
-                        <th data-sort="status" data-label="Status" style="cursor:pointer">Status</th>
-                        <th>Apex</th>
-                        <th>Portal</th>
-                        <th data-sort="location" data-label="Location" style="cursor:pointer">Location</th>
-                        <th data-sort="delivered" data-label="Delivered" style="cursor:pointer">Delivered</th>
-                        <th data-sort="supplier" data-label="Supplier" style="cursor:pointer">Supplier</th>
-                        <th data-sort="dfr" data-label="DFR" style="cursor:pointer">DFR</th>
-                        <th data-sort="mileage" data-label="Mileage" style="cursor:pointer">Mileage</th>
-                        <th data-sort="dis" data-label="DIS" style="cursor:pointer">DIS</th>
-                        <th data-sort="dts" data-label="DTS" style="cursor:pointer">DTS</th>
-                        <th data-sort="purchase_price" data-label="Purchase Price" style="cursor:pointer">Purchase Price</th>
-                        <th data-sort="cap_clean" data-label="CAP Live Clean" style="cursor:pointer">CAP Live Clean</th>
-                        <th data-sort="cap_pct" data-label="CAP %" style="cursor:pointer">CAP %</th>
-                        <th data-sort="sell_price" data-label="Sell Price" style="cursor:pointer">Sell Price</th>
-                        <th data-sort="at_ptm" data-label="AT PTM" style="cursor:pointer">AT PTM</th>
-                        <th data-sort="at_ptm_pct" data-label="AT PTM %" style="cursor:pointer">AT PTM %</th>
-                        <th data-sort="at_rating" data-label="AT Rating" style="cursor:pointer">AT Rating</th>
-                        <th data-sort="gpu_m" data-label="GPU-M" style="cursor:pointer">GPU-M</th>
-                    </tr>
-                </thead>
-                <tbody id="vehicle-modal-body"></tbody>
-            </table>
+            <div class="vehicle-modal-scroll-x">
+                <div class="vehicle-modal-tbody-wrap">
+                    <table id="vehicle-modal-table">
+                        <thead>
+                            <tr>
+                                <th data-sort="deriv" data-label="Make / Model / Derivative" style="cursor:pointer">Make / Model / Derivative</th>
+                                <th data-sort="vrm" data-label="VRM" style="cursor:pointer">VRM</th>
+                                <th data-sort="status" data-label="Status" style="cursor:pointer">Status</th>
+                                <th>Apex</th>
+                                <th>Portal</th>
+                                <th data-sort="location" data-label="Location" style="cursor:pointer">Location</th>
+                                <th data-sort="delivered" data-label="Delivered" style="cursor:pointer">Delivered</th>
+                                <th data-sort="supplier" data-label="Supplier" style="cursor:pointer">Supplier</th>
+                                <th data-sort="dfr" data-label="DFR" style="cursor:pointer">DFR</th>
+                                <th data-sort="mileage" data-label="Mileage" style="cursor:pointer">Mileage</th>
+                                <th data-sort="dis" data-label="DIS" style="cursor:pointer">DIS</th>
+                                <th data-sort="dts" data-label="DTS" style="cursor:pointer">DTS</th>
+                                <th data-sort="purchase_price" data-label="Purchase Price" style="cursor:pointer">Purchase Price</th>
+                                <th data-sort="cap_clean" data-label="CAP Live Clean" style="cursor:pointer">CAP Live Clean</th>
+                                <th data-sort="cap_pct" data-label="CAP %" style="cursor:pointer">CAP %</th>
+                                <th data-sort="sell_price" data-label="Sell Price" style="cursor:pointer">Sell Price</th>
+                                <th data-sort="at_ptm" data-label="AT PTM" style="cursor:pointer">AT PTM</th>
+                                <th data-sort="at_ptm_pct" data-label="AT PTM %" style="cursor:pointer">AT PTM %</th>
+                                <th data-sort="at_rating" data-label="AT Rating" style="cursor:pointer">AT Rating</th>
+                                <th data-sort="gpu_m" data-label="GPU-M" style="cursor:pointer">GPU-M</th>
+                            </tr>
+                        </thead>
+                        <tbody id="vehicle-modal-body"></tbody>
+                    </table>
+                </div>
+                <div class="vehicle-modal-avg-wrap">
+                    <table class="vehicle-modal-avg-table">
+                        <tbody>
+                            <tr id="vehicle-modal-avg-row"></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
         </div>
     </div>
 
