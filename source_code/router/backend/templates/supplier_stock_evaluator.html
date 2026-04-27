@@ -62,6 +62,13 @@
             width: 30px;
             display: inline-block;
         }
+        @keyframes row-flash {
+            0%   { background-color: #fff3cd; }
+            100% { background-color: transparent; }
+        }
+        .row-flash {
+            animation: row-flash 1.4s ease-out forwards;
+        }
     </style>
 </head>
 <body>
@@ -70,11 +77,14 @@
     </a>
 
     <div class="container mt-4">
-        <div class="d-flex align-items-center gap-3 mb-3">
+        <div class="d-flex align-items-center justify-content-between mb-3">
             <h2 class="mb-0">Supplier Stock Evaluator</h2>
-            <a href="{{ BASE_URL }}/home" class="btn btn-outline-secondary btn-sm">
-                <i class="fas fa-arrow-left me-1"></i>Back
-            </a>
+            <div class="d-flex align-items-center gap-2">
+                <a href="{{ BASE_URL }}/home" class="btn btn-outline-secondary btn-sm">
+                    <i class="fas fa-arrow-left me-1"></i>Back
+                </a>
+                <a href="{{ BASE_URL }}/buying-requirements" class="btn btn-primary btn-sm">Go to Buying Requirements</a>
+            </div>
         </div>
         <form id="uploadForm" action="{{ BASE_URL }}/upload-task" method="post">
             <div class="upload-row d-flex align-items-center gap-3 mb-3 flex-wrap">
@@ -93,42 +103,38 @@
         </form>
         {% if user == 'admin' %}
         <div class="d-flex align-items-center gap-2 mb-3 flex-wrap">
-            <div class="d-flex align-items-center gap-2">
-                <button id="btnMotability" class="btn btn-outline-primary" onclick="fetchSupplierStock('motability')">Get Motability stock</button>
-                <div class="form-check mb-0">
-                    <input class="form-check-input" type="checkbox" id="includePreview" value="on">
-                    <label class="form-check-label" for="includePreview">Include Preview</label>
-                </div>
+            <select class="form-select" id="fetchSupplierSelect" style="width:160px">
+                <option value="motability">Motability</option>
+                <option value="1link">1link</option>
+            </select>
+            <div class="form-check mb-0" id="includePreviewWrapper">
+                <input class="form-check-input" type="checkbox" id="includePreview" value="on">
+                <label class="form-check-label" for="includePreview">Include Preview</label>
             </div>
-            <div class="d-flex align-items-center gap-2">
-                <button id="btn1link" class="btn btn-outline-primary" onclick="fetchSupplierStock('1link')">Get 1link stock</button>
-            </div>
-            <span id="fetchStatus" class="text-muted small ms-2" style="display:none"></span>
-        </div>
-        {% endif %}
-        <div class="req-row d-flex align-items-center gap-3 mb-4">
-            <a href="{{ BASE_URL }}/buying-requirements" class="btn btn-primary">Go to Buying Requirements</a>
+            <button id="btnGetStock" class="btn btn-outline-primary" onclick="fetchSupplierStock()">Get Stock</button>
+            <span id="fetchStatusMsg" class="text-muted small" style="display:none"></span>
             {% if settings.calc_buying_reqs %}
             <span class="text-muted small">
                 Downloads include buying requirements &middot; {{ settings.number_to_buy }} to buy &middot; {{ settings.max_days_sales }}d sales &middot; max DTS {{ settings.max_dts }} &middot; min GPU-M {{ settings.min_gpu_m }}
             </span>
             {% endif %}
         </div>
+        {% endif %}
 
         <div class="d-flex justify-content-between align-items-center mt-4">
-        <div class="d-flex align-items-center gap-2">
-            <h4 class="task-list-heading mb-0">Task List</h4>
-            <button class="btn btn-outline-secondary" onclick="location.reload()">
-                <i class="fas fa-sync-alt"></i>
-            </button>
-            {% if at_least_one_pending %}
-                <div class="form-check ms-1">
-                    <input type="checkbox" class="form-check-input" id="auto-refresh-checkbox" checked>
-                    <label class="form-check-label countdown-label" for="auto-refresh-checkbox">Auto-refresh in <span id="countdown">5</span></label>
-                </div>
-            {% endif %}
+            <div class="d-flex align-items-center gap-2">
+                <h4 class="task-list-heading mb-0">Task List</h4>
+                <button class="btn btn-outline-secondary" onclick="location.reload()">
+                    <i class="fas fa-sync-alt"></i>
+                </button>
+                {% if at_least_one_pending %}
+                    <div class="form-check ms-1">
+                        <input type="checkbox" class="form-check-input" id="auto-refresh-checkbox" checked>
+                        <label class="form-check-label countdown-label" for="auto-refresh-checkbox">Auto-refresh in <span id="countdown">5</span></label>
+                    </div>
+                {% endif %}
+            </div>
         </div>
-    </div>
 
         <table class="table">
             <thead>
@@ -145,7 +151,7 @@
             </thead>
             <tbody>
                 {% for task in tasks %}
-                <tr>
+                <tr data-task-id="{{ task.task_id }}" data-status="{{ task.status }}">
                     <td>{{ task.task_id }}</td>
                     <td>{{ task.created.strftime("%Y-%m-%d %H:%M:%S") }}</td>
                     <td>{{ task.supplier_name }}</td>
@@ -169,8 +175,8 @@
                         {% else %}
                             <a href="#" class="btn btn-secondary disabled" aria-disabled="true"><i class="fa fa-download"></i></a>
                         {% endif %}
-                        {% if task.status == 'pending' %}
-                            <a href="{{ BASE_URL }}/delete-task/{{ task.task_id }}" class="btn btn-outline-danger" title="Delete pending task" onclick="return confirm('Delete this pending task?')"><i class="fa fa-trash"></i></a>
+                        {% if task.status in ('pending', 'created') %}
+                            <a href="#" class="btn btn-outline-danger" title="Delete task" onclick="deleteTask({{ task.task_id }}); return false;"><i class="fa fa-trash"></i></a>
                         {% endif %}
                 </tr>
                 {% endfor %}
@@ -195,29 +201,32 @@
             min_gpu_m:      {{ settings.min_gpu_m }},
         };
 
-        function startCountdown() {
-            var countdownElement = document.getElementById('countdown');
-            var timeLeft = 5;
-            var decrease = function() {
-                // CHeck the auto-refresh-checkbox status
-                var autoRefreshCheckbox = document.getElementById('auto-refresh-checkbox');
-                if (!autoRefreshCheckbox.checked) {
-                    return;
-                }
-                if (timeLeft <= 0) {
-                    clearInterval(countdownTimer);
-                    location.reload(); // Reload the page when countdown reaches 0
-                } else {
-                    countdownElement.textContent = timeLeft;
-                    timeLeft -= 1;
-                }
-            };
+        let _currentPage = {{ current_page }};
 
-            decrease(); // Call decrease function immediately to avoid 1-second delay
-            var countdownTimer = setInterval(decrease, 1000);
+        function _statusHtml(task) {
+            if (task.status === 'success')
+                return `<span class="status-label status-success" title="${task.message || ''}">Success</span>`;
+            if (task.status === 'created')
+                return `<span class="status-label status-created">Created</span>`;
+            if (task.status === 'pending')
+                return `<span class="status-label status-pending">Pending</span>`;
+            return `<span class="status-label status-error" title="${task.message || ''}">Error</span>`;
         }
 
-        document.addEventListener("DOMContentLoaded", function() {
+        function _actionsHtml(task) {
+            let html = '';
+            if (task.status === 'success') {
+                html += `<a href="#" class="btn btn-primary download-btn" data-task-id="${task.task_id}" title="Download"><i class="fa fa-download"></i></a>`;
+            } else {
+                html += `<a href="#" class="btn btn-secondary disabled" aria-disabled="true"><i class="fa fa-download"></i></a>`;
+            }
+            if (task.status === 'pending' || task.status === 'created') {
+                html += ` <a href="#" class="btn btn-outline-danger" title="Delete task" onclick="deleteTask(${task.task_id}); return false;"><i class="fa fa-trash"></i></a>`;
+            }
+            return html;
+        }
+
+        function _bindDownloadBtns() {
             document.querySelectorAll('.download-btn').forEach(function(el) {
                 el.addEventListener('click', function(e) {
                     e.preventDefault();
@@ -229,6 +238,88 @@
                     {% endif %}
                 });
             });
+        }
+
+        async function deleteTask(taskId) {
+            if (!confirm('Delete this task?')) return;
+            await fetch('{{ BASE_URL }}/delete-task/' + taskId);
+            await refreshTaskList();
+        }
+
+        let _knownTaskStates = {};
+
+        async function refreshTaskList() {
+            try {
+                const resp = await fetch('{{ BASE_URL }}/api/tasks-json?page=' + _currentPage);
+                if (!resp.ok) return;
+                const data = await resp.json();
+                const tbody = document.querySelector('table tbody');
+                tbody.innerHTML = data.tasks.map(task => `
+                    <tr data-task-id="${task.task_id}">
+                        <td>${task.task_id}</td>
+                        <td>${task.created || ''}</td>
+                        <td>${task.supplier_name || ''}</td>
+                        <td>${task.filename || ''}</td>
+                        <td>${task.total_rows !== null ? task.total_rows : '-'}</td>
+                        <td>${task.execution_time !== null ? task.execution_time + 's' : '-'}</td>
+                        <td>${_statusHtml(task)}</td>
+                        <td>${_actionsHtml(task)}</td>
+                    </tr>`).join('');
+
+                data.tasks.forEach(task => {
+                    const prev = _knownTaskStates[task.task_id];
+                    if (!prev || prev !== task.status) {
+                        const row = tbody.querySelector(`tr[data-task-id="${task.task_id}"]`);
+                        if (row) {
+                            row.classList.remove('row-flash');
+                            void row.offsetWidth; // force reflow to restart animation
+                            row.classList.add('row-flash');
+                        }
+                    }
+                    _knownTaskStates[task.task_id] = task.status;
+                });
+
+                _bindDownloadBtns();
+                if (!data.has_pending) {
+                    clearInterval(_refreshInterval);
+                    _refreshInterval = null;
+                    const countdown = document.getElementById('countdown');
+                    if (countdown) countdown.closest('.form-check')?.remove();
+                }
+            } catch (e) {}
+        }
+
+        let _refreshInterval = null;
+        let _countdownTimer = null;
+
+        function startCountdown() {
+            var countdownElement = document.getElementById('countdown');
+            var timeLeft = 5;
+
+            _refreshInterval = setInterval(async function() {
+                await refreshTaskList();
+                if (document.getElementById('auto-refresh-checkbox')?.checked) {
+                    timeLeft = 5;
+                    if (countdownElement) countdownElement.textContent = timeLeft;
+                }
+            }, 2000);
+
+            var decrease = function() {
+                var autoRefreshCheckbox = document.getElementById('auto-refresh-checkbox');
+                if (!autoRefreshCheckbox || !autoRefreshCheckbox.checked) return;
+                if (countdownElement) countdownElement.textContent = Math.max(0, timeLeft);
+                timeLeft -= 1;
+            };
+
+            decrease();
+            _countdownTimer = setInterval(decrease, 1000);
+        }
+
+        document.addEventListener("DOMContentLoaded", function() {
+            document.querySelectorAll('table tbody tr[data-task-id]').forEach(function(row) {
+                _knownTaskStates[row.dataset.taskId] = row.dataset.status;
+            });
+            _bindDownloadBtns();
 
             document.getElementById('uploadForm').addEventListener('submit', function (event) {
                 event.preventDefault();
@@ -272,35 +363,35 @@
             {% endif %}
         });
 
-        async function fetchSupplierStock(supplier) {
-            const statusEl = document.getElementById('fetchStatus');
-            const btnMotability = document.getElementById('btnMotability');
-            const btn1link = document.getElementById('btn1link');
+        let _anyFetchInFlight = false;
 
-            const supplierLabel = supplier === 'motability' ? 'Motability' : '1link';
+        document.getElementById('fetchSupplierSelect').addEventListener('change', function() {
+            document.getElementById('includePreviewWrapper').style.display =
+                this.value === 'motability' ? '' : 'none';
+        });
+
+        async function fetchSupplierStock() {
+            if (_anyFetchInFlight) return;
+
+            const supplier = document.getElementById('fetchSupplierSelect').value;
+            const btn = document.getElementById('btnGetStock');
+            const select = document.getElementById('fetchSupplierSelect');
+            const statusEl = document.getElementById('fetchStatusMsg');
+
             const steps = supplier === 'motability'
-                ? [
-                    'Connecting to Motability portal...',
-                    'Logging in...',
-                    'Retrieving stock file...',
-                    'Creating task...',
-                  ]
-                : [
-                    'Connecting to 1link portal...',
-                    'Retrieving stock file...',
-                    'Creating task...',
-                  ];
+                ? ['Connecting...', 'Logging in...', 'Retrieving stock file...', 'Creating task...']
+                : ['Connecting...', 'Retrieving stock file...', 'Creating task...'];
 
             const setStatus = (msg, isError) => {
                 statusEl.style.display = '';
                 statusEl.textContent = msg;
-                statusEl.className = 'small ms-2 ' + (isError ? 'text-danger' : 'text-muted');
+                statusEl.className = 'small ' + (isError ? 'text-danger' : 'text-muted');
             };
 
-            btnMotability.disabled = true;
-            btn1link.disabled = true;
+            _anyFetchInFlight = true;
+            btn.disabled = true;
+            select.disabled = true;
 
-            // Cycle through steps while request is in flight
             let stepIdx = 0;
             setStatus(steps[stepIdx]);
             const stepInterval = setInterval(() => {
@@ -308,37 +399,70 @@
                 setStatus(steps[stepIdx]);
             }, supplier === 'motability' ? 8000 : 2000);
 
-            try {
-                const formData = new FormData();
-                formData.append('supplier', supplier);
-                if (supplier === 'motability' && document.getElementById('includePreview').checked) {
-                    formData.append('include_preview', 'on');
+            const formData = new FormData();
+            formData.append('supplier', supplier);
+            if (supplier === 'motability' && document.getElementById('includePreview').checked) {
+                formData.append('include_preview', 'on');
+            }
+
+            const MAX_ATTEMPTS = 3;
+            let lastError = null;
+
+            for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+                if (attempt > 1) {
+                    setStatus(`Timed out, retrying (${attempt - 1}/${MAX_ATTEMPTS - 1})...`);
+                    await new Promise(r => setTimeout(r, 2000));
                 }
+                try {
+                    const resp = await fetch('{{ BASE_URL }}/api/fetch-supplier-stock', {
+                        method: 'POST',
+                        body: formData,
+                        redirect: 'manual',
+                    });
 
-                const resp = await fetch('{{ BASE_URL }}/api/fetch-supplier-stock', {
-                    method: 'POST',
-                    body: formData,
-                    redirect: 'manual',
-                });
+                    if (resp.ok || resp.type === 'opaqueredirect') {
+                        clearInterval(stepInterval);
+                        setStatus('Processing - check task list below');
+                        _anyFetchInFlight = false;
+                        btn.disabled = false;
+                        select.disabled = false;
+                        await refreshTaskList();
+                        return;
+                    }
 
-                clearInterval(stepInterval);
+                    if (resp.status === 504 && attempt < MAX_ATTEMPTS) {
+                        lastError = '504 Gateway Timeout';
+                        continue;
+                    }
 
-                if (resp.ok || resp.type === 'opaqueredirect') {
-                    setStatus('Retrieving Autotrader & CAP data...');
-                    setTimeout(() => location.reload(), 1200);
-                } else {
+                    clearInterval(stepInterval);
                     const text = await resp.text();
                     const match = text.match(/"detail"\s*:\s*"([^"]+)"/);
                     setStatus('Error: ' + (match ? match[1] : resp.status), true);
-                    btnMotability.disabled = false;
-                    btn1link.disabled = false;
+                    btn.disabled = false;
+                    select.disabled = false;
+                    _anyFetchInFlight = false;
+                    return;
+                } catch (e) {
+                    if (attempt < MAX_ATTEMPTS) {
+                        lastError = e.message;
+                        continue;
+                    }
+                    clearInterval(stepInterval);
+                    setStatus('Error: ' + e.message, true);
+                    btn.disabled = false;
+                    select.disabled = false;
+                    _anyFetchInFlight = false;
+                    return;
                 }
-            } catch (e) {
-                clearInterval(stepInterval);
-                setStatus('Error: ' + e.message, true);
-                btnMotability.disabled = false;
-                btn1link.disabled = false;
             }
+
+            // All retries exhausted
+            clearInterval(stepInterval);
+            setStatus('Error: ' + lastError + ' (after ' + (MAX_ATTEMPTS - 1) + ' retries)', true);
+            btn.disabled = false;
+            select.disabled = false;
+            _anyFetchInFlight = false;
         }
     </script>
 </body>

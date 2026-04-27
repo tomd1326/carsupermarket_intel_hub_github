@@ -1,5 +1,4 @@
-from __future__ import annotations
-
+import asyncio
 import base64
 import tempfile
 import threading
@@ -15,6 +14,7 @@ from fastapi.responses import FileResponse
 from fastapi import File, UploadFile
 import json
 import os
+from typing import Optional
 import requests
 import time
 import hashlib
@@ -126,18 +126,20 @@ def update_settings(
     min_gpu_m: int = Form(...),
     cap_workers: int = Form(...),
     cap_rate_limit: int = Form(...),
-    calc_buying_reqs: Optional[str] = Form(None),
+    calc_buying_reqs: str = Form(default=""),
+    enterprise_email_auto_process: str = Form(default=""),
     user: str = Depends(get_current_user),
 ):
     if user != 'admin':
         raise HTTPException(status_code=403, detail="Forbidden")
-    calc = calc_buying_reqs == 'on'
+    calc = calc_buying_reqs == "on"
+    auto_process = enterprise_email_auto_process == "on"
     with get_database_connection() as conn:
-        save_settings(conn, number_to_buy, max_days_sales, max_dts, min_gpu_m, cap_workers, cap_rate_limit, calc)
+        save_settings(conn, number_to_buy, max_days_sales, max_dts, min_gpu_m, cap_workers, cap_rate_limit, calc, auto_process)
     logger.info(
         "Settings updated by %s: number_to_buy=%d, max_days_sales=%d, max_dts=%d, "
-        "min_gpu_m=%d, cap_workers=%d, cap_rate_limit=%d, calc_buying_reqs=%s",
-        user, number_to_buy, max_days_sales, max_dts, min_gpu_m, cap_workers, cap_rate_limit, calc
+        "min_gpu_m=%d, cap_workers=%d, cap_rate_limit=%d, calc_buying_reqs=%s, enterprise_email_auto_process=%s",
+        user, number_to_buy, max_days_sales, max_dts, min_gpu_m, cap_workers, cap_rate_limit, calc, auto_process
     )
     return RedirectResponse(url=BASE_URL + "/settings-page?saved=1", status_code=303)
 
@@ -147,6 +149,16 @@ def update_settings(
 def home(request: Request, user: str = Depends(get_current_user)):
     if not user:
         return RedirectResponse(url=BASE_URL + "/login", status_code=303)
+    def _warm_caches():
+        try:
+            _get_sf_rows()
+        except Exception as e:
+            logger.warning(f"Home cache warm (SF) failed: {e}")
+        try:
+            _get_sp_purchases()
+        except Exception as e:
+            logger.warning(f"Home cache warm (SP) failed: {e}")
+    threading.Thread(target=_warm_caches, daemon=True).start()
     return templates.TemplateResponse("home.html", {"request": request, "user": user, "BASE_URL": BASE_URL})
 
 
@@ -292,6 +304,20 @@ def _rrp_to_price_band(rrp) -> str:
         if v < ceiling:
             return label
     return _PRICE_BAND_DEFAULT
+
+
+def _safe_int(v):
+    try:
+        return int(float(v))
+    except (TypeError, ValueError):
+        return None
+
+
+def _safe_float(v):
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return None
 
 
 # ── Caches ───────────────────────────────────────────────────────────────────
@@ -625,46 +651,62 @@ def task_buying_requirements_download(
         except OSError:
             pass
 
-    # ── 3. Build per-CAP-ID requirements lookup from SF data ─────────────────
+    # ── 3. Build requirements lookup from SF data ────────────────────────────
     # SF row indices:
-    #   0:cap_id  4:stock  5:sales90  6:sales7  8:dts  22:gpu_m_resolved
+    #   0:cap_id  3:price_band  4:stock  5:sales90  6:sales7  7:dis  8:dts
+    #   9:gpu_m  10:gpu_s  11:gpu_ms  13:sell_price  14:at_val  15:at_pct
+    #   16:at_rating  22:gpu_m_resolved
+    # DIS/DTS/sell/AT averaged only when sales90==1 (sold vehicles), GPU averaged across all passing.
+    # Keyed by (cap_id, price_band). A separate cap_id_at_pct dict holds the
+    # CAP-rate-only (non-interest_free) avg AT % per cap_id, used to estimate
+    # each supplier vehicle's retail price before its price band is known.
     sf_rows = _get_sf_rows()
 
-    # Aggregate per CAP ID — same logic as JS aggregateRawData
-    # SF row indices:
-    #   0:cap_id  4:stock  5:sales90  6:sales7  7:dis  8:dts  9:gpu_m  10:gpu_s  11:gpu_ms
-    #   13:sell_price  14:at_val  15:at_pct  16:at_rating  22:gpu_m_resolved
-    # DIS/DTS/sell/AT averaged only when sales90==1 (sold vehicles), GPU averaged across all passing
-    cap_data: dict = {}
-    for r in sf_rows:
-        cap_id  = r[0]
-        stock   = float(r[4]  or 0)
-        sales90 = float(r[5]  or 0)
-        sales7  = float(r[6]  or 0)
-        dis     = float(r[7])  if r[7]  is not None else None
-        dts     = float(r[8])  if r[8]  is not None else None
-        gpu_m   = float(r[22]) if r[22] is not None else None
-        gpu_s   = float(r[10]) if r[10] is not None else None
-        gpu_ms  = float(r[11]) if r[11] is not None else None
-        sell    = float(r[13]) if r[13] is not None else None
-        at_val  = float(r[14]) if r[14] is not None else None
-        at_rate = float(r[16]) if r[16] is not None else None
+    def _empty_bucket():
+        return {
+            "stock": 0.0, "sales_xxd": 0.0, "sales_7": 0.0,
+            "dis_sum": 0.0, "dis_n": 0,
+            "dts_sum": 0.0, "dts_n": 0,
+            "sell_sum": 0.0, "sell_n": 0,
+            "at_val_sum": 0.0, "at_val_n": 0,
+            "at_rate_sum": 0.0, "at_rate_n": 0,
+            "gpu_m_sum": 0.0, "gpu_m_n": 0,
+            "gpu_s_sum": 0.0, "gpu_s_n": 0,
+            "gpu_ms_sum": 0.0, "gpu_ms_n": 0,
+        }
 
-        if cap_id not in cap_data:
-            cap_data[cap_id] = {
-                "stock": 0.0, "sales_xxd": 0.0, "sales_7": 0.0,
-                "dis_sum": 0.0, "dis_n": 0,
-                "dts_sum": 0.0, "dts_n": 0,
-                "sell_sum": 0.0, "sell_n": 0,
-                "at_val_sum": 0.0, "at_val_n": 0,
-                "at_rate_sum": 0.0, "at_rate_n": 0,
-                "gpu_m_sum": 0.0, "gpu_m_n": 0,
-                "gpu_s_sum": 0.0, "gpu_s_n": 0,
-                "gpu_ms_sum": 0.0, "gpu_ms_n": 0,
-            }
-        g = cap_data[cap_id]
+    cap_data: dict = {}
+    # cap_id → {at_pct_sum, at_pct_n} for non-interest_free rows only
+    cap_id_at_pct: dict = {}
+
+    for r in sf_rows:
+        cap_id     = r[0]
+        price_band = r[3] or ""
+        stock      = float(r[4]  or 0)
+        sales90    = float(r[5]  or 0)
+        sales7     = float(r[6]  or 0)
+        dis        = float(r[7])  if r[7]  is not None else None
+        dts        = float(r[8])  if r[8]  is not None else None
+        gpu_m      = float(r[22]) if r[22] is not None else None
+        gpu_s      = float(r[10]) if r[10] is not None else None
+        gpu_ms     = float(r[11]) if r[11] is not None else None
+        sell       = float(r[13]) if r[13] is not None else None
+        at_val     = float(r[14]) if r[14] is not None else None
+        at_pct_raw = float(r[15]) if r[15] is not None else None
+
+        key = (cap_id, price_band)
+        if key not in cap_data:
+            cap_data[key] = _empty_bucket()
+        g = cap_data[key]
 
         g["stock"] += stock
+
+        # Accumulate CAP-rate-only AT % for price-band estimation step
+        if price_band != "interest_free" and at_pct_raw is not None:
+            if cap_id not in cap_id_at_pct:
+                cap_id_at_pct[cap_id] = {"sum": 0.0, "n": 0}
+            cap_id_at_pct[cap_id]["sum"] += at_pct_raw
+            cap_id_at_pct[cap_id]["n"]   += 1
 
         pass_dts  = dts   is None or dts   <= max_dts
         pass_gpum = gpu_m is None or gpu_m >= min_gpu_m
@@ -683,8 +725,8 @@ def task_buying_requirements_download(
             g["sell_sum"]    += sell;   g["sell_n"]    += 1
         if at_val is not None and sold:
             g["at_val_sum"]  += at_val; g["at_val_n"]  += 1
-        if at_rate is not None and sold:
-            g["at_rate_sum"] += at_rate; g["at_rate_n"] += 1
+        if at_pct_raw is not None and sold:
+            g["at_rate_sum"] += at_pct_raw; g["at_rate_n"] += 1
         if gpu_m  is not None:
             g["gpu_m_sum"]   += gpu_m;  g["gpu_m_n"]   += 1
         if gpu_s  is not None:
@@ -692,7 +734,7 @@ def task_buying_requirements_download(
         if gpu_ms is not None:
             g["gpu_ms_sum"]  += gpu_ms; g["gpu_ms_n"]  += 1
 
-    # Fleet-wide totals
+    # Fleet-wide totals (across all price bands)
     total_current_stock = sum(g["stock"]     for g in cap_data.values())
     total_xxd_sales     = sum(g["sales_xxd"] for g in cap_data.values())
     ideal_total         = total_current_stock + number_to_buy
@@ -703,16 +745,16 @@ def task_buying_requirements_download(
     def _avg_gbp(s, n):
         return round(s / n) if n > 0 else None
 
-    # Per-CAP-ID derived columns
+    # Per-(cap_id, price_band) derived columns
     cap_requirements: dict = {}
-    for cap_id, g in cap_data.items():
+    for (cap_id, price_band), g in cap_data.items():
         xxd_sales   = g["sales_xxd"]
         stock       = g["stock"]
         ideal_stock = (ideal_total * xxd_sales / total_xxd_sales) if total_xxd_sales > 0 and xxd_sales > 0 else 0.0
         avg_sell    = _avg_gbp(g["sell_sum"],   g["sell_n"])
         avg_at_val  = _avg_gbp(g["at_val_sum"], g["at_val_n"])
         at_pct      = round(((avg_sell + 199) / avg_at_val) * 100, 1) if avg_sell is not None and avg_at_val and avg_at_val != 0 else None
-        cap_requirements[cap_id] = {
+        cap_requirements[(cap_id, price_band)] = {
             f"{max_days_sales}d Sales":  round(xxd_sales,          1),
             "7d Sales":                  round(g["sales_7"],        1),
             "Stock":                     round(stock,               0),
@@ -730,6 +772,9 @@ def task_buying_requirements_download(
         }
 
     # ── 4. Join to elaborated file ────────────────────────────────────────────
+    # For each vehicle: use CAP-rate-only avg AT % × AT retail valuation to
+    # estimate its retail price, derive its price band, then look up
+    # (cap_id, derived_price_band) for all requirement columns.
     req_cols = [
         f"{max_days_sales}d Sales", "7d Sales", "Stock", "Ideal Stock", "Required",
         "Avg Days in Stock", "Avg Days to Sell", "Avg Sell Price",
@@ -737,17 +782,47 @@ def task_buying_requirements_download(
         "Avg GPU-M", "Avg GPU-S", "Avg GPU-MS",
     ]
 
-    def lookup(cap_id_val, col):
+    AT_VAL_COL = "at_valuations_retail_valuation"
+    cap_col    = "cap_capid" if "cap_capid" in elaborated_df.columns else None
+    at_col     = AT_VAL_COL  if AT_VAL_COL  in elaborated_df.columns else None
+
+    def _estimated_retail(cap_id_val, at_val_val):
+        cid = _safe_int(cap_id_val)
+        at_v = _safe_float(at_val_val)
+        if cid is None or at_v is None or at_v <= 0:
+            return None
+        pct_entry = cap_id_at_pct.get(cid)
+        if not pct_entry or pct_entry["n"] == 0:
+            return None
+        return round(at_v * (pct_entry["sum"] / pct_entry["n"]) / 100.0)
+
+    def _derive_price_band(cap_id_val, at_val_val):
+        retail = _estimated_retail(cap_id_val, at_val_val)
+        return _rrp_to_price_band(retail) if retail is not None else None
+
+    if cap_col and at_col:
+        elaborated_df["Estimated Retail Price"] = elaborated_df.apply(
+            lambda row: _estimated_retail(row[cap_col], row[at_col]), axis=1
+        )
+        elaborated_df["Derived Price Band"] = elaborated_df.apply(
+            lambda row: _derive_price_band(row[cap_col], row[at_col]), axis=1
+        )
+    else:
+        elaborated_df["Estimated Retail Price"] = None
+        elaborated_df["Derived Price Band"]     = None
+
+    def lookup(cap_id_val, price_band_val, col):
         try:
             cid = int(float(cap_id_val))
         except (TypeError, ValueError):
             return None
-        return cap_requirements.get(cid, {}).get(col)
+        return cap_requirements.get((cid, price_band_val or ""), {}).get(col)
 
-    cap_col = "cap_capid" if "cap_capid" in elaborated_df.columns else None
     for col in req_cols:
         if cap_col:
-            elaborated_df[col] = elaborated_df[cap_col].apply(lambda v, c=col: lookup(v, c))
+            elaborated_df[col] = elaborated_df.apply(
+                lambda row, c=col: lookup(row[cap_col], row.get("Derived Price Band"), c), axis=1
+            )
         else:
             elaborated_df[col] = None
 
@@ -767,6 +842,37 @@ def task_buying_requirements_download(
         raise
 
 
+@router.get("/api/tasks-json")
+def tasks_json(page: int = 1, page_size: int = 25, user: str = Depends(get_current_user)):
+    """Returns task list as JSON for in-place table updates."""
+    if not user:
+        raise HTTPException(status_code=401)
+    offset = (page - 1) * page_size
+    with get_database_connection() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute("SELECT COUNT(*) FROM tasks")
+            total_tasks = cursor.fetchone()[0]
+        with conn.cursor() as cursor:
+            cursor.execute(
+                "SELECT t.task_id, t.created, t.status, t.filename, t.total_rows, t.execution_time, t.message, s.supplier_name "
+                "FROM tasks t LEFT JOIN suppliers s ON t.supplier_id = s.supplier_id "
+                "ORDER BY t.task_id DESC LIMIT %s OFFSET %s",
+                (page_size, offset)
+            )
+            cols = [desc[0] for desc in cursor.description]
+            tasks = []
+            has_pending = False
+            for row in cursor.fetchall():
+                t = dict(zip(cols, row))
+                t['created'] = t['created'].strftime("%Y-%m-%d %H:%M:%S") if t['created'] else None
+                t['execution_time'] = round(t['execution_time'], 1) if t['execution_time'] is not None else None
+                tasks.append(t)
+                if t['status'] in ('pending', 'created'):
+                    has_pending = True
+    total_pages = (total_tasks + page_size - 1) // page_size
+    return {"tasks": tasks, "has_pending": has_pending, "total_pages": total_pages, "current_page": page}
+
+
 @router.get("/tasks", response_class=HTMLResponse, name="read_tasks")
 def read_tasks(request: Request, page: Optional[int] = 1, page_size: Optional[int] = 25, user: str = Depends(get_current_user)):
     if not user:
@@ -777,7 +883,7 @@ def read_tasks(request: Request, page: Optional[int] = 1, page_size: Optional[in
     with get_database_connection() as conn:
         # Get the list of suppliers
         with conn.cursor() as cursor:
-            cursor.execute("SELECT supplier_id, supplier_name FROM suppliers ORDER BY supplier_name")
+            cursor.execute("SELECT supplier_id, supplier_name FROM suppliers ORDER BY CASE WHEN supplier_name = 'Generic' THEN 1 ELSE 0 END, supplier_name")
             cols = [desc[0] for desc in cursor.description]
             suppliers = [dict(zip(cols, row)) for row in cursor.fetchall()]
 
@@ -796,7 +902,7 @@ def read_tasks(request: Request, page: Optional[int] = 1, page_size: Optional[in
             for row in cursor.fetchall():
                 task = dict(zip(cols, row))
                 tasks.append(task)
-                if task['status'] == 'pending':
+                if task['status'] in ('pending', 'created'):
                     at_least_one_pending = True
 
     total_pages = (total_tasks + page_size - 1) // page_size  # Calculate the total number of pages
@@ -909,9 +1015,9 @@ def download_task_file(task_id: str):
 def delete_task(task_id: str, user: str = Depends(get_current_user)):
     with get_database_connection() as conn:
         with conn.cursor() as cursor:
-            cursor.execute("DELETE FROM tasks WHERE task_id = %s AND status = 'pending'", (task_id,))
+            cursor.execute("DELETE FROM tasks WHERE task_id = %s AND status IN ('pending', 'created')", (task_id,))
         conn.commit()
-    return RedirectResponse(url=BASE_URL + "/tasks", status_code=303)
+    return {"ok": True}
 
 @router.get("/trigger-elaborate-task")
 async def trigger_elaborate_task(request: Request, user: str = Depends(get_current_user)):
@@ -937,6 +1043,10 @@ def enterprise_email_create_task(
     filename: str = Form(...),
 ):
     """Called by Power Automate step 1: creates a DB task and returns a presigned S3 PUT URL."""
+    with get_database_connection() as conn:
+        settings = get_settings(conn)
+    if not settings.get('enterprise_email_auto_process'):
+        raise HTTPException(status_code=503, detail="Enterprise email auto-processing is disabled")
     file_ext = filename.split('.')[-1].lower()
     if file_ext not in ['xlsx', 'xls']:
         raise HTTPException(status_code=400, detail="Expected xlsx or xls")
@@ -974,21 +1084,24 @@ async def enterprise_email_start_task(
     task_id: int = Form(...),
 ):
     """Called by Power Automate step 3: fires async elaboration after file is uploaded to S3."""
+    with get_database_connection() as conn:
+        settings = get_settings(conn)
     aws_context = request.scope["aws.context"] if "aws.context" in request.scope else None
     if aws_context is None:
         import asyncio
-        asyncio.create_task(elaborate_task({'task_id': task_id, 'cap_workers': 20, 'cap_rate_limit': 100}))
+        asyncio.create_task(elaborate_task({'task_id': task_id, 'cap_workers': settings['cap_workers'], 'cap_rate_limit': settings['cap_rate_limit']}))
     else:
         LambdaRequestsManager().simulate_http(
             aws_context=aws_context,
             path=BASE_URL + "/elaborate-task",
             method="POST",
-            data={'task_id': task_id, 'cap_workers': 20, 'cap_rate_limit': 100},
+            data={'task_id': task_id, 'cap_workers': settings['cap_workers'], 'cap_rate_limit': settings['cap_rate_limit']},
         )
     logger.info(f"Enterprise email: started elaborate for task_id={task_id}")
     return {"status": "started", "task_id": task_id}
 
-_SUPPLIER_FETCH_ROW_LIMIT = 100
+_SUPPLIER_FETCH_ROW_LIMIT = 50
+_supplier_fetch_lock = asyncio.Lock()
 
 
 @router.post("/api/fetch-supplier-stock")
@@ -1009,30 +1122,14 @@ async def fetch_supplier_stock(
     # Supplier credentials only exist in prod secret
     secrets = get_secret('prod/carsupermarket/car_pricer/api_access')
 
-    try:
-        if supplier == 'motability':
-            client = MotabilityFetchClient(
-                username=secrets['MOTABILITY_ID'],
-                password=secrets['MOTABILITY_PASSWORD'],
-            )
-            input_df = client.fetch_dataframe(row_limit=_SUPPLIER_FETCH_ROW_LIMIT)
-            if not include_preview:
-                type_col = input_df.columns[1] if len(input_df.columns) > 1 else None
-                if type_col is not None:
-                    input_df = input_df[input_df[type_col] != 'Preview']
-            filename = f"Motability_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
-        else:
-            client = OneLinkFetchClient(
-                username=secrets['1LINK_ID'],
-                password=secrets['1LINK_PASSWORD'],
-            )
-            input_df = client.fetch_dataframe(row_limit=_SUPPLIER_FETCH_ROW_LIMIT)
-            filename = f"1link_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
-    except Exception as e:
-        logger.error(f"fetch_supplier_stock failed for {supplier}: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+    if _supplier_fetch_lock.locked():
+        raise HTTPException(status_code=409, detail="A stock retrieval is already in progress. Please wait for it to finish.")
 
-    # Write DataFrame to a temp CSV and upload to S3 as the raw file
+    now = datetime.datetime.now()
+    supplier_label = 'Motability' if supplier == 'motability' else '1link'
+    filename = f"{supplier_label}_{now.strftime('%Y%m%d_%H%M%S')}.csv"
+
+    # Insert task immediately so it appears in the list while fetching
     with get_database_connection() as conn:
         with conn.cursor() as cursor:
             cursor.execute(
@@ -1045,10 +1142,61 @@ async def fetch_supplier_stock(
             supplier_id = row[0]
             cursor.execute(
                 "INSERT INTO tasks (created, status, supplier_id, filename) VALUES (%s, %s, %s, %s) RETURNING task_id",
-                (datetime.datetime.now(), 'created', supplier_id, filename)
+                (now, 'created', supplier_id, filename)
             )
             task_id = cursor.fetchone()[0]
             conn.commit()
+
+    _FETCH_MAX_ATTEMPTS = 3
+    _FETCH_RETRY_DELAY = 5  # seconds between attempts
+
+    async with _supplier_fetch_lock:
+        last_exc = None
+        input_df = None
+        for attempt in range(1, _FETCH_MAX_ATTEMPTS + 1):
+            try:
+                if supplier == 'motability':
+                    client = MotabilityFetchClient(
+                        username=secrets['MOTABILITY_ID'],
+                        password=secrets['MOTABILITY_PASSWORD'],
+                    )
+                    input_df = client.fetch_dataframe(row_limit=_SUPPLIER_FETCH_ROW_LIMIT)
+                    if not include_preview:
+                        type_col = input_df.columns[1] if len(input_df.columns) > 1 else None
+                        if type_col is not None:
+                            input_df = input_df[input_df[type_col] != 'Preview']
+                else:
+                    client = OneLinkFetchClient(
+                        username=secrets['1LINK_ID'],
+                        password=secrets['1LINK_PASSWORD'],
+                    )
+                    input_df = client.fetch_dataframe(row_limit=_SUPPLIER_FETCH_ROW_LIMIT)
+                break  # success
+            except Exception as e:
+                last_exc = e
+                logger.warning(f"fetch_supplier_stock attempt {attempt}/{_FETCH_MAX_ATTEMPTS} failed for {supplier}: {e}")
+                if attempt < _FETCH_MAX_ATTEMPTS:
+                    await asyncio.sleep(_FETCH_RETRY_DELAY)
+
+        if input_df is None:
+            with get_database_connection() as conn:
+                with conn.cursor() as cursor:
+                    cursor.execute(
+                        "UPDATE tasks SET status = 'error', message = %s WHERE task_id = %s",
+                        (str(last_exc)[:500], task_id)
+                    )
+                conn.commit()
+            logger.error(f"fetch_supplier_stock failed for {supplier} after {_FETCH_MAX_ATTEMPTS} attempts: {last_exc}", exc_info=True)
+            raise HTTPException(status_code=500, detail=str(last_exc))
+
+    # Write DataFrame to a temp CSV and upload to S3 as the raw file
+    with get_database_connection() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                "UPDATE tasks SET status = 'created' WHERE task_id = %s",
+                (task_id,)
+            )
+        conn.commit()
 
     fd, tmp_path = tempfile.mkstemp(suffix='.csv')
     os.close(fd)
@@ -1062,16 +1210,17 @@ async def fetch_supplier_stock(
         except OSError:
             pass
 
+    with get_database_connection() as conn:
+        settings = get_settings(conn)
     aws_context = request.scope["aws.context"] if "aws.context" in request.scope else None
     if aws_context is None:
-        import asyncio
-        asyncio.create_task(elaborate_task({'task_id': task_id, 'cap_workers': 20, 'cap_rate_limit': 100}))
+        asyncio.create_task(elaborate_task({'task_id': task_id, 'cap_workers': settings['cap_workers'], 'cap_rate_limit': settings['cap_rate_limit']}))
     else:
         LambdaRequestsManager().simulate_http(
             aws_context=aws_context,
             path=BASE_URL + "/elaborate-task",
             method="POST",
-            data={'task_id': task_id, 'cap_workers': 20, 'cap_rate_limit': 100},
+            data={'task_id': task_id, 'cap_workers': settings['cap_workers'], 'cap_rate_limit': settings['cap_rate_limit']},
         )
 
     logger.info(f"fetch_supplier_stock: created task_id={task_id} for {supplier} ({len(input_df)} rows)")

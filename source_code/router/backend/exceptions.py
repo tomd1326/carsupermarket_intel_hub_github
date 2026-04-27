@@ -19,7 +19,8 @@ def _is_db_connection_error(exc: Exception) -> bool:
 
 async def unhandled_exception_handler(request: Request, exc: Exception):
     tb = "".join(traceback.format_exception(exc))
-    logger.error("Unhandled exception: %s\n%s", exc, tb)
+    logger.error("Unhandled exception on %s %s: %s: %s", request.method, request.url.path, type(exc).__name__, exc)
+    logger.debug("Traceback:\n%s", tb)
 
     if _is_db_connection_error(exc):
         return templates.TemplateResponse(
