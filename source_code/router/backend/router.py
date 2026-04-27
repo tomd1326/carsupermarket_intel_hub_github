@@ -404,7 +404,7 @@ def _get_sf_rows(force: bool = False) -> list:
     if result is None:
         # S3 miss — query Snowflake and repopulate both caches
         with SnowflakeClient() as sf:
-            rows, _ = sf.execute("""
+            rows, col_names = sf.execute("""
                 SELECT
                     CAP_ID,
                     COALESCE(MAKE_MODEL, '') || ' ' || COALESCE(CAP_DERIVATIVE, '') || ' / ' || COALESCE(PRICE_BAND, '') AS LABEL,
@@ -440,7 +440,7 @@ def _get_sf_rows(force: bool = False) -> list:
                 FROM PROD_CARSUPERMARKET_DB.product_vehicle_journey.buying_requirements
                 ORDER BY CAP_ID
             """)
-        # One row per vehicle:
+        # Build name->index map so missing columns default to None rather than misaligning data
         # [0:cap_id, 1:label, 2:fuel, 3:price_band, 4:stock, 5:sales90, 6:sales7,
         #  7:dis, 8:dts, 9:gpu_m, 10:gpu_s, 11:gpu_ms,
         #  12:purchase_price, 13:sell_price, 14:at_val, 15:at_pct, 16:at_rating,
@@ -448,12 +448,25 @@ def _get_sf_rows(force: bool = False) -> list:
         #  21:vehicle_status, 22:gpu_m_resolved, 23:vehicle_location,
         #  24:date_first_registered, 25:mileage, 26:autotrader_portal_link,
         #  27:invoice_posted_date, 28:vehicle_updated_at, 29:make_model, 30:cap_live_clean]
-        result = [[r[0], r[1], r[2], r[3], r[4], r[5], r[6], r[7], r[8], r[9], r[10], r[11], r[12], r[13], r[14], r[15], r[16],
-                   str(r[17]) if r[17] is not None else None, r[18], r[19], r[20], r[21], r[22], r[23],
-                   str(r[24]) if r[24] is not None else None, r[25], r[26],
-                   str(r[27]) if r[27] is not None else None,
-                   str(r[28]) if r[28] is not None else None,
-                   r[29], r[30]] for r in rows]
+        col_map = {name.upper(): i for i, name in enumerate(col_names)}
+        def _g(r, name): return r[col_map[name]] if name in col_map else None
+        def _s(r, name): v = _g(r, name); return str(v) if v is not None else None
+        result = [[
+            _g(r, 'CAP_ID'), _g(r, 'LABEL'), _g(r, 'FUEL_TYPE'), _g(r, 'PRICE_BAND'),
+            _g(r, 'STOCK'), _g(r, 'SALES_90_DAYS'), _g(r, 'SALES_7_DAYS'),
+            _g(r, 'DAYS_IN_STOCK_ACKNOWLEDGED'), _g(r, 'DAYS_ADVERTISED_ACKNOWLEDGED'),
+            _g(r, 'GPU_M'), _g(r, 'GPU_S'), _g(r, 'GPU_MS'),
+            _g(r, 'PURCHASE_PRICE_INC_VAT'), _g(r, 'SELLING_PRICE_INC_VAT'),
+            _g(r, 'AUTOTRADER_LATEST_RETAIL_VALUATION'), _g(r, 'AUTOTRADER_PERCENT'),
+            _g(r, 'AUTOTRADER_LATEST_RETAIL_RATING'),
+            _s(r, 'ORDER_ACKNOWLEDGED_DATE'),
+            _g(r, 'VRM'), _g(r, 'SUPPLIER_NAME'), _g(r, 'VEHICLE_URL'),
+            _g(r, 'VEHICLE_STATUS'), _g(r, 'GPU_M_RESOLVED'), _g(r, 'VEHICLE_LOCATION'),
+            _s(r, 'DATE_FIRST_REGISTERED'),
+            _g(r, 'MILEAGE'), _g(r, 'AUTOTRADER_PORTAL_LINK'),
+            _s(r, 'INVOICE_POSTED_DATE'), _s(r, 'VEHICLE_UPDATED_AT'),
+            _g(r, 'MAKE_MODEL'), _g(r, 'CAP_LIVE_CLEAN_LATEST'),
+        ] for r in rows]
         _save_sf_cache_to_s3(result)
 
     with _cache_lock:

@@ -325,7 +325,9 @@ a.logout-link:hover { color: #343a40 !important; }
     text-align: left;
     padding: 5px 8px;
     font-weight: 600;
-    white-space: nowrap;
+    white-space: normal;
+    height: 52px;
+    vertical-align: bottom;
     position: sticky;
     top: 0;
     z-index: 10;
@@ -333,6 +335,11 @@ a.logout-link:hover { color: #343a40 !important; }
     border-top: 1px solid #b0b0b0;
     border-bottom: 1px solid #b0b0b0;
     border-right: 1px solid #b0b0b0;
+}
+
+#vehicle-modal-table th[data-sort="purchase_price"],
+#vehicle-modal-table th[data-sort="cap_clean"] {
+    min-width: 88px;
 }
 
 #vehicle-modal-table td {
@@ -367,4 +374,10 @@ a.logout-link:hover { color: #343a40 !important; }
 #vehicle-modal-table th[data-sort] {
     cursor: pointer;
     user-select: none;
+}
+
+/* Right-align DFR (9th col) through GPU-M (last col) */
+#vehicle-modal-table th:nth-child(n+9),
+#vehicle-modal-table td:nth-child(n+9) {
+    text-align: right;
 }
