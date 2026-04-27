@@ -22,6 +22,7 @@ redis = "^5.0.4"
 urllib3 = "^2.2"
 python-calamine = "^0.2.0"
 snowflake-connector-python = ">=3.17"
+tzdata = ">=2024.1"
 playwright = "^1.44.0"
 
 [tool.poetry.group.dev.dependencies]
