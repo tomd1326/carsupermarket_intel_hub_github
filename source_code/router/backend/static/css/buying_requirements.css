@@ -287,7 +287,7 @@ a.logout-link:hover { color: #343a40 !important; }
     justify-content: space-between;
     padding: 10px 14px 8px;
     border-bottom: 1px solid #e5e7eb;
-    background: #dbeafe;
+    background: #fff;
     border-radius: 6px 6px 0 0;
     flex-shrink: 0;
 }
@@ -326,7 +326,9 @@ a.logout-link:hover { color: #343a40 !important; }
     padding: 5px 8px;
     font-weight: 600;
     white-space: normal;
-    height: 52px;
+    line-height: 1.2;
+    height: calc(2 * 1.2em + 10px);
+    overflow: hidden;
     vertical-align: bottom;
     position: sticky;
     top: 0;
@@ -339,7 +341,15 @@ a.logout-link:hover { color: #343a40 !important; }
 
 #vehicle-modal-table th[data-sort="purchase_price"],
 #vehicle-modal-table th[data-sort="cap_clean"] {
-    min-width: 88px;
+    min-width: 70px;
+}
+
+#vehicle-modal-table th[data-sort="at_ptm_pct"] {
+    min-width: 58px;
+}
+
+#vehicle-modal-table th[data-sort="gpu_m"] {
+    min-width: 68px;
 }
 
 #vehicle-modal-table td {
