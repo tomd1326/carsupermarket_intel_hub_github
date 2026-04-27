@@ -1381,7 +1381,6 @@ async def elaborate_task(data: dict):
             with ThreadPoolExecutor(max_workers=2) as executor:
                 futures = [executor.submit(process_df, (autotrader, input_df, columns_mapper)),
                            executor.submit(process_df, (cap_client, input_df, columns_mapper, cap_workers, cap_rate_limit))]
-                           executor.submit(process_df, (cap_client, input_df, columns_mapper, cap_workers, cap_rate_limit))]
                 results = [future.result() for future in futures]
 
             processed_df = pd.concat([input_df, *results], axis=1)
