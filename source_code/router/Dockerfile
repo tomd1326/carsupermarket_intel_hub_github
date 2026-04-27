@@ -1,7 +1,7 @@
 ARG BUILD_DIR="backend"
 
-FROM python:3.9-slim as build-image
-   
+FROM public.ecr.aws/lambda/python:3.12 as build-image
+
 ARG PKG_URL
 ARG LAST_PKG_VERSION
 ARG DOMAIN_ML
@@ -14,10 +14,10 @@ ENV TZ=Europe/Paris
 # Configuring tzdata
 RUN ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone
 
-# Install aws-lambda-cpp build dependencies, git, python3, pip3
-RUN apt-get update -y && \
-  apt-get install -y \
-  git-all
+# Install build dependencies
+RUN dnf update -y && \
+    dnf install -y git && \
+    dnf clean all
 
 # Include global arg in this stage of the build
 ARG BUILD_DIR
@@ -25,7 +25,7 @@ ARG LOCAL_ENV
 
 RUN mkdir -p ${BUILD_DIR}
 
-COPy ./pyproject.toml .
+COPY ./pyproject.toml .
 COPY ./backend ${BUILD_DIR}/
 
 # Upgrade pip
@@ -46,7 +46,7 @@ RUN pip3 install \
       --target /python_build \
       -r requirements.txt
 
-FROM public.ecr.aws/lambda/python:3.9 as run-image
+FROM public.ecr.aws/lambda/python:3.12 as run-image
 
 ENV TZ=Europe/London
 
@@ -56,5 +56,39 @@ COPY --from=build-image /python_build /python_build
 COPY backend/ ${LAMBDA_TASK_ROOT}/
 
 ENV PYTHONPATH=.:backend:/python_build
+ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+
+# Install Chromium system dependencies via dnf (install-deps uses apt-get which is unavailable on Amazon Linux)
+RUN dnf install -y \
+    nss \
+    dbus \
+    dbus-libs \
+    atk \
+    at-spi2-atk \
+    at-spi2-core \
+    cups-libs \
+    libdrm \
+    libxkbcommon \
+    libXcomposite \
+    libXdamage \
+    libXext \
+    libXfixes \
+    libXrandr \
+    libXrender \
+    libX11 \
+    libxcb \
+    mesa-libgbm \
+    pango \
+    cairo \
+    alsa-lib \
+    fontconfig \
+    lsof \
+    libstdc++ \
+    libgcc \
+    && dnf clean all
+
+# Install Playwright and Chromium
+RUN pip3 install "playwright>=1.44.0" && \
+    python3 -m playwright install chromium
 
 CMD ["main.handler"]
