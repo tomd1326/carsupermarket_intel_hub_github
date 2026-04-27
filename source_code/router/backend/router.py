@@ -57,13 +57,23 @@ s3_bucketname = 'aa-raw-sources-uk'
 s3_bucket_region = 'eu-west-1'  # bucket is always in eu-west-1 regardless of Lambda region
 
 
+VALID_USERS = {
+    'admin': '401b8fe6c8d8d7e9ecf3e7cfae3fd3ba700693bfb452becce59f08003a55c640',
+    'buyer': 'cd44b3a3d1fb9021db64745df31dce588104bf663952dc84fe6e9cd6140aa3cb',
+}
+
+# session_id -> {user, login_time} — tracks active sessions server-side
+_active_sessions: dict = {}
+
 def get_current_user(request: Request):
     user = request.session.get('user')
     if not user:
         return None
-        # raise HTTPException(status_code=HTTP_401_UNAUTHORIZED, detail="Unauthorized", headers={"Location": "/login"})
-        # redirect to login page
-        # return RedirectResponse(url="/login", status_code=303)
+    # Invalidate session if password has changed since login
+    if request.session.get('pwd_hash') != VALID_USERS.get(user):
+        _active_sessions.pop(request.session.get('session_id'), None)
+        request.session.clear()
+        return None
     return user
 
 
@@ -85,12 +95,12 @@ def login(request: Request):
 def login(request: Request, username: str = Form(...), password: str = Form(...)):
     # calculate sha256 hash of the password
     pwd_hash = hashlib.sha256(password.encode()).hexdigest()
-    valid_users = {
-        'admin': 'a05ef593239b0ff678c3bb69731e785c470d781a121692302912550aa2459b74',
-        'buyer': 'cd44b3a3d1fb9021db64745df31dce588104bf663952dc84fe6e9cd6140aa3cb',
-    }
-    if pwd_hash == valid_users.get(username):
+    if pwd_hash == VALID_USERS.get(username):
+        session_id = hashlib.sha256(os.urandom(16)).hexdigest()
         request.session['user'] = username
+        request.session['pwd_hash'] = pwd_hash
+        request.session['session_id'] = session_id
+        _active_sessions[session_id] = {'user': username, 'login_time': datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
         return RedirectResponse(url=BASE_URL + "/home", status_code=303)  # CHANGED: was /tasks
     return templates.TemplateResponse(
         "login.html",
@@ -104,7 +114,8 @@ def login(request: Request, username: str = Form(...), password: str = Form(...)
 
 @router.get("/logout")
 def logout(request: Request):
-    request.session.pop('user', None)
+    _active_sessions.pop(request.session.get('session_id'), None)
+    request.session.clear()
     return RedirectResponse(url=BASE_URL + "/login", status_code=303)
 
 
@@ -114,7 +125,8 @@ def settings_page(request: Request, user: str = Depends(get_current_user)):
         return RedirectResponse(url=BASE_URL + "/home", status_code=303)
     with get_database_connection() as conn:
         settings = get_settings(conn)
-    return templates.TemplateResponse("settings.html", {"request": request, "user": user, "BASE_URL": BASE_URL, "settings": settings})
+    sessions = sorted(_active_sessions.values(), key=lambda s: s['login_time'], reverse=True)
+    return templates.TemplateResponse("settings.html", {"request": request, "user": user, "BASE_URL": BASE_URL, "settings": settings, "active_sessions": sessions})
 
 
 @router.post("/settings")
