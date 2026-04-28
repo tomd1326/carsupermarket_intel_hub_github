@@ -474,14 +474,13 @@ function aggregateRawData() {
         g.sales90 += sales90;
         g.sales7  += sales7;
 
-        const isIF = r[3] === 'interest_free';
         if (dis     != null && sales90 === 1) { g.dis_sum      += dis;    g.dis_n++;      }
         if (dts     != null && sales90 === 1) { g.dts_sum      += dts;    g.dts_n++;      }
         if (gpu_m   != null && sales90 === 1) { g.gpu_m_sum  += gpu_m;  g.gpu_m_n++;  }
         if (gpu_s   != null && sales90 === 1) { g.gpu_s_sum  += gpu_s;  g.gpu_s_n++;  }
         if (gpu_ms  != null && sales90 === 1) { g.gpu_ms_sum += gpu_ms; g.gpu_ms_n++; }
-        if (!isIF && sell   != null && sell !== 0 && sales90 === 1) { g.sell_sum += sell; g.sell_n++; }
-        if (!isIF && at_val != null && sales90 === 1) { g.at_val_sum  += at_val;  g.at_val_n++;  }
+        if (sell    != null && sell !== 0 && sales90 === 1) { g.sell_sum += sell; g.sell_n++; }
+        if (at_val  != null && sales90 === 1) { g.at_val_sum  += at_val;  g.at_val_n++;  }
         if (at_rate != null && sales90 === 1) { g.at_rating_sum += at_rate; g.at_rating_n++; }
     }
 
@@ -569,14 +568,13 @@ function aggregateModelData() {
         g.sales90 += sales90;
         g.sales7  += sales7;
 
-        const isIF = r[3] === 'interest_free';
         if (dis    != null && sales90 === 1) { g.dis_sum     += dis;    g.dis_n++;     }
         if (dts    != null && sales90 === 1) { g.dts_sum     += dts;    g.dts_n++;     }
         if (gpu_m  != null && sales90 === 1) { g.gpu_m_sum  += gpu_m;  g.gpu_m_n++;  }
         if (gpu_s  != null && sales90 === 1) { g.gpu_s_sum  += gpu_s;  g.gpu_s_n++;  }
         if (gpu_ms != null && sales90 === 1) { g.gpu_ms_sum += gpu_ms; g.gpu_ms_n++; }
-        if (!isIF && sell   != null && sell !== 0 && sales90 === 1) { g.sell_sum += sell; g.sell_n++; }
-        if (!isIF && at_val != null && sales90 === 1) { g.at_val_sum  += at_val;  g.at_val_n++;  }
+        if (sell   != null && sell !== 0 && sales90 === 1) { g.sell_sum += sell; g.sell_n++; }
+        if (at_val != null && sales90 === 1) { g.at_val_sum  += at_val;  g.at_val_n++;  }
         if (at_rate!= null && sales90 === 1) { g.at_rating_sum += at_rate; g.at_rating_n++; }
     }
 
@@ -700,8 +698,8 @@ function renderTotalsRow(visibleRows) {
         [4,  'sum', fmtInt],
         [7,  'sum', fmtInt],
         [3,  'sum', fmtInt],
-        [18, 'sum', fmtInt],
-        [19, 'sum', fmtInt],
+        [18, 'sum', v => fmt(v, 1)],
+        [19, 'sum', v => fmt(v, 1)],
         [6,  'sum', fmtInt],   // Today's Buying (cap only)
         null,                  // Remaining (cap only, computed)
         [8,  'avg', v => fmt(v, 1)],
@@ -718,7 +716,7 @@ function renderTotalsRow(visibleRows) {
         [4,  'sum', fmtInt],
         [7,  'sum', fmtInt],
         [3,  'sum', fmtInt],
-        [18, 'sum', fmtInt],
+        [18, 'sum', v => fmt(v, 1)],
         [21, 'sum', fmtInt],
         [8,  'avg', v => fmt(v, 1)],
         [9,  'avg', v => fmt(v, 1)],
@@ -749,11 +747,11 @@ function renderTotalsRow(visibleRows) {
             td.style.background = '';
             if (isCap && i === REMAINING_CELL_IDX) {
                 const remSum = rows.reduce((s, r) => s + (Number(r[21]) || 0), 0);
-                td.textContent = spReady ? fmtInt(remSum) : '';
+                td.textContent = spReady ? fmt(remSum, 1) : '';
                 return;
             }
             if (!isCap && i === MODEL_REM_IDX) {
-                td.textContent = fmtInt(Math.round(reqSum));
+                td.textContent = fmt(reqSum, 1);
                 return;
             }
             if (isCap && i === TODAY_CELL_IDX) {
@@ -824,7 +822,7 @@ function renderTable() {
         const sales = Number(row[4]) || 0;
         const stock = Number(row[3]) || 0;
         row[18] = sales > 0 && total90dSales > 0
-            ? Math.round(idealTotal * sales / total90dSales)
+            ? idealTotal * sales / total90dSales
             : 0;
         row[19] = row[18] - stock;
         if (row[18] > maxIdeal) maxIdeal = row[18];
@@ -836,7 +834,7 @@ function renderTable() {
     if (lbl) lbl.textContent = `Ideal total: ${(totalCurrentStock + numberToBuy).toLocaleString()}`;
 
     tableData.forEach(r => {
-        r[21] = Math.round(r[19] || 0) - (r[6] || 0);
+        r[21] = (r[19] || 0) - (r[6] || 0);
         if (r[21] > maxRem) maxRem = r[21];
         if (r[21] < minRem) minRem = r[21];
     });
@@ -875,13 +873,13 @@ function renderTable() {
         }
         { const td = add(row[7] != null ? fmtInt(row[7]) : ''); if ((row[7] || 0) === 0) td.style.background = '#d8d8d8'; }
         { const td = add(fmtInt(row[3])); if ((row[3] || 0) === 0) td.style.background = '#d8d8d8'; }
-        add(row[18] != null ? fmtInt(row[18]) : '');
-        if (currentView === 'cap') add(row[19] != null ? fmtInt(row[19]) : '');
+        add(row[18] != null ? fmt(row[18], 1) : '');
+        if (currentView === 'cap') add(row[19] != null ? fmt(row[19], 1) : '');
         if (currentView === 'cap') {
             const tdToday = add(row[6] != null ? fmtInt(row[6]) : '');
             if ((row[6] || 0) > 0) tdToday.style.background = '#fef08a';
         }
-        add(fmtInt(row[21]));
+        add(row[21] != null ? fmt(row[21], 1) : '');
         add(row[8]  != null ? fmt(row[8],  1) : '');
         add(row[9]  != null ? fmt(row[9],  1) : '');
         add(row[14] != null ? fmtGBP(row[14]) : '');
@@ -927,7 +925,7 @@ function renderTable() {
     body.appendChild(fragment);
 
     const reqSum = tableData.reduce((s, r) => s + (r[19] > 0 ? r[19] : 0), 0);
-    document.getElementById('required-sum-inline').textContent = reqSum.toLocaleString();
+    document.getElementById('required-sum-inline').textContent = fmt(reqSum, 1);
 
     updateSalesColumnLabel();
     applyFilter();
@@ -1320,14 +1318,14 @@ function exportXLSX() {
             : null;
         return [
             cap_id,
-            g.required,
+            fmt1(g.required),
             g.label,
             g.fuel,
             g.sales90,
             g.sales7,
             g.stock,
-            g.ideal,
-            g.required,
+            fmt1(g.ideal),
+            fmt1(g.required),
             fmt1(avg(g.dis_sum,       g.dis_n)),
             fmt1(avg(g.dts_sum,       g.dts_n)),
             fmtN(avgSell),
