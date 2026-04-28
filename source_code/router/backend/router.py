@@ -64,6 +64,7 @@ VALID_USERS = {
 
 # session_id -> {user, login_time} — tracks active sessions server-side
 _active_sessions: dict = {}
+_sessions_invalidated_at: float = 0.0  # epoch — sessions logged in before this are force-logged out
 
 def get_current_user(request: Request):
     user = request.session.get('user')
@@ -71,6 +72,11 @@ def get_current_user(request: Request):
         return None
     # Invalidate session if password has changed since login
     if request.session.get('pwd_hash') != VALID_USERS.get(user):
+        _active_sessions.pop(request.session.get('session_id'), None)
+        request.session.clear()
+        return None
+    # Invalidate session if admin triggered a force re-login after this session logged in
+    if request.session.get('login_time_epoch', 0) < _sessions_invalidated_at:
         _active_sessions.pop(request.session.get('session_id'), None)
         request.session.clear()
         return None
@@ -97,9 +103,11 @@ def login(request: Request, username: str = Form(...), password: str = Form(...)
     pwd_hash = hashlib.sha256(password.encode()).hexdigest()
     if pwd_hash == VALID_USERS.get(username):
         session_id = hashlib.sha256(os.urandom(16)).hexdigest()
+        login_epoch = time.time()
         request.session['user'] = username
         request.session['pwd_hash'] = pwd_hash
         request.session['session_id'] = session_id
+        request.session['login_time_epoch'] = login_epoch
         _active_sessions[session_id] = {'user': username, 'login_time': datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
         return RedirectResponse(url=BASE_URL + "/home", status_code=303)  # CHANGED: was /tasks
     return templates.TemplateResponse(
@@ -127,6 +135,16 @@ def settings_page(request: Request, user: str = Depends(get_current_user)):
         settings = get_settings(conn)
     sessions = sorted(_active_sessions.values(), key=lambda s: s['login_time'], reverse=True)
     return templates.TemplateResponse("settings.html", {"request": request, "user": user, "BASE_URL": BASE_URL, "settings": settings, "active_sessions": sessions})
+
+
+@router.post("/settings/force-relogin")
+def force_relogin(request: Request, user: str = Depends(get_current_user)):
+    global _sessions_invalidated_at, _active_sessions
+    if user != 'admin':
+        return RedirectResponse(url=BASE_URL + "/home", status_code=303)
+    _sessions_invalidated_at = time.time()
+    _active_sessions.clear()
+    return RedirectResponse(url=BASE_URL + "/settings-page?relogin=1", status_code=303)
 
 
 @router.post("/settings")
