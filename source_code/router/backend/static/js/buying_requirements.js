@@ -476,9 +476,9 @@ function aggregateRawData() {
 
         if (dis     != null && sales90 === 1) { g.dis_sum      += dis;    g.dis_n++;      }
         if (dts     != null && sales90 === 1) { g.dts_sum      += dts;    g.dts_n++;      }
-        if (gpu_m   != null) { g.gpu_m_sum  += gpu_m;  g.gpu_m_n++;  }
-        if (gpu_s   != null) { g.gpu_s_sum  += gpu_s;  g.gpu_s_n++;  }
-        if (gpu_ms  != null) { g.gpu_ms_sum += gpu_ms; g.gpu_ms_n++; }
+        if (gpu_m   != null && sales90 === 1) { g.gpu_m_sum  += gpu_m;  g.gpu_m_n++;  }
+        if (gpu_s   != null && sales90 === 1) { g.gpu_s_sum  += gpu_s;  g.gpu_s_n++;  }
+        if (gpu_ms  != null && sales90 === 1) { g.gpu_ms_sum += gpu_ms; g.gpu_ms_n++; }
         if (sell    != null && sell !== 0 && sales90 === 1) { g.sell_sum += sell; g.sell_n++; }
         if (at_val  != null && sales90 === 1) { g.at_val_sum  += at_val;  g.at_val_n++;  }
         if (at_rate != null && sales90 === 1) { g.at_rating_sum += at_rate; g.at_rating_n++; }
@@ -569,9 +569,9 @@ function aggregateModelData() {
 
         if (dis    != null && sales90 === 1) { g.dis_sum     += dis;    g.dis_n++;     }
         if (dts    != null && sales90 === 1) { g.dts_sum     += dts;    g.dts_n++;     }
-        if (gpu_m  != null) { g.gpu_m_sum  += gpu_m;  g.gpu_m_n++;  }
-        if (gpu_s  != null) { g.gpu_s_sum  += gpu_s;  g.gpu_s_n++;  }
-        if (gpu_ms != null) { g.gpu_ms_sum += gpu_ms; g.gpu_ms_n++; }
+        if (gpu_m  != null && sales90 === 1) { g.gpu_m_sum  += gpu_m;  g.gpu_m_n++;  }
+        if (gpu_s  != null && sales90 === 1) { g.gpu_s_sum  += gpu_s;  g.gpu_s_n++;  }
+        if (gpu_ms != null && sales90 === 1) { g.gpu_ms_sum += gpu_ms; g.gpu_ms_n++; }
         if (sell   != null && sell !== 0 && sales90 === 1) { g.sell_sum += sell; g.sell_n++; }
         if (at_val != null && sales90 === 1) { g.at_val_sum  += at_val;  g.at_val_n++;  }
         if (at_rate!= null && sales90 === 1) { g.at_rating_sum += at_rate; g.at_rating_n++; }
@@ -1163,6 +1163,32 @@ function refreshTable() {
     if (!rawData.length) return;
     const btn = document.getElementById('refreshTableBtn');
     if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spinner-border spinner-border-sm me-2"></span>Loading...'; }
+    // Reset all table filters before re-aggregating
+    filterBand.clear(); filterBand.add('All');
+    document.querySelectorAll('.filter-btn[data-group="band"]').forEach(b => {
+        b.classList.toggle('btn-dark', b.dataset.value === 'All');
+        b.classList.toggle('btn-outline-secondary', b.dataset.value !== 'All');
+    });
+    filterFuel.clear(); filterFuel.add('All');
+    document.querySelectorAll('.filter-btn[data-group="fuel"]').forEach(b => {
+        b.classList.toggle('btn-dark', b.dataset.value === 'All');
+        b.classList.toggle('btn-outline-secondary', b.dataset.value !== 'All');
+    });
+    filterCapId = null;
+    const capInp = document.getElementById('capIdSearch');
+    if (capInp) capInp.value = '';
+    const capClear = document.getElementById('capIdClearBtn');
+    if (capClear) capClear.style.display = 'none';
+    filterModel = null;
+    const modelInp = document.getElementById('modelSearch');
+    if (modelInp) modelInp.value = '';
+    const modelClear = document.getElementById('modelClearBtn');
+    if (modelClear) modelClear.style.display = 'none';
+    filterMinReq = null;
+    const reqInp = document.getElementById('minReqInput');
+    if (reqInp) reqInp.value = '';
+    const reqClear = document.getElementById('minReqClearBtn');
+    if (reqClear) reqClear.style.display = 'none';
     requestAnimationFrame(() => setTimeout(() => {
         if (currentView === 'model') aggregateModelData(); else aggregateRawData();
         applySpPurchases(spPurchases);
@@ -1230,32 +1256,83 @@ function loadSPFromCache() {
 function exportXLSX() {
     const fmt1 = v => v != null ? Math.round(v * 10) / 10 : null;
     const fmtN = v => v != null ? Math.round(v) : null;
+    const avg  = (sum, n) => n > 0 ? sum / n : null;
+
+    // Aggregate rawData by cap_id only — one row per derivative regardless of price band
+    const groups = new Map();
+    for (const r of rawData) {
+        const cap_id  = r[0];
+        const sales90 = Number(r[5]) || 0;
+        if (!groups.has(cap_id)) {
+            groups.set(cap_id, {
+                label: r[1].split(' / ').slice(0, -1).join(' / '),
+                fuel: normFuel(r[2]),
+                stock: 0, sales90: 0, sales7: 0,
+                dis_sum: 0, dis_n: 0,
+                dts_sum: 0, dts_n: 0,
+                gpu_m_sum: 0, gpu_m_n: 0,
+                gpu_s_sum: 0, gpu_s_n: 0,
+                gpu_ms_sum: 0, gpu_ms_n: 0,
+                sell_sum: 0, sell_n: 0,
+                at_val_sum: 0, at_val_n: 0,
+                at_pct_sum: 0, at_pct_n: 0,
+                at_rating_sum: 0, at_rating_n: 0,
+            });
+        }
+        const g = groups.get(cap_id);
+        g.stock   += Number(r[4]) || 0;
+        g.sales90 += sales90;
+        g.sales7  += Number(r[6]) || 0;
+        if (sales90 !== 1) continue;
+        const dis      = r[7]  != null ? Number(r[7])  : null;
+        const dts      = r[8]  != null ? Number(r[8])  : null;
+        const gpu_m    = r[22] != null ? Number(r[22]) : null;
+        const gpu_s    = r[10] != null ? Number(r[10]) : null;
+        const gpu_ms   = r[11] != null ? Number(r[11]) : null;
+        const sell     = r[13] != null ? Number(r[13]) : null;
+        const at_val   = r[14] != null ? Number(r[14]) : null;
+        const at_pct   = r[15] != null ? Number(r[15]) : null;
+        const at_rate  = r[16] != null ? Number(r[16]) : null;
+        if (dis    != null) { g.dis_sum      += dis;    g.dis_n++;      }
+        if (dts    != null) { g.dts_sum      += dts;    g.dts_n++;      }
+        if (gpu_m  != null) { g.gpu_m_sum    += gpu_m;  g.gpu_m_n++;    }
+        if (gpu_s  != null) { g.gpu_s_sum    += gpu_s;  g.gpu_s_n++;    }
+        if (gpu_ms != null) { g.gpu_ms_sum   += gpu_ms; g.gpu_ms_n++;   }
+        if (sell   != null && sell !== 0) { g.sell_sum += sell; g.sell_n++; }
+        if (at_val != null) { g.at_val_sum   += at_val; g.at_val_n++;   }
+        if (at_pct != null) { g.at_pct_sum   += at_pct; g.at_pct_n++;   }
+        if (at_rate!= null) { g.at_rating_sum+= at_rate;g.at_rating_n++;}
+    }
 
     const headers = ['CAP ID', 'Make Model Derivative', 'Fuel', 'Stock', '90d Sales', '7d Sales',
-        'Ideal Stock', 'Required', 'Avg DIS', 'Avg DTS',
-        'Avg Sell Price', 'Avg AT PTM', 'Avg AT PTM %', 'Avg AT Rating',
-        'Avg GPU-M', 'Avg GPU-S', 'Avg GPU-MS', 'Price Band'];
+        'Avg DIS', 'Avg DTS',
+        'Avg Sell Price', 'Avg AT Val', 'Avg AT PTM %', 'Avg AT Rating',
+        'Avg GPU-M', 'Avg GPU-S', 'Avg GPU-MS'];
 
-    const rows = tableData.map(row => [
-        row[0],          // CAP ID
-        row[1].split(' / ').slice(0, -1).join(' / '),  // Make / Model / Derivative (strip price band)
-        normFuel(row[2]),// fuel (normalised)
-        fmtN(row[3]),    // stock
-        fmt1(row[4]),    // sales xxd
-        fmt1(row[7]),    // 7d sales
-        fmt1(row[18]),   // ideal stock
-        fmt1(row[19]),   // required
-        fmt1(row[8]),    // avg DIS
-        fmt1(row[9]),    // avg DTS
-        fmtN(row[14]),   // avg sell price
-        fmtN(row[15]),   // avg AT PTM
-        row[16] != null ? Math.round(row[16] * 10) / 10 : null, // AT PTM %
-        fmt1(row[17]),   // avg AT rating
-        fmtN(row[10]),   // avg GPU-M
-        fmtN(row[11]),   // avg GPU-S
-        fmtN(row[12]),   // avg GPU-MS
-        row[22],         // price band
-    ]);
+    const rows = [...groups.entries()].sort((a, b) => a[1].label.localeCompare(b[1].label)).map(([cap_id, g]) => {
+        const avgSell  = avg(g.sell_sum,  g.sell_n);
+        const avgAtVal = avg(g.at_val_sum, g.at_val_n);
+        const atPct    = avgSell != null && avgAtVal != null && avgAtVal !== 0
+            ? Math.round(((avgSell + 199) / avgAtVal) * 1000) / 10
+            : null;
+        return [
+            cap_id,
+            g.label,
+            g.fuel,
+            g.stock,
+            g.sales90,
+            g.sales7,
+            fmt1(avg(g.dis_sum,      g.dis_n)),
+            fmt1(avg(g.dts_sum,      g.dts_n)),
+            fmtN(avgSell),
+            fmtN(avgAtVal),
+            atPct,
+            fmt1(avg(g.at_rating_sum, g.at_rating_n)),
+            fmtN(avg(g.gpu_m_sum,    g.gpu_m_n)),
+            fmtN(avg(g.gpu_s_sum,    g.gpu_s_n)),
+            fmtN(avg(g.gpu_ms_sum,   g.gpu_ms_n)),
+        ];
+    });
 
     const ws = XLSX.utils.aoa_to_sheet([headers, ...rows]);
     const wb = XLSX.utils.book_new();
