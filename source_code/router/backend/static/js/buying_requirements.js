@@ -487,6 +487,7 @@ function aggregateRawData() {
     const avg = (sum, n) => n > 0 ? sum / n : null;
     tableData = [];
     for (const g of groups.values()) {
+        if (g.stock === 0 && g.sales90 === 0) continue;
         const avgSell  = avg(g.sell_sum,   g.sell_n);
         const avgAtVal = avg(g.at_val_sum, g.at_val_n);
         tableData.push([
@@ -580,6 +581,7 @@ function aggregateModelData() {
     const avg = (sum, n) => n > 0 ? sum / n : null;
     tableData = [];
     for (const g of groups.values()) {
+        if (g.stock === 0 && g.sales90 === 0) continue;
         const avgSell  = avg(g.sell_sum,   g.sell_n);
         const avgAtVal = avg(g.at_val_sum, g.at_val_n);
         tableData.push([
@@ -696,8 +698,8 @@ function renderTotalsRow(visibleRows) {
         [4,  'sum', fmtInt],
         [7,  'sum', fmtInt],
         [3,  'sum', fmtInt],
-        [18, 'sum', v => fmt(v, 1)],
-        [19, 'sum', v => fmt(v, 1)],
+        [18, 'sum', fmtInt],
+        [19, 'sum', fmtInt],
         [6,  'sum', fmtInt],   // Today's Buying (cap only)
         null,                  // Remaining (cap only, computed)
         [8,  'avg', v => fmt(v, 1)],
@@ -714,7 +716,7 @@ function renderTotalsRow(visibleRows) {
         [4,  'sum', fmtInt],
         [7,  'sum', fmtInt],
         [3,  'sum', fmtInt],
-        [18, 'sum', v => fmt(v, 1)],
+        [18, 'sum', fmtInt],
         [21, 'sum', fmtInt],
         [8,  'avg', v => fmt(v, 1)],
         [9,  'avg', v => fmt(v, 1)],
@@ -744,7 +746,8 @@ function renderTotalsRow(visibleRows) {
             if (!td) return;
             td.style.background = '';
             if (isCap && i === REMAINING_CELL_IDX) {
-                td.textContent = spReady ? fmtInt(Math.round(reqSum) - todaySum) : '';
+                const remSum = rows.reduce((s, r) => s + (Number(r[21]) || 0), 0);
+                td.textContent = spReady ? fmtInt(remSum) : '';
                 return;
             }
             if (!isCap && i === MODEL_REM_IDX) {
@@ -819,7 +822,7 @@ function renderTable() {
         const sales = Number(row[4]) || 0;
         const stock = Number(row[3]) || 0;
         row[18] = sales > 0 && total90dSales > 0
-            ? idealTotal * sales / total90dSales
+            ? Math.round(idealTotal * sales / total90dSales)
             : 0;
         row[19] = row[18] - stock;
         if (row[18] > maxIdeal) maxIdeal = row[18];
@@ -870,8 +873,8 @@ function renderTable() {
         }
         { const td = add(row[7] != null ? fmtInt(row[7]) : ''); if ((row[7] || 0) === 0) td.style.background = '#d8d8d8'; }
         { const td = add(fmtInt(row[3])); if ((row[3] || 0) === 0) td.style.background = '#d8d8d8'; }
-        add(row[18] != null ? fmt(row[18], 1) : '');
-        if (currentView === 'cap') add(row[19] != null ? fmt(row[19], 1) : '');
+        add(row[18] != null ? fmtInt(row[18]) : '');
+        if (currentView === 'cap') add(row[19] != null ? fmtInt(row[19]) : '');
         if (currentView === 'cap') {
             const tdToday = add(row[6] != null ? fmtInt(row[6]) : '');
             if ((row[6] || 0) > 0) tdToday.style.background = '#fef08a';
@@ -922,7 +925,7 @@ function renderTable() {
     body.appendChild(fragment);
 
     const reqSum = tableData.reduce((s, r) => s + (r[19] > 0 ? r[19] : 0), 0);
-    document.getElementById('required-sum-inline').textContent = Math.round(reqSum).toLocaleString();
+    document.getElementById('required-sum-inline').textContent = reqSum.toLocaleString();
 
     updateSalesColumnLabel();
     applyFilter();
@@ -1258,16 +1261,21 @@ function exportXLSX() {
     const fmtN = v => v != null ? Math.round(v) : null;
     const avg  = (sum, n) => n > 0 ? sum / n : null;
 
-    // Aggregate rawData by cap_id only — one row per derivative regardless of price band
+    // Aggregate from tableData — same source as the table, so averages match exactly
+    // tableData rows: [0:cap_id, 1:label, 2:fuel, 3:stock, 4:sales90, 7:sales7,
+    //                  8:avgDIS, 9:avgDTS, 10:avgGPUM, 11:avgGPUS, 12:avgGPUMS,
+    //                  14:avgSell, 15:avgATVal, 16:avgATPct, 17:avgATRating, 18:ideal, 19:required,
+    //                  22:price_band]
     const groups = new Map();
-    for (const r of rawData) {
-        const cap_id  = r[0];
-        const sales90 = Number(r[5]) || 0;
+    for (const r of tableData) {
+        const cap_id = r[0];
+        const isIF   = r[22] === 'interest_free';
         if (!groups.has(cap_id)) {
             groups.set(cap_id, {
                 label: r[1].split(' / ').slice(0, -1).join(' / '),
                 fuel: normFuel(r[2]),
                 stock: 0, sales90: 0, sales7: 0,
+                ideal: 0, required: 0,
                 dis_sum: 0, dis_n: 0,
                 dts_sum: 0, dts_n: 0,
                 gpu_m_sum: 0, gpu_m_n: 0,
@@ -1275,36 +1283,29 @@ function exportXLSX() {
                 gpu_ms_sum: 0, gpu_ms_n: 0,
                 sell_sum: 0, sell_n: 0,
                 at_val_sum: 0, at_val_n: 0,
-                at_pct_sum: 0, at_pct_n: 0,
                 at_rating_sum: 0, at_rating_n: 0,
             });
         }
         const g = groups.get(cap_id);
-        g.stock   += Number(r[4]) || 0;
-        g.sales90 += sales90;
-        g.sales7  += Number(r[6]) || 0;
-        if (sales90 !== 1) continue;
-        const dis      = r[7]  != null ? Number(r[7])  : null;
-        const dts      = r[8]  != null ? Number(r[8])  : null;
-        const gpu_m    = r[22] != null ? Number(r[22]) : null;
-        const gpu_s    = r[10] != null ? Number(r[10]) : null;
-        const gpu_ms   = r[11] != null ? Number(r[11]) : null;
-        const sell     = r[13] != null ? Number(r[13]) : null;
-        const at_val   = r[14] != null ? Number(r[14]) : null;
-        const at_pct   = r[15] != null ? Number(r[15]) : null;
-        const at_rate  = r[16] != null ? Number(r[16]) : null;
-        if (dis    != null) { g.dis_sum      += dis;    g.dis_n++;      }
-        if (dts    != null) { g.dts_sum      += dts;    g.dts_n++;      }
-        if (gpu_m  != null) { g.gpu_m_sum    += gpu_m;  g.gpu_m_n++;    }
-        if (gpu_s  != null) { g.gpu_s_sum    += gpu_s;  g.gpu_s_n++;    }
-        if (gpu_ms != null) { g.gpu_ms_sum   += gpu_ms; g.gpu_ms_n++;   }
-        if (sell   != null && sell !== 0) { g.sell_sum += sell; g.sell_n++; }
-        if (at_val != null) { g.at_val_sum   += at_val; g.at_val_n++;   }
-        if (at_pct != null) { g.at_pct_sum   += at_pct; g.at_pct_n++;   }
-        if (at_rate!= null) { g.at_rating_sum+= at_rate;g.at_rating_n++;}
+        g.stock    += Number(r[3])  || 0;
+        g.sales90  += Number(r[4])  || 0;
+        g.sales7   += Number(r[7])  || 0;
+        g.ideal    += Number(r[18]) || 0;
+        g.required += Number(r[19]) || 0;
+        if (r[8]  != null) { g.dis_sum      += Number(r[8]);  g.dis_n++;      }
+        if (r[9]  != null) { g.dts_sum      += Number(r[9]);  g.dts_n++;      }
+        if (r[10] != null) { g.gpu_m_sum    += Number(r[10]); g.gpu_m_n++;    }
+        if (r[11] != null) { g.gpu_s_sum    += Number(r[11]); g.gpu_s_n++;    }
+        if (r[12] != null) { g.gpu_ms_sum   += Number(r[12]); g.gpu_ms_n++;   }
+        if (r[17] != null) { g.at_rating_sum+= Number(r[17]); g.at_rating_n++;}
+        if (!isIF) {
+            if (r[14] != null) { g.sell_sum  += Number(r[14]); g.sell_n++;  }
+            if (r[15] != null) { g.at_val_sum+= Number(r[15]); g.at_val_n++;}
+        }
     }
 
-    const headers = ['CAP ID', 'Make Model Derivative', 'Fuel', 'Stock', '90d Sales', '7d Sales',
+    const headers = ['CAP ID', 'Required', 'Make Model Derivative', 'Fuel',
+        '90d Sales', '7d Sales', 'Stock', 'Ideal Stock', 'Required',
         'Avg DIS', 'Avg DTS',
         'Avg Sell Price', 'Avg AT Val', 'Avg AT PTM %', 'Avg AT Rating',
         'Avg GPU-M', 'Avg GPU-S', 'Avg GPU-MS'];
@@ -1317,20 +1318,23 @@ function exportXLSX() {
             : null;
         return [
             cap_id,
+            g.required,
             g.label,
             g.fuel,
-            g.stock,
             g.sales90,
             g.sales7,
-            fmt1(avg(g.dis_sum,      g.dis_n)),
-            fmt1(avg(g.dts_sum,      g.dts_n)),
+            g.stock,
+            g.ideal,
+            g.required,
+            fmt1(avg(g.dis_sum,       g.dis_n)),
+            fmt1(avg(g.dts_sum,       g.dts_n)),
             fmtN(avgSell),
             fmtN(avgAtVal),
             atPct,
             fmt1(avg(g.at_rating_sum, g.at_rating_n)),
-            fmtN(avg(g.gpu_m_sum,    g.gpu_m_n)),
-            fmtN(avg(g.gpu_s_sum,    g.gpu_s_n)),
-            fmtN(avg(g.gpu_ms_sum,   g.gpu_ms_n)),
+            fmtN(avg(g.gpu_m_sum,     g.gpu_m_n)),
+            fmtN(avg(g.gpu_s_sum,     g.gpu_s_n)),
+            fmtN(avg(g.gpu_ms_sum,    g.gpu_ms_n)),
         ];
     });
 
