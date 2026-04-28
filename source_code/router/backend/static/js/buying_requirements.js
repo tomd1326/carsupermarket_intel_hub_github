@@ -619,7 +619,7 @@ function getNumberToBuy() {
 
 /* ── Colour scale helpers ────────────────────────────────── */
 const _RED = [248, 105, 107];
-const _YEL = [255, 235, 132];
+const _YEL = [255, 243, 180];
 const _GRN = [ 99, 190, 123];
 function _excelScale(ratio) {
     const r = Math.min(1, Math.max(0, ratio));
@@ -1387,6 +1387,7 @@ function _modalStatus(r) {
 
 function _getModalSortValue(r, col) {
     if (col === 'deriv')     return (r[1].split(' / ').slice(0, -1).join(' / ') || '').toLowerCase();
+    if (col === 'price_band') return (r[3] || '').toLowerCase();
     if (col === 'vrm')       return (r[18] || '').toLowerCase();
     if (col === 'supplier')  return (r[19] || '').toLowerCase();
     if (col === 'status')    return _statusRank(r);
@@ -1459,7 +1460,8 @@ function _renderModalRows() {
     let ratingSum = 0, ratingN = 0;
     let gpumSum = 0, gpumN  = 0;
 
-    _modalVehicles.forEach(r => {
+    const visibleVehicles = _modalBand === 'All' ? _modalVehicles : _modalVehicles.filter(r => r[3] === _modalBand);
+    visibleVehicles.forEach(r => {
         const tr = document.createElement('tr');
         const status = _modalStatus(r);
         const deriv = r[1].split(' / ').slice(0, -1).join(' / ');
@@ -1471,6 +1473,7 @@ function _renderModalRows() {
             return td;
         };
         addTd(deriv);
+        addTd(r[3] === 'interest_free' ? '0%' : (r[3] || '—'));
         addTd(r[18] || '—');
         addTd(status);
         const tdApex = document.createElement('td');
@@ -1510,7 +1513,8 @@ function _renderModalRows() {
         addTd(r[16] != null ? fmtInt(r[16]) : '—', 'right');
         { const td = addTd(r[22] != null ? fmtGBP(r[22]) : '—', 'right'); if (r[22] != null && r[22] < 0) td.style.color = '#dc2626'; }
         if (status === 'Delivered') tr.classList.add('vehicle-row-sold');
-        if (status === 'Ordered') tr.classList.add('vehicle-row-ordered');
+        else if (status === 'Ordered') tr.classList.add('vehicle-row-ordered');
+        else if (r[3] === 'interest_free') tr.classList.add('vehicle-row-if');
         tbody.appendChild(tr);
 
         // accumulate averages
@@ -1548,6 +1552,7 @@ function _renderModalRows() {
     const avgPTMPct  = (avgSell && avgPTM) ? (((avgSell + 199) / avgPTM) * 100) : null;
 
     addAvgTd('', null, true);   // deriv
+    addAvgTd('', null, true);   // price band
     addAvgTd('', null, true);   // vrm
     addAvgTd('', null, true);   // status
     addAvgTd('', null, true);   // apex
@@ -1568,15 +1573,35 @@ function _renderModalRows() {
     addAvgTd(avgRating != null ? fmtInt(avgRating) : '—', 'right');
     { const td = addAvgTd(avgGPUM != null ? fmtGBP(avgGPUM) : '—', 'right'); if (avgGPUM != null && avgGPUM < 0) td.style.color = '#dc2626'; }
 
-    // sync avg table column widths to match the main modal table
-    requestAnimationFrame(() => {
-        const mainThs = document.querySelectorAll('#vehicle-modal-table thead th');
-        const avgTds  = avgRow.querySelectorAll('td');
-        mainThs.forEach((th, i) => {
-            if (avgTds[i]) avgTds[i].style.width = th.offsetWidth + 'px';
-        });
-        const avgTable = document.querySelector('.vehicle-modal-avg-table');
-        if (avgTable) avgTable.style.width = document.getElementById('vehicle-modal-table').offsetWidth + 'px';
+}
+
+let _modalBand = 'All';
+
+function _buildModalFilterBar(bands) {
+    const bar = document.getElementById('vehicle-modal-filter-bar');
+    bar.innerHTML = '';
+    const allBandOrder = ['<10k','10-12.5k','12.5-15k','15-20k','20-25k','25-30k','30k+','interest_free'];
+    const sorted = ['All', ...allBandOrder.filter(b => bands.has(b))];
+    sorted.forEach(val => {
+        const btn = document.createElement('button');
+        btn.className = 'btn btn-sm ' + (val === _modalBand ? 'btn-dark' : 'btn-outline-secondary') + ' modal-band-btn';
+        btn.textContent = val === 'interest_free' ? '0%' : val;
+        btn.onclick = () => {
+            _modalBand = val;
+            bar.querySelectorAll('.modal-band-btn').forEach(b => {
+                b.classList.toggle('btn-dark', b.textContent === (val === 'interest_free' ? '0%' : val) && val === _modalBand);
+                b.classList.toggle('btn-outline-secondary', !(b.textContent === (val === 'interest_free' ? '0%' : val) && val === _modalBand));
+            });
+            // re-sync button states cleanly
+            bar.querySelectorAll('.modal-band-btn').forEach((b, i) => {
+                const bVal = sorted[i];
+                b.classList.toggle('btn-dark', bVal === _modalBand);
+                b.classList.toggle('btn-outline-secondary', bVal !== _modalBand);
+            });
+            _sortModalVehicles();
+            _renderModalRows();
+        };
+        bar.appendChild(btn);
     });
 }
 
@@ -1591,7 +1616,7 @@ function openVehicleModal(capId, label) {
     const minGPUM = getMinGPUM();
     const todayMs = Date.now();
     _modalVehicles = rawData.filter(r => {
-        if (r[0] !== capId || r[1] !== label) return false;
+        if (r[0] !== capId) return false;
         const isStock = Number(r[4]) === 1;
         if (isStock) return true;
         const ackDate = r[17] ? new Date(r[17]) : null;
@@ -1603,6 +1628,9 @@ function openVehicleModal(capId, label) {
         const passGPUM = minGPUM === null || gpu_m === null || gpu_m >= minGPUM;
         return passDIS && passDTS && passGPUM;
     });
+    const bands = new Set(_modalVehicles.map(r => r[3]).filter(Boolean));
+    _modalBand = 'All';
+    _buildModalFilterBar(bands);
     _modalSortCol = 'default';
     _modalSortAsc = true;
     _sortModalVehicles();
