@@ -2,12 +2,15 @@ import logging
 import os
 import psycopg2
 import psycopg2.extras
+import psycopg2.pool
 from contextlib import contextmanager
 from botocore.exceptions import UnauthorizedSSOTokenError
 from fastapi import HTTPException
 from utils.secrets_manager_client import get_secret
 
 logger = logging.getLogger(__name__)
+
+_db_pool: psycopg2.pool.ThreadedConnectionPool | None = None
 
 
 def get_db_credentials():
@@ -30,6 +33,18 @@ def get_db_credentials():
             'database': 'carsupermarket_pricer',
             'port': int(data.get('port', 5432))
         }
+
+
+def _get_pool() -> psycopg2.pool.ThreadedConnectionPool:
+    global _db_pool
+    if _db_pool is None:
+        creds = get_db_credentials()
+        _db_pool = psycopg2.pool.ThreadedConnectionPool(
+            minconn=1, maxconn=10,
+            host=creds['host'], user=creds['user'], password=creds['password'],
+            database=creds['database'], port=creds['port'],
+        )
+    return _db_pool
 
 
 SETTINGS_DEFAULTS = {
@@ -88,20 +103,13 @@ def save_settings(conn, number_to_buy: int, max_days_sales: int, max_dts: int, m
 @contextmanager
 def get_database_connection():
     try:
-        db_credentials = get_db_credentials()
+        pool = _get_pool()
     except UnauthorizedSSOTokenError:
         logger.error("AWS SSO session has expired. Run: aws sso login")
         raise HTTPException(status_code=503, detail="AWS SSO session has expired. Run: aws sso login")
 
-    connection = psycopg2.connect(
-        host=db_credentials['host'],
-        user=db_credentials['user'],
-        password=db_credentials['password'],
-        database=db_credentials['database'],
-        port=db_credentials['port']
-    )
-
+    connection = pool.getconn()
     try:
         yield connection
     finally:
-        connection.close()
+        pool.putconn(connection)

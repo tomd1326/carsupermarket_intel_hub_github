@@ -474,19 +474,21 @@ function aggregateRawData() {
         g.sales90 += sales90;
         g.sales7  += sales7;
 
+        const isIF = r[3] === 'interest_free';
         if (dis     != null && sales90 === 1) { g.dis_sum      += dis;    g.dis_n++;      }
         if (dts     != null && sales90 === 1) { g.dts_sum      += dts;    g.dts_n++;      }
-        if (gpu_m   != null) { g.gpu_m_sum  += gpu_m;  g.gpu_m_n++;  }
-        if (gpu_s   != null) { g.gpu_s_sum  += gpu_s;  g.gpu_s_n++;  }
-        if (gpu_ms  != null) { g.gpu_ms_sum += gpu_ms; g.gpu_ms_n++; }
-        if (sell    != null && sell !== 0 && sales90 === 1) { g.sell_sum += sell; g.sell_n++; }
-        if (at_val  != null && sales90 === 1) { g.at_val_sum  += at_val;  g.at_val_n++;  }
+        if (gpu_m   != null && sales90 === 1) { g.gpu_m_sum  += gpu_m;  g.gpu_m_n++;  }
+        if (gpu_s   != null && sales90 === 1) { g.gpu_s_sum  += gpu_s;  g.gpu_s_n++;  }
+        if (gpu_ms  != null && sales90 === 1) { g.gpu_ms_sum += gpu_ms; g.gpu_ms_n++; }
+        if (!isIF && sell   != null && sell !== 0 && sales90 === 1) { g.sell_sum += sell; g.sell_n++; }
+        if (!isIF && at_val != null && sales90 === 1) { g.at_val_sum  += at_val;  g.at_val_n++;  }
         if (at_rate != null && sales90 === 1) { g.at_rating_sum += at_rate; g.at_rating_n++; }
     }
 
     const avg = (sum, n) => n > 0 ? sum / n : null;
     tableData = [];
     for (const g of groups.values()) {
+        if (g.stock === 0 && g.sales90 === 0) continue;
         const avgSell  = avg(g.sell_sum,   g.sell_n);
         const avgAtVal = avg(g.at_val_sum, g.at_val_n);
         tableData.push([
@@ -567,19 +569,21 @@ function aggregateModelData() {
         g.sales90 += sales90;
         g.sales7  += sales7;
 
+        const isIF = r[3] === 'interest_free';
         if (dis    != null && sales90 === 1) { g.dis_sum     += dis;    g.dis_n++;     }
         if (dts    != null && sales90 === 1) { g.dts_sum     += dts;    g.dts_n++;     }
-        if (gpu_m  != null) { g.gpu_m_sum  += gpu_m;  g.gpu_m_n++;  }
-        if (gpu_s  != null) { g.gpu_s_sum  += gpu_s;  g.gpu_s_n++;  }
-        if (gpu_ms != null) { g.gpu_ms_sum += gpu_ms; g.gpu_ms_n++; }
-        if (sell   != null && sell !== 0 && sales90 === 1) { g.sell_sum += sell; g.sell_n++; }
-        if (at_val != null && sales90 === 1) { g.at_val_sum  += at_val;  g.at_val_n++;  }
+        if (gpu_m  != null && sales90 === 1) { g.gpu_m_sum  += gpu_m;  g.gpu_m_n++;  }
+        if (gpu_s  != null && sales90 === 1) { g.gpu_s_sum  += gpu_s;  g.gpu_s_n++;  }
+        if (gpu_ms != null && sales90 === 1) { g.gpu_ms_sum += gpu_ms; g.gpu_ms_n++; }
+        if (!isIF && sell   != null && sell !== 0 && sales90 === 1) { g.sell_sum += sell; g.sell_n++; }
+        if (!isIF && at_val != null && sales90 === 1) { g.at_val_sum  += at_val;  g.at_val_n++;  }
         if (at_rate!= null && sales90 === 1) { g.at_rating_sum += at_rate; g.at_rating_n++; }
     }
 
     const avg = (sum, n) => n > 0 ? sum / n : null;
     tableData = [];
     for (const g of groups.values()) {
+        if (g.stock === 0 && g.sales90 === 0) continue;
         const avgSell  = avg(g.sell_sum,   g.sell_n);
         const avgAtVal = avg(g.at_val_sum, g.at_val_n);
         tableData.push([
@@ -619,7 +623,7 @@ function getNumberToBuy() {
 
 /* ── Colour scale helpers ────────────────────────────────── */
 const _RED = [248, 105, 107];
-const _YEL = [255, 235, 132];
+const _YEL = [255, 243, 180];
 const _GRN = [ 99, 190, 123];
 function _excelScale(ratio) {
     const r = Math.min(1, Math.max(0, ratio));
@@ -696,8 +700,8 @@ function renderTotalsRow(visibleRows) {
         [4,  'sum', fmtInt],
         [7,  'sum', fmtInt],
         [3,  'sum', fmtInt],
-        [18, 'sum', v => fmt(v, 1)],
-        [19, 'sum', v => fmt(v, 1)],
+        [18, 'sum', fmtInt],
+        [19, 'sum', fmtInt],
         [6,  'sum', fmtInt],   // Today's Buying (cap only)
         null,                  // Remaining (cap only, computed)
         [8,  'avg', v => fmt(v, 1)],
@@ -714,7 +718,7 @@ function renderTotalsRow(visibleRows) {
         [4,  'sum', fmtInt],
         [7,  'sum', fmtInt],
         [3,  'sum', fmtInt],
-        [18, 'sum', v => fmt(v, 1)],
+        [18, 'sum', fmtInt],
         [21, 'sum', fmtInt],
         [8,  'avg', v => fmt(v, 1)],
         [9,  'avg', v => fmt(v, 1)],
@@ -744,7 +748,8 @@ function renderTotalsRow(visibleRows) {
             if (!td) return;
             td.style.background = '';
             if (isCap && i === REMAINING_CELL_IDX) {
-                td.textContent = spReady ? fmtInt(Math.round(reqSum) - todaySum) : '';
+                const remSum = rows.reduce((s, r) => s + (Number(r[21]) || 0), 0);
+                td.textContent = spReady ? fmtInt(remSum) : '';
                 return;
             }
             if (!isCap && i === MODEL_REM_IDX) {
@@ -819,7 +824,7 @@ function renderTable() {
         const sales = Number(row[4]) || 0;
         const stock = Number(row[3]) || 0;
         row[18] = sales > 0 && total90dSales > 0
-            ? idealTotal * sales / total90dSales
+            ? Math.round(idealTotal * sales / total90dSales)
             : 0;
         row[19] = row[18] - stock;
         if (row[18] > maxIdeal) maxIdeal = row[18];
@@ -870,8 +875,8 @@ function renderTable() {
         }
         { const td = add(row[7] != null ? fmtInt(row[7]) : ''); if ((row[7] || 0) === 0) td.style.background = '#d8d8d8'; }
         { const td = add(fmtInt(row[3])); if ((row[3] || 0) === 0) td.style.background = '#d8d8d8'; }
-        add(row[18] != null ? fmt(row[18], 1) : '');
-        if (currentView === 'cap') add(row[19] != null ? fmt(row[19], 1) : '');
+        add(row[18] != null ? fmtInt(row[18]) : '');
+        if (currentView === 'cap') add(row[19] != null ? fmtInt(row[19]) : '');
         if (currentView === 'cap') {
             const tdToday = add(row[6] != null ? fmtInt(row[6]) : '');
             if ((row[6] || 0) > 0) tdToday.style.background = '#fef08a';
@@ -922,7 +927,7 @@ function renderTable() {
     body.appendChild(fragment);
 
     const reqSum = tableData.reduce((s, r) => s + (r[19] > 0 ? r[19] : 0), 0);
-    document.getElementById('required-sum-inline').textContent = Math.round(reqSum).toLocaleString();
+    document.getElementById('required-sum-inline').textContent = reqSum.toLocaleString();
 
     updateSalesColumnLabel();
     applyFilter();
@@ -1163,6 +1168,32 @@ function refreshTable() {
     if (!rawData.length) return;
     const btn = document.getElementById('refreshTableBtn');
     if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spinner-border spinner-border-sm me-2"></span>Loading...'; }
+    // Reset all table filters before re-aggregating
+    filterBand.clear(); filterBand.add('All');
+    document.querySelectorAll('.filter-btn[data-group="band"]').forEach(b => {
+        b.classList.toggle('btn-dark', b.dataset.value === 'All');
+        b.classList.toggle('btn-outline-secondary', b.dataset.value !== 'All');
+    });
+    filterFuel.clear(); filterFuel.add('All');
+    document.querySelectorAll('.filter-btn[data-group="fuel"]').forEach(b => {
+        b.classList.toggle('btn-dark', b.dataset.value === 'All');
+        b.classList.toggle('btn-outline-secondary', b.dataset.value !== 'All');
+    });
+    filterCapId = null;
+    const capInp = document.getElementById('capIdSearch');
+    if (capInp) capInp.value = '';
+    const capClear = document.getElementById('capIdClearBtn');
+    if (capClear) capClear.style.display = 'none';
+    filterModel = null;
+    const modelInp = document.getElementById('modelSearch');
+    if (modelInp) modelInp.value = '';
+    const modelClear = document.getElementById('modelClearBtn');
+    if (modelClear) modelClear.style.display = 'none';
+    filterMinReq = null;
+    const reqInp = document.getElementById('minReqInput');
+    if (reqInp) reqInp.value = '';
+    const reqClear = document.getElementById('minReqClearBtn');
+    if (reqClear) reqClear.style.display = 'none';
     requestAnimationFrame(() => setTimeout(() => {
         if (currentView === 'model') aggregateModelData(); else aggregateRawData();
         applySpPurchases(spPurchases);
@@ -1230,32 +1261,84 @@ function loadSPFromCache() {
 function exportXLSX() {
     const fmt1 = v => v != null ? Math.round(v * 10) / 10 : null;
     const fmtN = v => v != null ? Math.round(v) : null;
+    const avg  = (sum, n) => n > 0 ? sum / n : null;
 
-    const headers = ['CAP ID', 'Make Model Derivative', 'Fuel', 'Stock', '90d Sales', '7d Sales',
-        'Ideal Stock', 'Required', 'Avg DIS', 'Avg DTS',
-        'Avg Sell Price', 'Avg AT PTM', 'Avg AT PTM %', 'Avg AT Rating',
-        'Avg GPU-M', 'Avg GPU-S', 'Avg GPU-MS', 'Price Band'];
+    // Aggregate from tableData — same source as the table, so averages match exactly
+    // tableData rows: [0:cap_id, 1:label, 2:fuel, 3:stock, 4:sales90, 7:sales7,
+    //                  8:avgDIS, 9:avgDTS, 10:avgGPUM, 11:avgGPUS, 12:avgGPUMS,
+    //                  14:avgSell, 15:avgATVal, 16:avgATPct, 17:avgATRating, 18:ideal, 19:required,
+    //                  22:price_band]
+    const groups = new Map();
+    for (const r of tableData) {
+        const cap_id = r[0];
+        const isIF   = r[22] === 'interest_free';
+        if (!groups.has(cap_id)) {
+            groups.set(cap_id, {
+                label: r[1].split(' / ').slice(0, -1).join(' / '),
+                fuel: normFuel(r[2]),
+                stock: 0, sales90: 0, sales7: 0,
+                ideal: 0, required: 0,
+                dis_sum: 0, dis_n: 0,
+                dts_sum: 0, dts_n: 0,
+                gpu_m_sum: 0, gpu_m_n: 0,
+                gpu_s_sum: 0, gpu_s_n: 0,
+                gpu_ms_sum: 0, gpu_ms_n: 0,
+                sell_sum: 0, sell_n: 0,
+                at_val_sum: 0, at_val_n: 0,
+                at_rating_sum: 0, at_rating_n: 0,
+            });
+        }
+        const g = groups.get(cap_id);
+        g.stock    += Number(r[3])  || 0;
+        g.sales90  += Number(r[4])  || 0;
+        g.sales7   += Number(r[7])  || 0;
+        g.ideal    += Number(r[18]) || 0;
+        g.required += Number(r[19]) || 0;
+        if (r[8]  != null) { g.dis_sum      += Number(r[8]);  g.dis_n++;      }
+        if (r[9]  != null) { g.dts_sum      += Number(r[9]);  g.dts_n++;      }
+        if (r[10] != null) { g.gpu_m_sum    += Number(r[10]); g.gpu_m_n++;    }
+        if (r[11] != null) { g.gpu_s_sum    += Number(r[11]); g.gpu_s_n++;    }
+        if (r[12] != null) { g.gpu_ms_sum   += Number(r[12]); g.gpu_ms_n++;   }
+        if (r[17] != null) { g.at_rating_sum+= Number(r[17]); g.at_rating_n++;}
+        if (!isIF) {
+            if (r[14] != null) { g.sell_sum  += Number(r[14]); g.sell_n++;  }
+            if (r[15] != null) { g.at_val_sum+= Number(r[15]); g.at_val_n++;}
+        }
+    }
 
-    const rows = tableData.map(row => [
-        row[0],          // CAP ID
-        row[1].split(' / ').slice(0, -1).join(' / '),  // Make / Model / Derivative (strip price band)
-        normFuel(row[2]),// fuel (normalised)
-        fmtN(row[3]),    // stock
-        fmt1(row[4]),    // sales xxd
-        fmt1(row[7]),    // 7d sales
-        fmt1(row[18]),   // ideal stock
-        fmt1(row[19]),   // required
-        fmt1(row[8]),    // avg DIS
-        fmt1(row[9]),    // avg DTS
-        fmtN(row[14]),   // avg sell price
-        fmtN(row[15]),   // avg AT PTM
-        row[16] != null ? Math.round(row[16] * 10) / 10 : null, // AT PTM %
-        fmt1(row[17]),   // avg AT rating
-        fmtN(row[10]),   // avg GPU-M
-        fmtN(row[11]),   // avg GPU-S
-        fmtN(row[12]),   // avg GPU-MS
-        row[22],         // price band
-    ]);
+    const headers = ['CAP ID', 'Required', 'Make Model Derivative', 'Fuel',
+        '90d Sales', '7d Sales', 'Stock', 'Ideal Stock', 'Required',
+        'Avg DIS', 'Avg DTS',
+        'Avg Sell Price (Rate)', 'Avg AT Val (Rate)', 'Avg AT PTM % (Rate)', 'Avg AT Rating',
+        'Avg GPU-M', 'Avg GPU-S', 'Avg GPU-MS'];
+
+    const rows = [...groups.entries()].sort((a, b) => a[1].label.localeCompare(b[1].label)).map(([cap_id, g]) => {
+        const avgSell  = avg(g.sell_sum,  g.sell_n);
+        const avgAtVal = avg(g.at_val_sum, g.at_val_n);
+        const atPct    = avgSell != null && avgAtVal != null && avgAtVal !== 0
+            ? Math.round(((avgSell + 199) / avgAtVal) * 1000) / 10
+            : null;
+        return [
+            cap_id,
+            g.required,
+            g.label,
+            g.fuel,
+            g.sales90,
+            g.sales7,
+            g.stock,
+            g.ideal,
+            g.required,
+            fmt1(avg(g.dis_sum,       g.dis_n)),
+            fmt1(avg(g.dts_sum,       g.dts_n)),
+            fmtN(avgSell),
+            fmtN(avgAtVal),
+            atPct,
+            fmt1(avg(g.at_rating_sum, g.at_rating_n)),
+            fmtN(avg(g.gpu_m_sum,     g.gpu_m_n)),
+            fmtN(avg(g.gpu_s_sum,     g.gpu_s_n)),
+            fmtN(avg(g.gpu_ms_sum,    g.gpu_ms_n)),
+        ];
+    });
 
     const ws = XLSX.utils.aoa_to_sheet([headers, ...rows]);
     const wb = XLSX.utils.book_new();
@@ -1310,6 +1393,7 @@ function _modalStatus(r) {
 
 function _getModalSortValue(r, col) {
     if (col === 'deriv')     return (r[1].split(' / ').slice(0, -1).join(' / ') || '').toLowerCase();
+    if (col === 'price_band') return (r[3] || '').toLowerCase();
     if (col === 'vrm')       return (r[18] || '').toLowerCase();
     if (col === 'supplier')  return (r[19] || '').toLowerCase();
     if (col === 'status')    return _statusRank(r);
@@ -1382,7 +1466,8 @@ function _renderModalRows() {
     let ratingSum = 0, ratingN = 0;
     let gpumSum = 0, gpumN  = 0;
 
-    _modalVehicles.forEach(r => {
+    const visibleVehicles = _modalBand === 'All' ? _modalVehicles : _modalVehicles.filter(r => r[3] === _modalBand);
+    visibleVehicles.forEach(r => {
         const tr = document.createElement('tr');
         const status = _modalStatus(r);
         const deriv = r[1].split(' / ').slice(0, -1).join(' / ');
@@ -1394,6 +1479,7 @@ function _renderModalRows() {
             return td;
         };
         addTd(deriv);
+        addTd(r[3] === 'interest_free' ? '0%' : (r[3] || '—'));
         addTd(r[18] || '—');
         addTd(status);
         const tdApex = document.createElement('td');
@@ -1433,7 +1519,8 @@ function _renderModalRows() {
         addTd(r[16] != null ? fmtInt(r[16]) : '—', 'right');
         { const td = addTd(r[22] != null ? fmtGBP(r[22]) : '—', 'right'); if (r[22] != null && r[22] < 0) td.style.color = '#dc2626'; }
         if (status === 'Delivered') tr.classList.add('vehicle-row-sold');
-        if (status === 'Ordered') tr.classList.add('vehicle-row-ordered');
+        else if (status === 'Ordered') tr.classList.add('vehicle-row-ordered');
+        else if (r[3] === 'interest_free') tr.classList.add('vehicle-row-if');
         tbody.appendChild(tr);
 
         // accumulate averages
@@ -1471,6 +1558,7 @@ function _renderModalRows() {
     const avgPTMPct  = (avgSell && avgPTM) ? (((avgSell + 199) / avgPTM) * 100) : null;
 
     addAvgTd('', null, true);   // deriv
+    addAvgTd('', null, true);   // price band
     addAvgTd('', null, true);   // vrm
     addAvgTd('', null, true);   // status
     addAvgTd('', null, true);   // apex
@@ -1491,15 +1579,35 @@ function _renderModalRows() {
     addAvgTd(avgRating != null ? fmtInt(avgRating) : '—', 'right');
     { const td = addAvgTd(avgGPUM != null ? fmtGBP(avgGPUM) : '—', 'right'); if (avgGPUM != null && avgGPUM < 0) td.style.color = '#dc2626'; }
 
-    // sync avg table column widths to match the main modal table
-    requestAnimationFrame(() => {
-        const mainThs = document.querySelectorAll('#vehicle-modal-table thead th');
-        const avgTds  = avgRow.querySelectorAll('td');
-        mainThs.forEach((th, i) => {
-            if (avgTds[i]) avgTds[i].style.width = th.offsetWidth + 'px';
-        });
-        const avgTable = document.querySelector('.vehicle-modal-avg-table');
-        if (avgTable) avgTable.style.width = document.getElementById('vehicle-modal-table').offsetWidth + 'px';
+}
+
+let _modalBand = 'All';
+
+function _buildModalFilterBar(bands) {
+    const bar = document.getElementById('vehicle-modal-filter-bar');
+    bar.innerHTML = '';
+    const allBandOrder = ['<10k','10-12.5k','12.5-15k','15-20k','20-25k','25-30k','30k+','interest_free'];
+    const sorted = ['All', ...allBandOrder.filter(b => bands.has(b))];
+    sorted.forEach(val => {
+        const btn = document.createElement('button');
+        btn.className = 'btn btn-sm ' + (val === _modalBand ? 'btn-dark' : 'btn-outline-secondary') + ' modal-band-btn';
+        btn.textContent = val === 'interest_free' ? '0%' : val;
+        btn.onclick = () => {
+            _modalBand = val;
+            bar.querySelectorAll('.modal-band-btn').forEach(b => {
+                b.classList.toggle('btn-dark', b.textContent === (val === 'interest_free' ? '0%' : val) && val === _modalBand);
+                b.classList.toggle('btn-outline-secondary', !(b.textContent === (val === 'interest_free' ? '0%' : val) && val === _modalBand));
+            });
+            // re-sync button states cleanly
+            bar.querySelectorAll('.modal-band-btn').forEach((b, i) => {
+                const bVal = sorted[i];
+                b.classList.toggle('btn-dark', bVal === _modalBand);
+                b.classList.toggle('btn-outline-secondary', bVal !== _modalBand);
+            });
+            _sortModalVehicles();
+            _renderModalRows();
+        };
+        bar.appendChild(btn);
     });
 }
 
@@ -1514,7 +1622,7 @@ function openVehicleModal(capId, label) {
     const minGPUM = getMinGPUM();
     const todayMs = Date.now();
     _modalVehicles = rawData.filter(r => {
-        if (r[0] !== capId || r[1] !== label) return false;
+        if (r[0] !== capId) return false;
         const isStock = Number(r[4]) === 1;
         if (isStock) return true;
         const ackDate = r[17] ? new Date(r[17]) : null;
@@ -1526,6 +1634,9 @@ function openVehicleModal(capId, label) {
         const passGPUM = minGPUM === null || gpu_m === null || gpu_m >= minGPUM;
         return passDIS && passDTS && passGPUM;
     });
+    const bands = new Set(_modalVehicles.map(r => r[3]).filter(Boolean));
+    _modalBand = 'All';
+    _buildModalFilterBar(bands);
     _modalSortCol = 'default';
     _modalSortAsc = true;
     _sortModalVehicles();

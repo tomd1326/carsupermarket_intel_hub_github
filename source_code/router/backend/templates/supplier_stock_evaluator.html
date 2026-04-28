@@ -10,6 +10,7 @@
     <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
     <style>
         body, button, input, select, textarea { font-family: 'DM Sans', system-ui, sans-serif; }
+        body { overflow-x: hidden; }
         .settings-cog {
             position: fixed;
             top: 16px;
@@ -39,7 +40,10 @@
         .req-row { font-size: 0.95rem; }
         .req-row label { font-size: 0.95rem; }
         .req-row .form-control { font-size: 0.95rem; }
-        h4.task-list-heading { font-size: 1.1rem; font-weight: 600; }
+        h4.task-list-heading { font-size: 1.05rem; font-weight: 600; }
+        .table thead th { font-size: 0.875rem; vertical-align: middle; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; border: none !important; }
+        .table > thead { border-color: transparent !important; }
+        .table tbody td { font-size: 0.875rem; vertical-align: middle; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
         .status-label {
             padding: 2px 8px;
             color: white;
@@ -72,19 +76,19 @@
     </style>
 </head>
 <body>
-    <a href="{{ BASE_URL }}/logout" class="logout-link">
-        <i class="fas fa-sign-out-alt"></i> Logout
-    </a>
+    <div style="position:fixed;top:14px;right:24px;z-index:1040;display:flex;align-items:center;gap:8px">
+        <a href="{{ BASE_URL }}/buying-requirements" class="btn btn-primary btn-sm">Go to Buying Requirements</a>
+        <a href="{{ BASE_URL }}/home" class="btn btn-outline-secondary btn-sm">
+            <i class="fas fa-arrow-left me-1"></i>Back
+        </a>
+        <a href="{{ BASE_URL }}/logout" class="logout-link" style="position:static">
+            <i class="fas fa-sign-out-alt"></i> Logout
+        </a>
+    </div>
 
     <div class="container mt-4">
-        <div class="d-flex align-items-center justify-content-between mb-3">
+        <div class="mb-3">
             <h2 class="mb-0">Supplier Stock Evaluator</h2>
-            <div class="d-flex align-items-center gap-2">
-                <a href="{{ BASE_URL }}/home" class="btn btn-outline-secondary btn-sm">
-                    <i class="fas fa-arrow-left me-1"></i>Back
-                </a>
-                <a href="{{ BASE_URL }}/buying-requirements" class="btn btn-primary btn-sm">Go to Buying Requirements</a>
-            </div>
         </div>
         <form id="uploadForm" action="{{ BASE_URL }}/upload-task" method="post">
             <div class="upload-row d-flex align-items-center gap-3 mb-3 flex-wrap">
@@ -136,15 +140,25 @@
             </div>
         </div>
 
-        <table class="table">
+        <table class="table" style="table-layout:fixed;width:100%">
+            <colgroup>
+                <col style="width:7%">
+                <col style="width:13%">
+                <col style="width:11%">
+                <col>
+                <col style="width:6%">
+                <col style="width:5%">
+                <col style="width:8%">
+                <col style="width:10%">
+            </colgroup>
             <thead>
                 <tr>
                     <th scope="col">Task ID</th>
                     <th scope="col">Created At</th>
                     <th scope="col">Supplier</th>
                     <th scope="col">Filename</th>
-                    <th scope="col">Rows</th>
-                    <th scope="col">Exec. Time</th>
+                    <th scope="col">Vehicles</th>
+                    <th scope="col">Time</th>
                     <th scope="col">Status</th>
                     <th scope="col">Download</th>
                 </tr>
@@ -171,12 +185,12 @@
                     </td>
                     <td>
                         {% if task.status == 'success' %}
-                            <a href="#" class="btn btn-primary download-btn" data-task-id="{{ task.task_id }}" title="Download"><i class="fa fa-download"></i></a>
+                            <a href="#" class="btn btn-primary btn-sm download-btn" data-task-id="{{ task.task_id }}" title="Download"><i class="fa fa-download"></i></a>
                         {% else %}
-                            <a href="#" class="btn btn-secondary disabled" aria-disabled="true"><i class="fa fa-download"></i></a>
+                            <a href="#" class="btn btn-secondary btn-sm disabled" aria-disabled="true"><i class="fa fa-download"></i></a>
                         {% endif %}
                         {% if task.status in ('pending', 'created') %}
-                            <a href="#" class="btn btn-outline-danger" title="Delete task" onclick="deleteTask({{ task.task_id }}); return false;"><i class="fa fa-trash"></i></a>
+                            <a href="#" class="btn btn-outline-danger btn-sm" title="Delete task" onclick="deleteTask({{ task.task_id }}); return false;"><i class="fa fa-trash"></i></a>
                         {% endif %}
                 </tr>
                 {% endfor %}
@@ -216,12 +230,12 @@
         function _actionsHtml(task) {
             let html = '';
             if (task.status === 'success') {
-                html += `<a href="#" class="btn btn-primary download-btn" data-task-id="${task.task_id}" title="Download"><i class="fa fa-download"></i></a>`;
+                html += `<a href="#" class="btn btn-primary btn-sm download-btn" data-task-id="${task.task_id}" title="Download"><i class="fa fa-download"></i></a>`;
             } else {
-                html += `<a href="#" class="btn btn-secondary disabled" aria-disabled="true"><i class="fa fa-download"></i></a>`;
+                html += `<a href="#" class="btn btn-secondary btn-sm disabled" aria-disabled="true"><i class="fa fa-download"></i></a>`;
             }
             if (task.status === 'pending' || task.status === 'created') {
-                html += ` <a href="#" class="btn btn-outline-danger" title="Delete task" onclick="deleteTask(${task.task_id}); return false;"><i class="fa fa-trash"></i></a>`;
+                html += ` <a href="#" class="btn btn-outline-danger btn-sm" title="Delete task" onclick="deleteTask(${task.task_id}); return false;"><i class="fa fa-trash"></i></a>`;
             }
             return html;
         }

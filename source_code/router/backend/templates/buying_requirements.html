@@ -66,7 +66,7 @@
                 <input type="number" id="minGPUM" class="form-control form-control-sm no-spin" style="width:90px"
                        min="0" step="1" value="{{ settings.min_gpu_m }}" onclick="this.select()">
                 <button id="refreshTableBtn" class="btn btn-primary btn-sm" onclick="refreshTable()">
-                    <i class="fas fa-filter me-1"></i>Apply Filters
+                    <i class="fas fa-sync-alt me-1"></i>Refresh Table
                 </button>
                 <button class="btn btn-outline-secondary btn-sm" onclick="resetApplyFilters()">Reset to Default</button>
                 <button class="btn btn-outline-success btn-sm" onclick="exportXLSX()">
@@ -158,13 +158,38 @@
             <span id="vehicle-modal-title" class="vehicle-modal-title"></span>
             <button class="vehicle-modal-close" onclick="closeVehicleModal()" aria-label="Close">&times;</button>
         </div>
+        <div class="vehicle-modal-filter-bar" id="vehicle-modal-filter-bar"></div>
         <div class="vehicle-modal-body">
             <div class="vehicle-modal-scroll-x">
                 <div class="vehicle-modal-tbody-wrap">
                     <table id="vehicle-modal-table">
+                        <colgroup>
+                            <col style="width:300px"><!-- deriv -->
+                            <col style="width:65px"><!-- price band -->
+                            <col style="width:75px"><!-- vrm -->
+                            <col style="width:68px"><!-- status -->
+                            <col style="width:46px"><!-- apex -->
+                            <col style="width:52px"><!-- portal -->
+                            <col style="width:110px"><!-- location -->
+                            <col style="width:80px"><!-- delivered -->
+                            <col style="width:72px"><!-- supplier -->
+                            <col style="width:80px"><!-- dfr -->
+                            <col style="width:62px"><!-- mileage -->
+                            <col style="width:40px"><!-- dis -->
+                            <col style="width:40px"><!-- dts -->
+                            <col style="width:90px"><!-- purchase price -->
+                            <col style="width:90px"><!-- cap live clean -->
+                            <col style="width:55px"><!-- cap % -->
+                            <col style="width:80px"><!-- sell price -->
+                            <col style="width:80px"><!-- at ptm -->
+                            <col style="width:58px"><!-- at ptm % -->
+                            <col style="width:48px"><!-- at rating -->
+                            <col style="width:68px"><!-- gpu-m -->
+                        </colgroup>
                         <thead>
                             <tr>
                                 <th data-sort="deriv" data-label="Make / Model / Derivative" style="cursor:pointer">Make / Model / Derivative</th>
+                                <th data-sort="price_band" data-label="Price Band" style="cursor:pointer">Price Band</th>
                                 <th data-sort="vrm" data-label="VRM" style="cursor:pointer">VRM</th>
                                 <th data-sort="status" data-label="Status" style="cursor:pointer">Status</th>
                                 <th>Apex</th>
@@ -187,15 +212,10 @@
                             </tr>
                         </thead>
                         <tbody id="vehicle-modal-body"></tbody>
-                    </table>
-                </div>
-                <div class="vehicle-modal-avg-wrap">
-                    <table class="vehicle-modal-avg-table">
-                        <tbody>
+                        <tfoot id="vehicle-modal-avg-tfoot">
                             <tr id="vehicle-modal-avg-row"></tr>
-                        </tbody>
+                        </tfoot>
                     </table>
-                </div>
             </div>
         </div>
     </div>
