@@ -50,7 +50,7 @@ class BasePathMiddleware(BaseHTTPMiddleware):
 
 
 # Add middleware for session management
-app.add_middleware(SessionMiddleware, secret_key="as#$RD$26xc04$GF3r1dFDmhjd")
+app.add_middleware(SessionMiddleware, secret_key="as#$RD$26xc04$GF3r1dFDmhjd", max_age=30 * 24 * 3600, https_only=True)
 # Add middleware for base path
 app.add_middleware(BasePathMiddleware)
 
