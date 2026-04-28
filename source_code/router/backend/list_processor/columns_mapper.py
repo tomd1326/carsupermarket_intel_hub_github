@@ -144,7 +144,7 @@ class UniversalColumnsMapper(BaseColumnsMapper):
 
         # Match CAP ID
         capid = None
-        for pattern in ["cap[\s_-]?(id|code)"]:
+        for pattern in [r"cap[\s_-]?(id|code)"]:
             for col in row.keys():
                 if pd.isnull(row[col]):
                     continue
