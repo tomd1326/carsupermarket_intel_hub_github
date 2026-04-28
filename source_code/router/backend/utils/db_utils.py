@@ -91,6 +91,9 @@ def save_settings(conn, number_to_buy: int, max_days_sales: int, max_dts: int, m
         'enterprise_email_auto_process':    '1' if enterprise_email_auto_process else '0',
     }
     with conn.cursor() as cur:
+        cur.execute(
+            "CREATE TABLE IF NOT EXISTS settings (key VARCHAR(100) PRIMARY KEY, value VARCHAR(250))"
+        )
         for key, value in values.items():
             cur.execute(
                 "INSERT INTO settings (key, value) VALUES (%s, %s) "
