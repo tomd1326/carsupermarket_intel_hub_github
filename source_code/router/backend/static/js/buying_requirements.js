@@ -474,13 +474,14 @@ function aggregateRawData() {
         g.sales90 += sales90;
         g.sales7  += sales7;
 
+        const isIF = r[3] === 'interest_free';
         if (dis     != null && sales90 === 1) { g.dis_sum      += dis;    g.dis_n++;      }
         if (dts     != null && sales90 === 1) { g.dts_sum      += dts;    g.dts_n++;      }
         if (gpu_m   != null && sales90 === 1) { g.gpu_m_sum  += gpu_m;  g.gpu_m_n++;  }
         if (gpu_s   != null && sales90 === 1) { g.gpu_s_sum  += gpu_s;  g.gpu_s_n++;  }
         if (gpu_ms  != null && sales90 === 1) { g.gpu_ms_sum += gpu_ms; g.gpu_ms_n++; }
-        if (sell    != null && sell !== 0 && sales90 === 1) { g.sell_sum += sell; g.sell_n++; }
-        if (at_val  != null && sales90 === 1) { g.at_val_sum  += at_val;  g.at_val_n++;  }
+        if (!isIF && sell   != null && sell !== 0 && sales90 === 1) { g.sell_sum += sell; g.sell_n++; }
+        if (!isIF && at_val != null && sales90 === 1) { g.at_val_sum  += at_val;  g.at_val_n++;  }
         if (at_rate != null && sales90 === 1) { g.at_rating_sum += at_rate; g.at_rating_n++; }
     }
 
@@ -568,13 +569,14 @@ function aggregateModelData() {
         g.sales90 += sales90;
         g.sales7  += sales7;
 
+        const isIF = r[3] === 'interest_free';
         if (dis    != null && sales90 === 1) { g.dis_sum     += dis;    g.dis_n++;     }
         if (dts    != null && sales90 === 1) { g.dts_sum     += dts;    g.dts_n++;     }
         if (gpu_m  != null && sales90 === 1) { g.gpu_m_sum  += gpu_m;  g.gpu_m_n++;  }
         if (gpu_s  != null && sales90 === 1) { g.gpu_s_sum  += gpu_s;  g.gpu_s_n++;  }
         if (gpu_ms != null && sales90 === 1) { g.gpu_ms_sum += gpu_ms; g.gpu_ms_n++; }
-        if (sell   != null && sell !== 0 && sales90 === 1) { g.sell_sum += sell; g.sell_n++; }
-        if (at_val != null && sales90 === 1) { g.at_val_sum  += at_val;  g.at_val_n++;  }
+        if (!isIF && sell   != null && sell !== 0 && sales90 === 1) { g.sell_sum += sell; g.sell_n++; }
+        if (!isIF && at_val != null && sales90 === 1) { g.at_val_sum  += at_val;  g.at_val_n++;  }
         if (at_rate!= null && sales90 === 1) { g.at_rating_sum += at_rate; g.at_rating_n++; }
     }
 
@@ -1307,7 +1309,7 @@ function exportXLSX() {
     const headers = ['CAP ID', 'Required', 'Make Model Derivative', 'Fuel',
         '90d Sales', '7d Sales', 'Stock', 'Ideal Stock', 'Required',
         'Avg DIS', 'Avg DTS',
-        'Avg Sell Price', 'Avg AT Val', 'Avg AT PTM %', 'Avg AT Rating',
+        'Avg Sell Price (Rate)', 'Avg AT Val (Rate)', 'Avg AT PTM % (Rate)', 'Avg AT Rating',
         'Avg GPU-M', 'Avg GPU-S', 'Avg GPU-MS'];
 
     const rows = [...groups.entries()].sort((a, b) => a[1].label.localeCompare(b[1].label)).map(([cap_id, g]) => {
