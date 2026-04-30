@@ -58,8 +58,9 @@ s3_bucket_region = 'eu-west-1'  # bucket is always in eu-west-1 regardless of La
 
 
 VALID_USERS = {
-    'admin': '401b8fe6c8d8d7e9ecf3e7cfae3fd3ba700693bfb452becce59f08003a55c640',
-    'buyer': 'cd44b3a3d1fb9021db64745df31dce588104bf663952dc84fe6e9cd6140aa3cb',
+    'admin':   '401b8fe6c8d8d7e9ecf3e7cfae3fd3ba700693bfb452becce59f08003a55c640',
+    'buyer':   'cd44b3a3d1fb9021db64745df31dce588104bf663952dc84fe6e9cd6140aa3cb',
+    'jjagger': hashlib.sha256('T!mEL5qb?Un3lY6'.encode()).hexdigest(),
 }
 
 # session_id -> {user, login_time} — tracks active sessions server-side
@@ -132,7 +133,7 @@ def settings_page(request: Request, user: str = Depends(get_current_user)):
     if user != 'admin':
         return RedirectResponse(url=BASE_URL + "/home", status_code=303)
     with get_database_connection() as conn:
-        settings = get_settings(conn)
+        settings = get_settings(conn, user='buyer')
     sessions = sorted(_active_sessions.values(), key=lambda s: s['login_time'], reverse=True)
     return templates.TemplateResponse("settings.html", {"request": request, "user": user, "BASE_URL": BASE_URL, "settings": settings, "active_sessions": sessions})
 
@@ -165,7 +166,7 @@ def update_settings(
     calc = calc_buying_reqs == "on"
     auto_process = enterprise_email_auto_process == "on"
     with get_database_connection() as conn:
-        save_settings(conn, number_to_buy, max_days_sales, max_dts, min_gpu_m, cap_workers, cap_rate_limit, calc, auto_process)
+        save_settings(conn, number_to_buy, max_days_sales, max_dts, min_gpu_m, cap_workers, cap_rate_limit, calc, auto_process, user='buyer')
     logger.info(
         "Settings updated by %s: number_to_buy=%d, max_days_sales=%d, max_dts=%d, "
         "min_gpu_m=%d, cap_workers=%d, cap_rate_limit=%d, calc_buying_reqs=%s, enterprise_email_auto_process=%s",
@@ -193,12 +194,19 @@ def home(request: Request, user: str = Depends(get_current_user)):
 
 
 # NEW
+@router.get("/stock-list", response_class=HTMLResponse)
+def stock_list(request: Request, user: str = Depends(get_current_user)):
+    if user != 'admin':
+        return RedirectResponse(url=BASE_URL + "/home", status_code=303)
+    return templates.TemplateResponse("stock_list.html", {"request": request, "user": user, "BASE_URL": BASE_URL})
+
+
 @router.get("/buying-requirements", response_class=HTMLResponse)
 def buying_requirements(request: Request, user: str = Depends(get_current_user)):
     if not user:
         return RedirectResponse(url=BASE_URL + "/login", status_code=303)
     with get_database_connection() as conn:
-        settings = get_settings(conn)
+        settings = get_settings(conn, user=user)
     return templates.TemplateResponse("buying_requirements.html", {"request": request, "user": user, "BASE_URL": BASE_URL, "settings": settings})
 
 
@@ -353,7 +361,8 @@ def _safe_int(v):
 
 def _safe_float(v):
     try:
-        return float(v)
+        f = float(v)
+        return None if f != f else f  # NaN check
     except (TypeError, ValueError):
         return None
 
@@ -375,7 +384,7 @@ _SP_TTL_SECONDS    = 30 * 60
 _SP_S3_TTL_SECONDS = 30 * 60
 _S3_BUCKET         = "aa-raw-sources-uk"
 _S3_ENV            = 'prod' if os.getenv('AWS_REGION') == 'eu-west-1' else 'dev'
-_SF_S3_KEY         = f"applications/pricing/uk-vehicle-list-evaluator/{_S3_ENV}/cache/buying_requirements_v16.json"
+_SF_S3_KEY         = f"applications/pricing/uk-vehicle-list-evaluator/{_S3_ENV}/cache/buying_requirements_v20.json"
 _SP_S3_KEY         = f"applications/pricing/uk-vehicle-list-evaluator/{_S3_ENV}/cache/sp_purchases_v4.json"
 
 
@@ -532,7 +541,10 @@ def _get_sf_rows(force: bool = False) -> list:
                 INVOICE_POSTED_DATE,
                 VEHICLE_UPDATED_AT,
                 COALESCE(MAKE_MODEL, '') AS MAKE_MODEL,
-                CAP_LIVE_CLEAN_LATEST
+                CAP_LIVE_CLEAN_LATEST,
+                VEHICLE_COSTS,
+                GPU_M_COSTS,
+                COALESCE(MILEAGE_BAND, '') AS MILEAGE_BAND
             FROM PROD_CARSUPERMARKET_DB.product_vehicle_journey.buying_requirements
             ORDER BY CAP_ID
         """)
@@ -547,21 +559,23 @@ def _get_sf_rows(force: bool = False) -> list:
     col_map = {name.upper(): i for i, name in enumerate(col_names)}
     def _g(r, name): return r[col_map[name]] if name in col_map else None
     def _s(r, name): v = _g(r, name); return str(v) if v is not None else None
+    def _gbp(r, name): v = _g(r, name); return round(v, 2) if v is not None else None
     result = [[
         _g(r, 'CAP_ID'), _g(r, 'LABEL'), _g(r, 'FUEL_TYPE'), _g(r, 'PRICE_BAND'),
         _g(r, 'STOCK'), _g(r, 'SALES_90_DAYS'), _g(r, 'SALES_7_DAYS'),
         _g(r, 'DAYS_IN_STOCK_ACKNOWLEDGED'), _g(r, 'DAYS_ADVERTISED_ACKNOWLEDGED'),
-        _g(r, 'GPU_M'), _g(r, 'GPU_S'), _g(r, 'GPU_MS'),
-        _g(r, 'PURCHASE_PRICE_INC_VAT'), _g(r, 'SELLING_PRICE_INC_VAT'),
-        _g(r, 'AUTOTRADER_LATEST_RETAIL_VALUATION'), _g(r, 'AUTOTRADER_PERCENT'),
+        _gbp(r, 'GPU_M'), _gbp(r, 'GPU_S'), _gbp(r, 'GPU_MS'),
+        _gbp(r, 'PURCHASE_PRICE_INC_VAT'), _gbp(r, 'SELLING_PRICE_INC_VAT'),
+        _gbp(r, 'AUTOTRADER_LATEST_RETAIL_VALUATION'), _g(r, 'AUTOTRADER_PERCENT'),
         _g(r, 'AUTOTRADER_LATEST_RETAIL_RATING'),
         _s(r, 'ORDER_ACKNOWLEDGED_DATE'),
         _g(r, 'VRM'), _g(r, 'SUPPLIER_NAME'), _g(r, 'VEHICLE_URL'),
-        _g(r, 'VEHICLE_STATUS'), _g(r, 'GPU_M_RESOLVED'), _g(r, 'VEHICLE_LOCATION'),
+        _g(r, 'VEHICLE_STATUS'), _gbp(r, 'GPU_M_RESOLVED'), _g(r, 'VEHICLE_LOCATION'),
         _s(r, 'DATE_FIRST_REGISTERED'),
         _g(r, 'MILEAGE'), _g(r, 'AUTOTRADER_PORTAL_LINK'),
         _s(r, 'INVOICE_POSTED_DATE'), _s(r, 'VEHICLE_UPDATED_AT'),
         _g(r, 'MAKE_MODEL'), _g(r, 'CAP_LIVE_CLEAN_LATEST'),
+        _gbp(r, 'VEHICLE_COSTS'), _gbp(r, 'GPU_M_COSTS'), _g(r, 'MILEAGE_BAND'),
     ] for r in rows]
     _save_sf_cache_to_s3(result, cached_at)
 
@@ -790,6 +804,7 @@ def task_buying_requirements_download(
             "sell_sum": 0.0, "sell_n": 0,
             "at_val_sum": 0.0, "at_val_n": 0,
             "at_rate_sum": 0.0, "at_rate_n": 0,
+            "gpu_m_costs_sum": 0.0, "gpu_m_costs_n": 0,
             "gpu_m_sum": 0.0, "gpu_m_n": 0,
             "gpu_s_sum": 0.0, "gpu_s_n": 0,
             "gpu_ms_sum": 0.0, "gpu_ms_n": 0,
@@ -798,6 +813,8 @@ def task_buying_requirements_download(
     cap_data: dict = {}
     # cap_id → {at_pct_sum, at_pct_n} for non-interest_free rows only
     cap_id_at_pct: dict = {}
+    # (cap_id, mileage_band) → {sum, n} for vehicle_costs
+    cap_id_vehicle_costs: dict = {}
 
     for r in sf_rows:
         cap_id     = r[0]
@@ -812,7 +829,12 @@ def task_buying_requirements_download(
         gpu_ms     = float(r[11]) if r[11] is not None else None
         sell       = float(r[13]) if r[13] is not None else None
         at_val     = float(r[14]) if r[14] is not None else None
-        at_pct_raw = float(r[15]) if r[15] is not None else None
+        at_pct_raw     = float(r[15]) if r[15] is not None else None
+        at_rating      = float(r[16]) if r[16] is not None else None
+        vehicle_costs  = _safe_float(r[31]) if len(r) > 31 else None
+        _gpu_m_costs_raw = _safe_float(r[32]) if len(r) > 32 else None
+        gpu_m_costs    = -_gpu_m_costs_raw if _gpu_m_costs_raw is not None else None
+        mileage_band   = r[33] if len(r) > 33 else None
 
         key = cap_id
         if key not in cap_data:
@@ -821,11 +843,18 @@ def task_buying_requirements_download(
 
         g["stock"] += stock
 
-        # Accumulate CAP-rate-only AT % for price-band estimation step
-        if price_band != "interest_free" and at_pct_raw is not None:
+        # Accumulate CAP-rate-only sell/AT-val ratio for price-band estimation.
+        # Use raw sell price / AT val ratio to estimate retail price for supplier vehicles.
+        sell_f  = float(r[13]) if r[13] is not None else None
+        at_val_f = float(r[14]) if r[14] is not None else None
+        if sell_f is not None: sell_f = None if sell_f != sell_f else sell_f
+        if at_val_f is not None: at_val_f = None if at_val_f != at_val_f else at_val_f
+        if (price_band != "interest_free" and sales90 == 1
+                and sell_f is not None and at_val_f is not None and at_val_f > 0):
+            ratio = sell_f / at_val_f * 100.0
             if cap_id not in cap_id_at_pct:
                 cap_id_at_pct[cap_id] = {"sum": 0.0, "n": 0}
-            cap_id_at_pct[cap_id]["sum"] += at_pct_raw
+            cap_id_at_pct[cap_id]["sum"] += ratio
             cap_id_at_pct[cap_id]["n"]   += 1
 
         pass_dts  = dts   is None or dts   <= max_dts
@@ -837,22 +866,31 @@ def task_buying_requirements_download(
         g["sales_7"]   += sales7
 
         sold = sales90 == 1
-        if dis    is not None and sold:
-            g["dis_sum"]     += dis;    g["dis_n"]     += 1
-        if dts    is not None and sold:
-            g["dts_sum"]     += dts;    g["dts_n"]     += 1
-        if sell   is not None and sell != 0 and sold:
-            g["sell_sum"]    += sell;   g["sell_n"]    += 1
-        if at_val is not None and sold:
-            g["at_val_sum"]  += at_val; g["at_val_n"]  += 1
-        if at_pct_raw is not None and sold:
-            g["at_rate_sum"] += at_pct_raw; g["at_rate_n"] += 1
-        if gpu_m  is not None:
-            g["gpu_m_sum"]   += gpu_m;  g["gpu_m_n"]   += 1
-        if gpu_s  is not None:
-            g["gpu_s_sum"]   += gpu_s;  g["gpu_s_n"]   += 1
-        if gpu_ms is not None:
-            g["gpu_ms_sum"]  += gpu_ms; g["gpu_ms_n"]  += 1
+        sold_rate = sold and price_band != "interest_free"
+        if dis       is not None and sold:
+            g["dis_sum"]     += dis;        g["dis_n"]     += 1
+        if dts       is not None and sold:
+            g["dts_sum"]     += dts;        g["dts_n"]     += 1
+        if sell      is not None and sell != 0 and sold_rate:
+            g["sell_sum"]    += sell;       g["sell_n"]    += 1
+        if at_val    is not None and sold_rate:
+            g["at_val_sum"]  += at_val;     g["at_val_n"]  += 1
+        if at_rating  is not None and sold:
+            g["at_rate_sum"] += at_rating;  g["at_rate_n"] += 1
+        if vehicle_costs is not None and sold and mileage_band:
+            vc_key = (cap_id, mileage_band)
+            if vc_key not in cap_id_vehicle_costs:
+                cap_id_vehicle_costs[vc_key] = {"sum": 0.0, "n": 0}
+            cap_id_vehicle_costs[vc_key]["sum"] += vehicle_costs
+            cap_id_vehicle_costs[vc_key]["n"]   += 1
+        if gpu_m_costs   is not None and sold:
+            g["gpu_m_costs_sum"]   += gpu_m_costs;   g["gpu_m_costs_n"]   += 1
+        if gpu_m     is not None and sold:
+            g["gpu_m_sum"]   += gpu_m;      g["gpu_m_n"]   += 1
+        if gpu_s     is not None and sold:
+            g["gpu_s_sum"]   += gpu_s;      g["gpu_s_n"]   += 1
+        if gpu_ms    is not None and sold:
+            g["gpu_ms_sum"]  += gpu_ms;     g["gpu_ms_n"]  += 1
 
     # Fleet-wide totals (across all price bands)
     total_current_stock = sum(g["stock"]     for g in cap_data.values())
@@ -872,8 +910,8 @@ def task_buying_requirements_download(
         stock       = g["stock"]
         ideal_stock = (ideal_total * xxd_sales / total_xxd_sales) if total_xxd_sales > 0 and xxd_sales > 0 else 0.0
         avg_sell    = _avg_gbp(g["sell_sum"],   g["sell_n"])
-        avg_at_val  = _avg_gbp(g["at_val_sum"], g["at_val_n"])
-        at_pct      = round(((avg_sell + 199) / avg_at_val) * 100, 1) if avg_sell is not None and avg_at_val and avg_at_val != 0 else None
+        avg_at_val  = round(g["at_val_sum"] / g["at_val_n"]) if g["at_val_n"] > 0 else None
+        at_pct      = round((avg_sell / avg_at_val) * 100, 2) if avg_sell is not None and avg_at_val and avg_at_val != 0 else None
         cap_requirements[cap_id] = {
             "90d Sales":                 round(xxd_sales,          1),
             "7d Sales":                  round(g["sales_7"],        1),
@@ -885,7 +923,8 @@ def task_buying_requirements_download(
             "Avg Sell Price":            avg_sell,
             "Avg AT PTM":                avg_at_val,
             "Avg AT PTM %":              at_pct,
-            "Avg AT Rating":             _avg(g["at_rate_sum"], g["at_rate_n"]),
+            "Avg AT Rating":             round(g["at_rate_sum"] / g["at_rate_n"], 2) if g["at_rate_n"] > 0 else None,
+            "Avg GPU-M Costs":           _avg_gbp(g["gpu_m_costs_sum"],   g["gpu_m_costs_n"]),
             "Avg GPU-M":                 _avg_gbp(g["gpu_m_sum"],  g["gpu_m_n"]),
             "Avg GPU-S":                 _avg_gbp(g["gpu_s_sum"],  g["gpu_s_n"]),
             "Avg GPU-MS":                _avg_gbp(g["gpu_ms_sum"], g["gpu_ms_n"]),
@@ -899,12 +938,43 @@ def task_buying_requirements_download(
         "90d Sales", "7d Sales", "Stock", "Ideal Stock", "Required",
         "Avg Days in Stock", "Avg Days to Sell", "Avg Sell Price",
         "Avg AT PTM", "Avg AT PTM %", "Avg AT Rating",
-        "Avg GPU-M", "Avg GPU-S", "Avg GPU-MS",
+        "Avg GPU-M Costs",
+        "Avg GPU-M",
     ]
 
     AT_VAL_COL = "at_valuations_retail_valuation"
     cap_col    = "cap_capid" if "cap_capid" in elaborated_df.columns else None
     at_col     = AT_VAL_COL  if AT_VAL_COL  in elaborated_df.columns else None
+    _mileage_candidates = ["mileage", "miles", "odo", "odom"]
+    mileage_col = next((c for c in elaborated_df.columns if c.lower() in _mileage_candidates), None)
+
+    def _mileage_to_band(m):
+        try:
+            m = int(float(m))
+        except (TypeError, ValueError):
+            return None
+        if m <= 0:      return None
+        if m < 10000:   return '<10k'
+        if m < 20000:   return '10-20k'
+        if m < 30000:   return '20-30k'
+        if m < 40000:   return '30-40k'
+        if m < 50000:   return '40-50k'
+        if m < 60000:   return '50-60k'
+        if m < 70000:   return '60-70k'
+        return '70k+'
+
+    def _lookup_vehicle_costs(cap_id_val, mileage_val):
+        cid = _safe_int(cap_id_val)
+        band = _mileage_to_band(mileage_val)
+        if cid is None or not band:
+            return None
+        _bands = ['<10k', '10-20k', '20-30k', '30-40k', '40-50k', '50-60k', '60-70k', '70k+']
+        idx = _bands.index(band) if band in _bands else -1
+        for b in _bands[idx:]:
+            entry = cap_id_vehicle_costs.get((cid, b))
+            if entry and entry["n"] > 0:
+                return round(entry["sum"] / entry["n"])
+        return None
 
     def _estimated_retail(cap_id_val, at_val_val):
         cid = _safe_int(cap_id_val)
@@ -931,6 +1001,10 @@ def task_buying_requirements_download(
         elaborated_df["Estimated Retail Price"] = None
         elaborated_df["Derived Price Band"]     = None
 
+    elaborated_df["Mileage Band"] = elaborated_df.apply(
+        lambda row: _mileage_to_band(row[mileage_col]) if mileage_col else None, axis=1
+    )
+
     def lookup(cap_id_val, col):
         try:
             cid = int(float(cap_id_val))
@@ -945,6 +1019,13 @@ def task_buying_requirements_download(
             )
         else:
             elaborated_df[col] = None
+
+    if cap_col and mileage_col:
+        elaborated_df["Avg Vehicle Costs"] = elaborated_df.apply(
+            lambda row: _lookup_vehicle_costs(row[cap_col], row[mileage_col]), axis=1
+        )
+    else:
+        elaborated_df["Avg Vehicle Costs"] = None
 
     # ── 5. Write and return ───────────────────────────────────────────────────
     fd2, tmp_out = tempfile.mkstemp(suffix="." + file_ext)
@@ -993,6 +1074,310 @@ def tasks_json(page: int = 1, page_size: int = 25, user: str = Depends(get_curre
     return {"tasks": tasks, "has_pending": has_pending, "total_pages": total_pages, "current_page": page}
 
 
+# ── MOT Check (admin only) ────────────────────────────────────────────────────
+_mot_progress: dict = {}   # keyed by session_id: {pct, done, total, eta_s}
+_mot_lock = threading.Lock()
+_MOT_S3_PREFIX = "applications/pricing/uk-vehicle-list-evaluator/{env}/mot-check/"
+
+
+@router.get("/mot-check", response_class=HTMLResponse)
+def mot_check_page(request: Request, user: str = Depends(get_current_user)):
+    if not user:
+        return RedirectResponse(url=BASE_URL + "/login", status_code=303)
+    return templates.TemplateResponse("mot_check.html", {"request": request, "user": user, "BASE_URL": BASE_URL})
+
+
+@router.get("/mot-check/progress")
+def mot_check_progress(request: Request, user: str = Depends(get_current_user)):
+    if not user:
+        raise HTTPException(status_code=403)
+    sid = request.session.get('session_id', '')
+    with _mot_lock:
+        p = _mot_progress.get(sid, {"pct": 0, "done": 0, "total": 0, "eta_s": None})
+    return p
+
+
+@router.post("/mot-check/process")
+def mot_check_process(request: Request, payload: dict, user: str = Depends(get_current_user)):
+    if not user:
+        raise HTTPException(status_code=403)
+
+    from utils.dvsa_client import DVSAClient
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    vrms = [v.strip().upper() for v in (payload.get("vrms") or []) if v.strip()]
+    if not vrms:
+        raise HTTPException(status_code=400, detail="No VRMs provided")
+
+    sid = request.session.get('session_id', '')
+    total = len(vrms)
+    with _mot_lock:
+        _mot_progress[sid] = {"pct": 0, "done": 0, "total": total, "eta_s": None}
+
+    client = DVSAClient()
+    results = [None] * total
+    start = time.time()
+    done_count = 0
+
+    def fetch(idx_vrm):
+        idx, vrm = idx_vrm
+        try:
+            return idx, vrm, client.get_vehicle_by_vrm(vrm), None
+        except Exception as e:
+            return idx, vrm, None, str(e)
+
+    with ThreadPoolExecutor(max_workers=10) as pool:
+        futures = {pool.submit(fetch, (i, v)): i for i, v in enumerate(vrms)}
+        for fut in as_completed(futures):
+            idx, vrm, vehicle_json, err = fut.result()
+            results[idx] = _build_mot_row(vrm, vehicle_json)
+            done_count += 1
+            elapsed = time.time() - start
+            avg = elapsed / done_count
+            eta_s = (total - done_count) * avg
+            with _mot_lock:
+                _mot_progress[sid] = {
+                    "pct": round(done_count / total * 100, 1),
+                    "done": done_count,
+                    "total": total,
+                    "eta_s": round(eta_s, 1),
+                }
+
+    with _mot_lock:
+        _mot_progress.pop(sid, None)
+
+    columns = ["Registration", "Make", "Model", "Colour", "Fuel Type",
+               "Date Registered", "Most Recent MOT Date", "MOT Expiry Date",
+               "Odometer", "Status"]
+    max_pairs = max((r["pairs"] for r in results), default=0)
+    for i in range(1, max_pairs + 1):
+        sfx = ("st" if i == 1 else "nd" if i == 2 else "rd" if i == 3 else "th")
+        columns += [f"{i}{sfx} MOT Date", f"{i}{sfx} MOT Mileage"]
+
+    rows = []
+    for r in results:
+        row = [r["vrm"], r["make"], r["model"], r["colour"], r["fuel"],
+               r["date_registered"], r["last_mot_date"], r["expiry_date"],
+               r["odometer"], r["status"]]
+        for d, m in r["test_pairs"]:
+            row += [d, m]
+        row += ["", ""] * (max_pairs - len(r["test_pairs"]))
+        rows.append(row)
+
+    # Write XLSX to a temp file and upload to S3
+    import openpyxl
+    from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+    import io
+
+    env = 'prod' if os.getenv('AWS_REGION') == 'eu-west-1' else 'dev'
+    ts_str = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    filename = f"mot_check_{ts_str}.xlsx"
+    s3_key = _MOT_S3_PREFIX.format(env=env) + filename
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "MOT Check"
+
+    header_fill = PatternFill("solid", fgColor="BDD7EE")
+    header_font = Font(bold=True)
+    valid_fill   = PatternFill("solid", fgColor="C6EFCE")
+    expired_fill = PatternFill("solid", fgColor="FFC7CE")
+    thin = Side(style="thin", color="CCCCCC")
+    border = Border(left=thin, right=thin, top=thin, bottom=thin)
+
+    status_col = columns.index("Status") + 1 if "Status" in columns else None
+
+    ws.append(columns)
+    for cell in ws[1]:
+        cell.fill = header_fill
+        cell.font = header_font
+        cell.alignment = Alignment(horizontal="center")
+        cell.border = border
+
+    for row in rows:
+        ws.append(row)
+        row_idx = ws.max_row
+        for col_idx, cell in enumerate(ws[row_idx], start=1):
+            cell.border = border
+            if col_idx == status_col:
+                val = cell.value or ""
+                if val == "VALID":
+                    cell.fill = valid_fill
+                elif val == "EXPIRED":
+                    cell.fill = expired_fill
+
+    ws.freeze_panes = "A2"
+    for col in ws.columns:
+        max_len = max((len(str(c.value or "")) for c in col), default=8)
+        ws.column_dimensions[col[0].column_letter].width = min(max(max_len + 2, 10), 40)
+
+    fd, tmp_path = tempfile.mkstemp(suffix=".xlsx")
+    os.close(fd)
+    try:
+        import boto3 as _boto3
+        wb.save(tmp_path)
+        expired_count = sum(1 for r in results if r.get("status") == "EXPIRED")
+        unknown_count = sum(1 for r in results if r.get("status") == "UNKNOWN")
+        with open(tmp_path, 'rb') as f:
+            _boto3.client('s3').upload_fileobj(
+                f, s3_bucketname, s3_key,
+                ExtraArgs={"Metadata": {
+                    "vrm_count":     str(len(vrms)),
+                    "expired_count": str(expired_count),
+                    "unknown_count": str(unknown_count),
+                    "processed_by":  user,
+                }},
+            )
+    finally:
+        try:
+            os.remove(tmp_path)
+        except OSError:
+            pass
+
+    return {"columns": columns, "rows": rows, "filename": filename}
+
+
+@router.get("/mot-check/history")
+def mot_check_history(user: str = Depends(get_current_user)):
+    if not user:
+        raise HTTPException(status_code=403)
+    import boto3
+    env = 'prod' if os.getenv('AWS_REGION') == 'eu-west-1' else 'dev'
+    prefix = _MOT_S3_PREFIX.format(env=env)
+    try:
+        resp = boto3.client('s3').list_objects_v2(Bucket=s3_bucketname, Prefix=prefix)
+        objects = resp.get('Contents', [])
+        objects.sort(key=lambda o: o['LastModified'], reverse=True)
+        import boto3 as _boto3
+        s3 = _boto3.client('s3')
+
+        def _metadata(key):
+            try:
+                m = s3.head_object(Bucket=s3_bucketname, Key=key).get('Metadata', {})
+                return {
+                    "vrm_count":     int(m['vrm_count'])     if m.get('vrm_count')     else None,
+                    "expired_count": int(m['expired_count']) if m.get('expired_count') else None,
+                    "unknown_count": int(m['unknown_count']) if m.get('unknown_count') else None,
+                    "processed_by":  m.get('processed_by'),
+                }
+            except Exception:
+                return {"vrm_count": None, "expired_count": None, "unknown_count": None, "processed_by": None}
+
+        result = []
+        for o in objects:
+            if o['Key'] == prefix:
+                continue
+            meta = _metadata(o['Key'])
+            result.append({
+                "filename":      o['Key'].replace(prefix, ''),
+                "ts":            o['LastModified'].strftime("%d/%m/%Y %H:%M"),
+                "size_kb":       round(o['Size'] / 1024, 1),
+                "vrm_count":     meta["vrm_count"],
+                "expired_count": meta["expired_count"],
+                "unknown_count": meta["unknown_count"],
+                "processed_by":  meta["processed_by"],
+            })
+        return result
+    except Exception as e:
+        logger.warning(f"MOT history S3 list failed: {e}")
+        return []
+
+
+@router.get("/mot-check/download/{filename}")
+def mot_check_download(filename: str, user: str = Depends(get_current_user)):
+    if not user:
+        raise HTTPException(status_code=403)
+    env = 'prod' if os.getenv('AWS_REGION') == 'eu-west-1' else 'dev'
+    s3_key = _MOT_S3_PREFIX.format(env=env) + filename
+    fd, tmp_path = tempfile.mkstemp(suffix=".xlsx")
+    os.close(fd)
+    try:
+        download_file(tmp_path, s3_bucketname, s3_key)
+        return FileResponse(tmp_path, filename=filename, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+    except Exception:
+        try:
+            os.remove(tmp_path)
+        except OSError:
+            pass
+        raise HTTPException(status_code=404, detail="File not found in S3")
+
+
+def _parse_mot_datetime(s: str):
+    if not s:
+        return None
+    s = s.strip()
+    try:
+        if "T" in s:
+            return datetime.datetime.fromisoformat(s.replace("Z", "+00:00")).replace(tzinfo=None)
+    except Exception:
+        pass
+    for fmt in ("%Y.%m.%d %H:%M:%S", "%Y.%m.%d", "%Y-%m-%d"):
+        try:
+            return datetime.datetime.strptime(s, fmt)
+        except ValueError:
+            continue
+    return None
+
+
+def _to_ddmmyyyy(s: str) -> str:
+    if not s:
+        return ""
+    dt = _parse_mot_datetime(s)
+    if not dt:
+        return ""
+    return dt.strftime("%d/%m/%Y")
+
+
+def _build_mot_row(vrm: str, vehicle_json) -> dict:
+    import zoneinfo
+    uk_tz = zoneinfo.ZoneInfo("Europe/London")
+
+    empty = {"vrm": vrm, "make": "", "model": "", "colour": "", "fuel": "",
+              "date_registered": "", "last_mot_date": "", "expiry_date": "",
+              "odometer": "", "status": "UNKNOWN", "test_pairs": [], "pairs": 0}
+
+    if not vehicle_json:
+        return empty
+
+    v = vehicle_json[0] if isinstance(vehicle_json, list) and vehicle_json else vehicle_json
+    if not isinstance(v, dict):
+        return empty
+
+    tests = [t for t in (v.get("motTests") or [])
+             if (t.get("testResult") or "").upper() == "PASSED"]
+    tests.sort(key=lambda t: (_parse_mot_datetime(t.get("completedDate") or "") or datetime.datetime.min))
+
+    most_recent = tests[-1] if tests else {}
+    expiry = _to_ddmmyyyy(most_recent.get("expiryDate") or v.get("motTestExpiryDate") or "")
+
+    status = "UNKNOWN"
+    if expiry:
+        try:
+            exp_d = datetime.datetime.strptime(expiry, "%d/%m/%Y").date()
+            today = datetime.datetime.now(uk_tz).date()
+            status = "VALID" if exp_d >= today else "EXPIRED"
+        except Exception:
+            pass
+
+    pairs = [(_to_ddmmyyyy(t.get("completedDate") or ""),
+              str(t.get("odometerValue") or "").strip()) for t in tests]
+
+    return {
+        "vrm": vrm,
+        "make": v.get("make") or "",
+        "model": v.get("model") or "",
+        "colour": v.get("primaryColour") or "",
+        "fuel": v.get("fuelType") or "",
+        "date_registered": _to_ddmmyyyy(v.get("firstUsedDate") or ""),
+        "last_mot_date": _to_ddmmyyyy(most_recent.get("completedDate") or ""),
+        "expiry_date": expiry,
+        "odometer": str(most_recent.get("odometerValue") or "").strip(),
+        "status": status,
+        "test_pairs": pairs,
+        "pairs": len(pairs),
+    }
+
+
 @router.get("/tasks", response_class=HTMLResponse, name="read_tasks")
 def read_tasks(request: Request, page: Optional[int] = 1, page_size: Optional[int] = 25, user: str = Depends(get_current_user)):
     if not user:
@@ -1028,7 +1413,7 @@ def read_tasks(request: Request, page: Optional[int] = 1, page_size: Optional[in
     total_pages = (total_tasks + page_size - 1) // page_size  # Calculate the total number of pages
 
     with get_database_connection() as conn:
-        settings = get_settings(conn)
+        settings = get_settings(conn, user=user)
     return templates.TemplateResponse("supplier_stock_evaluator.html", {
         "request": request,
         "user": user,

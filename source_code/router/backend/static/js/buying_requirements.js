@@ -474,14 +474,16 @@ function aggregateRawData() {
         g.sales90 += sales90;
         g.sales7  += sales7;
 
-        if (dis     != null && sales90 === 1) { g.dis_sum      += dis;    g.dis_n++;      }
-        if (dts     != null && sales90 === 1) { g.dts_sum      += dts;    g.dts_n++;      }
-        if (gpu_m   != null && sales90 === 1) { g.gpu_m_sum  += gpu_m;  g.gpu_m_n++;  }
-        if (gpu_s   != null && sales90 === 1) { g.gpu_s_sum  += gpu_s;  g.gpu_s_n++;  }
-        if (gpu_ms  != null && sales90 === 1) { g.gpu_ms_sum += gpu_ms; g.gpu_ms_n++; }
-        if (sell    != null && sell !== 0 && sales90 === 1) { g.sell_sum += sell; g.sell_n++; }
-        if (at_val  != null && sales90 === 1) { g.at_val_sum  += at_val;  g.at_val_n++;  }
-        if (at_rate != null && sales90 === 1) { g.at_rating_sum += at_rate; g.at_rating_n++; }
+        const sold     = sales90 === 1;
+        const soldRate = sold && r[3] !== 'interest_free';
+        if (dis     != null && sold)     { g.dis_sum        += dis;    g.dis_n++;        }
+        if (dts     != null && sold)     { g.dts_sum        += dts;    g.dts_n++;        }
+        if (gpu_m   != null && sold)     { g.gpu_m_sum      += gpu_m;  g.gpu_m_n++;      }
+        if (gpu_s   != null && sold)     { g.gpu_s_sum      += gpu_s;  g.gpu_s_n++;      }
+        if (gpu_ms  != null && sold)     { g.gpu_ms_sum     += gpu_ms; g.gpu_ms_n++;     }
+        if (sell    != null && sell !== 0 && soldRate) { g.sell_sum += sell; g.sell_n++; }
+        if (at_val  != null && soldRate) { g.at_val_sum     += at_val; g.at_val_n++;     }
+        if (at_rate != null && sold)     { g.at_rating_sum  += at_rate; g.at_rating_n++; }
     }
 
     const avg = (sum, n) => n > 0 ? sum / n : null;
@@ -507,7 +509,7 @@ function aggregateRawData() {
             null,                                       // 13 purchase_price (not displayed)
             avgSell,                                    // 14 avg sell price
             avgAtVal,                                   // 15 avg AT val
-            (avgSell != null && avgAtVal != null && avgAtVal !== 0) ? ((avgSell + 199) / avgAtVal) * 100 : null, // 16 AT pct %
+            (avgSell != null && avgAtVal != null && avgAtVal !== 0) ? ((avgSell) / avgAtVal) * 100 : null, // 16 AT pct %
             avg(g.at_rating_sum, g.at_rating_n),        // 17 avg AT rating
             // 18, 19, 20, 21 set in renderTable (ideal, required, -, remaining)
             // 22: price_band
@@ -601,7 +603,7 @@ function aggregateModelData() {
             null,
             avgSell,
             avgAtVal,
-            (avgSell != null && avgAtVal != null && avgAtVal !== 0) ? ((avgSell + 199) / avgAtVal) * 100 : null,
+            (avgSell != null && avgAtVal != null && avgAtVal !== 0) ? ((avgSell) / avgAtVal) * 100 : null,
             avg(g.at_rating_sum, g.at_rating_n),
             // 18, 19, 20, 21 set in renderTable
             g.price_band,  // 22
@@ -1314,7 +1316,7 @@ function exportXLSX() {
         const avgSell  = avg(g.sell_sum,  g.sell_n);
         const avgAtVal = avg(g.at_val_sum, g.at_val_n);
         const atPct    = avgSell != null && avgAtVal != null && avgAtVal !== 0
-            ? Math.round(((avgSell + 199) / avgAtVal) * 1000) / 10
+            ? Math.round(((avgSell) / avgAtVal) * 1000) / 10
             : null;
         return [
             cap_id,
@@ -1513,7 +1515,7 @@ function _renderModalRows() {
         addTd(capPct, 'right');
         addTd(r[13] != null && r[13] !== 0 ? fmtGBP(r[13]) : '—', 'right');
         addTd(r[14] != null ? fmtGBP(r[14]) : '—', 'right');
-        addTd(r[13] != null && r[13] !== 0 && r[14] != null && r[14] !== 0 ? fmtPct(((r[13] + 199) / r[14]) * 100) : '—', 'right');
+        addTd(r[13] != null && r[13] !== 0 && r[14] != null && r[14] !== 0 ? fmtPct((r[13] / r[14]) * 100) : '—', 'right');
         addTd(r[16] != null ? fmtInt(r[16]) : '—', 'right');
         { const td = addTd(r[22] != null ? fmtGBP(r[22]) : '—', 'right'); if (r[22] != null && r[22] < 0) td.style.color = '#dc2626'; }
         if (status === 'Delivered') tr.classList.add('vehicle-row-sold');
@@ -1553,7 +1555,7 @@ function _renderModalRows() {
     const avgRating = ratingN ? ratingSum / ratingN : null;
     const avgGPUM = gpumN ? gpumSum / gpumN : null;
     const avgCapPct  = (avgPP  && avgCap)  ? ((avgPP  / avgCap)  * 100) : null;
-    const avgPTMPct  = (avgSell && avgPTM) ? (((avgSell + 199) / avgPTM) * 100) : null;
+    const avgPTMPct  = (avgSell && avgPTM) ? (((avgSell) / avgPTM) * 100) : null;
 
     addAvgTd('', null, true);   // deriv
     addAvgTd('', null, true);   // price band

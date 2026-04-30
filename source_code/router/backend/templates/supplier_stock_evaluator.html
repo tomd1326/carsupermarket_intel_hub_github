@@ -244,12 +244,35 @@
             document.querySelectorAll('.download-btn').forEach(function(el) {
                 el.addEventListener('click', function(e) {
                     e.preventDefault();
+                    var btn = el;
+                    btn.classList.add('disabled');
+                    btn.innerHTML = '<i class="fa fa-spinner fa-spin"></i>';
+
                     {% if settings.calc_buying_reqs %}
                     var params = new URLSearchParams(BUYING_REQ_PARAMS);
-                    window.location.href = '{{ BASE_URL }}/tasks/' + el.dataset.taskId + '/buying-requirements-download?' + params.toString();
+                    var url = '{{ BASE_URL }}/tasks/' + el.dataset.taskId + '/buying-requirements-download?' + params.toString();
                     {% else %}
-                    window.location.href = '{{ BASE_URL }}/download/' + el.dataset.taskId;
+                    var url = '{{ BASE_URL }}/download/' + el.dataset.taskId;
                     {% endif %}
+
+                    fetch(url)
+                        .then(function(resp) {
+                            var disposition = resp.headers.get('content-disposition') || '';
+                            var match = disposition.match(/filename[^;=\n]*=["']?([^"';\n]+)/i);
+                            var filename = match ? match[1].trim() : 'download';
+                            return resp.blob().then(function(blob) {
+                                var a = document.createElement('a');
+                                a.href = URL.createObjectURL(blob);
+                                a.download = filename;
+                                a.click();
+                                URL.revokeObjectURL(a.href);
+                            });
+                        })
+                        .finally(function() {
+                            btn.classList.remove('disabled');
+                            btn.innerHTML = '<i class="fa fa-download"></i>';
+                            refreshTaskList();
+                        });
                 });
             });
         }
