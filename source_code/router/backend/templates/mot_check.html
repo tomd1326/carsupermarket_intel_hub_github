@@ -61,10 +61,13 @@
         .progress-bar { background-color: #7ed321; }
 
         .history-empty { color: #adb5bd; font-size: 0.88rem; }
-        .history-scroll { max-height: 260px; overflow-y: auto; overflow-x: auto; }
+        .history-scroll { max-height: 520px; overflow-y: auto; overflow-x: auto; }
         .history-table { font-size: 0.82rem; width: 100%; }
         .history-table th { white-space: nowrap; background-color: #f0f4f8; font-weight: 600; padding: 7px 10px; position: sticky; top: 0; z-index: 1; }
         .history-table td { white-space: nowrap; padding: 7px 10px; border-top: 1px solid #f0f0f0; vertical-align: middle; }
+        .history-table tbody tr { cursor: pointer; transition: background 0.1s; }
+        .history-table tbody tr:hover { background-color: #f0f7ff; }
+        .history-table tbody tr.active-history-row { background-color: #dbeeff; }
 
         .logout-link {
             position: fixed;
@@ -89,9 +92,28 @@
         .badge-unknown { background-color: #e2e3e5; color: #383d41; }
 
         .result-table { font-size: 0.8rem; }
-        .result-table th { white-space: nowrap; background-color: #f0f4f8; position: sticky; top: 0; z-index: 1; }
-        .result-table td { white-space: nowrap; }
+        .result-table th {
+            white-space: nowrap;
+            background-color: #f0f4f8;
+            position: sticky;
+            top: 0;
+            z-index: 1;
+            border-right: 1px solid #b0bac5;
+        }
+        .result-table td {
+            white-space: nowrap;
+            border-right: 1px solid #c8d0da;
+        }
+        .result-table td:last-child,
+        .result-table th:last-child { border-right: none; }
         .result-scroll { max-height: 380px; overflow-y: auto; overflow-x: auto; }
+
+        .results-title { font-weight: 700; }
+        .results-timestamp { font-size: 1rem; color: #212529; font-weight: 600; margin-left: 8px; }
+
+        .history-loading { color: #adb5bd; font-size: 0.88rem; }
+
+        .warn-cell { background-color: #f8d7da !important; color: #721c24 !important; font-weight: 600; }
     </style>
 </head>
 <body>
@@ -101,12 +123,13 @@
         <!-- Header -->
         <div class="d-flex align-items-center gap-3 mb-4">
             <img src="{{ BASE_URL }}/static/icon.png" alt="" class="brand-logo">
-            <div>
-                <a href="{{ BASE_URL }}/home" class="text-white-50 text-decoration-none small">
-                    <i class="fas fa-arrow-left me-1"></i>Back
-                </a>
-                <h1 class="page-title mb-0">MOT Check</h1>
-            </div>
+            <h1 class="page-title mb-0">MOT Check</h1>
+            <a href="javascript:history.back()" class="btn btn-outline-secondary btn-sm">
+                <i class="fas fa-arrow-left me-1"></i>Back
+            </a>
+            <a href="{{ BASE_URL }}/home" class="btn btn-outline-secondary btn-sm">
+                <i class="fas fa-home me-1"></i>Home
+            </a>
         </div>
 
         <!-- Two-column layout -->
@@ -116,7 +139,7 @@
             <div class="col-12 col-lg-5 col-xl-4">
                 <div class="card mb-3">
                     <div class="card-body">
-                        <label class="form-label fw-bold small text-uppercase text-muted mb-1">VRMs (one per line)</label>
+                        <label class="form-label fw-bold small text-muted mb-1">VRMs (one per line)</label>
                         <textarea id="vrmInput" class="form-control mb-2" rows="14"></textarea>
                         <div class="text-muted small mb-3" id="vrmCount" style="display:none;">
                             <i class="fas fa-car me-1"></i><span id="countVal">0</span> vehicles
@@ -147,10 +170,13 @@
 
             <!-- Right: history + results -->
             <div class="col-12 col-lg-7 col-xl-8">
-                <div class="card mb-3" id="resultsCard" style="display:none;">
+                <div class="card mb-3" id="resultsCard">
                     <div class="card-body">
                         <div class="d-flex justify-content-between align-items-center mb-2">
-                            <h6 class="mb-0 fw-bold">Results</h6>
+                            <h6 class="mb-0 results-title">
+                                Results
+                                <span class="results-timestamp" id="resultsTimestamp"></span>
+                            </h6>
                             <button class="btn btn-sm btn-outline-secondary" onclick="downloadCsv()">
                                 <i class="fas fa-download me-1"></i>Download XLSX
                             </button>
@@ -167,8 +193,9 @@
 
                 <div class="card">
                     <div class="card-body">
-                        <h6 class="fw-bold mb-3">Previous Tasks</h6>
+                        <h6 class="fw-bold mb-3">Previous Tasks <span class="text-muted fw-normal" style="font-size:0.8rem;">(Click to view results)</span></h6>
                         <div class="history-scroll">
+                            <p class="history-loading mb-0" id="historyLoading"><i class="fas fa-spinner fa-spin me-1"></i>Loading...</p>
                             <table class="history-table" id="historyTable" style="display:none;">
                                 <thead>
                                     <tr>
@@ -184,7 +211,7 @@
                                 </thead>
                                 <tbody id="historyBody"></tbody>
                             </table>
-                            <p class="history-empty mb-0" id="historyEmpty">No previous runs found.</p>
+                            <p class="history-empty mb-0" id="historyEmpty" style="display:none;">No previous runs found.</p>
                         </div>
                     </div>
                 </div>
@@ -195,6 +222,7 @@
     <script>
         window.BASE_URL = "{{ BASE_URL }}";
         let _currentFilename = null;
+        let _currentTs = null;
 
         const vrmInput = document.getElementById('vrmInput');
         vrmInput.addEventListener('input', () => {
@@ -209,13 +237,18 @@
                 .filter(v => v.length > 0);
         }
 
+        function nowTimestamp() {
+            const d = new Date();
+            const pad = n => String(n).padStart(2, '0');
+            return `${pad(d.getDate())}/${pad(d.getMonth()+1)}/${d.getFullYear()} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+        }
+
         function startProcessing() {
             const vrms = parseVrms();
             if (!vrms.length) { alert('Enter at least one VRM.'); return; }
 
             document.getElementById('processBtn').disabled = true;
             document.getElementById('progressCard').style.display = '';
-            document.getElementById('resultsCard').style.display = 'none';
             setProgress(0, 0, vrms.length, null);
 
             let pollInterval = setInterval(() => {
@@ -238,7 +271,8 @@
                 clearInterval(pollInterval);
                 setProgress(100, data.rows.length, data.rows.length, null);
                 _currentFilename = data.filename;
-                renderResults(data.columns, data.rows);
+                _currentTs = nowTimestamp();
+                renderResults(data.columns, data.rows, _currentTs);
                 loadHistory();
                 document.getElementById('processBtn').disabled = false;
             })
@@ -261,43 +295,156 @@
             }
         }
 
-        function renderResults(columns, rows) {
+        function parseDMY(str) {
+            if (!str) return null;
+            const p = str.split('/');
+            if (p.length !== 3) return null;
+            const d = new Date(Date.UTC(+p[2], +p[1] - 1, +p[0]));
+            return isNaN(d) ? null : d;
+        }
+
+        function warnedCells(columns, row) {
+            const warned = new Set();
+
+            // Mileage: each historical mileage must be >= previous, and odometer >= last historical
+            const histMileage = [];
+            for (let i = 0; i < columns.length; i++) {
+                if (/^\d+(st|nd|rd|th) MOT Mileage$/i.test(columns[i])) {
+                    const n = row[i] ? parseInt(String(row[i]).replace(/,/g, ''), 10) : NaN;
+                    histMileage.push({ idx: i, val: isNaN(n) ? null : n });
+                }
+            }
+            for (let j = 1; j < histMileage.length; j++) {
+                if (histMileage[j-1].val !== null && histMileage[j].val !== null && histMileage[j].val < histMileage[j-1].val)
+                    warned.add(histMileage[j].idx);
+            }
+            const odomIdx = columns.indexOf('Odometer');
+            if (odomIdx >= 0 && histMileage.length > 0) {
+                const lastM = histMileage[histMileage.length - 1].val;
+                const odom = row[odomIdx] ? parseInt(String(row[odomIdx]).replace(/,/g, ''), 10) : NaN;
+                if (lastM !== null && !isNaN(odom) && odom < lastM) warned.add(odomIdx);
+            }
+
+            // Early MOT: test done 60+ days before due date (1 year after previous test)
+            const histDates = [];
+            for (let i = 0; i < columns.length; i++) {
+                if (/^\d+(st|nd|rd|th) MOT Date$/i.test(columns[i]))
+                    histDates.push({ idx: i, date: parseDMY(row[i]) });
+            }
+            for (let j = 1; j < histDates.length; j++) {
+                const prev = histDates[j-1].date, curr = histDates[j].date;
+                if (!prev || !curr) continue;
+                const due = new Date(prev); due.setFullYear(due.getFullYear() + 1);
+                if ((due - curr) / 864e5 >= 60) warned.add(histDates[j].idx);
+            }
+            // Check most recent MOT date against last historical
+            const recentIdx = columns.indexOf('Most Recent MOT Date');
+            if (recentIdx >= 0 && histDates.length > 0) {
+                const lastHist = histDates[histDates.length - 1];
+                const recent = parseDMY(row[recentIdx]);
+                if (lastHist.date && recent && recent > lastHist.date) {
+                    const due = new Date(lastHist.date); due.setFullYear(due.getFullYear() + 1);
+                    if ((due - recent) / 864e5 >= 60) warned.add(recentIdx);
+                }
+            }
+
+            return warned;
+        }
+
+        let _activeFilter = null;
+
+        function applyFilter(filter) {
+            // Toggle off if already active
+            _activeFilter = _activeFilter === filter ? null : filter;
+
+            document.querySelectorAll('#resultsBody tr').forEach(tr => {
+                const cats = (tr.dataset.cats || '').split(',');
+                tr.style.display = (!_activeFilter || cats.includes(_activeFilter)) ? '' : 'none';
+            });
+
+            // Update badge outlines to show which is active
+            document.querySelectorAll('#resultsSummary [data-filter]').forEach(el => {
+                el.style.outline = (el.dataset.filter === _activeFilter) ? '2px solid #495057' : 'none';
+                el.style.cursor = 'pointer';
+            });
+        }
+
+        function renderResults(columns, rows, ts) {
             const header = document.getElementById('resultsHeader');
             const body = document.getElementById('resultsBody');
+            _activeFilter = null;
             header.innerHTML = columns.map(c => `<th>${c}</th>`).join('');
+
+            const commentsIdx = columns.indexOf('Comments');
+            const statusIdx = columns.indexOf('Status');
+
             body.innerHTML = rows.map(row => {
+                const warned = warnedCells(columns, row);
+                const hasMileage = [...warned].some(i => /MOT Mileage/i.test(columns[i]) || columns[i] === 'Odometer');
+                const hasEarly   = [...warned].some(i => /MOT Date/i.test(columns[i]));
+                const isExpired  = statusIdx >= 0 && row[statusIdx] === 'EXPIRED';
+                const isUnknown  = statusIdx >= 0 && row[statusIdx] === 'UNKNOWN';
+
+                const cats = [];
+                if (isExpired)  cats.push('expired');
+                if (isUnknown)  cats.push('unknown');
+                if (hasMileage) cats.push('mileage');
+                if (hasEarly)   cats.push('early');
+
                 const cells = row.map((cell, i) => {
                     if (columns[i] === 'Status') {
                         const cls = cell === 'VALID' ? 'badge-valid' : cell === 'EXPIRED' ? 'badge-expired' : 'badge-unknown';
                         return `<td><span class="status-badge ${cls}">${cell}</span></td>`;
                     }
+                    if (i === commentsIdx && cell) return `<td class="warn-cell">${cell}</td>`;
+                    if (warned.has(i)) return `<td class="warn-cell">${cell ?? ''}</td>`;
                     return `<td>${cell ?? ''}</td>`;
                 }).join('');
-                return `<tr>${cells}</tr>`;
+                return `<tr data-cats="${cats.join(',')}">${cells}</tr>`;
             }).join('');
 
-            const statusIdx = columns.indexOf('Status');
-            const expired = statusIdx >= 0 ? rows.filter(r => r[statusIdx] === 'EXPIRED').length : 0;
-            const unknown = statusIdx >= 0 ? rows.filter(r => r[statusIdx] === 'UNKNOWN').length : 0;
+            const expired        = statusIdx >= 0 ? rows.filter(r => r[statusIdx] === 'EXPIRED').length : 0;
+            const unknown        = statusIdx >= 0 ? rows.filter(r => r[statusIdx] === 'UNKNOWN').length : 0;
+            let mileageWarnCount = 0, earlyMotWarnCount = 0;
+            rows.forEach(row => {
+                const w = warnedCells(columns, row);
+                if ([...w].some(i => /MOT Mileage/i.test(columns[i]) || columns[i] === 'Odometer')) mileageWarnCount++;
+                if ([...w].some(i => /MOT Date/i.test(columns[i]))) earlyMotWarnCount++;
+            });
+
+            const badge = (filter, bg, color, icon, label) =>
+                `<span data-filter="${filter}" onclick="applyFilter('${filter}')" style="background:${bg};color:${color};font-weight:600;padding:5px 12px;border-radius:6px;display:inline-block;cursor:pointer;user-select:none;"><i class="fas fa-${icon} me-1"></i>${label}</span>`;
+
             const summary = document.getElementById('resultsSummary');
             const parts = [];
             if (expired > 0) {
-                parts.push(`<span style="background:#f8d7da;color:#842029;font-weight:600;padding:5px 12px;border-radius:6px;display:inline-block;"><i class="fas fa-exclamation-circle me-1"></i>${expired} expired MOT${expired !== 1 ? 's' : ''}</span>`);
+                parts.push(badge('expired', '#f8d7da', '#842029', 'exclamation-circle', `${expired} expired MOT${expired !== 1 ? 's' : ''}`));
             } else {
                 parts.push(`<span style="background:#d1e7dd;color:#155724;font-weight:600;padding:5px 12px;border-radius:6px;display:inline-block;"><i class="fas fa-check-circle me-1"></i>No expired MOTs</span>`);
             }
             if (unknown > 0) {
-                parts.push(`<span style="background:#e2e3e5;color:#41464b;font-weight:600;padding:5px 12px;border-radius:6px;display:inline-block;"><i class="fas fa-question-circle me-1"></i>${unknown} not found</span>`);
+                parts.push(badge('unknown', '#e2e3e5', '#41464b', 'question-circle', `${unknown} not found`));
+            }
+            if (mileageWarnCount > 0) {
+                parts.push(badge('mileage', '#f8d7da', '#842029', 'tachometer-alt', `${mileageWarnCount} mileage discrepanc${mileageWarnCount !== 1 ? 'ies' : 'y'}`));
+            }
+            if (earlyMotWarnCount > 0) {
+                parts.push(badge('early', '#f8d7da', '#842029', 'calendar-alt', `${earlyMotWarnCount} early MOT test${earlyMotWarnCount !== 1 ? 's' : ''}`));
             }
             summary.innerHTML = `<div class="d-flex gap-2 flex-wrap">${parts.join('')}</div>`;
 
-            document.getElementById('resultsCard').style.display = '';
+            document.getElementById('resultsTimestamp').textContent = ts || '';
         }
 
         function loadHistory() {
+            document.getElementById('historyLoading').style.display = '';
+            document.getElementById('historyEmpty').style.display = 'none';
+            document.getElementById('historyTable').style.display = 'none';
+
             fetch(BASE_URL + '/mot-check/history')
                 .then(r => r.json())
                 .then(items => {
+                    document.getElementById('historyLoading').style.display = 'none';
                     const table = document.getElementById('historyTable');
                     const body  = document.getElementById('historyBody');
                     const empty = document.getElementById('historyEmpty');
@@ -306,7 +453,7 @@
                         empty.style.display = '';
                         return;
                     }
-                    body.innerHTML = items.map(item => {
+                    body.innerHTML = items.map((item, idx) => {
                         const expiredCell = item.expired_count != null
                             ? (item.expired_count > 0
                                 ? `<td style="color:#842029;font-weight:600;">${item.expired_count}</td>`
@@ -318,7 +465,7 @@
                                 : `<td>0</td>`)
                             : `<td>—</td>`;
                         return `
-                        <tr>
+                        <tr data-filename="${item.filename}" data-ts="${item.ts}" onclick="loadHistoryResult(this)">
                             <td>${item.filename}</td>
                             <td>${item.ts}</td>
                             <td>${item.processed_by ?? '—'}</td>
@@ -327,7 +474,7 @@
                             ${expiredCell}
                             ${unknownCell}
                             <td>
-                                <a href="${BASE_URL}/mot-check/download/${encodeURIComponent(item.filename)}" class="btn btn-sm btn-outline-secondary">
+                                <a href="${BASE_URL}/mot-check/download/${encodeURIComponent(item.filename)}" class="btn btn-sm btn-outline-secondary" onclick="event.stopPropagation()">
                                     <i class="fas fa-download me-1"></i>XLSX
                                 </a>
                             </td>
@@ -336,7 +483,34 @@
                     table.style.display = '';
                     empty.style.display = 'none';
                 })
-                .catch(() => {});
+                .catch(() => {
+                    document.getElementById('historyLoading').style.display = 'none';
+                    document.getElementById('historyEmpty').style.display = '';
+                });
+        }
+
+        function loadHistoryResult(row) {
+            const filename = row.dataset.filename;
+            const ts = row.dataset.ts;
+            if (!filename) return;
+
+            // Highlight the clicked row
+            document.querySelectorAll('#historyBody tr').forEach(r => r.classList.remove('active-history-row'));
+            row.classList.add('active-history-row');
+
+            _currentFilename = filename;
+
+            fetch(BASE_URL + '/mot-check/load/' + encodeURIComponent(filename))
+                .then(r => {
+                    if (!r.ok) return r.json().then(e => { throw new Error(e.detail || 'Failed to load results'); });
+                    return r.json();
+                })
+                .then(data => {
+                    renderResults(data.columns, data.rows, ts);
+                })
+                .catch(err => {
+                    alert('Could not load results: ' + err.message);
+                });
         }
 
         function downloadCsv() {
