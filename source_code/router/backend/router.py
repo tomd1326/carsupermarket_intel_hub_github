@@ -58,10 +58,38 @@ s3_bucket_region = 'eu-west-1'  # bucket is always in eu-west-1 regardless of La
 
 
 VALID_USERS = {
-    'admin':   '401b8fe6c8d8d7e9ecf3e7cfae3fd3ba700693bfb452becce59f08003a55c640',
-    'buyer':   'cd44b3a3d1fb9021db64745df31dce588104bf663952dc84fe6e9cd6140aa3cb',
-    'jjagger': hashlib.sha256('T!mEL5qb?Un3lY6'.encode()).hexdigest(),
+    'tdrayson': 'e026581a53dc97e3381566ad0f74e99ae65e0297f9eb41bb76596627885bf8a0',
 }
+
+def _passwords_s3_key():
+    env = 'prod' if os.getenv('AWS_REGION') == 'eu-west-1' else 'dev'
+    return f"applications/pricing/uk-vehicle-list-evaluator/{env}/user_passwords.json"
+
+def _load_passwords_from_s3():
+    try:
+        import boto3 as _boto3
+        s3 = _boto3.client('s3', region_name=s3_bucket_region)
+        obj = s3.get_object(Bucket=s3_bucketname, Key=_passwords_s3_key())
+        overrides = json.loads(obj['Body'].read())
+        for username, pwd_hash in overrides.items():
+            VALID_USERS[username] = pwd_hash
+        logger.info("Loaded %d password overrides from S3", len(overrides))
+    except Exception as e:
+        logger.info("No password overrides loaded from S3 (%s)", e)
+
+def _save_passwords_to_s3():
+    try:
+        import boto3 as _boto3
+        # Persist all non-admin, non-hardcoded hashes — store every non-admin user's current hash
+        overrides = {u: h for u, h in VALID_USERS.items() if u != 'tdrayson'}
+        payload = json.dumps(overrides).encode()
+        s3 = _boto3.client('s3', region_name=s3_bucket_region)
+        s3.put_object(Bucket=s3_bucketname, Key=_passwords_s3_key(), Body=payload, ContentType='application/json')
+        logger.info("Saved password overrides to S3")
+    except Exception as e:
+        logger.error("Failed to save password overrides to S3: %s", e)
+
+_load_passwords_from_s3()
 
 # session_id -> {user, login_time} — tracks active sessions server-side
 _active_sessions: dict = {}
@@ -130,22 +158,102 @@ def logout(request: Request):
 
 @router.get("/settings-page", response_class=HTMLResponse)
 def settings_page(request: Request, user: str = Depends(get_current_user)):
-    if user != 'admin':
+    if user != 'tdrayson':
         return RedirectResponse(url=BASE_URL + "/home", status_code=303)
     with get_database_connection() as conn:
         settings = get_settings(conn, user='buyer')
     sessions = sorted(_active_sessions.values(), key=lambda s: s['login_time'], reverse=True)
-    return templates.TemplateResponse("settings.html", {"request": request, "user": user, "BASE_URL": BASE_URL, "settings": settings, "active_sessions": sessions})
+    non_admin_users = sorted(u for u in VALID_USERS if u != 'tdrayson')
+    return templates.TemplateResponse("settings.html", {"request": request, "user": user, "BASE_URL": BASE_URL, "settings": settings, "active_sessions": sessions, "non_admin_users": non_admin_users})
+
+
+@router.get("/settings/users", response_class=HTMLResponse)
+def users_page(request: Request, user: str = Depends(get_current_user)):
+    if user != 'tdrayson':
+        return RedirectResponse(url=BASE_URL + "/home", status_code=303)
+    sessions = sorted(_active_sessions.values(), key=lambda s: s['login_time'], reverse=True)
+    non_admin_users = sorted(u for u in VALID_USERS if u != 'tdrayson')
+    return templates.TemplateResponse("users.html", {"request": request, "user": user, "BASE_URL": BASE_URL, "active_sessions": sessions, "non_admin_users": non_admin_users})
 
 
 @router.post("/settings/force-relogin")
 def force_relogin(request: Request, user: str = Depends(get_current_user)):
     global _sessions_invalidated_at, _active_sessions
-    if user != 'admin':
+    if user != 'tdrayson':
         return RedirectResponse(url=BASE_URL + "/home", status_code=303)
     _sessions_invalidated_at = time.time()
     _active_sessions.clear()
     return RedirectResponse(url=BASE_URL + "/settings-page?relogin=1", status_code=303)
+
+
+def _user_redirect(redirect_to: str, **params):
+    base = BASE_URL + ("/settings/users" if redirect_to == "users" else "/settings-page")
+    qs = "&".join(f"{k}={v}" for k, v in params.items())
+    return RedirectResponse(url=f"{base}?{qs}", status_code=303)
+
+
+@router.post("/settings/delete-user")
+def delete_user(
+    request: Request,
+    target_user: str = Form(...),
+    redirect_to: str = Form("settings"),
+    user: str = Depends(get_current_user)
+):
+    if user != 'tdrayson':
+        raise HTTPException(status_code=403)
+    if target_user == 'tdrayson':
+        raise HTTPException(status_code=400, detail="Cannot delete admin")
+    if target_user not in VALID_USERS:
+        return _user_redirect(redirect_to, pwderr="User+not+found")
+    del VALID_USERS[target_user]
+    _save_passwords_to_s3()
+    logger.info("User %s deleted by admin", target_user)
+    return _user_redirect(redirect_to, userdeleted=target_user)
+
+
+@router.post("/settings/add-user")
+def add_user(
+    request: Request,
+    new_username: str = Form(...),
+    new_password: str = Form(...),
+    redirect_to: str = Form("settings"),
+    user: str = Depends(get_current_user)
+):
+    if user != 'tdrayson':
+        raise HTTPException(status_code=403)
+    username = new_username.strip().lower()
+    if not username:
+        return _user_redirect(redirect_to, pwderr="Username+cannot+be+empty")
+    if username in VALID_USERS:
+        return _user_redirect(redirect_to, pwderr="User+already+exists")
+    if not new_password or len(new_password) < 6:
+        return _user_redirect(redirect_to, pwderr="Password+must+be+at+least+6+characters")
+    VALID_USERS[username] = hashlib.sha256(new_password.encode()).hexdigest()
+    _save_passwords_to_s3()
+    logger.info("User %s created by admin", username)
+    return _user_redirect(redirect_to, useradded=username)
+
+
+@router.post("/settings/set-password")
+def set_password(
+    request: Request,
+    target_user: str = Form(...),
+    new_password: str = Form(...),
+    redirect_to: str = Form("settings"),
+    user: str = Depends(get_current_user)
+):
+    if user != 'tdrayson':
+        raise HTTPException(status_code=403)
+    if target_user == 'tdrayson':
+        raise HTTPException(status_code=400, detail="Cannot change admin password here")
+    if target_user not in VALID_USERS:
+        raise HTTPException(status_code=404, detail="User not found")
+    if not new_password or len(new_password) < 6:
+        return _user_redirect(redirect_to, pwderr="Password+must+be+at+least+6+characters")
+    VALID_USERS[target_user] = hashlib.sha256(new_password.encode()).hexdigest()
+    _save_passwords_to_s3()
+    logger.info("Password updated for %s by admin", target_user)
+    return _user_redirect(redirect_to, pwdok=target_user)
 
 
 @router.post("/settings")
@@ -158,19 +266,19 @@ def update_settings(
     cap_workers: int = Form(...),
     cap_rate_limit: int = Form(...),
     calc_buying_reqs: str = Form(default=""),
-    enterprise_email_auto_process: str = Form(default=""),
+    get_stock: str = Form(default=""),
     user: str = Depends(get_current_user),
 ):
-    if user != 'admin':
+    if user != 'tdrayson':
         raise HTTPException(status_code=403, detail="Forbidden")
     calc = calc_buying_reqs == "on"
-    auto_process = enterprise_email_auto_process == "on"
+    gs = get_stock == "on"
     with get_database_connection() as conn:
-        save_settings(conn, number_to_buy, max_days_sales, max_dts, min_gpu_m, cap_workers, cap_rate_limit, calc, auto_process, user='buyer')
+        save_settings(conn, number_to_buy, max_days_sales, max_dts, min_gpu_m, cap_workers, cap_rate_limit, calc, gs, user='buyer')
     logger.info(
         "Settings updated by %s: number_to_buy=%d, max_days_sales=%d, max_dts=%d, "
-        "min_gpu_m=%d, cap_workers=%d, cap_rate_limit=%d, calc_buying_reqs=%s, enterprise_email_auto_process=%s",
-        user, number_to_buy, max_days_sales, max_dts, min_gpu_m, cap_workers, cap_rate_limit, calc, auto_process
+        "min_gpu_m=%d, cap_workers=%d, cap_rate_limit=%d, calc_buying_reqs=%s, get_stock=%s",
+        user, number_to_buy, max_days_sales, max_dts, min_gpu_m, cap_workers, cap_rate_limit, calc, gs
     )
     return RedirectResponse(url=BASE_URL + "/settings-page?saved=1", status_code=303)
 
@@ -196,7 +304,7 @@ def home(request: Request, user: str = Depends(get_current_user)):
 # NEW
 @router.get("/stock-list", response_class=HTMLResponse)
 def stock_list(request: Request, user: str = Depends(get_current_user)):
-    if user != 'admin':
+    if user != 'tdrayson':
         return RedirectResponse(url=BASE_URL + "/home", status_code=303)
     return templates.TemplateResponse("stock_list.html", {"request": request, "user": user, "BASE_URL": BASE_URL})
 
@@ -815,6 +923,8 @@ def task_buying_requirements_download(
     cap_id_at_pct: dict = {}
     # (cap_id, mileage_band) → {sum, n} for vehicle_costs
     cap_id_vehicle_costs: dict = {}
+    # mileage_band → {sum, n} across all cap_ids — fallback when no per-cap entry exists
+    band_vehicle_costs: dict = {}
 
     for r in sf_rows:
         cap_id     = r[0]
@@ -883,6 +993,10 @@ def task_buying_requirements_download(
                 cap_id_vehicle_costs[vc_key] = {"sum": 0.0, "n": 0}
             cap_id_vehicle_costs[vc_key]["sum"] += vehicle_costs
             cap_id_vehicle_costs[vc_key]["n"]   += 1
+            if mileage_band not in band_vehicle_costs:
+                band_vehicle_costs[mileage_band] = {"sum": 0.0, "n": 0}
+            band_vehicle_costs[mileage_band]["sum"] += vehicle_costs
+            band_vehicle_costs[mileage_band]["n"]   += 1
         if gpu_m_costs   is not None and sold:
             g["gpu_m_costs_sum"]   += gpu_m_costs;   g["gpu_m_costs_n"]   += 1
         if gpu_m     is not None and sold:
@@ -945,8 +1059,8 @@ def task_buying_requirements_download(
     AT_VAL_COL = "at_valuations_retail_valuation"
     cap_col    = "cap_capid" if "cap_capid" in elaborated_df.columns else None
     at_col     = AT_VAL_COL  if AT_VAL_COL  in elaborated_df.columns else None
-    _mileage_candidates = ["mileage", "miles", "odo", "odom"]
-    mileage_col = next((c for c in elaborated_df.columns if c.lower() in _mileage_candidates), None)
+    _mileage_candidates = ["mileage", "miles", "odometer", "odo", "odom"]
+    mileage_col = next((c for c in elaborated_df.columns if any(cand in c.lower() for cand in _mileage_candidates)), None)
 
     def _mileage_to_band(m):
         try:
@@ -974,6 +1088,10 @@ def task_buying_requirements_download(
             entry = cap_id_vehicle_costs.get((cid, b))
             if entry and entry["n"] > 0:
                 return round(entry["sum"] / entry["n"])
+        # Fallback: average vehicle cost for this mileage band across all cap_ids
+        entry = band_vehicle_costs.get(band)
+        if entry and entry["n"] > 0:
+            return round(entry["sum"] / entry["n"])
         return None
 
     def _estimated_retail(cap_id_val, at_val_val):
@@ -1153,6 +1271,7 @@ def mot_check_process(request: Request, payload: dict, user: str = Depends(get_c
     for i in range(1, max_pairs + 1):
         sfx = ("st" if i == 1 else "nd" if i == 2 else "rd" if i == 3 else "th")
         columns += [f"{i}{sfx} MOT Date", f"{i}{sfx} MOT Mileage"]
+    columns.append("Comments")
 
     rows = []
     for r in results:
@@ -1162,6 +1281,7 @@ def mot_check_process(request: Request, payload: dict, user: str = Depends(get_c
         for d, m in r["test_pairs"]:
             row += [d, m]
         row += ["", ""] * (max_pairs - len(r["test_pairs"]))
+        row.append(_build_mot_comments(r))
         rows.append(row)
 
     # Write XLSX to a temp file and upload to S3
@@ -1185,7 +1305,8 @@ def mot_check_process(request: Request, payload: dict, user: str = Depends(get_c
     thin = Side(style="thin", color="CCCCCC")
     border = Border(left=thin, right=thin, top=thin, bottom=thin)
 
-    status_col = columns.index("Status") + 1 if "Status" in columns else None
+    status_col   = columns.index("Status")   + 1 if "Status"   in columns else None
+    comments_col = columns.index("Comments") + 1 if "Comments" in columns else None
 
     ws.append(columns)
     for cell in ws[1]:
@@ -1205,6 +1326,8 @@ def mot_check_process(request: Request, payload: dict, user: str = Depends(get_c
                     cell.fill = valid_fill
                 elif val == "EXPIRED":
                     cell.fill = expired_fill
+            elif col_idx == comments_col and cell.value:
+                cell.fill = expired_fill
 
     ws.freeze_panes = "A2"
     for col in ws.columns:
@@ -1302,6 +1425,38 @@ def mot_check_download(filename: str, user: str = Depends(get_current_user)):
         raise HTTPException(status_code=404, detail="File not found in S3")
 
 
+@router.get("/mot-check/load/{filename}")
+def mot_check_load(filename: str, user: str = Depends(get_current_user)):
+    if not user:
+        raise HTTPException(status_code=403)
+    import openpyxl
+    env = 'prod' if os.getenv('AWS_REGION') == 'eu-west-1' else 'dev'
+    s3_key = _MOT_S3_PREFIX.format(env=env) + filename
+    fd, tmp_path = tempfile.mkstemp(suffix=".xlsx")
+    os.close(fd)
+    try:
+        download_file(tmp_path, s3_bucketname, s3_key)
+        wb = openpyxl.load_workbook(tmp_path, read_only=True, data_only=True)
+        ws = wb.active
+        rows_iter = iter(ws.iter_rows(values_only=True))
+        header = next(rows_iter, None)
+        if not header:
+            return {"columns": [], "rows": []}
+        columns = [str(c) if c is not None else "" for c in header]
+        rows = []
+        for row in rows_iter:
+            rows.append([str(c) if c is not None else "" for c in row])
+        wb.close()
+        return {"columns": columns, "rows": rows}
+    except Exception as e:
+        raise HTTPException(status_code=404, detail="File not found in S3")
+    finally:
+        try:
+            os.remove(tmp_path)
+        except OSError:
+            pass
+
+
 def _parse_mot_datetime(s: str):
     if not s:
         return None
@@ -1326,6 +1481,59 @@ def _to_ddmmyyyy(s: str) -> str:
     if not dt:
         return ""
     return dt.strftime("%d/%m/%Y")
+
+
+def _build_mot_comments(r: dict) -> str:
+    notes = []
+
+    pairs = r.get("test_pairs") or []
+    # Mileage discrepancy: each mileage should be >= the previous
+    prev_mileage = None
+    for _date, mileage_str in pairs:
+        try:
+            m = int(str(mileage_str).replace(",", "")) if mileage_str else None
+        except ValueError:
+            m = None
+        if prev_mileage is not None and m is not None and m < prev_mileage:
+            notes.append("Mileage discrepancy")
+            break
+        if m is not None:
+            prev_mileage = m
+
+    # Current odometer vs most recent historical mileage
+    if pairs:
+        try:
+            last_m = int(str(pairs[-1][1]).replace(",", "")) if pairs[-1][1] else None
+        except ValueError:
+            last_m = None
+        try:
+            odom = int(str(r.get("odometer", "")).replace(",", "")) if r.get("odometer") else None
+        except ValueError:
+            odom = None
+        if last_m is not None and odom is not None and odom < last_m:
+            if "Mileage discrepancy" not in notes:
+                notes.append("Mileage discrepancy")
+
+    # Early MOT: any MOT done 60+ days before the previous was due to expire
+    dates = []
+    for date_str, _ in pairs:
+        try:
+            d = datetime.datetime.strptime(date_str, "%d/%m/%Y").date() if date_str else None
+        except ValueError:
+            d = None
+        dates.append(d)
+
+    for j in range(1, len(dates)):
+        prev_d = dates[j - 1]
+        curr_d = dates[j]
+        if prev_d is None or curr_d is None:
+            continue
+        due = datetime.date(prev_d.year + 1, prev_d.month, prev_d.day)
+        if (due - curr_d).days >= 60:
+            notes.append("Early MOT test")
+            break
+
+    return "; ".join(notes)
 
 
 def _build_mot_row(vrm: str, vehicle_json) -> dict:
@@ -1548,10 +1756,6 @@ def enterprise_email_create_task(
     filename: str = Form(...),
 ):
     """Called by Power Automate step 1: creates a DB task and returns a presigned S3 PUT URL."""
-    with get_database_connection() as conn:
-        settings = get_settings(conn)
-    if not settings.get('enterprise_email_auto_process'):
-        raise HTTPException(status_code=503, detail="Enterprise email auto-processing is disabled")
     file_ext = filename.split('.')[-1].lower()
     if file_ext not in ['xlsx', 'xls']:
         raise HTTPException(status_code=400, detail="Expected xlsx or xls")
@@ -1616,7 +1820,7 @@ async def fetch_supplier_stock(
     include_preview: Optional[str] = Form(None),
     user: str = Depends(get_current_user),
 ):
-    if user != 'admin':
+    if user != 'tdrayson':
         raise HTTPException(status_code=403, detail="Forbidden")
 
     supplier = supplier.lower()

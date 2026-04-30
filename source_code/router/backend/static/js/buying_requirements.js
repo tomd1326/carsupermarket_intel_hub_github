@@ -481,8 +481,8 @@ function aggregateRawData() {
         if (gpu_m   != null && sold)     { g.gpu_m_sum      += gpu_m;  g.gpu_m_n++;      }
         if (gpu_s   != null && sold)     { g.gpu_s_sum      += gpu_s;  g.gpu_s_n++;      }
         if (gpu_ms  != null && sold)     { g.gpu_ms_sum     += gpu_ms; g.gpu_ms_n++;     }
-        if (sell    != null && sell !== 0 && soldRate) { g.sell_sum += sell; g.sell_n++; }
-        if (at_val  != null && soldRate) { g.at_val_sum     += at_val; g.at_val_n++;     }
+        if (sell    != null && sell !== 0 && sold) { g.sell_sum += sell; g.sell_n++; }
+        if (at_val  != null && sold) { g.at_val_sum     += at_val; g.at_val_n++;     }
         if (at_rate != null && sold)     { g.at_rating_sum  += at_rate; g.at_rating_n++; }
     }
 
