@@ -50,7 +50,8 @@ class BasePathMiddleware(BaseHTTPMiddleware):
 
 
 # Add middleware for session management
-app.add_middleware(SessionMiddleware, secret_key="as#$RD$26xc04$GF3r1dFDmhjd", max_age=30 * 24 * 3600, https_only=True, same_site="none")
+_is_local = __name__ == '__main__' or os.getenv('LOCAL_ENV') == '1'
+app.add_middleware(SessionMiddleware, secret_key="as#$RD$26xc04$GF3r1dFDmhjd", max_age=30 * 24 * 3600, https_only=not _is_local, same_site="none" if not _is_local else "lax")
 # Add middleware for base path
 app.add_middleware(BasePathMiddleware)
 

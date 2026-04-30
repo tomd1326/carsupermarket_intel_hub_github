@@ -73,15 +73,15 @@
                     <div class="form-check">
                         <input class="form-check-input" type="checkbox" id="calc_buying_reqs" name="calc_buying_reqs"
                                {% if settings.calc_buying_reqs %}checked{% endif %}>
-                        <label class="form-check-label" for="calc_buying_reqs">Calculate Buying Requirements on download</label>
+                        <label class="form-check-label" for="calc_buying_reqs">Calculate Buying Requirements on download <span class="text-muted">(buyer)</span></label>
                     </div>
-                    <div class="form-text">When enabled, downloaded lists include buying requirements calculations using the settings above.</div>
+                    <div class="form-text">Controls the buyer login. Admin always has this enabled. When enabled, downloaded lists include buying requirements calculations using the settings above.</div>
                     <div class="form-check mt-3">
                         <input class="form-check-input" type="checkbox" id="enterprise_email_auto_process" name="enterprise_email_auto_process"
                                {% if settings.enterprise_email_auto_process %}checked{% endif %}>
                         <label class="form-check-label" for="enterprise_email_auto_process">Auto-process Enterprise stock lists from email</label>
                     </div>
-                    <div class="form-text">When enabled, stock lists received via the Enterprise email integration are automatically processed. Disabled by default.</div>
+                    <div class="form-text">System-wide toggle. When enabled, stock lists received via the Enterprise email integration are automatically processed. Disabled by default.</div>
                 </div>
             </div>
 

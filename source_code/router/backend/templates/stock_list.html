@@ -1,0 +1,281 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Stock List</title>
+    <link rel="icon" type="image/png" href="{{ BASE_URL }}/static/icon.png">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        body, button, input, select, textarea { font-family: 'DM Sans', system-ui, sans-serif; font-size: 13px; }
+
+        a.logout-link {
+            position: fixed;
+            top: 20px; right: 24px;
+            font-size: 0.9rem;
+            color: #6c757d !important;
+            z-index: 1040;
+            text-decoration: none;
+        }
+        a.logout-link:hover { color: #343a40 !important; }
+
+        .controls { padding: 16px 32px 0 32px; }
+
+        .filter-bar {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            gap: 6px 0;
+            margin-bottom: 10px;
+        }
+        .filter-group {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+            flex-wrap: wrap;
+            border-left: 1.5px solid #94a3b8;
+            padding-left: 10px;
+            margin-left: 10px;
+        }
+        .filter-group:first-child { border-left: none; padding-left: 0; margin-left: 0; }
+        .filter-btn { border-radius: 20px; padding: 2px 10px; font-size: 13px; }
+
+        .table-wrap {
+            overflow-x: auto;
+            overflow-y: auto;
+            max-height: 78vh;
+            padding: 0 32px 24px 32px;
+        }
+
+        #stock-table {
+            border-collapse: separate;
+            border-spacing: 0;
+            table-layout: fixed;
+            font-size: 12px;
+            width: max-content;
+            min-width: 100%;
+        }
+        #stock-table thead th {
+            position: sticky;
+            top: 0;
+            z-index: 2;
+            background: #dbeafe;
+            border-top: 1px solid #b0b0b0;
+            border-bottom: 2px solid #b0b0b0;
+            border-right: 1px solid #b0b0b0;
+            padding: 5px 6px;
+            white-space: normal;
+            line-height: 1.2;
+            height: calc(2 * 1.2em + 10px);
+            overflow: hidden;
+            vertical-align: bottom;
+            font-weight: 600;
+            cursor: pointer;
+            user-select: none;
+        }
+        #stock-table thead th:first-child { border-left: 1px solid #b0b0b0; }
+        #stock-table thead th { text-align: left; }
+        #stock-table td {
+            padding: 4px 6px;
+            white-space: nowrap;
+            border-bottom: 1px solid #b0b0b0;
+            border-right: 1px solid #b0b0b0;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            text-align: left;
+        }
+        #stock-table td:first-child { border-left: 1px solid #b0b0b0; }
+        #stock-table td.col-right  { text-align: right; }
+        #stock-table td.col-center { text-align: center; }
+        #stock-table .vehicle-row-sold td    { background: #fde8d8; color: #000; }
+        #stock-table .vehicle-row-ordered td { background: #d1d5db; color: #000; }
+        #stock-table .vehicle-row-if td      { background: #bfdbfe; color: #000; }
+
+        .apex-link {
+            font-size: 11px;
+            padding: 1px 6px;
+            border: 1px solid #0d6efd;
+            border-radius: 3px;
+            color: #0d6efd;
+            text-decoration: none;
+            display: inline-block;
+        }
+        .apex-link:hover { background: #0d6efd; color: #fff; }
+
+        .sort-arrow { opacity: 0.35; font-size: 0.65em; margin-left: 2px; }
+        th.sort-asc  .sort-arrow,
+        th.sort-desc .sort-arrow { opacity: 1; }
+
+        .resize-handle {
+            position: absolute;
+            right: 0; top: 0;
+            width: 6px; height: 100%;
+            cursor: col-resize;
+            z-index: 4;
+        }
+        .resize-handle:hover { background: #0d6efd44; }
+
+        #resize-ghost {
+            position: fixed;
+            top: 0; width: 2px; height: 100vh;
+            background: #0d6efd;
+            opacity: 0.5;
+            pointer-events: none;
+            z-index: 9999;
+            display: none;
+        }
+
+        #row-count { white-space: nowrap; }
+        #dosInput::-webkit-inner-spin-button,
+        #dosInput::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+
+        .summary-bar { display: flex; align-items: center; gap: 24px; flex-wrap: wrap; margin-bottom: 10px; }
+        .summary-item { font-size: 13px; }
+    </style>
+</head>
+<body>
+    <div id="resize-ghost"></div>
+    <a href="{{ BASE_URL }}/logout" class="logout-link">
+        <i class="fas fa-sign-out-alt"></i> Logout
+    </a>
+
+    <div class="controls">
+        <div class="d-flex align-items-center gap-3 mb-3">
+            <h2 class="mb-0" style="font-size:20px;font-weight:700">Stock List</h2>
+            <a href="{{ BASE_URL }}/home" class="btn btn-outline-secondary btn-sm">
+                <i class="fas fa-arrow-left me-1"></i>Back
+            </a>
+            <button id="fetchBtn" class="btn btn-primary btn-sm" onclick="fetchData(true)">
+                <i class="fas fa-sync-alt me-1"></i>Refresh Data
+            </button>
+            <span id="sf-status" class="text-muted small"><i class="fas fa-snowflake me-1 text-info"></i>Snowflake</span>
+            <span id="apex-updated" class="text-muted small" style="display:none">Apex data updated: <strong id="apex-updated-val"></strong></span>
+        </div>
+
+        <div id="fetch-loading" class="text-muted small mb-3">
+            <span class="spinner-border spinner-border-sm me-2"></span>Loading&hellip;
+        </div>
+
+        <div id="data-section" style="display:none">
+            <div class="summary-bar" id="summary-bar">
+                <span class="summary-item d-flex align-items-center gap-2">
+                    <strong>Days of Sales</strong>
+                    <input type="number" id="dosInput" class="form-control form-control-sm" style="width:70px;-moz-appearance:textfield" min="1" step="1" placeholder="days" onclick="this.select()">
+                    <button class="btn btn-sm btn-outline-secondary" onclick="applyFilters()">Apply</button>
+                    <button class="btn btn-sm btn-outline-secondary" id="dosClearBtn" style="display:none" onclick="clearDosFilter()">Clear</button>
+                </span>
+                <span class="summary-item" style="border-left:1.5px solid #cbd5e1;padding-left:16px"><strong>Total Stock:</strong> <span id="sum-stock">—</span></span>
+                <span class="summary-item" style="color:#374151"><strong>Total Ordered:</strong> <span id="sum-ordered">—</span></span>
+                <span class="summary-item" style="color:#b45309"><strong>Total Delivered:</strong> <span id="sum-delivered">—</span></span>
+                <span class="text-muted small" id="sum-filtered-note" style="display:none">(filtered view)</span>
+            </div>
+
+            <div class="filter-bar">
+                <div class="filter-group">
+                    <span class="fw-semibold small">Status</span>
+                    <button class="btn btn-sm btn-dark filter-btn" data-group="status" data-value="All">All</button>
+                    <button class="btn btn-sm btn-outline-secondary filter-btn" data-group="status" data-value="Stock">Stock</button>
+                    <button class="btn btn-sm btn-outline-secondary filter-btn" data-group="status" data-value="Ordered">Ordered</button>
+                    <button class="btn btn-sm btn-outline-secondary filter-btn" data-group="status" data-value="Delivered">Delivered</button>
+                </div>
+                <div class="filter-group">
+                    <span class="fw-semibold small">Price Band</span>
+                    <button class="btn btn-sm btn-dark filter-btn" data-group="band" data-value="All">All</button>
+                    <button class="btn btn-sm btn-outline-secondary filter-btn" data-group="band" data-value="<10k">&lt;10k</button>
+                    <button class="btn btn-sm btn-outline-secondary filter-btn" data-group="band" data-value="10-12.5k">10-12.5k</button>
+                    <button class="btn btn-sm btn-outline-secondary filter-btn" data-group="band" data-value="12.5-15k">12.5-15k</button>
+                    <button class="btn btn-sm btn-outline-secondary filter-btn" data-group="band" data-value="15-20k">15-20k</button>
+                    <button class="btn btn-sm btn-outline-secondary filter-btn" data-group="band" data-value="20-25k">20-25k</button>
+                    <button class="btn btn-sm btn-outline-secondary filter-btn" data-group="band" data-value="25-30k">25-30k</button>
+                    <button class="btn btn-sm btn-outline-secondary filter-btn" data-group="band" data-value="30k+">30k+</button>
+                    <button class="btn btn-sm btn-outline-secondary filter-btn" data-group="band" data-value="interest_free">0%</button>
+                </div>
+                <div class="filter-group">
+                    <span class="fw-semibold small">Fuel</span>
+                    <button class="btn btn-sm btn-dark filter-btn" data-group="fuel" data-value="All">All</button>
+                    <button class="btn btn-sm btn-outline-secondary filter-btn" data-group="fuel" data-value="Petrol">Petrol</button>
+                    <button class="btn btn-sm btn-outline-secondary filter-btn" data-group="fuel" data-value="Diesel">Diesel</button>
+                    <button class="btn btn-sm btn-outline-secondary filter-btn" data-group="fuel" data-value="Hybrid">Hybrid</button>
+                    <button class="btn btn-sm btn-outline-secondary filter-btn" data-group="fuel" data-value="Electric">Electric</button>
+                </div>
+                <div class="filter-group">
+                    <span class="fw-semibold small">Search</span>
+                    <input type="text" id="searchInput" class="form-control form-control-sm" style="width:140px" placeholder="Make / Model / VRM">
+                    <button class="btn btn-sm btn-outline-secondary" onclick="applyFilters()">Search</button>
+                </div>
+                <div class="filter-group" style="border-left:none;margin-left:16px;gap:8px">
+                    <span id="row-count" class="small text-muted"></span>
+                    <button class="btn btn-sm btn-outline-secondary" onclick="clearAllFilters()">Clear Filters</button>
+                    <span class="small text-muted ms-2">Font</span>
+                    <button class="btn btn-outline-secondary btn-sm px-2 py-0" onclick="changeFontSize(-1)">−</button>
+                    <span id="fontSizeLabel" class="small text-muted" style="min-width:28px;text-align:center">12px</span>
+                    <button class="btn btn-outline-secondary btn-sm px-2 py-0" onclick="changeFontSize(1)">+</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div id="table-error" class="alert alert-danger d-none mx-4 mt-2"></div>
+    <div class="table-wrap d-none mt-3" id="table-wrap">
+        <table id="stock-table">
+            <colgroup>
+                <col style="width:280px"><!-- make/model/deriv -->
+                <col style="width:65px"> <!-- price band -->
+                <col style="width:75px"> <!-- vrm -->
+                <col style="width:68px"> <!-- status -->
+                <col style="width:46px"> <!-- apex -->
+                <col style="width:52px"> <!-- portal -->
+                <col style="width:65px"> <!-- fuel -->
+                <col style="width:110px"><!-- location -->
+                <col style="width:80px"> <!-- delivered -->
+                <col style="width:72px"> <!-- supplier -->
+                <col style="width:80px"> <!-- dfr -->
+                <col style="width:62px"> <!-- mileage -->
+                <col style="width:40px"> <!-- dis -->
+                <col style="width:40px"> <!-- dts -->
+                <col style="width:90px"> <!-- purchase price -->
+                <col style="width:90px"> <!-- cap live clean -->
+                <col style="width:55px"> <!-- cap % -->
+                <col style="width:80px"> <!-- sell price -->
+                <col style="width:80px"> <!-- at ptm -->
+                <col style="width:58px"> <!-- at ptm % -->
+                <col style="width:48px"> <!-- at rating -->
+                <col style="width:68px"> <!-- gpu-m -->
+            </colgroup>
+            <thead>
+                <tr>
+                    <th data-sort="deriv">Make / Model / Derivative</th>
+                    <th data-sort="price_band">Price Band<span class="sort-arrow"></span></th>
+                    <th data-sort="vrm">VRM<span class="sort-arrow"></span></th>
+                    <th data-sort="status">Status<span class="sort-arrow"></span></th>
+                    <th>Apex</th>
+                    <th>Portal</th>
+                    <th data-sort="fuel">Fuel<span class="sort-arrow"></span></th>
+                    <th data-sort="location">Location<span class="sort-arrow"></span></th>
+                    <th data-sort="delivered">Delivered<span class="sort-arrow"></span></th>
+                    <th data-sort="supplier">Supplier<span class="sort-arrow"></span></th>
+                    <th data-sort="dfr">DFR<span class="sort-arrow"></span></th>
+                    <th data-sort="mileage">Mileage<span class="sort-arrow"></span></th>
+                    <th data-sort="dis">DIS<span class="sort-arrow"></span></th>
+                    <th data-sort="dts">DTS<span class="sort-arrow"></span></th>
+                    <th data-sort="purchase_price">Purchase Price<span class="sort-arrow"></span></th>
+                    <th data-sort="cap_clean">CAP Live Clean<span class="sort-arrow"></span></th>
+                    <th data-sort="cap_pct">CAP %<span class="sort-arrow"></span></th>
+                    <th data-sort="sell_price">Sell Price<span class="sort-arrow"></span></th>
+                    <th data-sort="at_ptm">AT PTM<span class="sort-arrow"></span></th>
+                    <th data-sort="at_ptm_pct">AT PTM %<span class="sort-arrow"></span></th>
+                    <th data-sort="at_rating">AT Rating<span class="sort-arrow"></span></th>
+                    <th data-sort="gpu_m">GPU-M<span class="sort-arrow"></span></th>
+                </tr>
+            </thead>
+            <tbody id="stock-tbody"></tbody>
+        </table>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
+    <script>window.BASE_URL = "{{ BASE_URL }}";</script>
+    <script src="{{ BASE_URL }}/static/js/stock_list.js"></script>
+</body>
+</html>

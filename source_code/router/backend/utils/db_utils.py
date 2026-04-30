@@ -58,38 +58,63 @@ SETTINGS_DEFAULTS = {
     'enterprise_email_auto_process':    '0',
 }
 
-
 BOOL_SETTINGS = {'calc_buying_reqs', 'enterprise_email_auto_process'}
 
+# calc_buying_reqs is stored per-user (e.g. calc_buying_reqs__buyer).
+# enterprise_email_auto_process is a system-level toggle — stored globally, read by Power Automate endpoints.
+PER_USER_BOOL_SETTINGS = {'calc_buying_reqs'}
+GLOBAL_BOOL_SETTINGS = {'enterprise_email_auto_process'}
 
-def get_settings(conn) -> dict:
+ADMIN_USER = 'admin'
+
+
+def get_settings(conn, user: str = None) -> dict:
     try:
         with conn.cursor() as cur:
             cur.execute("SELECT key, value FROM settings")
             rows = cur.fetchall()
+        row_map = dict(rows)
         result = dict(SETTINGS_DEFAULTS)
         for key, value in rows:
+            if key in BOOL_SETTINGS or '__' in key:
+                continue
             if key in result:
-                result[key] = (value == '1') if key in BOOL_SETTINGS else int(value)
+                result[key] = int(value)
+        # Per-user bool settings: admin always True; others read from user-scoped key.
+        for key in PER_USER_BOOL_SETTINGS:
+            if user == ADMIN_USER:
+                result[key] = True
+            else:
+                scoped_key = f'{key}__{user}' if user else key
+                result[key] = row_map.get(scoped_key, '0') == '1'
+        # Global bool settings: read bare key regardless of user.
+        for key in GLOBAL_BOOL_SETTINGS:
+            result[key] = row_map.get(key, '0') == '1'
         return result
     except Exception:
         d = dict(SETTINGS_DEFAULTS)
-        for key in BOOL_SETTINGS:
+        for key in PER_USER_BOOL_SETTINGS:
+            d[key] = user == ADMIN_USER
+        for key in GLOBAL_BOOL_SETTINGS:
             d[key] = False
         return d
 
 
-def save_settings(conn, number_to_buy: int, max_days_sales: int, max_dts: int, min_gpu_m: int, cap_workers: int, cap_rate_limit: int, calc_buying_reqs: bool, enterprise_email_auto_process: bool = False):
+def save_settings(conn, number_to_buy: int, max_days_sales: int, max_dts: int, min_gpu_m: int, cap_workers: int, cap_rate_limit: int, calc_buying_reqs: bool, enterprise_email_auto_process: bool = False, user: str = None):
     values = {
-        'number_to_buy':                    number_to_buy,
-        'max_days_sales':                   max_days_sales,
-        'max_dts':                          max_dts,
-        'min_gpu_m':                        min_gpu_m,
-        'cap_workers':                      cap_workers,
-        'cap_rate_limit':                   cap_rate_limit,
-        'calc_buying_reqs':                 '1' if calc_buying_reqs else '0',
-        'enterprise_email_auto_process':    '1' if enterprise_email_auto_process else '0',
+        'number_to_buy':                number_to_buy,
+        'max_days_sales':               max_days_sales,
+        'max_dts':                      max_dts,
+        'min_gpu_m':                    min_gpu_m,
+        'cap_workers':                  cap_workers,
+        'cap_rate_limit':               cap_rate_limit,
+        'enterprise_email_auto_process': '1' if enterprise_email_auto_process else '0',
     }
+    # calc_buying_reqs stored per-user; admin's preference is not stored (always True at read time).
+    if user != ADMIN_USER:
+        suffix = f'__{user}' if user else ''
+        values[f'calc_buying_reqs{suffix}'] = '1' if calc_buying_reqs else '0'
+
     with conn.cursor() as cur:
         cur.execute(
             "CREATE TABLE IF NOT EXISTS settings (key VARCHAR(100) PRIMARY KEY, value VARCHAR(250))"
