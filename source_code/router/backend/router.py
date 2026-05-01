@@ -29,6 +29,7 @@ from utils.db_utils import (get_database_connection, get_settings, save_settings
 from utils.snowflake_client import SnowflakeClient
 from utils.sharepoint_client import SharePointClient
 from list_processor.autotrader_client import AutoTraderClient
+from list_processor.batch_processor import process_file_with_cache
 from list_processor.cap_client import CAPClient
 from list_processor.columns_mapper import get_columns_mapper, BaseColumnsMapper
 from list_processor.motability_client import MotabilityFetchClient
@@ -267,6 +268,7 @@ def update_settings(
     cap_rate_limit: int = Form(...),
     calc_buying_reqs: str = Form(default=""),
     get_stock: str = Form(default=""),
+    evaluator_row_limit: int = Form(default=0),
     user: str = Depends(get_current_user),
 ):
     if user != 'tdrayson':
@@ -274,11 +276,11 @@ def update_settings(
     calc = calc_buying_reqs == "on"
     gs = get_stock == "on"
     with get_database_connection() as conn:
-        save_settings(conn, number_to_buy, max_days_sales, max_dts, min_gpu_m, cap_workers, cap_rate_limit, calc, gs, user='buyer')
+        save_settings(conn, number_to_buy, max_days_sales, max_dts, min_gpu_m, cap_workers, cap_rate_limit, calc, gs, evaluator_row_limit=evaluator_row_limit, user='buyer')
     logger.info(
         "Settings updated by %s: number_to_buy=%d, max_days_sales=%d, max_dts=%d, "
-        "min_gpu_m=%d, cap_workers=%d, cap_rate_limit=%d, calc_buying_reqs=%s, get_stock=%s",
-        user, number_to_buy, max_days_sales, max_dts, min_gpu_m, cap_workers, cap_rate_limit, calc, gs
+        "min_gpu_m=%d, cap_workers=%d, cap_rate_limit=%d, calc_buying_reqs=%s, get_stock=%s, evaluator_row_limit=%d",
+        user, number_to_buy, max_days_sales, max_dts, min_gpu_m, cap_workers, cap_rate_limit, calc, gs, evaluator_row_limit
     )
     return RedirectResponse(url=BASE_URL + "/settings-page?saved=1", status_code=303)
 
@@ -880,18 +882,31 @@ def task_buying_requirements_download(
 
     # ── 2. Download elaborated file from S3 ───────────────────────────────────
     env = "prod" if os.getenv("AWS_REGION") == "eu-west-1" else "dev"
-    file_ext = task["filename"].split(".")[-1]
-    fd, tmp_path = tempfile.mkstemp(suffix="." + file_ext)
-    os.close(fd)
-    try:
-        s3_key = f"applications/pricing/uk-vehicle-list-evaluator/{env}/elaborated/{task_id}.{file_ext}"
-        download_file(tmp_path, s3_bucketname, s3_key)
-        elaborated_df = read_dataframe_file(tmp_path)
-    finally:
+    orig_ext = task["filename"].rsplit(".", 1)[-1].lower()
+    _exts_to_try = ["xlsx"] if orig_ext == "xlsx" else ["xlsx", orig_ext]
+    logger.info("download: task=%s filename=%s orig_ext=%s exts_to_try=%s", task_id, task["filename"], orig_ext, _exts_to_try)
+    elaborated_df = None
+    _used_ext = "xlsx"
+    for _ext in _exts_to_try:
+        fd, tmp_path = tempfile.mkstemp(suffix="." + _ext)
+        os.close(fd)
         try:
-            os.remove(tmp_path)
-        except OSError:
-            pass
+            s3_key = f"applications/pricing/uk-vehicle-list-evaluator/{env}/elaborated/{task_id}.{_ext}"
+            logger.info("download: trying s3_key=%s tmp_path=%s", s3_key, tmp_path)
+            download_file(tmp_path, s3_bucketname, s3_key)
+            elaborated_df = read_dataframe_file(tmp_path)
+            _used_ext = _ext
+            logger.info("download: success with ext=%s", _ext)
+            break
+        except Exception as e:
+            logger.info("download: failed ext=%s error=%s", _ext, e)
+        finally:
+            try:
+                os.remove(tmp_path)
+            except OSError:
+                pass
+    if elaborated_df is None:
+        raise HTTPException(status_code=404, detail="Elaborated file not found on S3")
 
     # ── 3. Build requirements lookup from SF data ────────────────────────────
     # SF row indices:
@@ -1146,12 +1161,13 @@ def task_buying_requirements_download(
         elaborated_df["Avg Vehicle Costs"] = None
 
     # ── 5. Write and return ───────────────────────────────────────────────────
-    fd2, tmp_out = tempfile.mkstemp(suffix="." + file_ext)
+    fd2, tmp_out = tempfile.mkstemp(suffix="." + _used_ext)
     os.close(fd2)
     try:
         write_dataframe_file(elaborated_df, tmp_out)
         base_name = task["filename"].rsplit(".", 1)[0]
-        out_filename = f"{base_name}_requirements.{file_ext}"
+        out_filename = f"{base_name}_requirements.{_used_ext}"
+        logger.info("download: serving out_filename=%s tmp_out=%s", out_filename, tmp_out)
         return FileResponse(
             tmp_out,
             filename=out_filename,
@@ -1668,6 +1684,11 @@ async def upload_task(request: Request, fileBase64: str = Form(...), supplier_id
         with open(temp_input_file_path, 'wb') as temp_file:
             temp_file.write(content)
 
+        _supplier_prefixes = {'1': 'Enterprise', '2': 'Motability', '3': '1link'}
+        _prefix = _supplier_prefixes.get(str(supplier_id), '')
+        if _prefix and not filename.startswith(f'{_prefix}_'):
+            filename = f'{_prefix}_{filename}'
+
         # Create a task in the db
         with get_database_connection() as conn:
             with conn.cursor() as cursor:
@@ -1720,18 +1741,30 @@ def download_task_file(task_id: str):
     prefix = _supplier_prefixes.get(supplier_name.lower(), '')
     prefix = f'{prefix}_' if prefix and not task['filename'].startswith(f'{prefix}_') else ''
 
-    file_ext = task['filename'].split('.')[-1]
-    fd, tmp_path = tempfile.mkstemp(suffix='.' + file_ext)
-    os.close(fd)
     env = 'prod' if os.getenv('AWS_REGION') == 'eu-west-1' else 'dev'
-    s3_location = f'applications/pricing/uk-vehicle-list-evaluator/{env}/elaborated/{task["task_id"]}.{file_ext}'
-    download_file(tmp_path, s3_bucketname, s3_location)
-    output_filename = prefix + task['filename'].split('.')[0] + '_output.' + file_ext
+    orig_ext = task['filename'].rsplit('.', 1)[-1].lower()
+    _exts_to_try = ['xlsx'] if orig_ext == 'xlsx' else ['xlsx', orig_ext]
+    tmp_path = None
+    _used_ext = 'xlsx'
+    for _ext in _exts_to_try:
+        fd, tmp_path = tempfile.mkstemp(suffix='.' + _ext)
+        os.close(fd)
+        try:
+            s3_location = f'applications/pricing/uk-vehicle-list-evaluator/{env}/elaborated/{task["task_id"]}.{_ext}'
+            download_file(tmp_path, s3_bucketname, s3_location)
+            _used_ext = _ext
+            break
+        except Exception:
+            tmp_path = None
+    if tmp_path is None:
+        raise HTTPException(status_code=404, detail="Elaborated file not found on S3")
+    base_name = task['filename'].rsplit('.', 1)[0]
+    output_filename = prefix + base_name + '_output.' + _used_ext
     return FileResponse(
-            tmp_path,
-            filename=output_filename,
-            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            headers={"Content-Disposition": f'attachment; filename="{output_filename}"'},
+        tmp_path,
+        filename=output_filename,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{output_filename}"'},
     )
 
 @router.get("/delete-task/{task_id}")
@@ -1819,7 +1852,6 @@ async def enterprise_email_start_task(
     logger.info(f"Enterprise email: started elaborate for task_id={task_id}")
     return {"status": "started", "task_id": task_id}
 
-_SUPPLIER_FETCH_ROW_LIMIT = 50
 _supplier_fetch_lock = asyncio.Lock()
 
 
@@ -1840,6 +1872,7 @@ async def fetch_supplier_stock(
     env = 'prod' if os.getenv('AWS_REGION') == 'eu-west-1' else 'dev'
     # Supplier credentials only exist in prod secret
     secrets = get_secret('prod/carsupermarket/car_pricer/api_access')
+    logger.info('fetch_supplier_stock: starting %s fetch for %s', supplier, user)
 
     if _supplier_fetch_lock.locked():
         raise HTTPException(status_code=409, detail="A stock retrieval is already in progress. Please wait for it to finish.")
@@ -1849,25 +1882,35 @@ async def fetch_supplier_stock(
     filename = f"{supplier_label}_{now.strftime('%Y%m%d_%H%M%S')}.csv"
 
     # Insert task immediately so it appears in the list while fetching
-    with get_database_connection() as conn:
-        with conn.cursor() as cursor:
-            cursor.execute(
-                "SELECT supplier_id FROM suppliers WHERE LOWER(supplier_name) = %s LIMIT 1",
-                (supplier,)
-            )
-            row = cursor.fetchone()
-            if not row:
-                raise HTTPException(status_code=500, detail=f"Supplier '{supplier}' not found in DB")
-            supplier_id = row[0]
-            cursor.execute(
-                "INSERT INTO tasks (created, status, supplier_id, filename) VALUES (%s, %s, %s, %s) RETURNING task_id",
-                (now, 'created', supplier_id, filename)
-            )
-            task_id = cursor.fetchone()[0]
-            conn.commit()
+    try:
+        with get_database_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    "SELECT supplier_id FROM suppliers WHERE LOWER(supplier_name) = %s LIMIT 1",
+                    (supplier,)
+                )
+                row = cursor.fetchone()
+                if not row:
+                    raise HTTPException(status_code=500, detail=f"Supplier '{supplier}' not found in DB")
+                supplier_id = row[0]
+                cursor.execute(
+                    "INSERT INTO tasks (created, status, supplier_id, filename) VALUES (%s, %s, %s, %s) RETURNING task_id",
+                    (now, 'created', supplier_id, filename)
+                )
+                task_id = cursor.fetchone()[0]
+                conn.commit()
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"Database connection failed — check VPN/network connectivity. Detail: {e}")
 
     _FETCH_MAX_ATTEMPTS = 3
     _FETCH_RETRY_DELAY = 5  # seconds between attempts
+
+    with get_database_connection() as conn:
+        settings = get_settings(conn, user=user)
+    row_limit_setting = settings.get('evaluator_row_limit', 0)
+    fetch_row_limit = row_limit_setting if row_limit_setting > 0 else None
 
     async with _supplier_fetch_lock:
         last_exc = None
@@ -1879,7 +1922,7 @@ async def fetch_supplier_stock(
                         username=secrets['MOTABILITY_ID'],
                         password=secrets['MOTABILITY_PASSWORD'],
                     )
-                    input_df = client.fetch_dataframe(row_limit=_SUPPLIER_FETCH_ROW_LIMIT)
+                    input_df = client.fetch_dataframe(row_limit=fetch_row_limit)
                     if not include_preview:
                         type_col = input_df.columns[1] if len(input_df.columns) > 1 else None
                         if type_col is not None:
@@ -1889,7 +1932,7 @@ async def fetch_supplier_stock(
                         username=secrets['1LINK_ID'],
                         password=secrets['1LINK_PASSWORD'],
                     )
-                    input_df = client.fetch_dataframe(row_limit=_SUPPLIER_FETCH_ROW_LIMIT)
+                    input_df = client.fetch_dataframe(row_limit=fetch_row_limit)
                 break  # success
             except Exception as e:
                 last_exc = e
@@ -1929,8 +1972,6 @@ async def fetch_supplier_stock(
         except OSError:
             pass
 
-    with get_database_connection() as conn:
-        settings = get_settings(conn)
     aws_context = request.scope["aws.context"] if "aws.context" in request.scope else None
     if aws_context is None:
         asyncio.create_task(elaborate_task({'task_id': task_id, 'cap_workers': settings['cap_workers'], 'cap_rate_limit': settings['cap_rate_limit']}))
@@ -1942,7 +1983,7 @@ async def fetch_supplier_stock(
             data={'task_id': task_id, 'cap_workers': settings['cap_workers'], 'cap_rate_limit': settings['cap_rate_limit']},
         )
 
-    logger.info(f"fetch_supplier_stock: created task_id={task_id} for {supplier} ({len(input_df)} rows)")
+    logger.info(f"fetch_supplier_stock: created task_id={task_id} for {supplier} ({len(input_df)} rows), row_limit={fetch_row_limit}")
     return RedirectResponse(url=BASE_URL + "/tasks", status_code=303)
 
 
@@ -1969,7 +2010,7 @@ async def elaborate_task(data: dict):
         execution_time = None
 
         fd_in,  tmp_in  = tempfile.mkstemp(suffix='.' + file_ext)
-        fd_out, tmp_out = tempfile.mkstemp(suffix='.' + file_ext)
+        fd_out, tmp_out = tempfile.mkstemp(suffix='.xlsx')
         os.close(fd_in)
         os.close(fd_out)
 
@@ -1989,21 +2030,25 @@ async def elaborate_task(data: dict):
             cap_client = CAPClient()
             columns_mapper = get_columns_mapper(task['supplier_name'])
 
-            def process_df(args):
-                processor_obj, input_df, columns_mapper, *kwargs = args
-                return processor_obj.process_file(input_df, columns_mapper, *kwargs)
-                processor_obj, input_df, columns_mapper, *kwargs = args
-                return processor_obj.process_file(input_df, columns_mapper, *kwargs)
+            snapshot_suppliers = {'Enterprise', 'Motability', '1link'}
+            is_snapshot = task['supplier_name'] in snapshot_suppliers
 
-            with ThreadPoolExecutor(max_workers=2) as executor:
-                futures = [executor.submit(process_df, (autotrader, input_df, columns_mapper)),
-                           executor.submit(process_df, (cap_client, input_df, columns_mapper, cap_workers, cap_rate_limit))]
-                results = [future.result() for future in futures]
+            logger.info('Starting elaboration for task %s: %s, %d rows', data['task_id'], task['supplier_name'], total_rows)
 
-            processed_df = pd.concat([input_df, *results], axis=1)
+            processed_df = process_file_with_cache(
+                input_df=input_df,
+                columns_mapper=columns_mapper,
+                supplier_id=task['supplier_id'],
+                supplier_name=task['supplier_name'],
+                is_snapshot=is_snapshot,
+                at_client=autotrader,
+                cap_client=cap_client,
+                cap_workers=cap_workers,
+                cap_rate_limit=cap_rate_limit,
+            )
             write_dataframe_file(processed_df, tmp_out)
 
-            s3_location = f'applications/pricing/uk-vehicle-list-evaluator/{env}/elaborated/{data["task_id"]}.{file_ext}'
+            s3_location = f'applications/pricing/uk-vehicle-list-evaluator/{env}/elaborated/{data["task_id"]}.xlsx'
             upload_file(tmp_out, s3_bucketname, s3_location)
 
             execution_time = time.time() - t

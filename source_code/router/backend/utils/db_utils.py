@@ -11,6 +11,7 @@ from utils.secrets_manager_client import get_secret
 logger = logging.getLogger(__name__)
 
 _db_pool: psycopg2.pool.ThreadedConnectionPool | None = None
+_vehicle_db_pool: psycopg2.pool.ThreadedConnectionPool | None = None
 
 
 def get_db_credentials():
@@ -35,6 +36,30 @@ def get_db_credentials():
         }
 
 
+def get_vehicle_db_credentials():
+    """Always returns prod credentials — vehicle/valuation data is always written to prod."""
+    if os.getenv('LOCAL_ENV') == '1':
+        # In local dev, honour explicit overrides; otherwise fall through to prod secret.
+        host = os.getenv('VEHICLE_DB_HOST') or os.getenv('DB_HOST')
+        if host:
+            return {
+                'host': host,
+                'user': os.getenv('VEHICLE_DB_USER', os.getenv('DB_USER', 'test')),
+                'password': os.getenv('VEHICLE_DB_PASSWORD', os.getenv('DB_PASSWORD', 'password')),
+                'database': os.getenv('VEHICLE_DB_DATABASE', os.getenv('DB_DATABASE', 'test_db')),
+                'port': int(os.getenv('VEHICLE_DB_PORT', os.getenv('DB_PORT', 5432))),
+            }
+    varname = 'prod/aramis_group/data_platform/rds/aurora_pg_core_cluster_admin_credentials'
+    data = get_secret(varname)
+    return {
+        'host': data['endpoint'],
+        'user': data['username'],
+        'password': data['password'],
+        'database': 'carsupermarket_pricer',
+        'port': int(data.get('port', 5432)),
+    }
+
+
 def _get_pool() -> psycopg2.pool.ThreadedConnectionPool:
     global _db_pool
     if _db_pool is None:
@@ -47,6 +72,18 @@ def _get_pool() -> psycopg2.pool.ThreadedConnectionPool:
     return _db_pool
 
 
+def _get_vehicle_pool() -> psycopg2.pool.ThreadedConnectionPool:
+    global _vehicle_db_pool
+    if _vehicle_db_pool is None:
+        creds = get_vehicle_db_credentials()
+        _vehicle_db_pool = psycopg2.pool.ThreadedConnectionPool(
+            minconn=1, maxconn=10,
+            host=creds['host'], user=creds['user'], password=creds['password'],
+            database=creds['database'], port=creds['port'],
+        )
+    return _vehicle_db_pool
+
+
 SETTINGS_DEFAULTS = {
     'number_to_buy':                    200,
     'max_days_sales':                   90,
@@ -56,6 +93,7 @@ SETTINGS_DEFAULTS = {
     'cap_rate_limit':                   100,
     'calc_buying_reqs':                 '0',
     'get_stock':                        '0',
+    'evaluator_row_limit':              0,
 }
 
 BOOL_SETTINGS = {'calc_buying_reqs', 'get_stock'}
@@ -94,7 +132,7 @@ def get_settings(conn, user: str = None) -> dict:
         return d
 
 
-def save_settings(conn, number_to_buy: int, max_days_sales: int, max_dts: int, min_gpu_m: int, cap_workers: int, cap_rate_limit: int, calc_buying_reqs: bool, get_stock: bool = False, user: str = None):
+def save_settings(conn, number_to_buy: int, max_days_sales: int, max_dts: int, min_gpu_m: int, cap_workers: int, cap_rate_limit: int, calc_buying_reqs: bool, get_stock: bool = False, evaluator_row_limit: int = 0, user: str = None):
     values = {
         'number_to_buy':                number_to_buy,
         'max_days_sales':               max_days_sales,
@@ -102,6 +140,7 @@ def save_settings(conn, number_to_buy: int, max_days_sales: int, max_dts: int, m
         'min_gpu_m':                    min_gpu_m,
         'cap_workers':                  cap_workers,
         'cap_rate_limit':               cap_rate_limit,
+        'evaluator_row_limit':          evaluator_row_limit,
     }
     # Per-user bool settings; always-enabled users' preferences are not stored (always True at read time).
     if user not in ALWAYS_ENABLED_USERS:
@@ -126,6 +165,22 @@ def save_settings(conn, number_to_buy: int, max_days_sales: int, max_dts: int, m
 def get_database_connection():
     try:
         pool = _get_pool()
+    except UnauthorizedSSOTokenError:
+        logger.error("AWS SSO session has expired. Run: aws sso login")
+        raise HTTPException(status_code=503, detail="AWS SSO session has expired. Run: aws sso login")
+
+    connection = pool.getconn()
+    try:
+        yield connection
+    finally:
+        pool.putconn(connection)
+
+
+@contextmanager
+def get_vehicle_database_connection():
+    """Connection to the prod vehicle DB — always prod regardless of deployment environment."""
+    try:
+        pool = _get_vehicle_pool()
     except UnauthorizedSSOTokenError:
         logger.error("AWS SSO session has expired. Run: aws sso login")
         raise HTTPException(status_code=503, detail="AWS SSO session has expired. Run: aws sso login")
