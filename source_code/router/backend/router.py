@@ -1416,7 +1416,7 @@ def mot_check_download(filename: str, user: str = Depends(get_current_user)):
     os.close(fd)
     try:
         download_file(tmp_path, s3_bucketname, s3_key)
-        return FileResponse(tmp_path, filename=filename, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+        return FileResponse(tmp_path, filename=filename, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", headers={"Content-Disposition": f'attachment; filename="{filename}"'})
     except Exception:
         try:
             os.remove(tmp_path)
