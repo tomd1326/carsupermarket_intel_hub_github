@@ -1152,7 +1152,12 @@ def task_buying_requirements_download(
         write_dataframe_file(elaborated_df, tmp_out)
         base_name = task["filename"].rsplit(".", 1)[0]
         out_filename = f"{base_name}_requirements.{file_ext}"
-        return FileResponse(tmp_out, filename=out_filename, media_type="application/octet-stream")
+        return FileResponse(
+            tmp_out,
+            filename=out_filename,
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={"Content-Disposition": f'attachment; filename="{out_filename}"'},
+        )
     except Exception:
         try:
             os.remove(tmp_out)
@@ -1722,7 +1727,12 @@ def download_task_file(task_id: str):
     s3_location = f'applications/pricing/uk-vehicle-list-evaluator/{env}/elaborated/{task["task_id"]}.{file_ext}'
     download_file(tmp_path, s3_bucketname, s3_location)
     output_filename = prefix + task['filename'].split('.')[0] + '_output.' + file_ext
-    return FileResponse(tmp_path, filename=output_filename, media_type='application/octet-stream')
+    return FileResponse(
+            tmp_path,
+            filename=output_filename,
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={"Content-Disposition": f'attachment; filename="{output_filename}"'},
+    )
 
 @router.get("/delete-task/{task_id}")
 def delete_task(task_id: str, user: str = Depends(get_current_user)):
