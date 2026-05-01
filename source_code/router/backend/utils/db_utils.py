@@ -15,25 +15,14 @@ _vehicle_db_pool: psycopg2.pool.ThreadedConnectionPool | None = None
 
 
 def get_db_credentials():
-    if os.getenv('LOCAL_ENV') == '1':
-        return {
-            'host': os.getenv('DB_HOST', 'localhost'),
-            'user': os.getenv('DB_USER', 'test'),
-            'password': os.getenv('DB_PASSWORD', 'password'),
-            'database': os.getenv('DB_DATABASE', 'test_db'),
-            'port': int(os.getenv('DB_PORT', 5432))
-        }
-    elif os.getenv('AWS_REGION') is not None:
-        env = 'prod' if os.getenv('AWS_REGION') == 'eu-west-1' else 'dev'
-        varname = f'{env}/aramis_group/data_platform/rds/aurora_pg_core_cluster_admin_credentials'
-        data = get_secret(varname)
-        return {
-            'host': data['endpoint'],
-            'user': data['username'],
-            'password': data['password'],
-            'database': 'carsupermarket_pricer',
-            'port': int(data.get('port', 5432))
-        }
+    data = get_secret('prod/aramis_group/data_platform/rds/aurora_pg_core_cluster_admin_credentials')
+    return {
+        'host': data['endpoint'],
+        'user': data['username'],
+        'password': data['password'],
+        'database': 'carsupermarket_pricer',
+        'port': int(data.get('port', 5432)),
+    }
 
 
 def get_vehicle_db_credentials():

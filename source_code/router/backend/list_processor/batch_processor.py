@@ -28,6 +28,7 @@ from utils.vehicle_store import (
     fetch_cached_valuations,
     fetch_known_vehicles,
     fetch_price_history,
+    ensure_vehicles_exist,
     upsert_vehicles,
     insert_valuations,
     insert_listings,
@@ -101,42 +102,46 @@ def _write_to_db(supplier_id: int, supplier_name: str, vehicle_rows, api_results
                     'cap_registration_date': result.get('cap_registration_date'),
                 })
 
-            # only insert valuation/listing/status if vehicle row exists or will exist
-            if vrm_in_vehicles:
-                if not from_cache and (result.get('at_retail_valuation') is not None or result.get('cap_live_clean') is not None):
-                    valuations_to_insert.append({
-                        'vrm': vrow.vrm,
-                        'mileage': vrow.mileage,
-                        'fetched_at': now,
-                        'at_retail_valuation': result.get('at_retail_valuation'),
-                        'at_rating': result.get('at_rating'),
-                        'at_days_to_sell': result.get('at_days_to_sell'),
-                        'at_market_condition': result.get('at_market_condition'),
-                        'cap_live_clean': result.get('cap_live_clean'),
-                        'cap_live_retail': result.get('cap_live_retail'),
-                        'cap_monthly_clean': result.get('cap_monthly_clean'),
-                        'cap_monthly_retail': result.get('cap_monthly_retail'),
-                        'cap_rounded_mileage': result.get('cap_rounded_mileage'),
-                    })
-
-                listings_to_insert.append({
+            if vrm_in_vehicles and not from_cache and (result.get('at_retail_valuation') is not None or result.get('cap_live_clean') is not None):
+                valuations_to_insert.append({
                     'vrm': vrow.vrm,
-                    'supplier_id': supplier_id,
-                    'imported_at': now,
                     'mileage': vrow.mileage,
-                    'asking_price': vrow.asking_price,
+                    'fetched_at': now,
+                    'at_retail_valuation': result.get('at_retail_valuation'),
+                    'at_rating': result.get('at_rating'),
+                    'at_days_to_sell': result.get('at_days_to_sell'),
+                    'at_market_condition': result.get('at_market_condition'),
+                    'cap_live_clean': result.get('cap_live_clean'),
+                    'cap_live_retail': result.get('cap_live_retail'),
+                    'cap_monthly_clean': result.get('cap_monthly_clean'),
+                    'cap_monthly_retail': result.get('cap_monthly_retail'),
+                    'cap_rounded_mileage': result.get('cap_rounded_mileage'),
                 })
 
-                statuses_to_upsert.append({
-                    'vrm': vrow.vrm,
-                    'supplier_id': supplier_id,
-                    'asking_price': vrow.asking_price,
-                })
+            # Track price for every VRM present in the supplier file, regardless of AT/CAP data
+            listings_to_insert.append({
+                'vrm': vrow.vrm,
+                'supplier_id': supplier_id,
+                'imported_at': now,
+                'mileage': vrow.mileage,
+                'asking_price': vrow.asking_price,
+            })
+
+            statuses_to_upsert.append({
+                'vrm': vrow.vrm,
+                'supplier_id': supplier_id,
+                'asking_price': vrow.asking_price,
+            })
 
         with get_vehicle_database_connection() as conn:
             if vehicles_to_upsert:
                 upsert_vehicles(conn, vehicles_to_upsert)
-                conn.commit()  # must commit before valuations/listings FK checks
+
+            # Ensure all tracked VRMs exist in vehicles before FK-constrained inserts.
+            # Covers VRMs where AT/CAP failed but the supplier price still needs tracking.
+            all_tracked_vrms = [s['vrm'] for s in statuses_to_upsert]
+            ensure_vehicles_exist(conn, all_tracked_vrms)
+            conn.commit()
 
             if valuations_to_insert:
                 insert_valuations(conn, valuations_to_insert)
@@ -189,21 +194,40 @@ def process_file_with_cache(
 
     if cache_misses:
         miss_vrms = {v.vrm for v in cache_misses}
+        # VRMs with a CAP ID but no derivable registration date (e.g. Irish plates) are
+        # not AT-searchable — exclude them from the AT call to avoid wasted error requests.
+        at_skip_vrms = {v.vrm for v in cache_misses if v.capid and not v.registration_date}
         miss_df = input_df[input_df.apply(
             lambda row: columns_mapper.map_row(row.to_dict()) is not None and
                         columns_mapper.map_row(row.to_dict()).vrm in miss_vrms,
             axis=1
         )]
+        at_miss_df = miss_df[miss_df.apply(
+            lambda row: columns_mapper.map_row(row.to_dict()) is not None and
+                        columns_mapper.map_row(row.to_dict()).vrm not in at_skip_vrms,
+            axis=1
+        )]
 
         with ThreadPoolExecutor(max_workers=2) as executor:
-            at_future = executor.submit(at_client.process_file, miss_df, columns_mapper)
+            at_future = executor.submit(at_client.process_file, at_miss_df, columns_mapper)
             cap_future = executor.submit(cap_client.process_file, miss_df, columns_mapper, cap_workers, cap_rate_limit)
             at_df, _at_veh, _at_val, _at_veh_err, _at_val_err = at_future.result()
             cap_df, _cap_vrm, _cap_monthly, _cap_live, _cap_retries, _cap_vrm_err, _cap_live_err = cap_future.result()
 
+        # Build AT results keyed by VRM (at_miss_df may be smaller than miss_df)
+        at_by_vrm: dict[str, pd.Series] = {}
+        at_miss_df_reset = at_miss_df.reset_index(drop=True)
+        at_df_reset = at_df.reset_index(drop=True)
+        for i, at_row in at_miss_df_reset.iterrows():
+            try:
+                v = columns_mapper.map_row(at_row.to_dict())
+                if v and i < len(at_df_reset):
+                    at_by_vrm[v.vrm] = at_df_reset.iloc[i]
+            except Exception:
+                pass
+
         # Merge AT+CAP results into api_results keyed by vrm
         miss_df_reset = miss_df.reset_index(drop=True)
-        at_df_reset = at_df.reset_index(drop=True)
         cap_df_reset = cap_df.reset_index(drop=True)
 
         for i, row in miss_df_reset.iterrows():
@@ -211,7 +235,7 @@ def process_file_with_cache(
                 vehicle = columns_mapper.map_row(row.to_dict())
                 if vehicle is None:
                     continue
-                at_row = at_df_reset.iloc[i] if i < len(at_df_reset) else pd.Series(dtype=object)
+                at_row = at_by_vrm.get(vehicle.vrm, pd.Series(dtype=object))
                 cap_row = cap_df_reset.iloc[i] if i < len(cap_df_reset) else pd.Series(dtype=object)
 
                 description = at_row.get('at_description', '')
@@ -311,6 +335,9 @@ def process_file_with_cache(
         })
 
     at_result = pd.DataFrame(at_rows)
+    for col in ('at_rating', 'at_original_days_to_sell', 'at_market_condition'):
+        if col in at_result.columns:
+            at_result[col] = pd.to_numeric(at_result[col], errors='coerce')
     cap_result = pd.DataFrame(cap_rows)
 
     # Step 6: fetch price history and prepend as first 3 enhanced columns
@@ -322,17 +349,21 @@ def process_file_with_cache(
         logger.error('Price history fetch failed — columns will be blank: %s', traceback.format_exc())
 
     price_rows = []
+    reductions = 0
     for vrow in vehicle_rows:
         ph = price_history.get(vrow.vrm, {})
         prev = ph.get('previous_price')
         curr = ph.get('current_price')
         changed_at = ph.get('price_changed_at')
+        price_change = round(float(curr) - float(prev), 2) if curr is not None and prev is not None else None
+        if price_change is not None and price_change < 0:
+            reductions += 1
         price_rows.append({
             'Previous Price':     float(prev) if prev is not None else None,
-            'Price Change':       round(float(curr) - float(prev), 2) if curr is not None and prev is not None else None,
+            'Price Change':       price_change,
             'Price Change Date':  changed_at.date() if changed_at is not None else None,
         })
 
     price_df = pd.DataFrame(price_rows)
 
-    return pd.concat([input_df.reset_index(drop=True), price_df, at_result, cap_result], axis=1)
+    return pd.concat([input_df.reset_index(drop=True), price_df, at_result, cap_result], axis=1), reductions

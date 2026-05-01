@@ -70,7 +70,10 @@ CREATE TABLE tasks (
     s3_location      VARCHAR(250),
     file_fingerprint VARCHAR(100),
     total_rows       INTEGER,
-    execution_time   FLOAT
+    execution_time   FLOAT,
+    uploaded_by      VARCHAR(100),
+    reductions       INTEGER,
+    source           VARCHAR(20)
 );
 
 CREATE TABLE settings (
