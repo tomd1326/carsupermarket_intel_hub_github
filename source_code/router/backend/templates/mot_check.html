@@ -1,0 +1,524 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MOT Check</title>
+    <link rel="icon" type="image/png" href="{{ BASE_URL }}/static/icon.png">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css" rel="stylesheet">
+    <style>
+        @font-face { font-family: 'DM Sans'; src: url('{{ BASE_URL }}/static/fonts/DMSans-Regular.ttf'); font-weight: 400; }
+        @font-face { font-family: 'DM Sans'; src: url('{{ BASE_URL }}/static/fonts/DMSans-Medium.ttf'); font-weight: 500; }
+        @font-face { font-family: 'DM Sans'; src: url('{{ BASE_URL }}/static/fonts/DMSans-SemiBold.ttf'); font-weight: 600; }
+        @font-face { font-family: 'DM Sans'; src: url('{{ BASE_URL }}/static/fonts/DMSans-Bold.ttf'); font-weight: 700; }
+
+        body, button, input, select, textarea { font-family: 'DM Sans', system-ui, sans-serif; }
+        body { background-color: #003c57; min-height: 100vh; }
+
+        .page-wrap {
+            min-height: 100vh;
+            padding: 48px 32px 64px;
+        }
+        .brand-logo {
+            width: 48px;
+            height: 48px;
+            border-radius: 10px;
+        }
+        .page-title {
+            color: #ffffff;
+            font-weight: 600;
+            font-size: 1.5rem;
+            letter-spacing: -0.2px;
+        }
+        .card {
+            border: none;
+            border-radius: 12px;
+            box-shadow: 0 4px 24px rgba(0,0,0,0.18);
+        }
+        .card-body { padding: 24px 28px; }
+
+        textarea {
+            resize: vertical;
+            font-size: 0.88rem;
+            font-family: 'DM Sans', monospace;
+        }
+        .btn-process {
+            background-color: #7ed321;
+            border: none;
+            color: #0d3d5f;
+            font-weight: 700;
+            font-size: 1rem;
+            padding: 11px 0;
+            border-radius: 8px;
+            width: 100%;
+            transition: background 0.15s;
+        }
+        .btn-process:hover { background-color: #6cba18; color: #0d3d5f; }
+        .btn-process:disabled { opacity: 0.6; cursor: not-allowed; }
+
+        .progress { height: 8px; border-radius: 6px; }
+        .progress-bar { background-color: #7ed321; }
+
+        .history-empty { color: #adb5bd; font-size: 0.88rem; }
+        .history-scroll { max-height: 520px; overflow-y: auto; overflow-x: auto; }
+        .history-table { font-size: 0.82rem; width: 100%; }
+        .history-table th { white-space: nowrap; background-color: #f0f4f8; font-weight: 600; padding: 7px 10px; position: sticky; top: 0; z-index: 1; }
+        .history-table td { white-space: nowrap; padding: 7px 10px; border-top: 1px solid #f0f0f0; vertical-align: middle; }
+        .history-table tbody tr { cursor: pointer; transition: background 0.1s; }
+        .history-table tbody tr:hover { background-color: #f0f7ff; }
+        .history-table tbody tr.active-history-row { background-color: #dbeeff; }
+
+        .logout-link {
+            position: fixed;
+            top: 18px;
+            right: 22px;
+            font-size: 0.85rem;
+            color: rgba(255,255,255,0.55);
+            text-decoration: none;
+        }
+        .logout-link:hover { color: #fff; }
+
+        .status-badge {
+            display: inline-block;
+            font-size: 0.72rem;
+            font-weight: 700;
+            padding: 2px 7px;
+            border-radius: 4px;
+            text-transform: uppercase;
+        }
+        .badge-valid   { background-color: #d4edda; color: #155724; }
+        .badge-expired { background-color: #f8d7da; color: #721c24; }
+        .badge-unknown { background-color: #e2e3e5; color: #383d41; }
+
+        .result-table { font-size: 0.8rem; }
+        .result-table th {
+            white-space: nowrap;
+            background-color: #f0f4f8;
+            position: sticky;
+            top: 0;
+            z-index: 1;
+            border-right: 1px solid #b0bac5;
+        }
+        .result-table td {
+            white-space: nowrap;
+            border-right: 1px solid #c8d0da;
+        }
+        .result-table td:last-child,
+        .result-table th:last-child { border-right: none; }
+        .result-scroll { max-height: 380px; overflow-y: auto; overflow-x: auto; }
+
+        .results-title { font-weight: 700; }
+        .results-timestamp { font-size: 1rem; color: #212529; font-weight: 600; margin-left: 8px; }
+
+        .history-loading { color: #adb5bd; font-size: 0.88rem; }
+
+        .warn-cell { background-color: #f8d7da !important; color: #721c24 !important; font-weight: 600; }
+    </style>
+</head>
+<body>
+    <a href="{{ BASE_URL }}/logout" class="logout-link"><i class="fas fa-sign-out-alt"></i> Logout</a>
+
+    <div class="page-wrap">
+        <!-- Header -->
+        <div class="d-flex align-items-center gap-3 mb-4">
+            <img src="{{ BASE_URL }}/static/icon.png" alt="" class="brand-logo">
+            <h1 class="page-title mb-0">MOT Check</h1>
+            <a href="javascript:history.back()" class="btn btn-outline-secondary btn-sm">
+                <i class="fas fa-arrow-left me-1"></i>Back
+            </a>
+            <a href="{{ BASE_URL }}/home" class="btn btn-outline-secondary btn-sm">
+                <i class="fas fa-home me-1"></i>Home
+            </a>
+        </div>
+
+        <!-- Two-column layout -->
+        <div class="row g-4 align-items-start">
+
+            <!-- Left: input + progress -->
+            <div class="col-12 col-lg-5 col-xl-4">
+                <div class="card mb-3">
+                    <div class="card-body">
+                        <label class="form-label fw-bold small text-muted mb-1">VRMs (one per line)</label>
+                        <textarea id="vrmInput" class="form-control mb-2" rows="14"></textarea>
+                        <div class="text-muted small mb-3" id="vrmCount" style="display:none;">
+                            <i class="fas fa-car me-1"></i><span id="countVal">0</span> vehicles
+                        </div>
+                        <button class="btn btn-process" id="processBtn" onclick="startProcessing()">
+                            Run MOT Check
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Progress -->
+                <div class="card" id="progressCard" style="display:none;">
+                    <div class="card-body">
+                        <div class="d-flex justify-content-between mb-1">
+                            <span class="small text-muted">Processing...</span>
+                            <span class="small text-muted" id="progressLabel">0%</span>
+                        </div>
+                        <div class="progress mb-2">
+                            <div class="progress-bar" id="progressBar" style="width:0%"></div>
+                        </div>
+                        <div class="d-flex justify-content-between small text-muted">
+                            <span id="progressRows">0 / 0</span>
+                            <span id="progressEta">Calculating...</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Right: history + results -->
+            <div class="col-12 col-lg-7 col-xl-8">
+                <div class="card mb-3" id="resultsCard">
+                    <div class="card-body">
+                        <div class="d-flex justify-content-between align-items-center mb-2">
+                            <h6 class="mb-0 results-title">
+                                Results
+                                <span class="results-timestamp" id="resultsTimestamp"></span>
+                            </h6>
+                            <button class="btn btn-sm btn-outline-secondary" onclick="downloadCsv()">
+                                <i class="fas fa-download me-1"></i>Download XLSX
+                            </button>
+                        </div>
+                        <div id="resultsSummary" class="mb-3" style="font-size:0.88rem;"></div>
+                        <div class="result-scroll">
+                            <table class="table table-sm table-hover result-table mb-0">
+                                <thead><tr id="resultsHeader"></tr></thead>
+                                <tbody id="resultsBody"></tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="card">
+                    <div class="card-body">
+                        <h6 class="fw-bold mb-3">Previous Tasks <span class="text-muted fw-normal" style="font-size:0.8rem;">(Click to view results)</span></h6>
+                        <div class="history-scroll">
+                            <p class="history-loading mb-0" id="historyLoading"><i class="fas fa-spinner fa-spin me-1"></i>Loading...</p>
+                            <table class="history-table" id="historyTable" style="display:none;">
+                                <thead>
+                                    <tr>
+                                        <th>File Name</th>
+                                        <th>Date &amp; Time</th>
+                                        <th>User</th>
+                                        <th>Size</th>
+                                        <th># Vehicles</th>
+                                        <th># Expired</th>
+                                        <th># Not Found</th>
+                                        <th></th>
+                                    </tr>
+                                </thead>
+                                <tbody id="historyBody"></tbody>
+                            </table>
+                            <p class="history-empty mb-0" id="historyEmpty" style="display:none;">No previous runs found.</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        window.BASE_URL = "{{ BASE_URL }}";
+        let _currentFilename = null;
+        let _currentTs = null;
+
+        const vrmInput = document.getElementById('vrmInput');
+        vrmInput.addEventListener('input', () => {
+            const n = parseVrms().length;
+            document.getElementById('countVal').textContent = n;
+            document.getElementById('vrmCount').style.display = n > 0 ? '' : 'none';
+        });
+
+        function parseVrms() {
+            return vrmInput.value.split('\n')
+                .map(v => v.trim().replace(/\s+/g, '').toUpperCase())
+                .filter(v => v.length > 0);
+        }
+
+        function nowTimestamp() {
+            const d = new Date();
+            const pad = n => String(n).padStart(2, '0');
+            return `${pad(d.getDate())}/${pad(d.getMonth()+1)}/${d.getFullYear()} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+        }
+
+        function startProcessing() {
+            const vrms = parseVrms();
+            if (!vrms.length) { alert('Enter at least one VRM.'); return; }
+
+            document.getElementById('processBtn').disabled = true;
+            document.getElementById('progressCard').style.display = '';
+            setProgress(0, 0, vrms.length, null);
+
+            let pollInterval = setInterval(() => {
+                fetch(BASE_URL + '/mot-check/progress')
+                    .then(r => r.json())
+                    .then(p => { if (p.total > 0) setProgress(p.pct, p.done, p.total, p.eta_s); })
+                    .catch(() => {});
+            }, 1000);
+
+            fetch(BASE_URL + '/mot-check/process', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({vrms})
+            })
+            .then(r => {
+                if (!r.ok) return r.json().then(e => { throw new Error(e.detail || 'Processing failed'); });
+                return r.json();
+            })
+            .then(data => {
+                clearInterval(pollInterval);
+                setProgress(100, data.rows.length, data.rows.length, null);
+                _currentFilename = data.filename;
+                _currentTs = nowTimestamp();
+                renderResults(data.columns, data.rows, _currentTs);
+                loadHistory();
+                document.getElementById('processBtn').disabled = false;
+            })
+            .catch(err => {
+                clearInterval(pollInterval);
+                document.getElementById('processBtn').disabled = false;
+                alert('Error: ' + err.message);
+            });
+        }
+
+        function setProgress(pct, done, total, eta_s) {
+            document.getElementById('progressBar').style.width = pct + '%';
+            document.getElementById('progressLabel').textContent = Math.round(pct) + '%';
+            document.getElementById('progressRows').textContent = done + ' / ' + total;
+            if (eta_s !== null) {
+                const m = Math.floor(eta_s / 60), s = Math.round(eta_s % 60);
+                document.getElementById('progressEta').textContent = m > 0 ? m + 'm ' + s + 's' : s + 's';
+            } else {
+                document.getElementById('progressEta').textContent = done === total ? 'Done' : 'Calculating...';
+            }
+        }
+
+        function parseDMY(str) {
+            if (!str) return null;
+            const p = str.split('/');
+            if (p.length !== 3) return null;
+            const d = new Date(Date.UTC(+p[2], +p[1] - 1, +p[0]));
+            return isNaN(d) ? null : d;
+        }
+
+        function warnedCells(columns, row) {
+            const warned = new Set();
+
+            // Mileage: each historical mileage must be >= previous, and odometer >= last historical
+            const histMileage = [];
+            for (let i = 0; i < columns.length; i++) {
+                if (/^\d+(st|nd|rd|th) MOT Mileage$/i.test(columns[i])) {
+                    const n = row[i] ? parseInt(String(row[i]).replace(/,/g, ''), 10) : NaN;
+                    histMileage.push({ idx: i, val: isNaN(n) ? null : n });
+                }
+            }
+            for (let j = 1; j < histMileage.length; j++) {
+                if (histMileage[j-1].val !== null && histMileage[j].val !== null && histMileage[j].val < histMileage[j-1].val)
+                    warned.add(histMileage[j].idx);
+            }
+            const odomIdx = columns.indexOf('Odometer');
+            if (odomIdx >= 0 && histMileage.length > 0) {
+                const lastM = histMileage[histMileage.length - 1].val;
+                const odom = row[odomIdx] ? parseInt(String(row[odomIdx]).replace(/,/g, ''), 10) : NaN;
+                if (lastM !== null && !isNaN(odom) && odom < lastM) warned.add(odomIdx);
+            }
+
+            // Early MOT: test done 60+ days before due date (1 year after previous test)
+            const histDates = [];
+            for (let i = 0; i < columns.length; i++) {
+                if (/^\d+(st|nd|rd|th) MOT Date$/i.test(columns[i]))
+                    histDates.push({ idx: i, date: parseDMY(row[i]) });
+            }
+            for (let j = 1; j < histDates.length; j++) {
+                const prev = histDates[j-1].date, curr = histDates[j].date;
+                if (!prev || !curr) continue;
+                const due = new Date(prev); due.setFullYear(due.getFullYear() + 1);
+                if ((due - curr) / 864e5 >= 60) warned.add(histDates[j].idx);
+            }
+            // Check most recent MOT date against last historical
+            const recentIdx = columns.indexOf('Most Recent MOT Date');
+            if (recentIdx >= 0 && histDates.length > 0) {
+                const lastHist = histDates[histDates.length - 1];
+                const recent = parseDMY(row[recentIdx]);
+                if (lastHist.date && recent && recent > lastHist.date) {
+                    const due = new Date(lastHist.date); due.setFullYear(due.getFullYear() + 1);
+                    if ((due - recent) / 864e5 >= 60) warned.add(recentIdx);
+                }
+            }
+
+            return warned;
+        }
+
+        let _activeFilter = null;
+
+        function applyFilter(filter) {
+            // Toggle off if already active
+            _activeFilter = _activeFilter === filter ? null : filter;
+
+            document.querySelectorAll('#resultsBody tr').forEach(tr => {
+                const cats = (tr.dataset.cats || '').split(',');
+                tr.style.display = (!_activeFilter || cats.includes(_activeFilter)) ? '' : 'none';
+            });
+
+            // Update badge outlines to show which is active
+            document.querySelectorAll('#resultsSummary [data-filter]').forEach(el => {
+                el.style.outline = (el.dataset.filter === _activeFilter) ? '2px solid #495057' : 'none';
+                el.style.cursor = 'pointer';
+            });
+        }
+
+        function renderResults(columns, rows, ts) {
+            const header = document.getElementById('resultsHeader');
+            const body = document.getElementById('resultsBody');
+            _activeFilter = null;
+            header.innerHTML = columns.map(c => `<th>${c}</th>`).join('');
+
+            const commentsIdx = columns.indexOf('Comments');
+            const statusIdx = columns.indexOf('Status');
+
+            body.innerHTML = rows.map(row => {
+                const warned = warnedCells(columns, row);
+                const hasMileage = [...warned].some(i => /MOT Mileage/i.test(columns[i]) || columns[i] === 'Odometer');
+                const hasEarly   = [...warned].some(i => /MOT Date/i.test(columns[i]));
+                const isExpired  = statusIdx >= 0 && row[statusIdx] === 'EXPIRED';
+                const isUnknown  = statusIdx >= 0 && row[statusIdx] === 'UNKNOWN';
+
+                const cats = [];
+                if (isExpired)  cats.push('expired');
+                if (isUnknown)  cats.push('unknown');
+                if (hasMileage) cats.push('mileage');
+                if (hasEarly)   cats.push('early');
+
+                const cells = row.map((cell, i) => {
+                    if (columns[i] === 'Status') {
+                        const cls = cell === 'VALID' ? 'badge-valid' : cell === 'EXPIRED' ? 'badge-expired' : 'badge-unknown';
+                        return `<td><span class="status-badge ${cls}">${cell}</span></td>`;
+                    }
+                    if (i === commentsIdx && cell) return `<td class="warn-cell">${cell}</td>`;
+                    if (warned.has(i)) return `<td class="warn-cell">${cell ?? ''}</td>`;
+                    return `<td>${cell ?? ''}</td>`;
+                }).join('');
+                return `<tr data-cats="${cats.join(',')}">${cells}</tr>`;
+            }).join('');
+
+            const expired        = statusIdx >= 0 ? rows.filter(r => r[statusIdx] === 'EXPIRED').length : 0;
+            const unknown        = statusIdx >= 0 ? rows.filter(r => r[statusIdx] === 'UNKNOWN').length : 0;
+            let mileageWarnCount = 0, earlyMotWarnCount = 0;
+            rows.forEach(row => {
+                const w = warnedCells(columns, row);
+                if ([...w].some(i => /MOT Mileage/i.test(columns[i]) || columns[i] === 'Odometer')) mileageWarnCount++;
+                if ([...w].some(i => /MOT Date/i.test(columns[i]))) earlyMotWarnCount++;
+            });
+
+            const badge = (filter, bg, color, icon, label) =>
+                `<span data-filter="${filter}" onclick="applyFilter('${filter}')" style="background:${bg};color:${color};font-weight:600;padding:5px 12px;border-radius:6px;display:inline-block;cursor:pointer;user-select:none;"><i class="fas fa-${icon} me-1"></i>${label}</span>`;
+
+            const summary = document.getElementById('resultsSummary');
+            const parts = [];
+            if (expired > 0) {
+                parts.push(badge('expired', '#f8d7da', '#842029', 'exclamation-circle', `${expired} expired MOT${expired !== 1 ? 's' : ''}`));
+            } else {
+                parts.push(`<span style="background:#d1e7dd;color:#155724;font-weight:600;padding:5px 12px;border-radius:6px;display:inline-block;"><i class="fas fa-check-circle me-1"></i>No expired MOTs</span>`);
+            }
+            if (unknown > 0) {
+                parts.push(badge('unknown', '#e2e3e5', '#41464b', 'question-circle', `${unknown} not found`));
+            }
+            if (mileageWarnCount > 0) {
+                parts.push(badge('mileage', '#f8d7da', '#842029', 'tachometer-alt', `${mileageWarnCount} mileage discrepanc${mileageWarnCount !== 1 ? 'ies' : 'y'}`));
+            }
+            if (earlyMotWarnCount > 0) {
+                parts.push(badge('early', '#f8d7da', '#842029', 'calendar-alt', `${earlyMotWarnCount} early MOT test${earlyMotWarnCount !== 1 ? 's' : ''}`));
+            }
+            summary.innerHTML = `<div class="d-flex gap-2 flex-wrap">${parts.join('')}</div>`;
+
+            document.getElementById('resultsTimestamp').textContent = ts || '';
+        }
+
+        function loadHistory() {
+            document.getElementById('historyLoading').style.display = '';
+            document.getElementById('historyEmpty').style.display = 'none';
+            document.getElementById('historyTable').style.display = 'none';
+
+            fetch(BASE_URL + '/mot-check/history')
+                .then(r => r.json())
+                .then(items => {
+                    document.getElementById('historyLoading').style.display = 'none';
+                    const table = document.getElementById('historyTable');
+                    const body  = document.getElementById('historyBody');
+                    const empty = document.getElementById('historyEmpty');
+                    if (!items.length) {
+                        table.style.display = 'none';
+                        empty.style.display = '';
+                        return;
+                    }
+                    body.innerHTML = items.map((item, idx) => {
+                        const expiredCell = item.expired_count != null
+                            ? (item.expired_count > 0
+                                ? `<td style="color:#842029;font-weight:600;">${item.expired_count}</td>`
+                                : `<td style="color:#155724;">0</td>`)
+                            : `<td>—</td>`;
+                        const unknownCell = item.unknown_count != null
+                            ? (item.unknown_count > 0
+                                ? `<td style="color:#41464b;font-weight:600;">${item.unknown_count}</td>`
+                                : `<td>0</td>`)
+                            : `<td>—</td>`;
+                        return `
+                        <tr data-filename="${item.filename}" data-ts="${item.ts}" onclick="loadHistoryResult(this)">
+                            <td>${item.filename}</td>
+                            <td>${item.ts}</td>
+                            <td>${item.processed_by ?? '—'}</td>
+                            <td>${item.size_kb} KB</td>
+                            <td>${item.vrm_count != null ? item.vrm_count : '—'}</td>
+                            ${expiredCell}
+                            ${unknownCell}
+                            <td>
+                                <a href="${BASE_URL}/mot-check/download/${encodeURIComponent(item.filename)}" class="btn btn-sm btn-outline-secondary" onclick="event.stopPropagation()">
+                                    <i class="fas fa-download me-1"></i>XLSX
+                                </a>
+                            </td>
+                        </tr>`;
+                    }).join('');
+                    table.style.display = '';
+                    empty.style.display = 'none';
+                })
+                .catch(() => {
+                    document.getElementById('historyLoading').style.display = 'none';
+                    document.getElementById('historyEmpty').style.display = '';
+                });
+        }
+
+        function loadHistoryResult(row) {
+            const filename = row.dataset.filename;
+            const ts = row.dataset.ts;
+            if (!filename) return;
+
+            // Highlight the clicked row
+            document.querySelectorAll('#historyBody tr').forEach(r => r.classList.remove('active-history-row'));
+            row.classList.add('active-history-row');
+
+            _currentFilename = filename;
+
+            fetch(BASE_URL + '/mot-check/load/' + encodeURIComponent(filename))
+                .then(r => {
+                    if (!r.ok) return r.json().then(e => { throw new Error(e.detail || 'Failed to load results'); });
+                    return r.json();
+                })
+                .then(data => {
+                    renderResults(data.columns, data.rows, ts);
+                })
+                .catch(err => {
+                    alert('Could not load results: ' + err.message);
+                });
+        }
+
+        function downloadCsv() {
+            if (!_currentFilename) return;
+            window.location.href = BASE_URL + '/mot-check/download/' + encodeURIComponent(_currentFilename);
+        }
+
+        loadHistory();
+    </script>
+</body>
+</html>

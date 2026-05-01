@@ -98,7 +98,13 @@
             <a href="{{ BASE_URL }}/tasks" class="btn menu-btn">
                 Supplier Stock Evaluator
             </a>
-            {% if user == 'admin' %}
+            <a href="{{ BASE_URL }}/mot-check" class="btn menu-btn">
+                MOT Check
+            </a>
+            {% if user == 'tdrayson' %}
+            <a href="{{ BASE_URL }}/stock-list" class="btn menu-btn">
+                Stock List
+            </a>
             <a href="{{ BASE_URL }}/settings-page" class="btn menu-btn-settings">
                 <i class="fas fa-cog"></i> Settings
             </a>

@@ -55,41 +55,60 @@ SETTINGS_DEFAULTS = {
     'cap_workers':                      25,
     'cap_rate_limit':                   100,
     'calc_buying_reqs':                 '0',
-    'enterprise_email_auto_process':    '0',
+    'get_stock':                        '0',
 }
 
+BOOL_SETTINGS = {'calc_buying_reqs', 'get_stock'}
 
-BOOL_SETTINGS = {'calc_buying_reqs', 'enterprise_email_auto_process'}
+# Per-user bool settings stored as e.g. calc_buying_reqs__buyer, get_stock__buyer.
+PER_USER_BOOL_SETTINGS = {'calc_buying_reqs', 'get_stock'}
+
+ADMIN_USER = 'admin'
+ALWAYS_ENABLED_USERS = {'admin', 'tdrayson'}
 
 
-def get_settings(conn) -> dict:
+def get_settings(conn, user: str = None) -> dict:
     try:
         with conn.cursor() as cur:
             cur.execute("SELECT key, value FROM settings")
             rows = cur.fetchall()
+        row_map = dict(rows)
         result = dict(SETTINGS_DEFAULTS)
         for key, value in rows:
+            if key in BOOL_SETTINGS or '__' in key:
+                continue
             if key in result:
-                result[key] = (value == '1') if key in BOOL_SETTINGS else int(value)
+                result[key] = int(value)
+        # Per-user bool settings: always-enabled users always True; others read from user-scoped key.
+        for key in PER_USER_BOOL_SETTINGS:
+            if user in ALWAYS_ENABLED_USERS:
+                result[key] = True
+            else:
+                scoped_key = f'{key}__{user}' if user else key
+                result[key] = row_map.get(scoped_key, '0') == '1'
         return result
     except Exception:
         d = dict(SETTINGS_DEFAULTS)
-        for key in BOOL_SETTINGS:
-            d[key] = False
+        for key in PER_USER_BOOL_SETTINGS:
+            d[key] = user in ALWAYS_ENABLED_USERS
         return d
 
 
-def save_settings(conn, number_to_buy: int, max_days_sales: int, max_dts: int, min_gpu_m: int, cap_workers: int, cap_rate_limit: int, calc_buying_reqs: bool, enterprise_email_auto_process: bool = False):
+def save_settings(conn, number_to_buy: int, max_days_sales: int, max_dts: int, min_gpu_m: int, cap_workers: int, cap_rate_limit: int, calc_buying_reqs: bool, get_stock: bool = False, user: str = None):
     values = {
-        'number_to_buy':                    number_to_buy,
-        'max_days_sales':                   max_days_sales,
-        'max_dts':                          max_dts,
-        'min_gpu_m':                        min_gpu_m,
-        'cap_workers':                      cap_workers,
-        'cap_rate_limit':                   cap_rate_limit,
-        'calc_buying_reqs':                 '1' if calc_buying_reqs else '0',
-        'enterprise_email_auto_process':    '1' if enterprise_email_auto_process else '0',
+        'number_to_buy':                number_to_buy,
+        'max_days_sales':               max_days_sales,
+        'max_dts':                      max_dts,
+        'min_gpu_m':                    min_gpu_m,
+        'cap_workers':                  cap_workers,
+        'cap_rate_limit':               cap_rate_limit,
     }
+    # Per-user bool settings; always-enabled users' preferences are not stored (always True at read time).
+    if user not in ALWAYS_ENABLED_USERS:
+        suffix = f'__{user}' if user else ''
+        values[f'calc_buying_reqs{suffix}'] = '1' if calc_buying_reqs else '0'
+        values[f'get_stock{suffix}'] = '1' if get_stock else '0'
+
     with conn.cursor() as cur:
         cur.execute(
             "CREATE TABLE IF NOT EXISTS settings (key VARCHAR(100) PRIMARY KEY, value VARCHAR(250))"
