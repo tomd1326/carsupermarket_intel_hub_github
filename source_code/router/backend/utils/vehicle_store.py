@@ -84,6 +84,38 @@ def fetch_known_vehicles(conn, vrms: list[str]) -> dict[str, dict]:
     return {r['vrm']: dict(r) for r in rows}
 
 
+def ensure_vehicles_exist(conn, vrms: list[str]) -> None:
+    """
+    Insert a minimal stub row for any VRM not yet in the vehicles table.
+    Required so FK constraints on supplier_vehicle_listings/status don't fail
+    for VRMs where AT returned no data.
+    """
+    if not vrms:
+        return
+    with conn.cursor() as cur:
+        psycopg2.extras.execute_values(
+            cur,
+            "INSERT INTO vehicles (vrm) VALUES %s ON CONFLICT (vrm) DO NOTHING",
+            [(vrm,) for vrm in vrms],
+        )
+
+
+def ensure_vehicles_exist(conn, vrms: list[str]) -> None:
+    """
+    Insert a minimal stub row for any VRM not yet in the vehicles table.
+    Required so FK constraints on supplier_vehicle_listings/status don't fail
+    for VRMs where AT returned no data.
+    """
+    if not vrms:
+        return
+    with conn.cursor() as cur:
+        psycopg2.extras.execute_values(
+            cur,
+            "INSERT INTO vehicles (vrm) VALUES %s ON CONFLICT (vrm) DO NOTHING",
+            [(vrm,) for vrm in vrms],
+        )
+
+
 def upsert_vehicles(conn, vehicles: list[dict]) -> None:
     """
     Bulk upsert vehicle identity rows.
