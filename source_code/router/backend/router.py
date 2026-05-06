@@ -20,12 +20,19 @@ import time
 import hashlib
 import logging
 import datetime
+from zoneinfo import ZoneInfo
+
+def _uk_now() -> datetime.datetime:
+    return datetime.datetime.now(tz=ZoneInfo('Europe/London')).replace(tzinfo=None)
 
 from botocore.config import Config
 
 from utils.lambda_http import LambdaRequestsManager
 from utils.s3_tools import upload_file, download_file
-from utils.db_utils import (get_database_connection, get_settings, save_settings)
+from utils.db_utils import (get_database_connection, get_prod_pricer_connection, get_settings, save_settings,
+                            record_login, record_logout, record_event,
+                            get_last_login_per_user, get_active_sessions_all_envs,
+                            load_all_users, upsert_user, remove_user)
 from utils.snowflake_client import SnowflakeClient
 from utils.sharepoint_client import SharePointClient
 from list_processor.autotrader_client import AutoTraderClient
@@ -40,6 +47,7 @@ import pandas as pd
 
 
 BASE_URL = os.getenv("BASE_URL", "/dev")
+_ENV = 'local' if os.getenv('LOCAL_ENV') == '1' else ('prod' if os.getenv('AWS_REGION') == 'eu-west-1' else 'dev')
 router = APIRouter(
     prefix="",
     tags=["Main Router"],
@@ -62,39 +70,34 @@ VALID_USERS = {
     'tdrayson': 'e026581a53dc97e3381566ad0f74e99ae65e0297f9eb41bb76596627885bf8a0',
 }
 
-def _passwords_s3_key():
-    env = 'prod' if os.getenv('AWS_REGION') == 'eu-west-1' else 'dev'
-    return f"applications/pricing/uk-vehicle-list-evaluator/{env}/user_passwords.json"
-
-def _load_passwords_from_s3():
+def _load_users_from_aurora():
     try:
-        import boto3 as _boto3
-        s3 = _boto3.client('s3', region_name=s3_bucket_region)
-        obj = s3.get_object(Bucket=s3_bucketname, Key=_passwords_s3_key())
-        overrides = json.loads(obj['Body'].read())
-        for username, pwd_hash in overrides.items():
-            VALID_USERS[username] = pwd_hash
-        logger.info("Loaded %d password overrides from S3", len(overrides))
+        with get_prod_pricer_connection() as conn:
+            users = load_all_users(conn)
+        VALID_USERS.update(users)
+        logger.info("Loaded %d users from Aurora", len(users))
     except Exception as e:
-        logger.info("No password overrides loaded from S3 (%s)", e)
+        logger.warning("Could not load users from Aurora — falling back to hardcoded admin only: %s", e)
 
-def _save_passwords_to_s3():
-    try:
-        import boto3 as _boto3
-        # Persist all non-admin, non-hardcoded hashes — store every non-admin user's current hash
-        overrides = {u: h for u, h in VALID_USERS.items() if u != 'tdrayson'}
-        payload = json.dumps(overrides).encode()
-        s3 = _boto3.client('s3', region_name=s3_bucket_region)
-        s3.put_object(Bucket=s3_bucketname, Key=_passwords_s3_key(), Body=payload, ContentType='application/json')
-        logger.info("Saved password overrides to S3")
-    except Exception as e:
-        logger.error("Failed to save password overrides to S3: %s", e)
-
-_load_passwords_from_s3()
+_load_users_from_aurora()
 
 # session_id -> {user, login_time} — tracks active sessions server-side
 _active_sessions: dict = {}
 _sessions_invalidated_at: float = 0.0  # epoch — sessions logged in before this are force-logged out
+
+def _track(request: Request, event_type: str, page: str, metadata: dict | None = None) -> None:
+    if _ENV != 'prod':
+        return
+    session_id = request.session.get('session_id')
+    username = request.session.get('user')
+    if not session_id or not username:
+        return
+    try:
+        with get_database_connection() as conn:
+            record_event(conn, session_id, username, _ENV, event_type, page, metadata)
+    except Exception as e:
+        logger.warning("Failed to record event %s for %s: %s", event_type, username, e)
+
 
 def get_current_user(request: Request):
     user = request.session.get('user')
@@ -138,7 +141,13 @@ def login(request: Request, username: str = Form(...), password: str = Form(...)
         request.session['pwd_hash'] = pwd_hash
         request.session['session_id'] = session_id
         request.session['login_time_epoch'] = login_epoch
-        _active_sessions[session_id] = {'user': username, 'login_time': datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+        _active_sessions[session_id] = {'user': username, 'login_time': _uk_now().strftime('%Y-%m-%d %H:%M:%S')}
+        if _ENV == 'prod':
+            try:
+                with get_database_connection() as conn:
+                    record_login(conn, session_id, username, _ENV, _uk_now())
+            except Exception as e:
+                logger.warning("Failed to record login for %s: %s", username, e)
         return RedirectResponse(url=BASE_URL + "/home", status_code=303)  # CHANGED: was /tasks
     return templates.TemplateResponse(
         "login.html",
@@ -152,7 +161,14 @@ def login(request: Request, username: str = Form(...), password: str = Form(...)
 
 @router.get("/logout")
 def logout(request: Request):
-    _active_sessions.pop(request.session.get('session_id'), None)
+    session_id = request.session.get('session_id')
+    _active_sessions.pop(session_id, None)
+    if session_id and _ENV == 'prod':
+        try:
+            with get_database_connection() as conn:
+                record_logout(conn, session_id, _uk_now())
+        except Exception as e:
+            logger.warning("Failed to record logout for session %s: %s", session_id, e)
     request.session.clear()
     return RedirectResponse(url=BASE_URL + "/login", status_code=303)
 
@@ -174,7 +190,19 @@ def users_page(request: Request, user: str = Depends(get_current_user)):
         return RedirectResponse(url=BASE_URL + "/home", status_code=303)
     sessions = sorted(_active_sessions.values(), key=lambda s: s['login_time'], reverse=True)
     non_admin_users = sorted(u for u in VALID_USERS if u != 'tdrayson')
-    return templates.TemplateResponse("users.html", {"request": request, "user": user, "BASE_URL": BASE_URL, "active_sessions": sessions, "non_admin_users": non_admin_users})
+    last_logins = {}
+    db_active_sessions = []
+    try:
+        with get_prod_pricer_connection() as conn:
+            last_logins = get_last_login_per_user(conn)
+            db_active_sessions = get_active_sessions_all_envs(conn)
+    except Exception as e:
+        logger.warning("Failed to load user activity data: %s", e)
+    return templates.TemplateResponse("users.html", {
+        "request": request, "user": user, "BASE_URL": BASE_URL,
+        "active_sessions": sessions, "non_admin_users": non_admin_users,
+        "last_logins": last_logins, "db_active_sessions": db_active_sessions,
+    })
 
 
 @router.post("/settings/force-relogin")
@@ -207,7 +235,8 @@ def delete_user(
     if target_user not in VALID_USERS:
         return _user_redirect(redirect_to, pwderr="User+not+found")
     del VALID_USERS[target_user]
-    _save_passwords_to_s3()
+    with get_prod_pricer_connection() as conn:
+        remove_user(conn, target_user)
     logger.info("User %s deleted by admin", target_user)
     return _user_redirect(redirect_to, userdeleted=target_user)
 
@@ -229,8 +258,10 @@ def add_user(
         return _user_redirect(redirect_to, pwderr="User+already+exists")
     if not new_password or len(new_password) < 6:
         return _user_redirect(redirect_to, pwderr="Password+must+be+at+least+6+characters")
-    VALID_USERS[username] = hashlib.sha256(new_password.encode()).hexdigest()
-    _save_passwords_to_s3()
+    pwd_hash = hashlib.sha256(new_password.encode()).hexdigest()
+    VALID_USERS[username] = pwd_hash
+    with get_prod_pricer_connection() as conn:
+        upsert_user(conn, username, pwd_hash)
     logger.info("User %s created by admin", username)
     return _user_redirect(redirect_to, useradded=username)
 
@@ -251,8 +282,10 @@ def set_password(
         raise HTTPException(status_code=404, detail="User not found")
     if not new_password or len(new_password) < 6:
         return _user_redirect(redirect_to, pwderr="Password+must+be+at+least+6+characters")
-    VALID_USERS[target_user] = hashlib.sha256(new_password.encode()).hexdigest()
-    _save_passwords_to_s3()
+    pwd_hash = hashlib.sha256(new_password.encode()).hexdigest()
+    VALID_USERS[target_user] = pwd_hash
+    with get_prod_pricer_connection() as conn:
+        upsert_user(conn, target_user, pwd_hash)
     logger.info("Password updated for %s by admin", target_user)
     return _user_redirect(redirect_to, pwdok=target_user)
 
@@ -300,6 +333,7 @@ def home(request: Request, user: str = Depends(get_current_user)):
         except Exception as e:
             logger.warning(f"Home cache warm (SP) failed: {e}")
     threading.Thread(target=_warm_caches, daemon=True).start()
+    _track(request, 'page_view', '/home')
     return templates.TemplateResponse("home.html", {"request": request, "user": user, "BASE_URL": BASE_URL})
 
 
@@ -308,6 +342,7 @@ def home(request: Request, user: str = Depends(get_current_user)):
 def stock_list(request: Request, user: str = Depends(get_current_user)):
     if user != 'tdrayson':
         return RedirectResponse(url=BASE_URL + "/home", status_code=303)
+    _track(request, 'page_view', '/stock-list')
     return templates.TemplateResponse("stock_list.html", {"request": request, "user": user, "BASE_URL": BASE_URL})
 
 
@@ -317,6 +352,7 @@ def buying_requirements(request: Request, user: str = Depends(get_current_user))
         return RedirectResponse(url=BASE_URL + "/login", status_code=303)
     with get_database_connection() as conn:
         settings = get_settings(conn, user=user)
+    _track(request, 'page_view', '/buying-requirements')
     return templates.TemplateResponse("buying_requirements.html", {"request": request, "user": user, "BASE_URL": BASE_URL, "settings": settings})
 
 
@@ -1240,6 +1276,7 @@ _CAP_LOOKUP_COLUMNS = [
 def cap_lookup_page(request: Request, user: str = Depends(get_current_user)):
     if user != 'tdrayson':
         return RedirectResponse(url=BASE_URL + "/home", status_code=303)
+    _track(request, 'page_view', '/cap-lookup')
     return templates.TemplateResponse("cap_lookup.html", {"request": request, "user": user, "BASE_URL": BASE_URL})
 
 
@@ -1268,6 +1305,7 @@ def cap_lookup_process(request: Request, payload: dict, user: str = Depends(get_
 
     sid = request.session.get('session_id', '')
     total = len(vrms)
+    _track(request, 'cap_lookup', '/cap-lookup', {'vrm_count': total})
     with _cap_lookup_lock:
         _cap_lookup_progress[sid] = {"pct": 0, "done": 0, "total": total, "eta_s": None}
 
@@ -1324,7 +1362,7 @@ def cap_lookup_process(request: Request, payload: dict, user: str = Depends(get_
     from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 
     env = 'prod' if os.getenv('AWS_REGION') == 'eu-west-1' else 'dev'
-    ts_str = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    ts_str = _uk_now().strftime("%Y%m%d_%H%M%S")
     filename = f"cap_lookup_{ts_str}.xlsx"
     s3_key = _CAP_LOOKUP_S3_PREFIX.format(env=env) + filename
 
@@ -1404,7 +1442,7 @@ def cap_lookup_history(user: str = Depends(get_current_user)):
             meta = _meta(o['Key'])
             result.append({
                 "filename":     o['Key'].replace(prefix, ''),
-                "ts":           o['LastModified'].strftime("%d/%m/%Y %H:%M"),
+                "ts":           o['LastModified'].astimezone(ZoneInfo('Europe/London')).strftime("%d/%m/%Y %H:%M"),
                 "size_kb":      round(o['Size'] / 1024, 1),
                 "vrm_count":    meta["vrm_count"],
                 "processed_by": meta["processed_by"],
@@ -1472,6 +1510,7 @@ def cap_lookup_load(filename: str, user: str = Depends(get_current_user)):
 def mot_check_page(request: Request, user: str = Depends(get_current_user)):
     if not user:
         return RedirectResponse(url=BASE_URL + "/login", status_code=303)
+    _track(request, 'page_view', '/mot-check')
     return templates.TemplateResponse("mot_check.html", {"request": request, "user": user, "BASE_URL": BASE_URL})
 
 
@@ -1499,6 +1538,7 @@ def mot_check_process(request: Request, payload: dict, user: str = Depends(get_c
 
     sid = request.session.get('session_id', '')
     total = len(vrms)
+    _track(request, 'mot_check', '/mot-check', {'vrm_count': total})
     with _mot_lock:
         _mot_progress[sid] = {"pct": 0, "done": 0, "total": total, "eta_s": None}
 
@@ -1560,7 +1600,7 @@ def mot_check_process(request: Request, payload: dict, user: str = Depends(get_c
     import io
 
     env = 'prod' if os.getenv('AWS_REGION') == 'eu-west-1' else 'dev'
-    ts_str = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    ts_str = _uk_now().strftime("%Y%m%d_%H%M%S")
     filename = f"mot_check_{ts_str}.xlsx"
     s3_key = _MOT_S3_PREFIX.format(env=env) + filename
 
@@ -1892,9 +1932,11 @@ def read_tasks(request: Request, page: Optional[int] = 1, page_size: Optional[in
 
     with get_database_connection() as conn:
         settings = get_settings(conn, user=user)
+    _track(request, 'page_view', '/tasks')
     return templates.TemplateResponse("supplier_stock_evaluator.html", {
         "request": request,
         "user": user,
+        "is_admin": user == 'tdrayson',
         "tasks": tasks,
         "at_least_one_pending": at_least_one_pending,
         'suppliers': suppliers,
@@ -1942,9 +1984,10 @@ async def upload_task(request: Request, fileBase64: str = Form(...), supplier_id
         with get_database_connection() as conn:
             with conn.cursor() as cursor:
                 cursor.execute("INSERT INTO tasks (created, status, supplier_id, filename, uploaded_by, source) VALUES (%s, %s, %s, %s, %s, %s) RETURNING task_id",
-                               (datetime.datetime.now(), 'created', supplier_id, filename, user, 'Upload'))
+                               (_uk_now(), 'created', supplier_id, filename, user, 'Upload'))
                 task_id = cursor.fetchone()[0]
-                conn.commit()
+            conn.commit()
+        _track(request, 'upload_task', '/tasks', {'supplier_id': supplier_id, 'filename': filename, 'task_id': task_id})
 
         env = 'prod' if os.getenv('AWS_REGION') == 'eu-west-1' else 'dev'
         s3_location = f'applications/pricing/uk-vehicle-list-evaluator/{env}/raw/{task_id}.{file_ext}'
@@ -2069,7 +2112,7 @@ def enterprise_email_create_task(
             supplier_id = row[0]
             cursor.execute(
                 "INSERT INTO tasks (created, status, supplier_id, filename, uploaded_by, source) VALUES (%s, %s, %s, %s, %s, %s) RETURNING task_id",
-                (datetime.datetime.now(), 'created', supplier_id, filename, 'enterprise-email', 'Upload')
+                (_uk_now(), 'created', supplier_id, filename, 'email', 'Upload')
             )
             task_id = cursor.fetchone()[0]
             conn.commit()
@@ -2135,7 +2178,7 @@ async def fetch_supplier_stock(
     if _supplier_fetch_lock.locked():
         raise HTTPException(status_code=409, detail="A stock retrieval is already in progress. Please wait for it to finish.")
 
-    now = datetime.datetime.now()
+    now = _uk_now()
     supplier_label = 'Motability' if supplier == 'motability' else '1link'
     filename = f"{supplier_label}_{now.strftime('%Y%m%d_%H%M%S')}.csv"
 
@@ -2160,6 +2203,7 @@ async def fetch_supplier_stock(
     except HTTPException:
         raise
     except Exception as e:
+        logger.exception("fetch_supplier_stock DB error: %s", e)
         raise HTTPException(status_code=503, detail=f"Database connection failed — check VPN/network connectivity. Detail: {e}")
 
     _FETCH_MAX_ATTEMPTS = 3
@@ -2293,6 +2337,15 @@ async def elaborate_task(data: dict):
 
             logger.info('Starting elaboration for task %s: %s, %d rows', data['task_id'], task['supplier_name'], total_rows)
 
+            with get_database_connection() as conn:
+                with conn.cursor() as cursor:
+                    cursor.execute(
+                        "SELECT created FROM tasks WHERE supplier_id = %s AND status = 'success' AND task_id != %s ORDER BY task_id DESC LIMIT 1",
+                        (task['supplier_id'], data['task_id'])
+                    )
+                    prev_row = cursor.fetchone()
+            prev_task_created = prev_row[0] if prev_row else None
+
             processed_df, reductions = process_file_with_cache(
                 input_df=input_df,
                 columns_mapper=columns_mapper,
@@ -2303,6 +2356,7 @@ async def elaborate_task(data: dict):
                 cap_client=cap_client,
                 cap_workers=cap_workers,
                 cap_rate_limit=cap_rate_limit,
+                prev_task_created=prev_task_created,
             )
             write_dataframe_file(processed_df, tmp_out)
 
