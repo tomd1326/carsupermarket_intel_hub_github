@@ -80,9 +80,11 @@
     </style>
 </head>
 <body>
-    <a href="{{ BASE_URL }}/logout" class="logout-link text-secondary">
-        <i class="fas fa-sign-out-alt"></i> Logout
-    </a>
+    <div class="logout-link d-flex align-items-center gap-2">
+        <span>{{ user }}</span>
+        <span class="text-secondary">·</span>
+        <a href="{{ BASE_URL }}/logout" class="text-secondary text-decoration-none"><i class="fas fa-sign-out-alt"></i> Logout</a>
+    </div>
     <div class="home-container">
         <img src="{{ BASE_URL }}/static/icon.png" alt="CarSupermarket" class="brand-logo">
         <h2 class="home-title mb-5">CarSupermarket.com Buying Tools</h2>

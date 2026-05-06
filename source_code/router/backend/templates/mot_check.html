@@ -67,12 +67,16 @@
         .logout-link {
             position: fixed;
             top: 18px;
+            display: flex;
+            align-items: center;
+            gap: 6px;
             right: 22px;
             font-size: 0.85rem;
             color: rgba(255,255,255,0.55);
             text-decoration: none;
         }
-        .logout-link:hover { color: #fff; }
+        .logout-link a { color: inherit; text-decoration: none; }
+        .logout-link a:hover { color: #fff; }
 
         .status-badge {
             display: inline-block;
@@ -112,7 +116,11 @@
     </style>
 </head>
 <body>
-    <a href="{{ BASE_URL }}/logout" class="logout-link"><i class="fas fa-sign-out-alt"></i> Logout</a>
+    <div class="logout-link">
+        <span>{{ user }}</span>
+        <span>·</span>
+        <a href="{{ BASE_URL }}/logout"><i class="fas fa-sign-out-alt"></i> Logout</a>
+    </div>
 
     <div class="page-wrap">
         <!-- Header -->

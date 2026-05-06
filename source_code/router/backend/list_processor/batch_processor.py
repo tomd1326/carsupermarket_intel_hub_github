@@ -172,6 +172,7 @@ def process_file_with_cache(
     cap_client: CAPClient,
     cap_workers: int,
     cap_rate_limit: int,
+    prev_task_created=None,
 ) -> pd.DataFrame:
     """
     Drop-in replacement for the parallel process_df calls in router.py.
@@ -357,7 +358,11 @@ def process_file_with_cache(
         changed_at = ph.get('price_changed_at')
         price_change = round(float(curr) - float(prev), 2) if curr is not None and prev is not None else None
         if price_change is not None and price_change < 0:
-            reductions += 1
+            if prev_task_created is None or (
+                changed_at is not None and
+                changed_at.replace(tzinfo=None) > prev_task_created.replace(tzinfo=None)
+            ):
+                reductions += 1
         price_rows.append({
             'Previous Price':     float(prev) if prev is not None else None,
             'Price Change':       price_change,
@@ -366,4 +371,4 @@ def process_file_with_cache(
 
     price_df = pd.DataFrame(price_rows)
 
-    return pd.concat([input_df.reset_index(drop=True), price_df, at_result, cap_result], axis=1), reductions
+    return pd.concat([input_df.reset_index(drop=True), at_result, cap_result, price_df], axis=1), reductions

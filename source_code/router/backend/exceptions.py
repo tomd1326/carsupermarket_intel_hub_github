@@ -24,6 +24,14 @@ _STATUS_TITLES = {
 _DB_KEYWORDS = ("connection timed out", "connection refused", "could not connect", "vpn", "check vpn", "server closed the connection")
 
 
+def _first_line(text: str) -> str:
+    for line in text.splitlines():
+        line = line.strip()
+        if line:
+            return line
+    return text.strip()
+
+
 def _is_db_connection_error(msg: str) -> bool:
     lower = msg.lower()
     return any(kw in lower for kw in _DB_KEYWORDS)
@@ -47,7 +55,7 @@ async def http_exception_handler(request: Request, exc: HTTPException):
                 "title": "Database Unreachable",
                 "message": clean.strip(),
                 "hint": "Connect to the VPN and try again.",
-                "details": raw.strip() if raw.strip() else None,
+                "details": _first_line(raw) if raw.strip() else None,
             },
             status_code=exc.status_code,
         )
@@ -82,7 +90,7 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
                 "title": "Database Unreachable",
                 "message": "Could not connect to the database. This usually means you are not connected to the VPN.",
                 "hint": "Connect to the VPN and try again.",
-                "details": str(exc),
+                "details": _first_line(str(exc)),
             },
             status_code=500,
         )

@@ -19,7 +19,7 @@ button.settings-cog {
 }
 button.settings-cog:hover { color: #343a40 !important; background: #e9ecef !important; }
 
-a.logout-link {
+.logout-link {
     position: fixed;
     top: 20px;
     right: 24px;
@@ -28,7 +28,7 @@ a.logout-link {
     z-index: 1040;
     text-decoration: none;
 }
-a.logout-link:hover { color: #343a40 !important; }
+.logout-link a:hover { color: #343a40 !important; }
 
 #data-section { display: none; }
 
