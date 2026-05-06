@@ -4,6 +4,7 @@ import logging
 import os
 from concurrent.futures import ThreadPoolExecutor
 from threading import Lock
+import threading
 import functools
 from inspect import signature
 import pandas as pd
@@ -43,6 +44,13 @@ class AutoTraderClient(metaclass=Singleton):
 
         # Rate limiter
         self.limiter = RateLimiter(rate_limit=60, time_window=1)
+
+        # Request counters (reset per process_file call)
+        self._counter_lock = threading.Lock()
+        self._vehicles_requests = 0
+        self._valuations_requests = 0
+        self._vehicles_errors = 0
+        self._valuations_errors = 0
 
     def get_access_token(self, session) -> str:
         with self.auth_lock:
@@ -85,12 +93,15 @@ class AutoTraderClient(metaclass=Singleton):
         }
 
         with self.limiter:
+            with self._counter_lock:
+                self._vehicles_requests += 1
             vehicles_response = session.get(self.vehicles_api_url, params=vehicles_params, headers=headers)
             if vehicles_response.status_code == 200:
                 return vehicles_response.json()
             else:
-                # Log the error instead of printing
-                logger.error(f"Error in Vehicles API call for VRM {vrm}: Status code {vehicles_response.status_code}", extra={'extra_vrm': vrm})
+                with self._counter_lock:
+                    self._vehicles_errors += 1
+                logger.debug(f"Vehicles API error for VRM {vrm}: Status code {vehicles_response.status_code}", extra={'extra_vrm': vrm})
                 return None
 
     @cache(ignore_args=['session', 'headers'], ex=60*60*24)
@@ -106,14 +117,16 @@ class AutoTraderClient(metaclass=Singleton):
         }
 
         with self.limiter:
+            with self._counter_lock:
+                self._valuations_requests += 1
             valuations_response = session.post(valuations_url, json=valuations_payload, headers=headers)
 
             if valuations_response.status_code == 200:
                 return valuations_response.json()
             else:
-                logger.error(
-                    f"Error in Valuations API call for VRM {vrm}, Derivative ID {derivative_id}: Status code {valuations_response.status_code}",
-                    extra={'extra_vrm': vrm})
+                with self._counter_lock:
+                    self._valuations_errors += 1
+                logger.debug(f"Valuations API error for VRM {vrm}: Status code {valuations_response.status_code}", extra={'extra_vrm': vrm})
                 return None
 
     @classmethod
@@ -136,7 +149,7 @@ class AutoTraderClient(metaclass=Singleton):
                     f'{api_name} API call for VRM {vrm} failed with status code: {status_code} and error: {e}',
                     extra={'extra_vrm': vrm})
         elif json_data is not None and not error_only:
-            logger.info(f'{api_name} API call for VRM {vrm} succeeded with status code: {status_code}',
+            logger.debug(f'{api_name} API call for VRM {vrm} succeeded with status code: {status_code}',
                          extra={'extra_vrm': vrm})
 
     def process_row(self, row: dict, session, column_mapper: BaseColumnsMapper) -> dict:
@@ -242,29 +255,21 @@ class AutoTraderClient(metaclass=Singleton):
                 #     if competitor_link != 'N/A':
                 #         total_results = self.competitor_request(session, headers, competitor_link)
 
-            if vehicles_data:
-                self.log_api_response('Vehicles', vehicle.vrm, 200, vehicles_data)
-            else:
-                logger.error(f'Error processing row with VRM {vehicle.vrm}: vehicles_data is None or Vehicles API call failed',
-                              extra={'extra_vrm': vehicle.vrm})
-
-            if valuations_data:
-                self.log_api_response('Valuations', vehicle.vrm, 200, valuations_data)
-            else:
-                logger.error(f'Error processing row with VRM {vehicle.vrm}: valuations_data is None or Valuations API call failed',
-                              extra={'extra_vrm': vehicle.vrm})
+            if not vehicles_data:
+                logger.debug(f'Vehicles data unavailable for VRM {vehicle.vrm}', extra={'extra_vrm': vehicle.vrm})
+            if not valuations_data:
+                logger.debug(f'Valuations data unavailable for VRM {vehicle.vrm}', extra={'extra_vrm': vehicle.vrm})
 
             return {
-                'description': description,  # Vehicle description
-                'vrm': vehicle.vrm,  # Vehicle registration mark
-                'mileage': vehicle.mileage,  # Vehicle mileage
-                'valuations_retail_valuation': valuations_retail_valuation,  # Retail valuation from the Valuations API
-                'rating': rating,  # Rating from the Vehicles API
-                'original_days_to_sell': original_days_to_sell,  # Days to sell from the Vehicles API
-                'market_condition': market_condition,  # Market condition from the Vehicles API
-                # 'total_results': total_results,  # Total results from competitor analysis
-                'factory_fitted_feature_names': ', '.join(factory_fitted_feature_names),  # Comma-separated list of factory-fitted features
-                'at_first_registration_date': first_registration_date,  # Replaces processing_time
+                'description': description,
+                'vrm': vehicle.vrm,
+                'mileage': vehicle.mileage,
+                'valuations_retail_valuation': valuations_retail_valuation,
+                'rating': rating,
+                'original_days_to_sell': original_days_to_sell,
+                'market_condition': market_condition,
+                'factory_fitted_feature_names': ', '.join(factory_fitted_feature_names),
+                'at_first_registration_date': first_registration_date,
             }
 
         except Exception as e:
@@ -282,31 +287,24 @@ class AutoTraderClient(metaclass=Singleton):
             }
 
     def process_file(self, input_df: pd.DataFrame, column_mapper: BaseColumnsMapper) -> pd.DataFrame:
-        # Initialize session object
         session = requests.Session()
-
-        # Initialize processed rows
         processed_rows = []
 
-        # Initialize thread pool
+        with self._counter_lock:
+            self._vehicles_requests = 0
+            self._valuations_requests = 0
+            self._vehicles_errors = 0
+            self._valuations_errors = 0
+
         with ThreadPoolExecutor(max_workers=40) as executor:
-            # Process each row in the DataFrame
             for index, row in input_df.iterrows():
                 processed_rows.append(executor.submit(self.process_row, (row.to_dict()), session, column_mapper))
-
-            # Wait for all threads to finish
             processed_rows = [future.result() for future in processed_rows]
 
-        # Filter None values
         processed_rows = [row if row is not None else {} for row in processed_rows]
-
-        # transform processed rows into a DataFrame
         processed_df = pd.DataFrame(processed_rows)
-
-        # Add prefix at_ to all columns
         processed_df.columns = [f'at_{col}' for col in processed_df.columns]
-
-        return processed_df
+        return processed_df, self._vehicles_requests, self._valuations_requests, self._vehicles_errors, self._valuations_errors
 
         # # Merge new DataFrame with the original DataFrame
         # processed_df = pd.concat([df, processed_df], axis=1)

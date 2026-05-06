@@ -1,5 +1,5 @@
 body, button, input, select, textarea {
-    font-family: 'DM Sans', system-ui, sans-serif;
+    font-family: 'Aptos Display', system-ui, sans-serif;
 }
 
 button.settings-cog {
@@ -19,7 +19,7 @@ button.settings-cog {
 }
 button.settings-cog:hover { color: #343a40 !important; background: #e9ecef !important; }
 
-a.logout-link {
+.logout-link {
     position: fixed;
     top: 20px;
     right: 24px;
@@ -28,7 +28,7 @@ a.logout-link {
     z-index: 1040;
     text-decoration: none;
 }
-a.logout-link:hover { color: #343a40 !important; }
+.logout-link a:hover { color: #343a40 !important; }
 
 #data-section { display: none; }
 
@@ -45,7 +45,7 @@ a.logout-link:hover { color: #343a40 !important; }
 }
 #filter-bar,
 #view-toggle {
-    height: 31px;
+    min-height: 31px;
 }
 
 .filter-divider {

@@ -20,15 +20,23 @@ import time
 import hashlib
 import logging
 import datetime
+from zoneinfo import ZoneInfo
+
+def _uk_now() -> datetime.datetime:
+    return datetime.datetime.now(tz=ZoneInfo('Europe/London')).replace(tzinfo=None)
 
 from botocore.config import Config
 
 from utils.lambda_http import LambdaRequestsManager
 from utils.s3_tools import upload_file, download_file
-from utils.db_utils import (get_database_connection, get_settings, save_settings)
+from utils.db_utils import (get_database_connection, get_prod_pricer_connection, get_settings, save_settings,
+                            record_login, record_logout, record_event,
+                            get_last_login_per_user, get_active_sessions_all_envs,
+                            load_all_users, upsert_user, remove_user)
 from utils.snowflake_client import SnowflakeClient
 from utils.sharepoint_client import SharePointClient
 from list_processor.autotrader_client import AutoTraderClient
+from list_processor.batch_processor import process_file_with_cache
 from list_processor.cap_client import CAPClient
 from list_processor.columns_mapper import get_columns_mapper, BaseColumnsMapper
 from list_processor.motability_client import MotabilityFetchClient
@@ -39,6 +47,7 @@ import pandas as pd
 
 
 BASE_URL = os.getenv("BASE_URL", "/dev")
+_ENV = 'local' if os.getenv('LOCAL_ENV') == '1' else ('prod' if os.getenv('AWS_REGION') == 'eu-west-1' else 'dev')
 router = APIRouter(
     prefix="",
     tags=["Main Router"],
@@ -61,39 +70,34 @@ VALID_USERS = {
     'tdrayson': 'e026581a53dc97e3381566ad0f74e99ae65e0297f9eb41bb76596627885bf8a0',
 }
 
-def _passwords_s3_key():
-    env = 'prod' if os.getenv('AWS_REGION') == 'eu-west-1' else 'dev'
-    return f"applications/pricing/uk-vehicle-list-evaluator/{env}/user_passwords.json"
-
-def _load_passwords_from_s3():
+def _load_users_from_aurora():
     try:
-        import boto3 as _boto3
-        s3 = _boto3.client('s3', region_name=s3_bucket_region)
-        obj = s3.get_object(Bucket=s3_bucketname, Key=_passwords_s3_key())
-        overrides = json.loads(obj['Body'].read())
-        for username, pwd_hash in overrides.items():
-            VALID_USERS[username] = pwd_hash
-        logger.info("Loaded %d password overrides from S3", len(overrides))
+        with get_prod_pricer_connection() as conn:
+            users = load_all_users(conn)
+        VALID_USERS.update(users)
+        logger.info("Loaded %d users from Aurora", len(users))
     except Exception as e:
-        logger.info("No password overrides loaded from S3 (%s)", e)
+        logger.warning("Could not load users from Aurora — falling back to hardcoded admin only: %s", e)
 
-def _save_passwords_to_s3():
-    try:
-        import boto3 as _boto3
-        # Persist all non-admin, non-hardcoded hashes — store every non-admin user's current hash
-        overrides = {u: h for u, h in VALID_USERS.items() if u != 'tdrayson'}
-        payload = json.dumps(overrides).encode()
-        s3 = _boto3.client('s3', region_name=s3_bucket_region)
-        s3.put_object(Bucket=s3_bucketname, Key=_passwords_s3_key(), Body=payload, ContentType='application/json')
-        logger.info("Saved password overrides to S3")
-    except Exception as e:
-        logger.error("Failed to save password overrides to S3: %s", e)
-
-_load_passwords_from_s3()
+_load_users_from_aurora()
 
 # session_id -> {user, login_time} — tracks active sessions server-side
 _active_sessions: dict = {}
 _sessions_invalidated_at: float = 0.0  # epoch — sessions logged in before this are force-logged out
+
+def _track(request: Request, event_type: str, page: str, metadata: dict | None = None) -> None:
+    if _ENV != 'prod':
+        return
+    session_id = request.session.get('session_id')
+    username = request.session.get('user')
+    if not session_id or not username:
+        return
+    try:
+        with get_database_connection() as conn:
+            record_event(conn, session_id, username, _ENV, event_type, page, metadata)
+    except Exception as e:
+        logger.warning("Failed to record event %s for %s: %s", event_type, username, e)
+
 
 def get_current_user(request: Request):
     user = request.session.get('user')
@@ -137,7 +141,13 @@ def login(request: Request, username: str = Form(...), password: str = Form(...)
         request.session['pwd_hash'] = pwd_hash
         request.session['session_id'] = session_id
         request.session['login_time_epoch'] = login_epoch
-        _active_sessions[session_id] = {'user': username, 'login_time': datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+        _active_sessions[session_id] = {'user': username, 'login_time': _uk_now().strftime('%Y-%m-%d %H:%M:%S')}
+        if _ENV == 'prod':
+            try:
+                with get_database_connection() as conn:
+                    record_login(conn, session_id, username, _ENV, _uk_now())
+            except Exception as e:
+                logger.warning("Failed to record login for %s: %s", username, e)
         return RedirectResponse(url=BASE_URL + "/home", status_code=303)  # CHANGED: was /tasks
     return templates.TemplateResponse(
         "login.html",
@@ -151,7 +161,14 @@ def login(request: Request, username: str = Form(...), password: str = Form(...)
 
 @router.get("/logout")
 def logout(request: Request):
-    _active_sessions.pop(request.session.get('session_id'), None)
+    session_id = request.session.get('session_id')
+    _active_sessions.pop(session_id, None)
+    if session_id and _ENV == 'prod':
+        try:
+            with get_database_connection() as conn:
+                record_logout(conn, session_id, _uk_now())
+        except Exception as e:
+            logger.warning("Failed to record logout for session %s: %s", session_id, e)
     request.session.clear()
     return RedirectResponse(url=BASE_URL + "/login", status_code=303)
 
@@ -173,7 +190,19 @@ def users_page(request: Request, user: str = Depends(get_current_user)):
         return RedirectResponse(url=BASE_URL + "/home", status_code=303)
     sessions = sorted(_active_sessions.values(), key=lambda s: s['login_time'], reverse=True)
     non_admin_users = sorted(u for u in VALID_USERS if u != 'tdrayson')
-    return templates.TemplateResponse("users.html", {"request": request, "user": user, "BASE_URL": BASE_URL, "active_sessions": sessions, "non_admin_users": non_admin_users})
+    last_logins = {}
+    db_active_sessions = []
+    try:
+        with get_prod_pricer_connection() as conn:
+            last_logins = get_last_login_per_user(conn)
+            db_active_sessions = get_active_sessions_all_envs(conn)
+    except Exception as e:
+        logger.warning("Failed to load user activity data: %s", e)
+    return templates.TemplateResponse("users.html", {
+        "request": request, "user": user, "BASE_URL": BASE_URL,
+        "active_sessions": sessions, "non_admin_users": non_admin_users,
+        "last_logins": last_logins, "db_active_sessions": db_active_sessions,
+    })
 
 
 @router.post("/settings/force-relogin")
@@ -206,7 +235,8 @@ def delete_user(
     if target_user not in VALID_USERS:
         return _user_redirect(redirect_to, pwderr="User+not+found")
     del VALID_USERS[target_user]
-    _save_passwords_to_s3()
+    with get_prod_pricer_connection() as conn:
+        remove_user(conn, target_user)
     logger.info("User %s deleted by admin", target_user)
     return _user_redirect(redirect_to, userdeleted=target_user)
 
@@ -228,8 +258,10 @@ def add_user(
         return _user_redirect(redirect_to, pwderr="User+already+exists")
     if not new_password or len(new_password) < 6:
         return _user_redirect(redirect_to, pwderr="Password+must+be+at+least+6+characters")
-    VALID_USERS[username] = hashlib.sha256(new_password.encode()).hexdigest()
-    _save_passwords_to_s3()
+    pwd_hash = hashlib.sha256(new_password.encode()).hexdigest()
+    VALID_USERS[username] = pwd_hash
+    with get_prod_pricer_connection() as conn:
+        upsert_user(conn, username, pwd_hash)
     logger.info("User %s created by admin", username)
     return _user_redirect(redirect_to, useradded=username)
 
@@ -250,8 +282,10 @@ def set_password(
         raise HTTPException(status_code=404, detail="User not found")
     if not new_password or len(new_password) < 6:
         return _user_redirect(redirect_to, pwderr="Password+must+be+at+least+6+characters")
-    VALID_USERS[target_user] = hashlib.sha256(new_password.encode()).hexdigest()
-    _save_passwords_to_s3()
+    pwd_hash = hashlib.sha256(new_password.encode()).hexdigest()
+    VALID_USERS[target_user] = pwd_hash
+    with get_prod_pricer_connection() as conn:
+        upsert_user(conn, target_user, pwd_hash)
     logger.info("Password updated for %s by admin", target_user)
     return _user_redirect(redirect_to, pwdok=target_user)
 
@@ -267,6 +301,7 @@ def update_settings(
     cap_rate_limit: int = Form(...),
     calc_buying_reqs: str = Form(default=""),
     get_stock: str = Form(default=""),
+    evaluator_row_limit: int = Form(default=0),
     user: str = Depends(get_current_user),
 ):
     if user != 'tdrayson':
@@ -274,11 +309,11 @@ def update_settings(
     calc = calc_buying_reqs == "on"
     gs = get_stock == "on"
     with get_database_connection() as conn:
-        save_settings(conn, number_to_buy, max_days_sales, max_dts, min_gpu_m, cap_workers, cap_rate_limit, calc, gs, user='buyer')
+        save_settings(conn, number_to_buy, max_days_sales, max_dts, min_gpu_m, cap_workers, cap_rate_limit, calc, gs, evaluator_row_limit=evaluator_row_limit, user='buyer')
     logger.info(
         "Settings updated by %s: number_to_buy=%d, max_days_sales=%d, max_dts=%d, "
-        "min_gpu_m=%d, cap_workers=%d, cap_rate_limit=%d, calc_buying_reqs=%s, get_stock=%s",
-        user, number_to_buy, max_days_sales, max_dts, min_gpu_m, cap_workers, cap_rate_limit, calc, gs
+        "min_gpu_m=%d, cap_workers=%d, cap_rate_limit=%d, calc_buying_reqs=%s, get_stock=%s, evaluator_row_limit=%d",
+        user, number_to_buy, max_days_sales, max_dts, min_gpu_m, cap_workers, cap_rate_limit, calc, gs, evaluator_row_limit
     )
     return RedirectResponse(url=BASE_URL + "/settings-page?saved=1", status_code=303)
 
@@ -298,6 +333,7 @@ def home(request: Request, user: str = Depends(get_current_user)):
         except Exception as e:
             logger.warning(f"Home cache warm (SP) failed: {e}")
     threading.Thread(target=_warm_caches, daemon=True).start()
+    _track(request, 'page_view', '/home')
     return templates.TemplateResponse("home.html", {"request": request, "user": user, "BASE_URL": BASE_URL})
 
 
@@ -306,6 +342,7 @@ def home(request: Request, user: str = Depends(get_current_user)):
 def stock_list(request: Request, user: str = Depends(get_current_user)):
     if user != 'tdrayson':
         return RedirectResponse(url=BASE_URL + "/home", status_code=303)
+    _track(request, 'page_view', '/stock-list')
     return templates.TemplateResponse("stock_list.html", {"request": request, "user": user, "BASE_URL": BASE_URL})
 
 
@@ -315,6 +352,7 @@ def buying_requirements(request: Request, user: str = Depends(get_current_user))
         return RedirectResponse(url=BASE_URL + "/login", status_code=303)
     with get_database_connection() as conn:
         settings = get_settings(conn, user=user)
+    _track(request, 'page_view', '/buying-requirements')
     return templates.TemplateResponse("buying_requirements.html", {"request": request, "user": user, "BASE_URL": BASE_URL, "settings": settings})
 
 
@@ -879,19 +917,42 @@ def task_buying_requirements_download(
         raise HTTPException(status_code=400, detail="Task not complete")
 
     # ── 2. Download elaborated file from S3 ───────────────────────────────────
-    env = "prod" if os.getenv("AWS_REGION") == "eu-west-1" else "dev"
-    file_ext = task["filename"].split(".")[-1]
-    fd, tmp_path = tempfile.mkstemp(suffix="." + file_ext)
-    os.close(fd)
-    try:
-        s3_key = f"applications/pricing/uk-vehicle-list-evaluator/{env}/elaborated/{task_id}.{file_ext}"
-        download_file(tmp_path, s3_bucketname, s3_key)
-        elaborated_df = read_dataframe_file(tmp_path)
-    finally:
+    orig_ext = task["filename"].rsplit(".", 1)[-1].lower()
+    _exts_to_try = ["xlsx"] if orig_ext == "xlsx" else ["xlsx", orig_ext]
+
+    # Build candidate S3 keys: stored location first, then both env prefixes as fallback
+    # for tasks created before s3_location was recorded.
+    _stored = task.get("s3_location")
+    _candidate_keys = []
+    if _stored:
+        _candidate_keys.append((_stored, _stored.rsplit(".", 1)[-1]))
+    for _ext in _exts_to_try:
+        for _env in ("prod", "dev"):
+            _key = f"applications/pricing/uk-vehicle-list-evaluator/{_env}/elaborated/{task_id}.{_ext}"
+            if not _stored or _key != _stored:
+                _candidate_keys.append((_key, _ext))
+
+    logger.info("download: task=%s candidates=%s", task_id, [k for k, _ in _candidate_keys])
+    elaborated_df = None
+    _used_ext = "xlsx"
+    for _s3_key, _ext in _candidate_keys:
+        fd, tmp_path = tempfile.mkstemp(suffix="." + _ext)
+        os.close(fd)
         try:
-            os.remove(tmp_path)
-        except OSError:
-            pass
+            download_file(tmp_path, s3_bucketname, _s3_key)
+            elaborated_df = read_dataframe_file(tmp_path)
+            _used_ext = _ext
+            logger.info("download: success with s3_key=%s", _s3_key)
+            break
+        except Exception as e:
+            logger.info("download: failed s3_key=%s error=%s", _s3_key, e)
+        finally:
+            try:
+                os.remove(tmp_path)
+            except OSError:
+                pass
+    if elaborated_df is None:
+        raise HTTPException(status_code=404, detail="Elaborated file not found on S3")
 
     # ── 3. Build requirements lookup from SF data ────────────────────────────
     # SF row indices:
@@ -1146,12 +1207,13 @@ def task_buying_requirements_download(
         elaborated_df["Avg Vehicle Costs"] = None
 
     # ── 5. Write and return ───────────────────────────────────────────────────
-    fd2, tmp_out = tempfile.mkstemp(suffix="." + file_ext)
+    fd2, tmp_out = tempfile.mkstemp(suffix="." + _used_ext)
     os.close(fd2)
     try:
         write_dataframe_file(elaborated_df, tmp_out)
         base_name = task["filename"].rsplit(".", 1)[0]
-        out_filename = f"{base_name}_requirements.{file_ext}"
+        out_filename = f"{base_name}_requirements.{_used_ext}"
+        logger.info("download: serving out_filename=%s tmp_out=%s", out_filename, tmp_out)
         return FileResponse(
             tmp_out,
             filename=out_filename,
@@ -1178,7 +1240,7 @@ def tasks_json(page: int = 1, page_size: int = 25, user: str = Depends(get_curre
             total_tasks = cursor.fetchone()[0]
         with conn.cursor() as cursor:
             cursor.execute(
-                "SELECT t.task_id, t.created, t.status, t.filename, t.total_rows, t.execution_time, t.message, s.supplier_name "
+                "SELECT t.task_id, t.created, t.status, t.filename, t.total_rows, t.reductions, t.execution_time, t.message, s.supplier_name, t.uploaded_by, t.source "
                 "FROM tasks t LEFT JOIN suppliers s ON t.supplier_id = s.supplier_id "
                 "ORDER BY t.task_id DESC LIMIT %s OFFSET %s",
                 (page_size, offset)
@@ -1189,7 +1251,7 @@ def tasks_json(page: int = 1, page_size: int = 25, user: str = Depends(get_curre
             for row in cursor.fetchall():
                 t = dict(zip(cols, row))
                 t['created'] = t['created'].strftime("%Y-%m-%d %H:%M:%S") if t['created'] else None
-                t['execution_time'] = round(t['execution_time'], 1) if t['execution_time'] is not None else None
+                t['execution_time'] = round(t['execution_time']) if t['execution_time'] is not None else None
                 tasks.append(t)
                 if t['status'] in ('pending', 'created'):
                     has_pending = True
@@ -1200,13 +1262,255 @@ def tasks_json(page: int = 1, page_size: int = 25, user: str = Depends(get_curre
 # ── MOT Check (admin only) ────────────────────────────────────────────────────
 _mot_progress: dict = {}   # keyed by session_id: {pct, done, total, eta_s}
 _mot_lock = threading.Lock()
+_cap_lookup_progress: dict = {}
+_cap_lookup_lock = threading.Lock()
 _MOT_S3_PREFIX = "applications/pricing/uk-vehicle-list-evaluator/{env}/mot-check/"
+_CAP_LOOKUP_S3_PREFIX = "applications/pricing/uk-vehicle-list-evaluator/{env}/cap-lookup/"
+
+_CAP_LOOKUP_COLUMNS = [
+    "VRM", "CAP ID", "Manufacturer", "Model", "Derivative", "Registration Date", "Note",
+]
+
+
+@router.get("/cap-lookup", response_class=HTMLResponse)
+def cap_lookup_page(request: Request, user: str = Depends(get_current_user)):
+    if user != 'tdrayson':
+        return RedirectResponse(url=BASE_URL + "/home", status_code=303)
+    _track(request, 'page_view', '/cap-lookup')
+    return templates.TemplateResponse("cap_lookup.html", {"request": request, "user": user, "BASE_URL": BASE_URL})
+
+
+@router.get("/cap-lookup/progress")
+def cap_lookup_progress(request: Request, user: str = Depends(get_current_user)):
+    if not user:
+        raise HTTPException(status_code=403)
+    sid = request.session.get('session_id', '')
+    with _cap_lookup_lock:
+        p = _cap_lookup_progress.get(sid, {"pct": 0, "done": 0, "total": 0, "eta_s": None})
+    return p
+
+
+@router.post("/cap-lookup/process")
+def cap_lookup_process(request: Request, payload: dict, user: str = Depends(get_current_user)):
+    if user != 'tdrayson':
+        raise HTTPException(status_code=403)
+
+    from list_processor.cap_client import CAPClient
+    from list_processor.structs import VehicleRow
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    vrms = [v.strip().upper() for v in (payload.get("vrms") or []) if v.strip()]
+    if not vrms:
+        raise HTTPException(status_code=400, detail="No VRMs provided")
+
+    sid = request.session.get('session_id', '')
+    total = len(vrms)
+    _track(request, 'cap_lookup', '/cap-lookup', {'vrm_count': total})
+    with _cap_lookup_lock:
+        _cap_lookup_progress[sid] = {"pct": 0, "done": 0, "total": total, "eta_s": None}
+
+    cap = CAPClient()
+    results = [None] * total
+    start = time.time()
+    done_count = 0
+
+    def fetch(idx_vrm):
+        idx, vrm = idx_vrm
+        try:
+            vehicle = VehicleRow(vrm=vrm, mileage=0)
+            data = cap.vrm_valuation(vehicle)
+            return idx, vrm, data, None
+        except Exception as e:
+            return idx, vrm, None, str(e)
+
+    with ThreadPoolExecutor(max_workers=10) as pool:
+        futures = {pool.submit(fetch, (i, v)): i for i, v in enumerate(vrms)}
+        for fut in as_completed(futures):
+            idx, vrm, data, err = fut.result()
+            results[idx] = (vrm, data, err)
+            done_count += 1
+            elapsed = time.time() - start
+            avg = elapsed / done_count
+            eta_s = (total - done_count) * avg
+            with _cap_lookup_lock:
+                _cap_lookup_progress[sid] = {
+                    "pct": round(done_count / total * 100, 1),
+                    "done": done_count,
+                    "total": total,
+                    "eta_s": round(eta_s, 1),
+                }
+
+    with _cap_lookup_lock:
+        _cap_lookup_progress.pop(sid, None)
+
+    rows = []
+    for vrm, data, err in results:
+        if err or not data:
+            rows.append([vrm, "", "", "", "", "", err or "Error"])
+        else:
+            rows.append([
+                vrm,
+                data.get('capid') or "",
+                data.get('capman') or "",
+                data.get('capmod') or "",
+                data.get('capder') or "",
+                data.get('registered_date') or "",
+                data.get('note') or "",
+            ])
+
+    import openpyxl
+    from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+
+    env = 'prod' if os.getenv('AWS_REGION') == 'eu-west-1' else 'dev'
+    ts_str = _uk_now().strftime("%Y%m%d_%H%M%S")
+    filename = f"cap_lookup_{ts_str}.xlsx"
+    s3_key = _CAP_LOOKUP_S3_PREFIX.format(env=env) + filename
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "CAP Lookup"
+
+    header_fill = PatternFill("solid", fgColor="BDD7EE")
+    header_font = Font(bold=True)
+    error_fill  = PatternFill("solid", fgColor="FFC7CE")
+    thin = Side(style="thin", color="CCCCCC")
+    border = Border(left=thin, right=thin, top=thin, bottom=thin)
+    note_col = _CAP_LOOKUP_COLUMNS.index("Note") + 1
+
+    ws.append(_CAP_LOOKUP_COLUMNS)
+    for cell in ws[1]:
+        cell.fill = header_fill
+        cell.font = header_font
+        cell.alignment = Alignment(horizontal="center")
+        cell.border = border
+
+    for row in rows:
+        ws.append(row)
+        row_idx = ws.max_row
+        for col_idx, cell in enumerate(ws[row_idx], start=1):
+            cell.border = border
+            if col_idx == note_col and cell.value:
+                cell.fill = error_fill
+
+    ws.freeze_panes = "A2"
+    for col in ws.columns:
+        max_len = max((len(str(c.value or "")) for c in col), default=8)
+        ws.column_dimensions[col[0].column_letter].width = min(max(max_len + 2, 10), 40)
+
+    fd, tmp_path = tempfile.mkstemp(suffix=".xlsx")
+    os.close(fd)
+    try:
+        import boto3 as _boto3
+        wb.save(tmp_path)
+        with open(tmp_path, 'rb') as f:
+            _boto3.client('s3').upload_fileobj(
+                f, s3_bucketname, s3_key,
+                ExtraArgs={"Metadata": {"vrm_count": str(len(vrms)), "processed_by": user}},
+            )
+    finally:
+        try:
+            os.remove(tmp_path)
+        except OSError:
+            pass
+
+    return {"columns": _CAP_LOOKUP_COLUMNS, "rows": rows, "filename": filename}
+
+
+@router.get("/cap-lookup/history")
+def cap_lookup_history(user: str = Depends(get_current_user)):
+    if not user:
+        raise HTTPException(status_code=403)
+    import boto3
+    env = 'prod' if os.getenv('AWS_REGION') == 'eu-west-1' else 'dev'
+    prefix = _CAP_LOOKUP_S3_PREFIX.format(env=env)
+    try:
+        resp = boto3.client('s3').list_objects_v2(Bucket=s3_bucketname, Prefix=prefix)
+        objects = sorted(resp.get('Contents', []), key=lambda o: o['LastModified'], reverse=True)
+        s3 = boto3.client('s3')
+
+        def _meta(key):
+            try:
+                m = s3.head_object(Bucket=s3_bucketname, Key=key).get('Metadata', {})
+                return {"vrm_count": int(m['vrm_count']) if m.get('vrm_count') else None, "processed_by": m.get('processed_by')}
+            except Exception:
+                return {"vrm_count": None, "processed_by": None}
+
+        result = []
+        for o in objects:
+            if o['Key'] == prefix:
+                continue
+            meta = _meta(o['Key'])
+            result.append({
+                "filename":     o['Key'].replace(prefix, ''),
+                "ts":           o['LastModified'].astimezone(ZoneInfo('Europe/London')).strftime("%d/%m/%Y %H:%M"),
+                "size_kb":      round(o['Size'] / 1024, 1),
+                "vrm_count":    meta["vrm_count"],
+                "processed_by": meta["processed_by"],
+            })
+        return result
+    except Exception as e:
+        logger.warning("CAP lookup history S3 list failed: %s", e)
+        return []
+
+
+@router.get("/cap-lookup/download/{filename}")
+def cap_lookup_download(filename: str, user: str = Depends(get_current_user)):
+    if not user:
+        raise HTTPException(status_code=403)
+    env = 'prod' if os.getenv('AWS_REGION') == 'eu-west-1' else 'dev'
+    s3_key = _CAP_LOOKUP_S3_PREFIX.format(env=env) + filename
+    fd, tmp_path = tempfile.mkstemp(suffix=".xlsx")
+    os.close(fd)
+    try:
+        download_file(tmp_path, s3_bucketname, s3_key)
+        return FileResponse(
+            tmp_path, filename=filename,
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
+    except Exception:
+        try:
+            os.remove(tmp_path)
+        except OSError:
+            pass
+        raise HTTPException(status_code=404, detail="File not found in S3")
+
+
+@router.get("/cap-lookup/load/{filename}")
+def cap_lookup_load(filename: str, user: str = Depends(get_current_user)):
+    if not user:
+        raise HTTPException(status_code=403)
+    import openpyxl
+    env = 'prod' if os.getenv('AWS_REGION') == 'eu-west-1' else 'dev'
+    s3_key = _CAP_LOOKUP_S3_PREFIX.format(env=env) + filename
+    fd, tmp_path = tempfile.mkstemp(suffix=".xlsx")
+    os.close(fd)
+    try:
+        download_file(tmp_path, s3_bucketname, s3_key)
+        wb = openpyxl.load_workbook(tmp_path, read_only=True, data_only=True)
+        ws = wb.active
+        rows_iter = iter(ws.iter_rows(values_only=True))
+        header = next(rows_iter, None)
+        if not header:
+            return {"columns": [], "rows": []}
+        columns = [str(c) if c is not None else "" for c in header]
+        rows = [[str(c) if c is not None else "" for c in row] for row in rows_iter]
+        wb.close()
+        return {"columns": columns, "rows": rows}
+    except Exception:
+        raise HTTPException(status_code=404, detail="File not found in S3")
+    finally:
+        try:
+            os.remove(tmp_path)
+        except OSError:
+            pass
 
 
 @router.get("/mot-check", response_class=HTMLResponse)
 def mot_check_page(request: Request, user: str = Depends(get_current_user)):
     if not user:
         return RedirectResponse(url=BASE_URL + "/login", status_code=303)
+    _track(request, 'page_view', '/mot-check')
     return templates.TemplateResponse("mot_check.html", {"request": request, "user": user, "BASE_URL": BASE_URL})
 
 
@@ -1234,6 +1538,7 @@ def mot_check_process(request: Request, payload: dict, user: str = Depends(get_c
 
     sid = request.session.get('session_id', '')
     total = len(vrms)
+    _track(request, 'mot_check', '/mot-check', {'vrm_count': total})
     with _mot_lock:
         _mot_progress[sid] = {"pct": 0, "done": 0, "total": total, "eta_s": None}
 
@@ -1295,7 +1600,7 @@ def mot_check_process(request: Request, payload: dict, user: str = Depends(get_c
     import io
 
     env = 'prod' if os.getenv('AWS_REGION') == 'eu-west-1' else 'dev'
-    ts_str = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    ts_str = _uk_now().strftime("%Y%m%d_%H%M%S")
     filename = f"mot_check_{ts_str}.xlsx"
     s3_key = _MOT_S3_PREFIX.format(env=env) + filename
 
@@ -1627,9 +1932,11 @@ def read_tasks(request: Request, page: Optional[int] = 1, page_size: Optional[in
 
     with get_database_connection() as conn:
         settings = get_settings(conn, user=user)
+    _track(request, 'page_view', '/tasks')
     return templates.TemplateResponse("supplier_stock_evaluator.html", {
         "request": request,
         "user": user,
+        "is_admin": user == 'tdrayson',
         "tasks": tasks,
         "at_least_one_pending": at_least_one_pending,
         'suppliers': suppliers,
@@ -1668,13 +1975,19 @@ async def upload_task(request: Request, fileBase64: str = Form(...), supplier_id
         with open(temp_input_file_path, 'wb') as temp_file:
             temp_file.write(content)
 
+        _supplier_prefixes = {'1': 'Enterprise', '2': 'Motability', '3': '1link'}
+        _prefix = _supplier_prefixes.get(str(supplier_id), '')
+        if _prefix and not filename.startswith(f'{_prefix}_'):
+            filename = f'{_prefix}_{filename}'
+
         # Create a task in the db
         with get_database_connection() as conn:
             with conn.cursor() as cursor:
-                cursor.execute("INSERT INTO tasks (created, status, supplier_id, filename) VALUES (%s, %s, %s, %s) RETURNING task_id",
-                               (datetime.datetime.now(), 'created', supplier_id, filename))
+                cursor.execute("INSERT INTO tasks (created, status, supplier_id, filename, uploaded_by, source) VALUES (%s, %s, %s, %s, %s, %s) RETURNING task_id",
+                               (_uk_now(), 'created', supplier_id, filename, user, 'Upload'))
                 task_id = cursor.fetchone()[0]
-                conn.commit()
+            conn.commit()
+        _track(request, 'upload_task', '/tasks', {'supplier_id': supplier_id, 'filename': filename, 'task_id': task_id})
 
         env = 'prod' if os.getenv('AWS_REGION') == 'eu-west-1' else 'dev'
         s3_location = f'applications/pricing/uk-vehicle-list-evaluator/{env}/raw/{task_id}.{file_ext}'
@@ -1720,18 +2033,39 @@ def download_task_file(task_id: str):
     prefix = _supplier_prefixes.get(supplier_name.lower(), '')
     prefix = f'{prefix}_' if prefix and not task['filename'].startswith(f'{prefix}_') else ''
 
-    file_ext = task['filename'].split('.')[-1]
-    fd, tmp_path = tempfile.mkstemp(suffix='.' + file_ext)
-    os.close(fd)
-    env = 'prod' if os.getenv('AWS_REGION') == 'eu-west-1' else 'dev'
-    s3_location = f'applications/pricing/uk-vehicle-list-evaluator/{env}/elaborated/{task["task_id"]}.{file_ext}'
-    download_file(tmp_path, s3_bucketname, s3_location)
-    output_filename = prefix + task['filename'].split('.')[0] + '_output.' + file_ext
+    orig_ext = task['filename'].rsplit('.', 1)[-1].lower()
+    _exts_to_try = ['xlsx'] if orig_ext == 'xlsx' else ['xlsx', orig_ext]
+
+    _stored = task.get('s3_location')
+    _candidate_keys = []
+    if _stored:
+        _candidate_keys.append((_stored, _stored.rsplit('.', 1)[-1]))
+    for _ext in _exts_to_try:
+        for _env in ('prod', 'dev'):
+            _key = f'applications/pricing/uk-vehicle-list-evaluator/{_env}/elaborated/{task["task_id"]}.{_ext}'
+            if not _stored or _key != _stored:
+                _candidate_keys.append((_key, _ext))
+
+    tmp_path = None
+    _used_ext = 'xlsx'
+    for _s3_key, _ext in _candidate_keys:
+        fd, tmp_path = tempfile.mkstemp(suffix='.' + _ext)
+        os.close(fd)
+        try:
+            download_file(tmp_path, s3_bucketname, _s3_key)
+            _used_ext = _ext
+            break
+        except Exception:
+            tmp_path = None
+    if tmp_path is None:
+        raise HTTPException(status_code=404, detail="Elaborated file not found on S3")
+    base_name = task['filename'].rsplit('.', 1)[0]
+    output_filename = prefix + base_name + '_output.' + _used_ext
     return FileResponse(
-            tmp_path,
-            filename=output_filename,
-            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            headers={"Content-Disposition": f'attachment; filename="{output_filename}"'},
+        tmp_path,
+        filename=output_filename,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{output_filename}"'},
     )
 
 @router.get("/delete-task/{task_id}")
@@ -1777,8 +2111,8 @@ def enterprise_email_create_task(
                 raise HTTPException(status_code=500, detail="Enterprise supplier not found in DB")
             supplier_id = row[0]
             cursor.execute(
-                "INSERT INTO tasks (created, status, supplier_id, filename) VALUES (%s, %s, %s, %s) RETURNING task_id",
-                (datetime.datetime.now(), 'created', supplier_id, filename)
+                "INSERT INTO tasks (created, status, supplier_id, filename, uploaded_by, source) VALUES (%s, %s, %s, %s, %s, %s) RETURNING task_id",
+                (_uk_now(), 'created', supplier_id, filename, 'email', 'Upload')
             )
             task_id = cursor.fetchone()[0]
             conn.commit()
@@ -1819,7 +2153,6 @@ async def enterprise_email_start_task(
     logger.info(f"Enterprise email: started elaborate for task_id={task_id}")
     return {"status": "started", "task_id": task_id}
 
-_SUPPLIER_FETCH_ROW_LIMIT = 50
 _supplier_fetch_lock = asyncio.Lock()
 
 
@@ -1840,34 +2173,46 @@ async def fetch_supplier_stock(
     env = 'prod' if os.getenv('AWS_REGION') == 'eu-west-1' else 'dev'
     # Supplier credentials only exist in prod secret
     secrets = get_secret('prod/carsupermarket/car_pricer/api_access')
+    logger.info('fetch_supplier_stock: starting %s fetch for %s', supplier, user)
 
     if _supplier_fetch_lock.locked():
         raise HTTPException(status_code=409, detail="A stock retrieval is already in progress. Please wait for it to finish.")
 
-    now = datetime.datetime.now()
+    now = _uk_now()
     supplier_label = 'Motability' if supplier == 'motability' else '1link'
     filename = f"{supplier_label}_{now.strftime('%Y%m%d_%H%M%S')}.csv"
 
     # Insert task immediately so it appears in the list while fetching
-    with get_database_connection() as conn:
-        with conn.cursor() as cursor:
-            cursor.execute(
-                "SELECT supplier_id FROM suppliers WHERE LOWER(supplier_name) = %s LIMIT 1",
-                (supplier,)
-            )
-            row = cursor.fetchone()
-            if not row:
-                raise HTTPException(status_code=500, detail=f"Supplier '{supplier}' not found in DB")
-            supplier_id = row[0]
-            cursor.execute(
-                "INSERT INTO tasks (created, status, supplier_id, filename) VALUES (%s, %s, %s, %s) RETURNING task_id",
-                (now, 'created', supplier_id, filename)
-            )
-            task_id = cursor.fetchone()[0]
-            conn.commit()
+    try:
+        with get_database_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    "SELECT supplier_id FROM suppliers WHERE LOWER(supplier_name) = %s LIMIT 1",
+                    (supplier,)
+                )
+                row = cursor.fetchone()
+                if not row:
+                    raise HTTPException(status_code=500, detail=f"Supplier '{supplier}' not found in DB")
+                supplier_id = row[0]
+                cursor.execute(
+                    "INSERT INTO tasks (created, status, supplier_id, filename, uploaded_by, source) VALUES (%s, %s, %s, %s, %s, %s) RETURNING task_id",
+                    (now, 'created', supplier_id, filename, user, 'Get Stock')
+                )
+                task_id = cursor.fetchone()[0]
+                conn.commit()
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("fetch_supplier_stock DB error: %s", e)
+        raise HTTPException(status_code=503, detail=f"Database connection failed — check VPN/network connectivity. Detail: {e}")
 
     _FETCH_MAX_ATTEMPTS = 3
     _FETCH_RETRY_DELAY = 5  # seconds between attempts
+
+    with get_database_connection() as conn:
+        settings = get_settings(conn, user=user)
+    row_limit_setting = settings.get('evaluator_row_limit', 0)
+    fetch_row_limit = row_limit_setting if row_limit_setting > 0 else None
 
     async with _supplier_fetch_lock:
         last_exc = None
@@ -1879,7 +2224,7 @@ async def fetch_supplier_stock(
                         username=secrets['MOTABILITY_ID'],
                         password=secrets['MOTABILITY_PASSWORD'],
                     )
-                    input_df = client.fetch_dataframe(row_limit=_SUPPLIER_FETCH_ROW_LIMIT)
+                    input_df = client.fetch_dataframe(row_limit=fetch_row_limit)
                     if not include_preview:
                         type_col = input_df.columns[1] if len(input_df.columns) > 1 else None
                         if type_col is not None:
@@ -1889,7 +2234,7 @@ async def fetch_supplier_stock(
                         username=secrets['1LINK_ID'],
                         password=secrets['1LINK_PASSWORD'],
                     )
-                    input_df = client.fetch_dataframe(row_limit=_SUPPLIER_FETCH_ROW_LIMIT)
+                    input_df = client.fetch_dataframe(row_limit=fetch_row_limit)
                 break  # success
             except Exception as e:
                 last_exc = e
@@ -1929,8 +2274,6 @@ async def fetch_supplier_stock(
         except OSError:
             pass
 
-    with get_database_connection() as conn:
-        settings = get_settings(conn)
     aws_context = request.scope["aws.context"] if "aws.context" in request.scope else None
     if aws_context is None:
         asyncio.create_task(elaborate_task({'task_id': task_id, 'cap_workers': settings['cap_workers'], 'cap_rate_limit': settings['cap_rate_limit']}))
@@ -1942,7 +2285,7 @@ async def fetch_supplier_stock(
             data={'task_id': task_id, 'cap_workers': settings['cap_workers'], 'cap_rate_limit': settings['cap_rate_limit']},
         )
 
-    logger.info(f"fetch_supplier_stock: created task_id={task_id} for {supplier} ({len(input_df)} rows)")
+    logger.info(f"fetch_supplier_stock: created task_id={task_id} for {supplier} ({len(input_df)} rows), row_limit={fetch_row_limit}")
     return RedirectResponse(url=BASE_URL + "/tasks", status_code=303)
 
 
@@ -1969,7 +2312,7 @@ async def elaborate_task(data: dict):
         execution_time = None
 
         fd_in,  tmp_in  = tempfile.mkstemp(suffix='.' + file_ext)
-        fd_out, tmp_out = tempfile.mkstemp(suffix='.' + file_ext)
+        fd_out, tmp_out = tempfile.mkstemp(suffix='.xlsx')
         os.close(fd_in)
         os.close(fd_out)
 
@@ -1989,21 +2332,35 @@ async def elaborate_task(data: dict):
             cap_client = CAPClient()
             columns_mapper = get_columns_mapper(task['supplier_name'])
 
-            def process_df(args):
-                processor_obj, input_df, columns_mapper, *kwargs = args
-                return processor_obj.process_file(input_df, columns_mapper, *kwargs)
-                processor_obj, input_df, columns_mapper, *kwargs = args
-                return processor_obj.process_file(input_df, columns_mapper, *kwargs)
+            snapshot_suppliers = {'Enterprise', 'Motability', '1link'}
+            is_snapshot = task['supplier_name'] in snapshot_suppliers
 
-            with ThreadPoolExecutor(max_workers=2) as executor:
-                futures = [executor.submit(process_df, (autotrader, input_df, columns_mapper)),
-                           executor.submit(process_df, (cap_client, input_df, columns_mapper, cap_workers, cap_rate_limit))]
-                results = [future.result() for future in futures]
+            logger.info('Starting elaboration for task %s: %s, %d rows', data['task_id'], task['supplier_name'], total_rows)
 
-            processed_df = pd.concat([input_df, *results], axis=1)
+            with get_database_connection() as conn:
+                with conn.cursor() as cursor:
+                    cursor.execute(
+                        "SELECT created FROM tasks WHERE supplier_id = %s AND status = 'success' AND task_id != %s ORDER BY task_id DESC LIMIT 1",
+                        (task['supplier_id'], data['task_id'])
+                    )
+                    prev_row = cursor.fetchone()
+            prev_task_created = prev_row[0] if prev_row else None
+
+            processed_df, reductions = process_file_with_cache(
+                input_df=input_df,
+                columns_mapper=columns_mapper,
+                supplier_id=task['supplier_id'],
+                supplier_name=task['supplier_name'],
+                is_snapshot=is_snapshot,
+                at_client=autotrader,
+                cap_client=cap_client,
+                cap_workers=cap_workers,
+                cap_rate_limit=cap_rate_limit,
+                prev_task_created=prev_task_created,
+            )
             write_dataframe_file(processed_df, tmp_out)
 
-            s3_location = f'applications/pricing/uk-vehicle-list-evaluator/{env}/elaborated/{data["task_id"]}.{file_ext}'
+            s3_location = f'applications/pricing/uk-vehicle-list-evaluator/{env}/elaborated/{data["task_id"]}.xlsx'
             upload_file(tmp_out, s3_bucketname, s3_location)
 
             execution_time = time.time() - t
@@ -2016,7 +2373,10 @@ async def elaborate_task(data: dict):
 
         with get_database_connection() as conn:
             with conn.cursor() as cursor:
-                cursor.execute("UPDATE tasks SET status = %s, message = %s, total_rows = %s, execution_time = %s WHERE task_id = %s", (status, message, total_rows, execution_time, data['task_id'],))
+                cursor.execute(
+                    "UPDATE tasks SET status = %s, message = %s, total_rows = %s, execution_time = %s, s3_location = %s, reductions = %s WHERE task_id = %s",
+                    (status, message, total_rows, execution_time, s3_location if status == 'success' else None, reductions if status == 'success' else None, data['task_id']),
+                )
                 conn.commit()
 
     except Exception as e:

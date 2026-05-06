@@ -13,7 +13,7 @@ from mangum import Mangum
 import json
 import hashlib
 
-from exceptions import unhandled_exception_handler
+from exceptions import unhandled_exception_handler, http_exception_handler
 from utils.secrets_manager_client import get_secret
 from utils.lambda_http import LambdaRequestsManager
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -38,6 +38,8 @@ logging.getLogger('urllib3').setLevel(logging.CRITICAL)
 logging.getLogger('asyncio').setLevel(logging.CRITICAL)
 logging.getLogger('multipart').setLevel(logging.CRITICAL)
 logging.getLogger('snowflake').setLevel(logging.WARNING)
+logging.getLogger('list_processor.autotrader_client').setLevel(logging.WARNING)
+logging.getLogger('list_processor.cap_client').setLevel(logging.WARNING)
 
 
 class BasePathMiddleware(BaseHTTPMiddleware):
@@ -144,6 +146,7 @@ def test_execution(data: dict):
 
 
 app.include_router(router.router)
+app.add_exception_handler(HTTPException, http_exception_handler)
 app.add_exception_handler(Exception, unhandled_exception_handler)
 app.mount("/static", StaticFiles(directory=os.path.join(os.path.dirname(__file__), "static")), name="static")
 
