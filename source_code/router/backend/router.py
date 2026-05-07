@@ -614,7 +614,7 @@ _CB_S3_TTL_SECONDS  = 30 * 60
 _S3_BUCKET         = "aa-raw-sources-uk"
 _S3_ENV            = 'prod' if os.getenv('AWS_REGION') == 'eu-west-1' else 'dev'
 _SF_S3_KEY         = f"applications/pricing/uk-vehicle-list-evaluator/{_S3_ENV}/cache/buying_requirements_v20.json"
-_DBS_S3_KEY        = f"applications/pricing/uk-vehicle-list-evaluator/{_S3_ENV}/cache/dbs_purchases_v16.json"
+_DBS_S3_KEY        = f"applications/pricing/uk-vehicle-list-evaluator/{_S3_ENV}/cache/dbs_purchases_v17.json"
 _CB_S3_KEY         = f"applications/pricing/uk-vehicle-list-evaluator/{_S3_ENV}/cache/cb_purchases_v13.json"
 _VRM_CAP_S3_KEY    = f"applications/pricing/uk-vehicle-list-evaluator/shared/vrm_cap_id_cache.json"
 
@@ -705,11 +705,15 @@ def _load_dbs_cache_from_s3() -> tuple[dict, list] | None:
     payload = _s3_load(_DBS_S3_KEY)
     if not payload:
         return None
-    return payload.get("purchases", {}), payload.get("vehicles", [])
+    purchases = payload.get("purchases", {})
+    vehicles  = payload.get("vehicles", [])
+    with _cache_lock:
+        _dbs_cache["total_vrms"] = payload.get("total_vrms", len(vehicles))
+    return purchases, vehicles
 
 
-def _save_dbs_cache_to_s3(purchases: dict, vehicles: list, ttl: int = _DBS_TTL_SECONDS) -> None:
-    _s3_save(_DBS_S3_KEY, {"purchases": {f"{k[0]}|{k[1]}": v for k, v in purchases.items()}, "vehicles": vehicles, "fetched_at": time.time()}, ttl)
+def _save_dbs_cache_to_s3(purchases: dict, vehicles: list, ttl: int = _DBS_TTL_SECONDS, total_vrms: int = None) -> None:
+    _s3_save(_DBS_S3_KEY, {"purchases": {f"{k[0]}|{k[1]}": v for k, v in purchases.items()}, "vehicles": vehicles, "total_vrms": total_vrms, "fetched_at": time.time()}, ttl)
 
 
 def _load_dbs_fetched_at_from_s3() -> float | None:
@@ -1013,6 +1017,8 @@ def _get_dbs_purchases(force: bool = False) -> dict:
 
     raw_rows = _enrich_cap_ids(raw_rows)
 
+    total_dbs_vrms = len(raw_rows)  # badge count — before CB dedup
+
     # Exclude DBS VRMs that are also in CB (CB wins when duplicated)
     cb_cached = _get_cb_purchases_cached()
     cb_vrms = {v['vrm'] for v in cb_cached[1]} if cb_cached else set()
@@ -1051,15 +1057,15 @@ def _get_dbs_purchases(force: bool = False) -> dict:
         vehicles.append({'vrm': r['vrm'], 'cap_id': r['cap_id'], 'band': band, 'make': r.get('make', ''), 'model': r.get('model', ''), 'deriv': r.get('deriv', ''), 'supplier': r.get('supplier', ''), 'mileage': r.get('mileage'), 'siv': r.get('siv'), 'rrp': _to_float(r.get('rrp')), 'rrp0': _to_float(r.get('rrp0')), 'dor': r.get('dor'), 'cap_live': r.get('cap_live'), 'at_ptm': r.get('at_ptm'), 'at_rating': r.get('at_rating'), 'source': 'dbs'})
 
     data_rows = len(values) - (header_row_idx + 1) if header_row_idx is not None else 0
-    logger.info(f"Daily Buyers Sheet: {sum(purchases.values())} purchases in {len(purchases)} cap/band keys (from {data_rows} rows, {len(raw_rows)} unique VRMs after CB dedup, skipped: {skipped_no_cap} no CAP ID, {skipped_no_rrp} no RRP, {skipped_no_sf} not in SF)")
+    logger.info(f"Daily Buyers Sheet: {sum(purchases.values())} purchases in {len(purchases)} cap/band keys (from {data_rows} rows, {total_dbs_vrms} unique VRMs, {len(cb_vrms)} deduped to CB, skipped: {skipped_no_cap} no CAP ID, {skipped_no_rrp} no RRP, {skipped_no_sf} not in SF)")
     fetched_at = time.time()
     with _cache_lock:
         _dbs_cache["purchases"]  = purchases
         _dbs_cache["vehicles"]   = vehicles
-        _dbs_cache["total_vrms"] = len(vehicles)
+        _dbs_cache["total_vrms"] = total_dbs_vrms
         _dbs_cache["expires"]    = time.monotonic() + _DBS_TTL_SECONDS
         _dbs_cache["fetched_at"] = fetched_at
-    _save_dbs_cache_to_s3(purchases, vehicles, _DBS_S3_TTL_SECONDS)
+    _save_dbs_cache_to_s3(purchases, vehicles, _DBS_S3_TTL_SECONDS, total_dbs_vrms)
     return purchases
 
 
