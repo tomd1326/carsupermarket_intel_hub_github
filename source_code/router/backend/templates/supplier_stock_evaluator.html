@@ -345,38 +345,35 @@
 
                 _bindDownloadBtns();
                 if (!data.has_pending) {
-                    clearInterval(_refreshInterval);
-                    _refreshInterval = null;
+                    stopCountdown();
                     const countdown = document.getElementById('countdown');
                     if (countdown) countdown.closest('.form-check')?.remove();
                 }
             } catch (e) {}
         }
 
-        let _refreshInterval = null;
         let _countdownTimer = null;
 
         function startCountdown() {
+            if (_countdownTimer) return;
             var countdownElement = document.getElementById('countdown');
             var timeLeft = 5;
 
-            _refreshInterval = setInterval(async function() {
-                await refreshTaskList();
-                if (document.getElementById('auto-refresh-checkbox')?.checked) {
-                    timeLeft = 5;
-                    if (countdownElement) countdownElement.textContent = timeLeft;
-                }
-            }, 5000);
-
-            var decrease = function() {
+            _countdownTimer = setInterval(async function() {
                 var autoRefreshCheckbox = document.getElementById('auto-refresh-checkbox');
                 if (!autoRefreshCheckbox || !autoRefreshCheckbox.checked) return;
-                if (countdownElement) countdownElement.textContent = Math.max(0, timeLeft);
                 timeLeft -= 1;
-            };
+                if (countdownElement) countdownElement.textContent = Math.max(0, timeLeft);
+                if (timeLeft <= 0) {
+                    timeLeft = 5;
+                    if (countdownElement) countdownElement.textContent = timeLeft;
+                    await refreshTaskList();
+                }
+            }, 1000);
+        }
 
-            decrease();
-            _countdownTimer = setInterval(decrease, 1000);
+        function stopCountdown() {
+            if (_countdownTimer) { clearInterval(_countdownTimer); _countdownTimer = null; }
         }
 
         document.addEventListener("DOMContentLoaded", function() {
@@ -469,61 +466,31 @@
                 formData.append('include_preview', 'on');
             }
 
-            const MAX_ATTEMPTS = 3;
-            let lastError = null;
+            try {
+                const resp = await fetch('{{ BASE_URL }}/api/fetch-supplier-stock', {
+                    method: 'POST',
+                    body: formData,
+                    redirect: 'manual',
+                });
 
-            for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
-                if (attempt > 1) {
-                    setStatus(`Timed out, retrying (${attempt - 1}/${MAX_ATTEMPTS - 1})...`);
-                    await new Promise(r => setTimeout(r, 2000));
-                }
-                try {
-                    const resp = await fetch('{{ BASE_URL }}/api/fetch-supplier-stock', {
-                        method: 'POST',
-                        body: formData,
-                        redirect: 'manual',
-                    });
-
-                    if (resp.ok || resp.type === 'opaqueredirect') {
-                        clearInterval(stepInterval);
-                        setStatus('Processing - check task list below');
-                        _anyFetchInFlight = false;
-                        btn.disabled = false;
-                        select.disabled = false;
-                        await refreshTaskList();
-                        return;
-                    }
-
-                    if (resp.status === 504 && attempt < MAX_ATTEMPTS) {
-                        lastError = '504 Gateway Timeout';
-                        continue;
-                    }
-
-                    clearInterval(stepInterval);
-                    const text = await resp.text();
-                    const match = text.match(/"detail"\s*:\s*"([^"]+)"/);
-                    setStatus('Error: ' + (match ? match[1] : resp.status), true);
+                clearInterval(stepInterval);
+                if (resp.ok || resp.type === 'opaqueredirect') {
+                    setStatus('Processing - check task list below');
+                    _anyFetchInFlight = false;
                     btn.disabled = false;
                     select.disabled = false;
-                    _anyFetchInFlight = false;
-                    return;
-                } catch (e) {
-                    if (attempt < MAX_ATTEMPTS) {
-                        lastError = e.message;
-                        continue;
-                    }
-                    clearInterval(stepInterval);
-                    setStatus('Error: ' + e.message, true);
-                    btn.disabled = false;
-                    select.disabled = false;
-                    _anyFetchInFlight = false;
+                    await refreshTaskList();
+                    startCountdown();
                     return;
                 }
+
+                const text = await resp.text();
+                const match = text.match(/"detail"\s*:\s*"([^"]+)"/);
+                setStatus('Error: ' + (match ? match[1] : resp.status), true);
+            } catch (e) {
+                clearInterval(stepInterval);
+                setStatus('Error: ' + e.message, true);
             }
-
-            // All retries exhausted
-            clearInterval(stepInterval);
-            setStatus('Error: ' + lastError + ' (after ' + (MAX_ATTEMPTS - 1) + ' retries)', true);
             btn.disabled = false;
             select.disabled = false;
             _anyFetchInFlight = false;

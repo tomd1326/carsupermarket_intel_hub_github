@@ -29,7 +29,7 @@ from botocore.config import Config
 
 from utils.lambda_http import LambdaRequestsManager
 from utils.s3_tools import upload_file, download_file
-from utils.db_utils import (get_database_connection, get_prod_pricer_connection, get_settings, save_settings,
+from utils.db_utils import (get_database_connection, get_settings, save_settings,
                             record_login, record_logout, record_event,
                             get_last_login_per_user, get_active_sessions_all_envs,
                             load_all_users, upsert_user, remove_user)
@@ -86,8 +86,6 @@ _active_sessions: dict = {}
 _sessions_invalidated_at: float = 0.0  # epoch — sessions logged in before this are force-logged out
 
 def _track(request: Request, event_type: str, page: str, metadata: dict | None = None) -> None:
-    if _ENV != 'prod':
-        return
     session_id = request.session.get('session_id')
     username = request.session.get('user')
     if not session_id or not username:
@@ -142,12 +140,11 @@ def login(request: Request, username: str = Form(...), password: str = Form(...)
         request.session['session_id'] = session_id
         request.session['login_time_epoch'] = login_epoch
         _active_sessions[session_id] = {'user': username, 'login_time': _uk_now().strftime('%Y-%m-%d %H:%M:%S')}
-        if _ENV == 'prod':
-            try:
-                with get_database_connection() as conn:
-                    record_login(conn, session_id, username, _ENV, _uk_now())
-            except Exception as e:
-                logger.warning("Failed to record login for %s: %s", username, e)
+        try:
+            with get_database_connection() as conn:
+                record_login(conn, session_id, username, _ENV, _uk_now())
+        except Exception as e:
+            logger.warning("Failed to record login for %s: %s", username, e)
         return RedirectResponse(url=BASE_URL + "/home", status_code=303)  # CHANGED: was /tasks
     return templates.TemplateResponse(
         "login.html",
@@ -163,7 +160,7 @@ def login(request: Request, username: str = Form(...), password: str = Form(...)
 def logout(request: Request):
     session_id = request.session.get('session_id')
     _active_sessions.pop(session_id, None)
-    if session_id and _ENV == 'prod':
+    if session_id:
         try:
             with get_database_connection() as conn:
                 record_logout(conn, session_id, _uk_now())
@@ -193,7 +190,7 @@ def users_page(request: Request, user: str = Depends(get_current_user)):
     last_logins = {}
     db_active_sessions = []
     try:
-        with get_prod_pricer_connection() as conn:
+        with get_database_connection() as conn:
             last_logins = get_last_login_per_user(conn)
             db_active_sessions = get_active_sessions_all_envs(conn)
     except Exception as e:
@@ -1716,7 +1713,7 @@ def tasks_json(page: int = 1, page_size: int = 25, user: str = Depends(get_curre
                 t['created'] = t['created'].strftime("%Y-%m-%d %H:%M:%S") if t['created'] else None
                 t['execution_time'] = round(t['execution_time']) if t['execution_time'] is not None else None
                 tasks.append(t)
-                if t['status'] in ('pending', 'created'):
+                if t['status'] == 'pending':
                     has_pending = True
     total_pages = (total_tasks + page_size - 1) // page_size
     return {"tasks": tasks, "has_pending": has_pending, "total_pages": total_pages, "current_page": page}
@@ -2388,7 +2385,7 @@ def read_tasks(request: Request, page: Optional[int] = 1, page_size: Optional[in
             for row in cursor.fetchall():
                 task = dict(zip(cols, row))
                 tasks.append(task)
-                if task['status'] in ('pending', 'created'):
+                if task['status'] == 'pending':
                     at_least_one_pending = True
 
     total_pages = (total_tasks + page_size - 1) // page_size  # Calculate the total number of pages
@@ -2447,7 +2444,7 @@ async def upload_task(request: Request, fileBase64: str = Form(...), supplier_id
         with get_database_connection() as conn:
             with conn.cursor() as cursor:
                 cursor.execute("INSERT INTO tasks (created, status, supplier_id, filename, uploaded_by, source) VALUES (%s, %s, %s, %s, %s, %s) RETURNING task_id",
-                               (_uk_now(), 'created', supplier_id, filename, user, 'Upload'))
+                               (_uk_now(), 'pending', supplier_id, filename, user, 'Upload'))
                 task_id = cursor.fetchone()[0]
             conn.commit()
         _track(request, 'upload_task', '/tasks', {'supplier_id': supplier_id, 'filename': filename, 'task_id': task_id})
@@ -2535,7 +2532,7 @@ def download_task_file(task_id: str):
 def delete_task(task_id: str, user: str = Depends(get_current_user)):
     with get_database_connection() as conn:
         with conn.cursor() as cursor:
-            cursor.execute("DELETE FROM tasks WHERE task_id = %s AND status IN ('pending', 'created')", (task_id,))
+            cursor.execute("DELETE FROM tasks WHERE task_id = %s AND status = 'pending'", (task_id,))
         conn.commit()
     return {"ok": True}
 
@@ -2575,7 +2572,7 @@ def enterprise_email_create_task(
             supplier_id = row[0]
             cursor.execute(
                 "INSERT INTO tasks (created, status, supplier_id, filename, uploaded_by, source) VALUES (%s, %s, %s, %s, %s, %s) RETURNING task_id",
-                (_uk_now(), 'created', supplier_id, filename, 'email', 'Upload')
+                (_uk_now(), 'pending', supplier_id, filename, 'email', 'Upload')
             )
             task_id = cursor.fetchone()[0]
             conn.commit()
@@ -2634,8 +2631,7 @@ async def fetch_supplier_stock(
         raise HTTPException(status_code=400, detail="supplier must be 'motability' or '1link'")
 
     env = 'prod' if os.getenv('AWS_REGION') == 'eu-west-1' else 'dev'
-    # Supplier credentials only exist in prod secret
-    secrets = get_secret('prod/carsupermarket/car_pricer/api_access')
+    secrets = get_secret(f'{env}/carsupermarket/car_pricer/api_access')
     logger.info('fetch_supplier_stock: starting %s fetch for %s', supplier, user)
 
     if _supplier_fetch_lock.locked():
@@ -2659,7 +2655,7 @@ async def fetch_supplier_stock(
                 supplier_id = row[0]
                 cursor.execute(
                     "INSERT INTO tasks (created, status, supplier_id, filename, uploaded_by, source) VALUES (%s, %s, %s, %s, %s, %s) RETURNING task_id",
-                    (now, 'created', supplier_id, filename, user, 'Get Stock')
+                    (now, 'pending', supplier_id, filename, user, 'Get Stock')
                 )
                 task_id = cursor.fetchone()[0]
                 conn.commit()
@@ -2717,14 +2713,6 @@ async def fetch_supplier_stock(
             raise HTTPException(status_code=500, detail=str(last_exc))
 
     # Write DataFrame to a temp CSV and upload to S3 as the raw file
-    with get_database_connection() as conn:
-        with conn.cursor() as cursor:
-            cursor.execute(
-                "UPDATE tasks SET status = 'created' WHERE task_id = %s",
-                (task_id,)
-            )
-        conn.commit()
-
     fd, tmp_path = tempfile.mkstemp(suffix='.csv')
     os.close(fd)
     try:
@@ -2765,8 +2753,6 @@ async def elaborate_task(data: dict):
                 task = dict(zip(cols, row)) if row else None
                 if not task:
                     return {"message": "Task not found"}
-                cursor.execute("UPDATE tasks SET status = 'pending' WHERE task_id = %s", (data['task_id'],))
-                conn.commit()
 
         env = 'prod' if os.getenv('AWS_REGION') == 'eu-west-1' else 'dev'
         file_ext = task['filename'].split('.')[-1]
