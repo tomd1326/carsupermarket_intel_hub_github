@@ -72,7 +72,7 @@ VALID_USERS = {
 
 def _load_users_from_aurora():
     try:
-        with get_prod_pricer_connection() as conn:
+        with get_database_connection() as conn:
             users = load_all_users(conn)
         VALID_USERS.update(users)
         logger.info("Loaded %d users from Aurora", len(users))
@@ -235,7 +235,7 @@ def delete_user(
     if target_user not in VALID_USERS:
         return _user_redirect(redirect_to, pwderr="User+not+found")
     del VALID_USERS[target_user]
-    with get_prod_pricer_connection() as conn:
+    with get_database_connection() as conn:
         remove_user(conn, target_user)
     logger.info("User %s deleted by admin", target_user)
     return _user_redirect(redirect_to, userdeleted=target_user)
@@ -260,7 +260,7 @@ def add_user(
         return _user_redirect(redirect_to, pwderr="Password+must+be+at+least+6+characters")
     pwd_hash = hashlib.sha256(new_password.encode()).hexdigest()
     VALID_USERS[username] = pwd_hash
-    with get_prod_pricer_connection() as conn:
+    with get_database_connection() as conn:
         upsert_user(conn, username, pwd_hash)
     logger.info("User %s created by admin", username)
     return _user_redirect(redirect_to, useradded=username)
@@ -284,7 +284,7 @@ def set_password(
         return _user_redirect(redirect_to, pwderr="Password+must+be+at+least+6+characters")
     pwd_hash = hashlib.sha256(new_password.encode()).hexdigest()
     VALID_USERS[target_user] = pwd_hash
-    with get_prod_pricer_connection() as conn:
+    with get_database_connection() as conn:
         upsert_user(conn, target_user, pwd_hash)
     logger.info("Password updated for %s by admin", target_user)
     return _user_redirect(redirect_to, pwdok=target_user)
