@@ -30,32 +30,34 @@
             </a>
         </div>
 
-        <div class="d-flex align-items-center gap-3 mb-2 flex-wrap">
+        <div class="d-flex align-items-center gap-3 mb-1 flex-wrap">
             <button id="fetchBtn" class="btn btn-primary btn-sm" onclick="fetchData()">
                 <i class="fas fa-sync-alt me-1"></i>Refresh Data
             </button>
             <span id="sf-status" class="text-muted small"><i class="fas fa-snowflake me-1 text-info"></i>Snowflake</span>
             <span id="apex-updated-at" class="text-muted small" style="display:none">Apex data updated at: <strong id="apex-updated-at-val"></strong></span>
-            <span id="sp-status" class="text-muted small"><i class="fas fa-file-excel me-1 text-success"></i>SharePoint</span>
+        </div>
+        <div class="d-flex align-items-center gap-3 mb-2 flex-wrap">
+            <span id="dbs-status" class="text-muted small"><i class="fas fa-file-excel me-1 text-success"></i>SharePoint</span>
             <a href="https://carsmkt.sharepoint.com/:x:/r/sites/BuyingDrive/Documents/Department/Buying/B2B/NEW%20DAILY%20BUYERS%20SHEET.xlsx?web=1"
                target="_blank"
                class="btn btn-outline-success btn-sm">
                 <i class="fas fa-file-excel me-1"></i>Open Buyers Sheet
             </a>
-            <span id="sp-total-badge" class="text-muted small"></span>
+            <span id="dbs-total-badge" class="text-muted small"></span>
+            <span id="cb-status" class="text-muted small"><i class="fas fa-file-excel me-1 text-success"></i>Cars Bought</span>
+            <a href="https://carsmkt.sharepoint.com/:x:/r/sites/CarSupermarketOperationalData/Shared%20Documents/Cars%20Bought/CARS%20BOUGHT%202026.xlsx?web=1"
+               target="_blank"
+               class="btn btn-outline-success btn-sm">
+                <i class="fas fa-file-excel me-1"></i>Open Cars Bought
+            </a>
+            <span id="cb-total-badge" class="text-muted small"></span>
         </div>
         <div id="fetch-loading" class="text-muted small mb-2" style="display:block">
             <span class="spinner-border spinner-border-sm me-2"></span>Loading&hellip;
         </div>
 
         <div id="data-section" style="display:none">
-            <div id="sf-summary" class="text-muted small mb-2">
-                Total Stock: <strong id="sf-total-stock">—</strong>
-                &nbsp;|&nbsp;
-                <span id="sf-summary-sales-label">90d Sales:</span> <strong id="sf-total-sales">—</strong>
-                &nbsp;|&nbsp;
-                <span id="idealTotalLabel"></span>&nbsp;&nbsp;|&nbsp;&nbsp;Sum of Positives: <strong id="required-sum-inline">—</strong>
-            </div>
             <div class="d-flex align-items-center gap-2 mb-2 flex-wrap">
                 <label for="numberToBuy" class="form-label mb-0 fw-semibold small">Number to Buy</label>
                 <input type="number" id="numberToBuy" class="form-control form-control-sm" style="width:90px"
@@ -77,6 +79,13 @@
                     <i class="fas fa-file-excel me-1"></i>Export CAP IDs
                 </button>
                 <span id="filtered-sales-label" class="small text-muted"></span>
+                <span class="text-muted small" style="margin-left:6px" id="sf-summary">
+                    Total Stock: <strong id="sf-total-stock">—</strong>
+                    &nbsp;|&nbsp;
+                    <span id="sf-summary-sales-label">90d Sales:</span> <strong id="sf-total-sales">—</strong>
+                    &nbsp;|&nbsp;
+                    <span id="idealTotalLabel"></span>&nbsp;&nbsp;|&nbsp;&nbsp;Sum of Positives: <strong id="required-sum-inline">—</strong>
+                </span>
             </div>
 
             <div id="filter-bar" class="d-flex flex-wrap mb-2 align-items-center" style="gap:0;row-gap:6px">
@@ -137,6 +146,13 @@
             <div class="filter-divider"></div>
             <span id="filtered-cap-count" class="small text-muted"></span>
             <button class="btn btn-sm btn-primary" onclick="resetTableFilters()">Clear All Filters</button>
+            <div class="d-flex align-items-center gap-1" style="margin-left:8px">
+                <span class="fw-semibold small">VRM</span>
+                <input type="text" id="vrmSearch" class="form-control form-control-sm" style="width:100px;text-transform:uppercase" placeholder="VRM" oninput="this.value=this.value.toUpperCase()" onkeydown="if(event.key==='Enter')searchVRM()">
+                <button class="btn btn-sm btn-outline-secondary" onclick="searchVRM()">Find</button>
+                <button class="btn btn-sm btn-outline-secondary" id="vrmClearBtn" style="display:none" onclick="clearVrmSearch()">Clear</button>
+                <span id="vrm-search-result" class="small text-muted"></span>
+            </div>
         </div>
         </div><!-- /#data-section -->
         </div><!-- /.controls-area -->
@@ -217,7 +233,8 @@
                         </thead>
                         <tbody id="vehicle-modal-body"></tbody>
                         <tfoot id="vehicle-modal-avg-tfoot">
-                            <tr id="vehicle-modal-avg-row"></tr>
+                            <tr id="vehicle-modal-avg-row-stock"></tr>
+                            <tr id="vehicle-modal-avg-row-sales"></tr>
                         </tfoot>
                     </table>
             </div>

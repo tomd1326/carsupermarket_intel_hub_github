@@ -295,7 +295,7 @@ class CAPClient(metaclass=Singleton):
         vrm_payload = {
             'SubscriberID': self.subscriber_id,
             'Password': self.cap_password,
-            'VRM': vehicle.vrm,
+            'VRM': vehicle.vrm.upper(),
             'Mileage': vehicle.mileage,
             'StandardEquipmentRequired': 'false'
         }
