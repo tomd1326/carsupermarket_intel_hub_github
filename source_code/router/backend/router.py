@@ -79,7 +79,7 @@ def _load_users_from_aurora():
     except Exception as e:
         logger.warning("Could not load users from Aurora — falling back to hardcoded admin only: %s", e)
 
-_load_users_from_aurora()
+threading.Thread(target=_load_users_from_aurora, daemon=True).start()
 
 # session_id -> {user, login_time} — tracks active sessions server-side
 _active_sessions: dict = {}
@@ -324,14 +324,23 @@ def home(request: Request, user: str = Depends(get_current_user)):
     if not user:
         return RedirectResponse(url=BASE_URL + "/login", status_code=303)
     def _warm_caches():
-        try:
-            _get_sf_rows()
-        except Exception as e:
-            logger.warning(f"Home cache warm (SF) failed: {e}")
-        try:
-            _get_sp_purchases()
-        except Exception as e:
-            logger.warning(f"Home cache warm (SP) failed: {e}")
+        def _sf():
+            try:
+                _get_sf_rows()
+            except Exception as e:
+                logger.warning(f"Home cache warm (SF) failed: {e}")
+        def _dbs():
+            try:
+                _get_dbs_purchases()
+            except Exception as e:
+                logger.warning(f"Home cache warm (DBS) failed: {e}")
+        def _cb():
+            try:
+                _get_cb_purchases()
+            except Exception as e:
+                logger.warning(f"Home cache warm (CB) failed: {e}")
+        with ThreadPoolExecutor(max_workers=3) as ex:
+            ex.submit(_sf); ex.submit(_dbs); ex.submit(_cb)
     threading.Thread(target=_warm_caches, daemon=True).start()
     _track(request, 'page_view', '/home')
     return templates.TemplateResponse("home.html", {"request": request, "user": user, "BASE_URL": BASE_URL})
@@ -406,41 +415,83 @@ def buying_requirements_sf_data(request: Request, force: bool = False, user: str
         return {"status": "error", "message": str(e)}
 
 
-@router.get("/buying-requirements/sp-purchases")
-def buying_requirements_sp_purchases(request: Request, user: str = Depends(get_current_user)):
-    """SharePoint purchases — always fetches live (called by Refresh Data)."""
+@router.get("/buying-requirements/dbs-purchases")
+def buying_requirements_dbs_purchases(request: Request, user: str = Depends(get_current_user)):
+    """Daily Buyers Sheet purchases — always fetches live (called by Refresh Data)."""
     if not user:
         return RedirectResponse(url=BASE_URL + "/login", status_code=303)
     try:
-        purchases = _get_sp_purchases(force=True)
+        purchases = _get_dbs_purchases(force=True)
         out = {f"{k[0]}|{k[1]}": v for k, v in purchases.items()}
         with _cache_lock:
-            fetched_at = _sp_cache.get("fetched_at")
-        return {"status": "ok", "purchases": out, "fetched_at": fetched_at}
+            fetched_at  = _dbs_cache.get("fetched_at")
+            vehicles    = _dbs_cache.get("vehicles") or []
+            total_vrms  = _dbs_cache.get("total_vrms", len(vehicles))
+        return {"status": "ok", "purchases": out, "vehicles": vehicles, "total": total_vrms, "fetched_at": fetched_at}
     except Exception as e:
-        logger.error(f"Buying requirements SP purchases failed: {e}")
+        logger.error(f"Buying requirements DBS purchases failed: {e}")
         return {"status": "error", "message": str(e)}
 
 
-@router.get("/buying-requirements/sp-purchases-cached")
-def buying_requirements_sp_purchases_cached(request: Request, user: str = Depends(get_current_user)):
-    """SP purchases from cache only — never triggers a live SharePoint fetch."""
+@router.get("/buying-requirements/dbs-purchases-cached")
+def buying_requirements_dbs_purchases_cached(request: Request, user: str = Depends(get_current_user)):
+    """DBS purchases from cache only — never triggers a live SharePoint fetch."""
     if not user:
         return RedirectResponse(url=BASE_URL + "/login", status_code=303)
     try:
-        purchases = _get_sp_purchases_cached()
-        if purchases is None:
-            return {"status": "ok", "purchases": {}, "fetched_at": None}
-        # S3 cache already has string keys; in-process cache has tuple keys
+        result = _get_dbs_purchases_cached()
+        if result is None:
+            return {"status": "ok", "purchases": {}, "vehicles": [], "total": None, "fetched_at": None}
+        purchases, vehicles = result
         if purchases and isinstance(next(iter(purchases)), tuple):
             purchases = {f"{k[0]}|{k[1]}": v for k, v in purchases.items()}
         with _cache_lock:
-            fetched_at = _sp_cache.get("fetched_at")
+            fetched_at = _dbs_cache.get("fetched_at")
+            total_vrms = _dbs_cache.get("total_vrms", len(vehicles))
         if fetched_at is None:
-            fetched_at = _load_sp_fetched_at_from_s3()
-        return {"status": "ok", "purchases": purchases, "fetched_at": fetched_at}
+            fetched_at = _load_dbs_fetched_at_from_s3()
+        return {"status": "ok", "purchases": purchases, "vehicles": vehicles, "total": total_vrms, "fetched_at": fetched_at}
     except Exception as e:
-        logger.error(f"Buying requirements SP cached failed: {e}")
+        logger.error(f"Buying requirements DBS cached failed: {e}")
+        return {"status": "error", "message": str(e)}
+
+
+@router.get("/buying-requirements/cb-purchases")
+def buying_requirements_cb_purchases(request: Request, user: str = Depends(get_current_user)):
+    """Cars Bought not on Apex — always fetches live (called by Refresh Data)."""
+    if not user:
+        return RedirectResponse(url=BASE_URL + "/login", status_code=303)
+    try:
+        purchases = _get_cb_purchases(force=True)
+        out = {f"{k[0]}|{k[1]}": v for k, v in purchases.items()}
+        with _cache_lock:
+            fetched_at  = _cb_cache.get("fetched_at")
+            vehicles    = _cb_cache.get("vehicles") or []
+            total_vrms  = _cb_cache.get("total_vrms", sum(purchases.values()))
+        return {"status": "ok", "purchases": out, "vehicles": vehicles, "total": total_vrms, "fetched_at": fetched_at}
+    except Exception as e:
+        logger.error(f"Buying requirements CB purchases failed: {e}")
+        return {"status": "error", "message": str(e)}
+
+
+@router.get("/buying-requirements/cb-purchases-cached")
+def buying_requirements_cb_purchases_cached(request: Request, user: str = Depends(get_current_user)):
+    """Cars Bought not on Apex from cache only — never triggers a live fetch."""
+    if not user:
+        return RedirectResponse(url=BASE_URL + "/login", status_code=303)
+    try:
+        result = _get_cb_purchases_cached()
+        if result is None:
+            return {"status": "ok", "purchases": {}, "vehicles": [], "total": None, "fetched_at": None}
+        purchases, vehicles = result
+        if purchases and isinstance(next(iter(purchases)), tuple):
+            purchases = {f"{k[0]}|{k[1]}": v for k, v in purchases.items()}
+        with _cache_lock:
+            fetched_at = _cb_cache.get("fetched_at")
+            total_vrms = _cb_cache.get("total_vrms", sum(purchases.values()) if purchases else 0)
+        return {"status": "ok", "purchases": purchases, "vehicles": vehicles, "total": total_vrms, "fetched_at": fetched_at}
+    except Exception as e:
+        logger.error(f"Buying requirements CB cached failed: {e}")
         return {"status": "error", "message": str(e)}
 
 
@@ -451,7 +502,7 @@ def buying_requirements_data(request: Request, user: str = Depends(get_current_u
         return RedirectResponse(url=BASE_URL + "/login", status_code=303)
     try:
         sf_rows   = _get_sf_rows()
-        purchases = _get_sp_purchases()
+        purchases = _get_dbs_purchases()
         out = []
         for r in sf_rows:
             cap_id = r[0]
@@ -465,10 +516,14 @@ def buying_requirements_data(request: Request, user: str = Depends(get_current_u
         return {"status": "error", "message": str(e)}
 
 
-_SP_SUBFOLDER = "Department/Buying/B2B"
-_SP_FILENAME  = "NEW DAILY BUYERS SHEET.xlsx"
-_SP_SHEET     = "Today"
-_SP_COLUMNS   = ["CAP ID", "RRP", "RRP 0%"]
+_DBS_SUBFOLDER = "Department/Buying/B2B"
+_DBS_FILENAME  = "NEW DAILY BUYERS SHEET.xlsx"
+_DBS_SHEET     = "Today"
+_DBS_COLUMNS   = ["CAP ID", "RRP", "RRP 0%"]
+
+_CB_SUBFOLDER  = "Cars Bought"
+_CB_FILENAME   = "CARS BOUGHT 2026.xlsx"
+_CB_SHEET      = "TO GO ON"
 
 _SF_DB     = "PROD_CARSUPERMARKET_DB"
 _SF_SCHEMA = "product_vehicle_journey"
@@ -498,6 +553,34 @@ def _rrp_to_price_band(rrp) -> str:
     return _PRICE_BAND_DEFAULT
 
 
+_EXCEL_EPOCH = datetime.date(1899, 12, 30)
+
+def _parse_excel_date(v) -> str | None:
+    """Convert an Excel serial number or ISO/string date to dd/mm/yyyy. Returns None if unparseable."""
+    if v is None or v == '' or v == 0:
+        return None
+    s = str(v).strip()
+    # Excel serial number (integer or float with no non-numeric chars except '.')
+    try:
+        serial = int(float(s))
+        if 30000 < serial < 60000:  # plausible Excel date range (1982–2064)
+            d = _EXCEL_EPOCH + datetime.timedelta(days=serial)
+            return d.strftime('%d/%m/%Y')
+    except (TypeError, ValueError):
+        pass
+    # ISO date string yyyy-mm-dd (possibly with time)
+    if len(s) >= 10 and s[4] == '-':
+        try:
+            d = datetime.date.fromisoformat(s[:10])
+            return d.strftime('%d/%m/%Y')
+        except ValueError:
+            pass
+    # Already dd/mm/yyyy
+    if len(s) == 10 and s[2] == '/' and s[5] == '/':
+        return s
+    return s[:10] if len(s) >= 10 else s
+
+
 def _safe_int(v):
     try:
         return int(float(v))
@@ -519,19 +602,24 @@ def _safe_float(v):
 #   recent scheduled window. Persisted to S3 so Lambda cold starts are instant.
 # SharePoint: live buyer activity — 30-min TTL, in-process + S3.
 _sf_cache: dict = {"rows": None, "cached_at": 0.0}   # cached_at = unix epoch (wall clock)
-_sp_cache: dict = {"purchases": None, "expires": 0.0, "fetched_at": None}
+_dbs_cache: dict = {"purchases": None, "vehicles": None, "expires": 0.0, "fetched_at": None}
+_cb_cache: dict  = {"purchases": None, "vehicles": None, "expires": 0.0, "fetched_at": None}
 _cache_lock = threading.Lock()
 
 # dbt run hours (UK local time) — data available 15 min after each
 _SF_SCHEDULE_HOURS_UK = [3, 7, 10, 13, 16]
 _SF_READY_OFFSET_MIN  = 15
 
-_SP_TTL_SECONDS    = 30 * 60
-_SP_S3_TTL_SECONDS = 30 * 60
+_DBS_TTL_SECONDS    = 30 * 60
+_DBS_S3_TTL_SECONDS = 30 * 60
+_CB_TTL_SECONDS     = 30 * 60
+_CB_S3_TTL_SECONDS  = 30 * 60
 _S3_BUCKET         = "aa-raw-sources-uk"
 _S3_ENV            = 'prod' if os.getenv('AWS_REGION') == 'eu-west-1' else 'dev'
 _SF_S3_KEY         = f"applications/pricing/uk-vehicle-list-evaluator/{_S3_ENV}/cache/buying_requirements_v20.json"
-_SP_S3_KEY         = f"applications/pricing/uk-vehicle-list-evaluator/{_S3_ENV}/cache/sp_purchases_v4.json"
+_DBS_S3_KEY        = f"applications/pricing/uk-vehicle-list-evaluator/{_S3_ENV}/cache/dbs_purchases_v16.json"
+_CB_S3_KEY         = f"applications/pricing/uk-vehicle-list-evaluator/{_S3_ENV}/cache/cb_purchases_v13.json"
+_VRM_CAP_S3_KEY    = f"applications/pricing/uk-vehicle-list-evaluator/shared/vrm_cap_id_cache.json"
 
 
 def _sf_last_valid_window_utc() -> float:
@@ -616,19 +704,21 @@ def _save_sf_cache_to_s3(rows: list, cached_at: float) -> None:
         logger.warning(f"Failed to write SF S3 cache: {e}")
 
 
-def _load_sp_cache_from_s3() -> dict | None:
-    payload = _s3_load(_SP_S3_KEY)
-    return payload["purchases"] if payload else None
+def _load_dbs_cache_from_s3() -> tuple[dict, list] | None:
+    payload = _s3_load(_DBS_S3_KEY)
+    if not payload:
+        return None
+    return payload.get("purchases", {}), payload.get("vehicles", [])
 
 
-def _save_sp_cache_to_s3(purchases: dict, ttl: int = _SP_TTL_SECONDS) -> None:
-    _s3_save(_SP_S3_KEY, {"purchases": {f"{k[0]}|{k[1]}": v for k, v in purchases.items()}, "fetched_at": time.time()}, ttl)
+def _save_dbs_cache_to_s3(purchases: dict, vehicles: list, ttl: int = _DBS_TTL_SECONDS) -> None:
+    _s3_save(_DBS_S3_KEY, {"purchases": {f"{k[0]}|{k[1]}": v for k, v in purchases.items()}, "vehicles": vehicles, "fetched_at": time.time()}, ttl)
 
 
-def _load_sp_fetched_at_from_s3() -> float | None:
+def _load_dbs_fetched_at_from_s3() -> float | None:
     try:
         import boto3
-        obj = boto3.client("s3").get_object(Bucket=_S3_BUCKET, Key=_SP_S3_KEY)
+        obj = boto3.client("s3").get_object(Bucket=_S3_BUCKET, Key=_DBS_S3_KEY)
         payload = json.loads(obj["Body"].read())
         if time.time() < payload.get("expires_at", 0):
             return payload.get("fetched_at")
@@ -731,20 +821,128 @@ def _get_sf_rows(force: bool = False) -> list:
     return result
 
 
-def _get_sp_purchases(force: bool = False) -> dict:
-    """Return cached SharePoint purchase counts per (cap_id, price_band), fetching if stale."""
+# ── Shared VRM → CAP ID cache ─────────────────────────────────────────────────
+# Keyed by VRM, no expiry — VRM→CAP ID is permanent. Shared across DBS and CB.
+
+_vrm_cap_cache: dict = {}   # in-process: {vrm: cap_id or None}
+_vrm_cap_lock = threading.Lock()
+
+
+def _load_vrm_cap_cache_from_s3() -> dict:
+    try:
+        import boto3
+        obj = boto3.client("s3").get_object(Bucket=_S3_BUCKET, Key=_VRM_CAP_S3_KEY)
+        return json.loads(obj["Body"].read())
+    except Exception:
+        return {}
+
+
+def _save_vrm_cap_cache_to_s3(cache: dict) -> None:
+    try:
+        import boto3
+        boto3.client("s3").put_object(
+            Bucket=_S3_BUCKET, Key=_VRM_CAP_S3_KEY,
+            Body=json.dumps(cache).encode(), ContentType="application/json"
+        )
+    except Exception as e:
+        logger.warning(f"VRM CAP cache S3 save failed: {e}")
+
+
+def _ensure_vrm_cap_cache_loaded() -> None:
+    """Load S3 cache into in-process dict if not already done."""
+    with _vrm_cap_lock:
+        if not _vrm_cap_cache:
+            loaded = _load_vrm_cap_cache_from_s3()
+            _vrm_cap_cache.update(loaded)
+            if loaded:
+                logger.info(f"VRM CAP cache: loaded {len(loaded)} entries from S3")
+
+
+def _enrich_cap_ids(rows: list[dict], workers: int = 25) -> list[dict]:
+    """
+    For each row dict with keys {vrm, cap_id, ...}, fill in missing cap_ids.
+    Checks in-process cache first, then CAP API for any remaining misses.
+    Writes new lookups back to S3.
+    rows must have 'vrm' and 'cap_id' keys.
+    """
+    _ensure_vrm_cap_cache_loaded()
+
+    need_api = []
+    for r in rows:
+        if r['cap_id'] is not None:
+            continue
+        vrm = r['vrm']
+        with _vrm_cap_lock:
+            if vrm in _vrm_cap_cache:
+                r['cap_id'] = _vrm_cap_cache[vrm]
+            else:
+                need_api.append(r)
+
+    logger.info(f"VRM CAP cache: {len(need_api)} VRMs need CAP API lookup")
+    if not need_api:
+        return rows
+    cap = CAPClient()
+
+    def _lookup_one(r):
+        try:
+            from list_processor.structs import VehicleRow
+            resp = cap.vrm_valuation(VehicleRow(vrm=r['vrm'], mileage=1000))
+            raw = resp.get('capid')
+            cap_id = int(raw) if raw and raw != 'Not Found' else None
+        except Exception as e:
+            logger.warning(f"CAP lookup failed for {r['vrm']}: {e}")
+            cap_id = None
+        return r['vrm'], cap_id
+
+    new_entries = {}
+    with ThreadPoolExecutor(max_workers=workers) as ex:
+        for vrm, cap_id in ex.map(_lookup_one, need_api):
+            new_entries[vrm] = cap_id
+
+    with _vrm_cap_lock:
+        _vrm_cap_cache.update(new_entries)
+
+    for r in need_api:
+        r['cap_id'] = new_entries.get(r['vrm'])
+
+    _save_vrm_cap_cache_to_s3(dict(_vrm_cap_cache))
+    logger.info(f"VRM CAP cache: {sum(1 for v in new_entries.values() if v)} resolved, {sum(1 for v in new_entries.values() if not v)} not found. Cache now {len(_vrm_cap_cache)} entries.")
+    return rows
+
+
+def _get_sf_cap_price_bands() -> dict:
+    """Return {cap_id: price_band} from SF cache — the band with the most stock, then most sales."""
+    with _cache_lock:
+        rows = _sf_cache.get("rows") or []
+    # rows: [0:cap_id, 3:price_band, 4:stock, 5:sales90, ...]
+    best: dict = {}  # cap_id -> (price_band, stock, sales90)
+    for r in rows:
+        cap_id     = r[0]
+        price_band = r[3]
+        stock      = r[4] or 0
+        sales90    = r[5] or 0
+        if cap_id is None or not price_band:
+            continue
+        prev = best.get(cap_id)
+        if prev is None or stock > prev[1] or (stock == prev[1] and sales90 > prev[2]):
+            best[cap_id] = (price_band, stock, sales90)
+    return {cap_id: v[0] for cap_id, v in best.items()}
+
+
+def _get_dbs_purchases(force: bool = False) -> dict:
+    """Return cached Daily Buyers Sheet purchase counts per (cap_id, price_band), fetching if stale."""
     now = time.monotonic()
     with _cache_lock:
-        if not force and _sp_cache["purchases"] is not None and now < _sp_cache["expires"]:
-            return _sp_cache["purchases"]
+        if not force and _dbs_cache["purchases"] is not None and now < _dbs_cache["expires"]:
+            return _dbs_cache["purchases"]
 
-    for _sp_attempt in range(1, 4):
+    for _attempt in range(1, 4):
         try:
-            values = SharePointClient().get_worksheet_values(_SP_SUBFOLDER, _SP_FILENAME, _SP_SHEET)
+            values = SharePointClient().get_worksheet_values(_DBS_SUBFOLDER, _DBS_FILENAME, _DBS_SHEET)
             break
-        except Exception as _sp_exc:
-            logger.warning(f"SharePoint fetch attempt {_sp_attempt}/3 failed: {_sp_exc}")
-            if _sp_attempt == 3:
+        except Exception as _exc:
+            logger.warning(f"Daily Buyers Sheet fetch attempt {_attempt}/3 failed: {_exc}")
+            if _attempt == 3:
                 raise
             time.sleep(3)
     purchases: dict = {}
@@ -758,55 +956,320 @@ def _get_sp_purchases(force: bool = False) -> dict:
             headers = [str(c).strip() for c in row]
             break
 
+    raw_rows = []
     if headers:
         try:
-            cap_idx  = headers.index("CAP ID")
-            rrp_idx  = headers.index("RRP")
-            rrp0_idx = headers.index("RRP 0%")
+            reg_idx   = headers.index("REG")
+            cap_idx   = headers.index("CAP ID")
+            rrp_idx   = headers.index("RRP")
+            rrp0_idx  = headers.index("RRP 0%")
         except ValueError:
             pass
         else:
+            make_idx     = headers.index("MAKE")           if "MAKE"           in headers else None
+            model_idx    = headers.index("MODEL")          if "MODEL"          in headers else None
+            deriv_idx    = headers.index("DERIVATIVE")     if "DERIVATIVE"     in headers else (
+                           headers.index("VARIANT")        if "VARIANT"        in headers else None)
+            supplier_idx = headers.index("SUPPLIER")       if "SUPPLIER"       in headers else None
+            mileage_idx  = headers.index("MILEAGE")        if "MILEAGE"        in headers else None
+            siv_idx      = headers.index("SIV")            if "SIV"            in headers else (
+                           headers.index("PURCHASE PRICE") if "PURCHASE PRICE" in headers else (
+                           headers.index("PURCHASE_PRICE") if "PURCHASE_PRICE" in headers else None))
+            dor_idx      = headers.index("DOR")              if "DOR"              in headers else None
+            cap_live_idx = headers.index("CAP CLEAN LIVE")  if "CAP CLEAN LIVE"  in headers else (
+                           headers.index("CAP LIVE CLEAN")  if "CAP LIVE CLEAN"  in headers else (
+                           headers.index("CAP CLEAN")       if "CAP CLEAN"       in headers else None))
+            at_ptm_idx    = headers.index("AUTOTRADER RRP")  if "AUTOTRADER RRP"  in headers else (
+                            headers.index("AT RRP")          if "AT RRP"          in headers else (
+                            headers.index("AT PTM")          if "AT PTM"          in headers else None))
+            at_rating_idx = headers.index("RR")              if "RR"              in headers else None
             for row in values[header_row_idx + 1:]:
+                vrm = str(row[reg_idx]).strip().replace(' ', '').upper() if reg_idx < len(row) and row[reg_idx] not in (None, '') else ''
+                if not vrm or vrm in ('NONE', 'N/A'):
+                    continue
                 try:
-                    raw_cap = str(row[cap_idx]).strip().replace(',', '') if row[cap_idx] not in (None, '') else ''
+                    raw_cap = str(row[cap_idx]).strip().replace(',', '') if cap_idx < len(row) and row[cap_idx] not in (None, '') else ''
                     cap_id = int(float(raw_cap)) if raw_cap else None
                 except (TypeError, ValueError):
                     cap_id = None
-                if cap_id is None:
-                    continue
+                rrp      = row[rrp_idx]  if rrp_idx  < len(row) else None
+                rrp0     = row[rrp0_idx] if rrp0_idx < len(row) else None
+                make     = str(row[make_idx]).strip()     if make_idx     is not None and make_idx     < len(row) and row[make_idx]     not in (None, '') else ''
+                model    = str(row[model_idx]).strip()    if model_idx    is not None and model_idx    < len(row) and row[model_idx]    not in (None, '') else ''
+                deriv    = str(row[deriv_idx]).strip()    if deriv_idx    is not None and deriv_idx    < len(row) and row[deriv_idx]    not in (None, '') else ''
+                supplier = str(row[supplier_idx]).strip() if supplier_idx is not None and supplier_idx < len(row) and row[supplier_idx] not in (None, '') else ''
+                def _parse_num(idx):
+                    if idx is None or idx >= len(row) or row[idx] in (None, ''):
+                        return None
+                    try:
+                        return float(str(row[idx]).replace('£', '').replace(',', '').strip())
+                    except (TypeError, ValueError):
+                        return None
+                mileage  = _parse_num(mileage_idx)
+                siv      = _parse_num(siv_idx)
+                dor_raw  = row[dor_idx] if dor_idx is not None and dor_idx < len(row) and row[dor_idx] not in (None, '') else None
+                dor      = _parse_excel_date(dor_raw)
+                cap_live  = _parse_num(cap_live_idx)
+                at_ptm    = _parse_num(at_ptm_idx)
+                at_rating = _parse_num(at_rating_idx)
+                raw_rows.append({'vrm': vrm, 'cap_id': cap_id, 'rrp': rrp, 'rrp0': rrp0, 'make': make, 'model': model, 'deriv': deriv, 'supplier': supplier, 'mileage': mileage, 'siv': siv, 'dor': dor, 'cap_live': cap_live, 'at_ptm': at_ptm, 'at_rating': at_rating})
 
-                rrp0 = row[rrp0_idx] if rrp0_idx < len(row) else None
-                try:
-                    rrp0_val = float(str(rrp0).replace('£', '').replace(',', '').strip()) if rrp0 not in (None, '') else 0
-                    is_if = rrp0_val > 0
-                except (TypeError, ValueError):
-                    is_if = False
-                if is_if:
-                    band = "interest_free"
-                else:
-                    rrp = row[rrp_idx] if rrp_idx < len(row) else None
-                    band = _rrp_to_price_band(rrp)
+    raw_rows = _enrich_cap_ids(raw_rows)
 
-                key = (cap_id, band)
-                purchases[key] = purchases.get(key, 0) + 1
+    # Exclude DBS VRMs that are also in CB (CB wins when duplicated)
+    cb_cached = _get_cb_purchases_cached()
+    cb_vrms = {v['vrm'] for v in cb_cached[1]} if cb_cached else set()
+    raw_rows = [r for r in raw_rows if r['vrm'] not in cb_vrms]
+
+    vehicles = []
+    sf_bands = _get_sf_cap_price_bands()
+
+    def _to_float(v):
+        if v is None or str(v).strip() in ('', 'None'): return None
+        try: return float(str(v).replace('£','').replace(',','').strip())
+        except (TypeError, ValueError): return None
+
+    skipped_no_cap = skipped_no_rrp = skipped_no_sf = 0
+    for r in raw_rows:
+        if r['cap_id'] is None:
+            skipped_no_cap += 1
+            continue
+        try:
+            _r0 = r['rrp0']
+            rrp0_val = float(str(_r0).replace('£', '').replace(',', '').strip()) if _r0 not in (None, '', 0, 0.0) and str(_r0).strip() not in ('0', '0.0', '0.00') else 0
+            is_if = rrp0_val > 0
+        except (TypeError, ValueError):
+            is_if = False
+        if not is_if:
+            rrp_float = _to_float(r.get('rrp'))
+            if not rrp_float:
+                skipped_no_rrp += 1
+                continue
+        if r['cap_id'] not in sf_bands:
+            skipped_no_sf += 1
+            continue
+        band = "interest_free" if is_if else _rrp_to_price_band(r['rrp'])
+        key = (r['cap_id'], band)
+        purchases[key] = purchases.get(key, 0) + 1
+        vehicles.append({'vrm': r['vrm'], 'cap_id': r['cap_id'], 'band': band, 'make': r.get('make', ''), 'model': r.get('model', ''), 'deriv': r.get('deriv', ''), 'supplier': r.get('supplier', ''), 'mileage': r.get('mileage'), 'siv': r.get('siv'), 'rrp': _to_float(r.get('rrp')), 'rrp0': _to_float(r.get('rrp0')), 'dor': r.get('dor'), 'cap_live': r.get('cap_live'), 'at_ptm': r.get('at_ptm'), 'at_rating': r.get('at_rating'), 'source': 'dbs'})
 
     data_rows = len(values) - (header_row_idx + 1) if header_row_idx is not None else 0
-    logger.info(f"SP: header on row {header_row_idx}, {len(purchases)} purchase keys from {data_rows} data rows")
+    logger.info(f"Daily Buyers Sheet: {sum(purchases.values())} purchases in {len(purchases)} cap/band keys (from {data_rows} rows, {len(raw_rows)} unique VRMs after CB dedup, skipped: {skipped_no_cap} no CAP ID, {skipped_no_rrp} no RRP, {skipped_no_sf} not in SF)")
     fetched_at = time.time()
     with _cache_lock:
-        _sp_cache["purchases"] = purchases
-        _sp_cache["expires"] = time.monotonic() + _SP_TTL_SECONDS
-        _sp_cache["fetched_at"] = fetched_at
-    _save_sp_cache_to_s3(purchases, _SP_S3_TTL_SECONDS)
+        _dbs_cache["purchases"]  = purchases
+        _dbs_cache["vehicles"]   = vehicles
+        _dbs_cache["total_vrms"] = len(vehicles)
+        _dbs_cache["expires"]    = time.monotonic() + _DBS_TTL_SECONDS
+        _dbs_cache["fetched_at"] = fetched_at
+    _save_dbs_cache_to_s3(purchases, vehicles, _DBS_S3_TTL_SECONDS)
     return purchases
 
 
-def _get_sp_purchases_cached() -> dict | None:
-    """Return SP purchases from in-process or S3 cache only — never fetches live."""
+def _get_dbs_purchases_cached() -> tuple[dict, list] | None:
+    """Return (purchases, vehicles) from in-process or S3 cache only — never fetches live."""
     with _cache_lock:
-        if _sp_cache["purchases"] is not None and time.monotonic() < _sp_cache["expires"]:
-            return _sp_cache["purchases"]
-    return _load_sp_cache_from_s3()
+        if _dbs_cache["purchases"] is not None and time.monotonic() < _dbs_cache["expires"]:
+            return _dbs_cache["purchases"], _dbs_cache.get("vehicles") or []
+    return _load_dbs_cache_from_s3()
+
+
+# ── Cars Bought cache helpers ─────────────────────────────────────────────────
+
+def _load_cb_cache_from_s3() -> tuple[dict, list] | None:
+    payload = _s3_load(_CB_S3_KEY)
+    if not payload:
+        return None
+    return payload.get("purchases", {}), payload.get("vehicles", [])
+
+
+def _save_cb_cache_to_s3(purchases: dict, vehicles: list, fetched_at: float, ttl: int = _CB_S3_TTL_SECONDS) -> None:
+    _s3_save(_CB_S3_KEY, {"purchases": {f"{k[0]}|{k[1]}": v for k, v in purchases.items()}, "vehicles": vehicles, "fetched_at": fetched_at}, ttl)
+
+
+class _CarsBoughtSharePointClient(SharePointClient):
+    TEAM_SITE = "/sites/CarSupermarketOperationalData"
+
+
+def _get_cb_purchases(force: bool = False) -> dict:
+    """Return purchases dict keyed by (cap_id, price_band) for Cars Bought not on Apex."""
+    now = time.monotonic()
+    with _cache_lock:
+        if not force and _cb_cache["purchases"] is not None and now < _cb_cache["expires"]:
+            return _cb_cache["purchases"]
+
+    def _fetch_cb_values():
+        for _attempt in range(1, 4):
+            try:
+                return _CarsBoughtSharePointClient().get_worksheet_values(_CB_SUBFOLDER, _CB_FILENAME, _CB_SHEET)
+            except Exception as _exc:
+                logger.warning(f"Cars Bought fetch attempt {_attempt}/3 failed: {_exc}")
+                if _attempt == 3:
+                    raise
+                time.sleep(3)
+
+    def _fetch_apex_vrms():
+        with SnowflakeClient() as sf:
+            rows, _ = sf.execute(
+                "SELECT VRM FROM PROD_CARSUPERMARKET_DB.product_vehicle_journey.buying_requirements WHERE STOCK = 1"
+            )
+        return {row[0].strip().upper() for row in rows if row[0]}
+
+    def _fetch_dbs_vrms():
+        try:
+            values = SharePointClient().get_worksheet_values(_DBS_SUBFOLDER, _DBS_FILENAME, _DBS_SHEET)
+            for row in values[:5]:
+                strs = [str(c).strip() for c in row]
+                if "REG" in strs:
+                    reg_idx = strs.index("REG")
+                    return {
+                        str(r[reg_idx]).strip().replace(' ', '').upper()
+                        for r in values[values.index(row) + 1:]
+                        if reg_idx < len(r) and r[reg_idx] not in (None, '')
+                        and str(r[reg_idx]).strip().upper() not in ('NONE', 'N/A', '')
+                    }
+        except Exception as e:
+            logger.warning(f"CB fetch: could not load DBS VRMs for dedup: {e}")
+        return set()
+
+    with ThreadPoolExecutor(max_workers=3) as ex:
+        f_cb   = ex.submit(_fetch_cb_values)
+        f_apex = ex.submit(_fetch_apex_vrms)
+        f_dbs  = ex.submit(_fetch_dbs_vrms)
+        cb_values = f_cb.result()
+        apex_vrms = f_apex.result()
+        dbs_vrms  = f_dbs.result()
+
+    header_row_idx = None
+    headers = []
+    # Check row 2 (index 1) first — sheet may have a title row above headers
+    for i in ([1] + [j for j in range(min(5, len(cb_values))) if j != 1]):
+        if i >= len(cb_values):
+            continue
+        strs = [str(c).strip() for c in cb_values[i]]
+        if "REG" in strs and "CAP ID" in strs:
+            header_row_idx = i
+            headers = strs
+            break
+
+    total_cb_rows = len(cb_values) - (header_row_idx + 1) if header_row_idx is not None else 0
+    logger.info(f"Cars Bought: loaded {total_cb_rows} data rows (header on row {header_row_idx})")
+
+    raw_rows = []
+    purchases: dict = {}
+    if headers:
+        try:
+            reg_idx  = headers.index("REG")
+            cap_idx  = headers.index("CAP ID")
+            rrp_idx  = headers.index("RRP")
+            rrp0_idx = headers.index("0%RRP")
+        except ValueError:
+            pass
+        else:
+            make_idx     = headers.index("MAKE")           if "MAKE"           in headers else None
+            model_idx    = headers.index("MODEL")          if "MODEL"          in headers else None
+            deriv_idx    = headers.index("VARIANT")        if "VARIANT"        in headers else None
+            supplier_idx = headers.index("SUPPLIER")       if "SUPPLIER"       in headers else None
+            mileage_idx  = headers.index("MILEAGE")        if "MILEAGE"        in headers else None
+            siv_idx      = headers.index("SIV")            if "SIV"            in headers else (
+                           headers.index("PURCHASE PRICE") if "PURCHASE PRICE" in headers else (
+                           headers.index("PURCHASE_PRICE") if "PURCHASE_PRICE" in headers else None))
+            dor_idx      = headers.index("DOR")              if "DOR"              in headers else None
+            cap_live_idx = headers.index("CAP CLEAN LIVE")  if "CAP CLEAN LIVE"  in headers else (
+                           headers.index("CAP LIVE CLEAN")  if "CAP LIVE CLEAN"  in headers else (
+                           headers.index("CAP CLEAN")       if "CAP CLEAN"       in headers else None))
+            at_ptm_idx    = headers.index("AUTOTRADER RRP")  if "AUTOTRADER RRP"  in headers else (
+                            headers.index("AT RRP")          if "AT RRP"          in headers else (
+                            headers.index("AT PTM")          if "AT PTM"          in headers else None))
+            at_rating_idx = headers.index("AT RATING")       if "AT RATING"       in headers else None
+            seen_vrms = set()
+            for row in cb_values[header_row_idx + 1:]:
+                vrm = str(row[reg_idx]).strip().replace(' ', '').upper() if reg_idx < len(row) and row[reg_idx] not in (None, '') else ''
+                if not vrm or vrm in ('NONE', 'N/A'):
+                    continue
+                if vrm in apex_vrms or vrm in dbs_vrms or vrm in seen_vrms:
+                    continue
+                seen_vrms.add(vrm)
+                raw_cap = str(row[cap_idx]).strip().replace(',', '') if cap_idx < len(row) and row[cap_idx] not in (None, '') else ''
+                try:
+                    cap_id = int(float(raw_cap)) if raw_cap else None
+                except (TypeError, ValueError):
+                    cap_id = None
+                rrp      = row[rrp_idx]  if rrp_idx  < len(row) else None
+                rrp0     = row[rrp0_idx] if rrp0_idx < len(row) else None
+                make     = str(row[make_idx]).strip()     if make_idx     is not None and make_idx     < len(row) and row[make_idx]     not in (None, '') else ''
+                model    = str(row[model_idx]).strip()    if model_idx    is not None and model_idx    < len(row) and row[model_idx]    not in (None, '') else ''
+                deriv    = str(row[deriv_idx]).strip()    if deriv_idx    is not None and deriv_idx    < len(row) and row[deriv_idx]    not in (None, '') else ''
+                supplier = str(row[supplier_idx]).strip() if supplier_idx is not None and supplier_idx < len(row) and row[supplier_idx] not in (None, '') else ''
+                def _parse_num(idx):
+                    if idx is None or idx >= len(row) or row[idx] in (None, ''):
+                        return None
+                    try:
+                        return float(str(row[idx]).replace('£', '').replace(',', '').strip())
+                    except (TypeError, ValueError):
+                        return None
+                mileage  = _parse_num(mileage_idx)
+                siv      = _parse_num(siv_idx)
+                dor_raw  = row[dor_idx] if dor_idx is not None and dor_idx < len(row) and row[dor_idx] not in (None, '') else None
+                dor      = _parse_excel_date(dor_raw)
+                cap_live  = _parse_num(cap_live_idx)
+                at_ptm    = _parse_num(at_ptm_idx)
+                at_rating = _parse_num(at_rating_idx)
+                raw_rows.append({'vrm': vrm, 'cap_id': cap_id, 'rrp': rrp, 'rrp0': rrp0, 'make': make, 'model': model, 'deriv': deriv, 'supplier': supplier, 'mileage': mileage, 'siv': siv, 'dor': dor, 'cap_live': cap_live, 'at_ptm': at_ptm, 'at_rating': at_rating})
+
+    raw_rows = _enrich_cap_ids(raw_rows)
+
+    sf_bands = _get_sf_cap_price_bands()
+
+    def _to_float(v):
+        if v is None or str(v).strip() in ('', 'None'): return None
+        try: return float(str(v).replace('£','').replace(',','').strip())
+        except (TypeError, ValueError): return None
+
+    total_vrms = len(raw_rows)  # all unique VRMs not on Apex/DBS — used for badge
+    vehicles: list = []
+    skipped_no_cap = skipped_no_rrp = skipped_no_sf = 0
+    for r in raw_rows:
+        if r['cap_id'] is None:
+            skipped_no_cap += 1
+            continue
+        try:
+            _r0 = r['rrp0']
+            rrp0_val = float(str(_r0).replace('£', '').replace(',', '').strip()) if _r0 not in (None, '', 0, 0.0) and str(_r0).strip() not in ('0', '0.0', '0.00') else 0
+            is_if = rrp0_val > 0
+        except (TypeError, ValueError):
+            is_if = False
+        if not is_if:
+            rrp_float = _to_float(r.get('rrp'))
+            if not rrp_float:
+                skipped_no_rrp += 1
+                continue
+        if r['cap_id'] not in sf_bands:
+            skipped_no_sf += 1
+            continue
+        band = "interest_free" if is_if else _rrp_to_price_band(r['rrp'])
+        key = (r['cap_id'], band)
+        purchases[key] = purchases.get(key, 0) + 1
+        vehicles.append({'vrm': r['vrm'], 'cap_id': r['cap_id'], 'band': band, 'make': r.get('make', ''), 'model': r.get('model', ''), 'deriv': r.get('deriv', ''), 'supplier': r.get('supplier', ''), 'mileage': r.get('mileage'), 'siv': r.get('siv'), 'rrp': _to_float(r.get('rrp')), 'rrp0': _to_float(r.get('rrp0')), 'dor': r.get('dor'), 'cap_live': r.get('cap_live'), 'at_ptm': r.get('at_ptm'), 'at_rating': r.get('at_rating'), 'source': 'cb'})
+
+    fetched_at = time.time()
+    with _cache_lock:
+        _cb_cache["purchases"]   = purchases
+        _cb_cache["vehicles"]    = vehicles
+        _cb_cache["total_vrms"]  = total_vrms
+        _cb_cache["expires"]     = time.monotonic() + _CB_TTL_SECONDS
+        _cb_cache["fetched_at"]  = fetched_at
+    _save_cb_cache_to_s3(purchases, vehicles, fetched_at, _CB_S3_TTL_SECONDS)
+    logger.info(f"Cars Bought: {total_vrms} unique VRMs, {sum(purchases.values())} in table ({len(purchases)} cap/band keys), skipped: {skipped_no_cap} no CAP ID, {skipped_no_rrp} no RRP, {skipped_no_sf} not in SF")
+    return purchases
+
+
+def _get_cb_purchases_cached() -> tuple[dict, list] | None:
+    """Return (purchases, vehicles) from in-process or S3 cache only."""
+    with _cache_lock:
+        if _cb_cache["purchases"] is not None and time.monotonic() < _cb_cache["expires"]:
+            return _cb_cache["purchases"], _cb_cache.get("vehicles") or []
+    return _load_cb_cache_from_s3()
 
 
 def _sse(message: str, kind: str = "log") -> str:
@@ -842,8 +1305,8 @@ def stream_snowflake(request: Request, user: str = Depends(get_current_user)):
     return StreamingResponse(generate(), media_type="text/event-stream")
 
 
-@router.get("/buying-requirements/stream-sharepoint")
-def stream_sharepoint(request: Request, user: str = Depends(get_current_user)):
+@router.get("/buying-requirements/stream-dbs")
+def stream_dbs(request: Request, user: str = Depends(get_current_user)):
     if not user:
         return RedirectResponse(url=BASE_URL + "/login", status_code=303)
 
@@ -859,10 +1322,10 @@ def stream_sharepoint(request: Request, user: str = Depends(get_current_user)):
             drive_id = client._get_drive_id(site_id)
             yield _sse("Got drive. Resolving file...")
 
-            item_id = client._get_item_id(drive_id, _SP_SUBFOLDER, _SP_FILENAME)
-            yield _sse(f"Got file. Reading '{_SP_SHEET}' sheet...")
+            item_id = client._get_item_id(drive_id, _DBS_SUBFOLDER, _DBS_FILENAME)
+            yield _sse(f"Got file. Reading '{_DBS_SHEET}' sheet...")
 
-            encoded_sheet = requests.utils.quote(_SP_SHEET)
+            encoded_sheet = requests.utils.quote(_DBS_SHEET)
             url = (
                 f"https://graph.microsoft.com/v1.0/drives/{drive_id}/items/{item_id}"
                 f"/workbook/worksheets/{encoded_sheet}/usedRange?$select=values"
@@ -872,16 +1335,16 @@ def stream_sharepoint(request: Request, user: str = Depends(get_current_user)):
             values = resp.json().get("values", [])
 
             headers = values[0] if values else []
-            missing = [c for c in _SP_COLUMNS if c not in headers]
+            missing = [c for c in _DBS_COLUMNS if c not in headers]
             if missing:
                 yield _sse(f"Missing columns: {missing}", "error")
                 return
 
-            indices = [headers.index(c) for c in _SP_COLUMNS]
+            indices = [headers.index(c) for c in _DBS_COLUMNS]
             rows = [[row[i] for i in indices] for row in values[1:]]
-            yield _sse(f"{len(rows):,} rows — columns: {', '.join(_SP_COLUMNS)}", "done")
+            yield _sse(f"{len(rows):,} rows — columns: {', '.join(_DBS_COLUMNS)}", "done")
         except Exception as e:
-            logger.error(f"SharePoint stream failed: {e}")
+            logger.error(f"Daily Buyers Sheet stream failed: {e}")
             yield _sse(str(e), "error")
 
     return StreamingResponse(generate(), media_type="text/event-stream")

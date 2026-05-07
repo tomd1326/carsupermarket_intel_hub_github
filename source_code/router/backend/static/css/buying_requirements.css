@@ -151,7 +151,7 @@ button.settings-cog:hover { color: #343a40 !important; background: #e9ecef !impo
 #data-table tbody td {
     border-bottom: 1px solid #b0b0b0;
     border-right: 1px solid #b0b0b0;
-    padding: 0.32em 0.45em;
+    padding: 0.18em 0.45em;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -326,7 +326,7 @@ button.settings-cog:hover { color: #343a40 !important; background: #e9ecef !impo
     display: flex;
     flex-direction: column;
     overflow: hidden;
-    padding: 0 14px;
+    padding: 0 14px 10px;
 }
 .vehicle-modal-scroll-x {
     flex: 1 1 auto;
@@ -432,8 +432,8 @@ button.settings-cog:hover { color: #343a40 !important; background: #e9ecef !impo
 }
 #vehicle-modal-avg-tfoot td {
     background: #eff6ff;
-    border-top: 2px solid #606060;
-    border-bottom: 2px solid #606060;
+    border-top: 1px solid #b0b0b0;
+    border-bottom: 1px solid #b0b0b0;
     border-right: 1px solid #b0b0b0;
     font-weight: 700;
     color: #1e3a5f;
@@ -443,6 +443,8 @@ button.settings-cog:hover { color: #343a40 !important; background: #e9ecef !impo
     overflow: hidden;
     text-overflow: ellipsis;
 }
+#vehicle-modal-avg-tfoot tr:first-child td { border-top: 2px solid #606060; }
+#vehicle-modal-avg-tfoot tr:last-child td  { border-bottom: 2px solid #606060; }
 #vehicle-modal-avg-tfoot td:first-child {
     border-left: 1px solid #b0b0b0;
 }
