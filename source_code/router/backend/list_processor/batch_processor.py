@@ -172,6 +172,8 @@ def process_file_with_cache(
     cap_client: CAPClient,
     cap_workers: int,
     cap_rate_limit: int,
+    at_workers: int = 40,
+    at_rate_limit: int = 60,
     prev_task_created=None,
 ) -> pd.DataFrame:
     """
@@ -192,6 +194,8 @@ def process_file_with_cache(
     api_results: dict[str, dict] = {}
     _at_veh = _at_val = _at_veh_err = _at_val_err = 0
     _cap_vrm = _cap_monthly = _cap_live = _cap_retries = _cap_vrm_err = _cap_live_err = 0
+    _at_errors: list = []
+    _cap_errors: list = []
 
     if cache_misses:
         miss_vrms = {v.vrm for v in cache_misses}
@@ -210,10 +214,15 @@ def process_file_with_cache(
         )]
 
         with ThreadPoolExecutor(max_workers=2) as executor:
-            at_future = executor.submit(at_client.process_file, at_miss_df, columns_mapper)
+            at_future = executor.submit(at_client.process_file, at_miss_df, columns_mapper, at_workers, at_rate_limit)
             cap_future = executor.submit(cap_client.process_file, miss_df, columns_mapper, cap_workers, cap_rate_limit)
-            at_df, _at_veh, _at_val, _at_veh_err, _at_val_err = at_future.result()
-            cap_df, _cap_vrm, _cap_monthly, _cap_live, _cap_retries, _cap_vrm_err, _cap_live_err = cap_future.result()
+            at_df, _at_veh, _at_val, _at_veh_err, _at_val_err, _at_errors = at_future.result()
+            cap_df, _cap_vrm, _cap_monthly, _cap_live, _cap_retries, _cap_vrm_err, _cap_live_err, _cap_errors = cap_future.result()
+
+        if at_client._abort:
+            raise RuntimeError(f"AT API aborted after {at_client._rate_limit_hits} rate limit (429) responses — reduce AT workers or rate limit")
+        if cap_client._abort:
+            raise RuntimeError(f"CAP API aborted after {cap_client._connection_errors} connection/timeout errors — reduce CAP workers or rate limit")
 
         # Build AT results keyed by VRM (at_miss_df may be smaller than miss_df)
         at_by_vrm: dict[str, pd.Series] = {}
@@ -371,4 +380,6 @@ def process_file_with_cache(
 
     price_df = pd.DataFrame(price_rows)
 
-    return pd.concat([input_df.reset_index(drop=True), at_result, cap_result, price_df], axis=1), reductions
+    # Exclude AT Valuations 400s — AT data quality issue (missing firstRegistrationDate), not speed/rate related
+    api_error_log = [e for e in _at_errors + _cap_errors if not (e.get('api') == 'AT Valuations' and e.get('status_code') == 400)]
+    return pd.concat([input_df.reset_index(drop=True), at_result, cap_result, price_df], axis=1), reductions, api_error_log

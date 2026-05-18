@@ -256,16 +256,17 @@ function applyFilter() {
         return (passDIS && passDTS && passGPUM) ? s + (Number(r[5]) || 0) : s;
     }, 0);
 
-    // In model view, translate filterCapId to the model label so filtering works
-    let filterModelLabel = null;
+    // In model view, translate filterCapId to all matching model labels (one per price band)
+    let filterModelLabels = null;
     if (filterCapId !== null && currentView === 'model') {
-        const raw = rawData.find(r => Number(r[0]) === filterCapId);
-        if (raw) {
+        const labels = new Set();
+        rawData.filter(r => Number(r[0]) === filterCapId).forEach(raw => {
             const makeModel = raw[29] || '';
             const fuel = normFuel(raw[2]);
             const band = raw[3] || '';
-            filterModelLabel = makeModel + ' / ' + fuel + ' / ' + band;
-        }
+            labels.add(makeModel + ' / ' + fuel + ' / ' + band);
+        });
+        if (labels.size > 0) filterModelLabels = labels;
     }
 
     const visibleRows = [];
@@ -279,7 +280,7 @@ function applyFilter() {
         let passCapId;
         if (filterCapId !== null) {
             passCapId = currentView === 'model'
-                ? (filterModelLabel !== null && row[1] === filterModelLabel)
+                ? (filterModelLabels !== null && filterModelLabels.has(row[1]))
                 : Number(row[0]) === filterCapId;
         } else {
             passCapId = true;
@@ -514,8 +515,9 @@ function aggregateRawData() {
         if (gpu_m   != null && sold)     { g.gpu_m_sum      += gpu_m;  g.gpu_m_n++;      }
         if (gpu_s   != null && sold)     { g.gpu_s_sum      += gpu_s;  g.gpu_s_n++;      }
         if (gpu_ms  != null && sold)     { g.gpu_ms_sum     += gpu_ms; g.gpu_ms_n++;     }
-        if (sell    != null && sell !== 0 && sold) { g.sell_sum += sell; g.sell_n++; }
-        if (at_val  != null && sold) { g.at_val_sum     += at_val; g.at_val_n++;     }
+        const soldForPrice = g.price_band === 'interest_free' ? sold : soldRate;
+        if (sell    != null && sell !== 0 && soldForPrice) { g.sell_sum += sell; g.sell_n++; }
+        if (at_val  != null && soldForPrice) { g.at_val_sum += at_val; g.at_val_n++;          }
         if (at_rate != null && sold)     { g.at_rating_sum  += at_rate; g.at_rating_n++; }
     }
 
@@ -544,11 +546,10 @@ function aggregateRawData() {
             avgAtVal,                                   // 15 avg AT val
             (avgSell != null && avgAtVal != null && avgAtVal !== 0) ? ((avgSell) / avgAtVal) * 100 : null, // 16 AT pct %
             avg(g.at_rating_sum, g.at_rating_n),        // 17 avg AT rating
-            // 18, 19 set in renderTable (ideal, required)
-            // 20: CB purchases — set by applyCbPurchases
-            null,                                       // 20 CB purchases
-            // 21 set in renderTable (remaining)
-            // 22: price_band
+            null,                                       // 18 ideal — set in renderTable
+            null,                                       // 19 required — set in renderTable
+            null,                                       // 20 CB purchases — set by applyCbPurchases
+            null,                                       // 21 remaining — set in renderTable
             g.price_band,                               // 22 price_band
         ]);
     }
@@ -641,7 +642,10 @@ function aggregateModelData() {
             avgAtVal,
             (avgSell != null && avgAtVal != null && avgAtVal !== 0) ? ((avgSell) / avgAtVal) * 100 : null,
             avg(g.at_rating_sum, g.at_rating_n),
-            // 18, 19, 20, 21 set in renderTable
+            null,          // 18 ideal — set in renderTable
+            null,          // 19 required — set in renderTable
+            null,          // 20 CB purchases — set by applyCbPurchases
+            null,          // 21 remaining — set in renderTable
             g.price_band,  // 22
         ]);
     }
@@ -1160,6 +1164,14 @@ function _setDbsUpdatedAt(fetchedAt) {
 }
 
 /* ── SharePoint patch ────────────────────────────────────── */
+let _dbsDone = false, _cbDone = false;
+function _maybeShowExportBtn() {
+    if (_dbsDone && _cbDone) {
+        const btn = document.getElementById('export-cap-ids-btn');
+        if (btn) { btn.classList.remove('disabled'); btn.removeAttribute('aria-disabled'); }
+    }
+}
+
 function patchDailyBuyersSheet() {
     setStatus('dbs-status', DBS_LABEL, 'running');
 
@@ -1171,6 +1183,7 @@ function patchDailyBuyersSheet() {
             renderTable();
             setStatus('dbs-status', DBS_LABEL, 'done');
             _setDbsUpdatedAt(resp.fetched_at);
+            _dbsDone = true; _maybeShowExportBtn();
         })
         .catch(() => setStatus('dbs-status', DBS_LABEL, 'error'));
 }
@@ -1198,6 +1211,7 @@ function patchCarsBought() {
             renderTable();
             setStatus('cb-status', CB_LABEL, 'done');
             _setCbUpdatedAt(resp.fetched_at, resp.total);
+            _cbDone = true; _maybeShowExportBtn();
         })
         .catch(() => setStatus('cb-status', CB_LABEL, 'error'));
 }
@@ -1215,6 +1229,7 @@ function loadCBFromCache() {
             applyCbPurchases(resp.purchases, resp.vehicles || []);
             renderTable();
             _setCbUpdatedAt(resp.fetched_at, resp.total);
+            _cbDone = true; _maybeShowExportBtn();
         })
         .catch(() => {});
 }
@@ -1342,6 +1357,7 @@ function loadFromServer(fetchSP = false, fromFetchData = false) {
                 return;
             }
             rawData = resp.rows;
+            rawData.forEach(r => { if (r[3] === '0%') r[3] = 'interest_free'; });
             setStatus('sf-status', SF_LABEL, 'done');
             _setSfCachedAt(resp.cached_at);
             _setApexUpdatedAt(rawData);
@@ -1370,6 +1386,7 @@ function loadDbsFromCache() {
             applyDbsPurchases(resp.purchases, resp.vehicles || [], resp.total);
             renderTable();
             _setDbsUpdatedAt(resp.fetched_at);
+            _dbsDone = true; _maybeShowExportBtn();
         })
         .catch(() => {});
 }
@@ -1393,7 +1410,7 @@ function exportXLSX() {
                 label: r[1].split(' / ').slice(0, -1).join(' / '),
                 fuel: normFuel(r[2]),
                 stock: 0, sales90: 0, sales7: 0,
-                ideal: 0, required: 0,
+                ideal: 0, required: 0, remaining: 0,
                 dis_sum: 0, dis_n: 0,
                 dts_sum: 0, dts_n: 0,
                 gpu_m_sum: 0, gpu_m_n: 0,
@@ -1409,8 +1426,9 @@ function exportXLSX() {
         g.stock    += Number(r[3])  || 0;
         g.sales90  += Number(r[4])  || 0;
         g.sales7   += Number(r[7])  || 0;
-        g.ideal    += Number(r[18]) || 0;
-        g.required += Number(r[19]) || 0;
+        g.ideal     += Number(r[18]) || 0;
+        g.required  += Number(r[19]) || 0;
+        g.remaining += Number(r[21]) || 0;
         if (r[8]  != null) { g.dis_sum      += Number(r[8]);  g.dis_n++;      }
         if (r[9]  != null) { g.dts_sum      += Number(r[9]);  g.dts_n++;      }
         if (r[10] != null) { g.gpu_m_sum    += Number(r[10]); g.gpu_m_n++;    }
@@ -1424,8 +1442,8 @@ function exportXLSX() {
         }
     }
 
-    const headers = ['CAP ID', 'Required', 'Make Model Derivative', 'Fuel',
-        '90d Sales', '7d Sales', 'Stock', 'Ideal Stock', 'Required',
+    const headers = ['CAP ID', 'Remaining', 'Make Model Derivative', 'Fuel',
+        '90d Sales', '7d Sales', 'Stock', 'Ideal Stock', 'Required', 'Remaining',
         'Avg DIS', 'Avg DTS',
         'Avg Sell Price (Rate)', 'Avg AT Val (Rate)', 'Avg AT PTM % (Rate)', 'Avg AT Rating',
         'Avg GPU-M', 'Avg GPU-S', 'Avg GPU-MS'];
@@ -1438,7 +1456,7 @@ function exportXLSX() {
             : null;
         return [
             cap_id,
-            fmt1(g.required),
+            fmt1(g.remaining),
             g.label,
             g.fuel,
             g.sales90,
@@ -1446,6 +1464,7 @@ function exportXLSX() {
             g.stock,
             fmt1(g.ideal),
             fmt1(g.required),
+            fmt1(g.remaining),
             fmt1(avg(g.dis_sum,       g.dis_n)),
             fmt1(avg(g.dts_sum,       g.dts_n)),
             fmtN(avgSell),

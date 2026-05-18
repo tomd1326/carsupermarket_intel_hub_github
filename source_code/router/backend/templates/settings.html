@@ -58,18 +58,34 @@
             <div class="card mb-4">
                 <div class="card-header fw-semibold">Supplier Stock Evaluator</div>
                 <div class="card-body">
+                    <div class="form-text fw-semibold mb-1">CAP</div>
                     <div class="d-flex gap-3 flex-wrap mb-3">
                         <div>
-                            <label for="cap_workers" class="form-label mb-1">CAP Workers</label>
+                            <label for="cap_workers" class="form-label mb-1">Workers</label>
                             <input class="form-control" type="number" id="cap_workers" name="cap_workers"
                                    value="{{ settings.cap_workers }}" min="1" max="40" style="width: 110px;">
-                            <div class="form-text">Max: 40</div>
+                            <div class="form-text">Default: 25</div>
                         </div>
                         <div>
                             <label for="cap_rate_limit" class="form-label mb-1">Rate Limit (req/s)</label>
                             <input class="form-control" type="number" id="cap_rate_limit" name="cap_rate_limit"
                                    value="{{ settings.cap_rate_limit }}" min="1" max="200" style="width: 110px;">
-                            <div class="form-text">Max: 200</div>
+                            <div class="form-text">Default: 100</div>
+                        </div>
+                    </div>
+                    <div class="form-text fw-semibold mb-1">Autotrader</div>
+                    <div class="d-flex gap-3 flex-wrap mb-3">
+                        <div>
+                            <label for="at_workers" class="form-label mb-1">Workers</label>
+                            <input class="form-control" type="number" id="at_workers" name="at_workers"
+                                   value="{{ settings.at_workers }}" min="1" max="80" style="width: 110px;">
+                            <div class="form-text">Default: 40</div>
+                        </div>
+                        <div>
+                            <label for="at_rate_limit" class="form-label mb-1">Rate Limit (req/s)</label>
+                            <input class="form-control" type="number" id="at_rate_limit" name="at_rate_limit"
+                                   value="{{ settings.at_rate_limit }}" min="1" max="200" style="width: 110px;">
+                            <div class="form-text">Default: 60</div>
                         </div>
                     </div>
                     <div class="form-check">
@@ -89,6 +105,21 @@
                                value="{{ settings.evaluator_row_limit }}" min="0" style="width: 110px;" onclick="this.select()">
                         <div class="form-text">Max rows to fetch from supplier feeds. 0 = no limit.</div>
                     </div>
+                </div>
+            </div>
+
+            <div class="card mb-4">
+                <div class="card-header fw-semibold">MOT Check</div>
+                <div class="card-body">
+                    <div class="d-flex gap-3 flex-wrap">
+                        <div>
+                            <label for="mot_workers" class="form-label mb-1">Workers</label>
+                            <input class="form-control" type="number" id="mot_workers" name="mot_workers"
+                                   value="{{ settings.mot_workers }}" min="1" max="10" style="width: 110px;">
+                            <div class="form-text">Default: 5. Max: 10</div>
+                        </div>
+                    </div>
+                    <div class="form-text mt-2">Concurrent DVSA API requests. Higher = faster but more likely to hit rate limits (429s).</div>
                 </div>
             </div>
 

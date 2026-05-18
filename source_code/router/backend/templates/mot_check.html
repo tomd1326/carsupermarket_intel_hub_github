@@ -86,9 +86,10 @@
             border-radius: 4px;
             text-transform: uppercase;
         }
-        .badge-valid   { background-color: #d4edda; color: #155724; }
-        .badge-expired { background-color: #f8d7da; color: #721c24; }
-        .badge-unknown { background-color: #e2e3e5; color: #383d41; }
+        .badge-valid     { background-color: #d4edda; color: #155724; }
+        .badge-expired   { background-color: #f8d7da; color: #721c24; }
+        .badge-unknown   { background-color: #e2e3e5; color: #383d41; }
+        .badge-not-found { background-color: #e2e3e5; color: #383d41; }
 
         .result-table { font-size: 0.8rem; }
         .result-table th {
@@ -388,16 +389,20 @@
                 const isExpired  = statusIdx >= 0 && row[statusIdx] === 'EXPIRED';
                 const isUnknown  = statusIdx >= 0 && row[statusIdx] === 'UNKNOWN';
 
+                const isNotFound  = statusIdx >= 0 && row[statusIdx] === 'NOT_FOUND';
+
                 const cats = [];
                 if (isExpired)  cats.push('expired');
                 if (isUnknown)  cats.push('unknown');
+                if (isNotFound) cats.push('not_found');
                 if (hasMileage) cats.push('mileage');
                 if (hasEarly)   cats.push('early');
 
                 const cells = row.map((cell, i) => {
                     if (columns[i] === 'Status') {
-                        const cls = cell === 'VALID' ? 'badge-valid' : cell === 'EXPIRED' ? 'badge-expired' : 'badge-unknown';
-                        return `<td><span class="status-badge ${cls}">${cell}</span></td>`;
+                        const cls = cell === 'VALID' ? 'badge-valid' : cell === 'EXPIRED' ? 'badge-expired' : cell === 'NOT_FOUND' ? 'badge-not-found' : 'badge-unknown';
+                        const label = cell === 'NOT_FOUND' ? 'NOT FOUND' : cell;
+                        return `<td><span class="status-badge ${cls}">${label}</span></td>`;
                     }
                     if (i === commentsIdx && cell) return `<td class="warn-cell">${cell}</td>`;
                     if (warned.has(i)) return `<td class="warn-cell">${cell ?? ''}</td>`;
@@ -408,6 +413,7 @@
 
             const expired        = statusIdx >= 0 ? rows.filter(r => r[statusIdx] === 'EXPIRED').length : 0;
             const unknown        = statusIdx >= 0 ? rows.filter(r => r[statusIdx] === 'UNKNOWN').length : 0;
+            const notFound       = statusIdx >= 0 ? rows.filter(r => r[statusIdx] === 'NOT_FOUND').length : 0;
             let mileageWarnCount = 0, earlyMotWarnCount = 0;
             rows.forEach(row => {
                 const w = warnedCells(columns, row);
@@ -426,7 +432,10 @@
                 parts.push(`<span style="background:#d1e7dd;color:#155724;font-weight:600;padding:5px 12px;border-radius:6px;display:inline-block;"><i class="fas fa-check-circle me-1"></i>No expired MOTs</span>`);
             }
             if (unknown > 0) {
-                parts.push(badge('unknown', '#e2e3e5', '#41464b', 'question-circle', `${unknown} not found`));
+                parts.push(badge('unknown', '#e2e3e5', '#41464b', 'car', `${unknown} no MOT history`));
+            }
+            if (notFound > 0) {
+                parts.push(badge('not_found', '#e2e3e5', '#41464b', 'question-circle', `${notFound} not found`));
             }
             if (mileageWarnCount > 0) {
                 parts.push(badge('mileage', '#f8d7da', '#842029', 'tachometer-alt', `${mileageWarnCount} mileage discrepanc${mileageWarnCount !== 1 ? 'ies' : 'y'}`));
