@@ -15,7 +15,7 @@ SEARCH_URL = (
     "https://mfldirect.co.uk/search-results"
     "?page=1"
     "&searchType=advancedSearch"
-    "&sortCode=mfldirect_CAP_RATIO_ascending"
+    "&sortCode=mfldirect_PRICE_REDUCED_DATE_descending"
     "&view=table"
     "&category=MAINLAND_ONLY"
     "&fixedPrice=true"
@@ -57,7 +57,7 @@ EXPORT_JS = """
             },
             body: JSON.stringify({
                 criteria: 'category=MAINLAND_ONLY&fixedPrice=true&conditionTier=0',
-                sortCode: 'mfldirect_CAP_RATIO_ascending'
+                sortCode: 'mfldirect_PRICE_REDUCED_DATE_descending'
             })
         });
         return {

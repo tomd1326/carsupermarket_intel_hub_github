@@ -72,6 +72,16 @@ class CAPClient(metaclass=Singleton):
         self._retry_lock = threading.Lock()
         self._local = threading.local()
 
+        # Request counters (reset per process_file call)
+        self._counter_lock = threading.Lock()
+        self._vrm_requests = 0
+        self._live_requests = 0
+        self._monthly_requests = 0
+        self._vrm_errors = 0
+        self._live_errors = 0
+        self._connection_errors = 0
+        self._abort = False
+
     @classmethod
     def is_excel_date_format(cls, date_str):
         try:
@@ -202,6 +212,8 @@ class CAPClient(metaclass=Singleton):
             'regDate': vehicle.registration_date.strftime('%Y-%m-%d'),
         }
 
+        with self._counter_lock:
+            self._live_requests += 1
         current_valuations = self.fetch_and_parse_data(self.live_valuation_url, live_payload, vrm=vehicle.vrm)
         if not current_valuations:
             return None, None
@@ -227,6 +239,8 @@ class CAPClient(metaclass=Singleton):
             'StandardEquipmentRequired': False
         }
 
+        with self._counter_lock:
+            self._monthly_requests += 1
         monthly_valuation_data = self.fetch_and_parse_data(self.monthly_valuation_url, old_payload, vrm=vehicle.vrm)
         return monthly_valuation_data
 
@@ -283,11 +297,13 @@ class CAPClient(metaclass=Singleton):
         vrm_payload = {
             'SubscriberID': self.subscriber_id,
             'Password': self.cap_password,
-            'VRM': vehicle.vrm,
+            'VRM': vehicle.vrm.upper(),
             'Mileage': vehicle.mileage,
             'StandardEquipmentRequired': 'false'
         }
 
+        with self._counter_lock:
+            self._vrm_requests += 1
         response = self._post_with_retry(self.vrm_url, vrm_payload, label=f"{vehicle.vrm} VRMValuation")
 
         cap_vrm_response = self.extract_vrm_values(response.text)
@@ -311,11 +327,49 @@ class CAPClient(metaclass=Singleton):
         except ValueError:
             return None
 
+    _CAP_CONNECTION_ERROR_ABORT = 10  # abort if this many connection/timeout errors received
+
     def process_row(self, row: pd.Series, column_mapper: BaseColumnsMapper) -> Optional[dict]:
+        if self._abort:
+            return None
         try:
-            return self._process_row(row, column_mapper)
+            result = self._process_row(row, column_mapper)
+            # Log VRM not-found (note set by CAP, no exception raised)
+            if result and result.get('note') and not result.get('capid'):
+                vehicle = column_mapper.map_row(row)
+                with self._counter_lock:
+                    self._error_log.append({
+                        'timestamp': datetime.datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S'),
+                        'api': 'CAP VRM',
+                        'vrm': vehicle.vrm if vehicle else str(row.name),
+                        'mileage': vehicle.mileage if vehicle else None,
+                        'cap_id': None,
+                        'status_code': None,
+                        'error_type': 'NOT_FOUND',
+                        'detail': result.get('note', '')[:200],
+                    })
+            return result
         except (requests.exceptions.ReadTimeout, requests.exceptions.ConnectionError) as e:
-            logger.error(f"CAP request failed after all retries for {row.get('VRM', row.name)}: {type(e).__name__}")
+            vehicle = column_mapper.map_row(row)
+            vehicle = column_mapper.map_row(row)
+            error_type = 'TIMEOUT' if 'timeout' in type(e).__name__.lower() else 'CONNECTION_ERROR'
+            with self._counter_lock:
+                self._vrm_errors += 1
+                self._connection_errors += 1
+                self._error_log.append({
+                    'timestamp': datetime.datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S'),
+                    'api': 'CAP VRM',
+                    'vrm': vehicle.vrm if vehicle else str(row.name),
+                    'mileage': vehicle.mileage if vehicle else None,
+                    'cap_id': vehicle.capid if vehicle else None,
+                    'status_code': None,
+                    'error_type': error_type,
+                    'detail': str(e)[:200],
+                })
+                if self._connection_errors >= self._CAP_CONNECTION_ERROR_ABORT:
+                    self._abort = True
+                    logger.error("[CAP] Aborting: %d connection/timeout errors received", self._connection_errors)
+            logger.debug(f"CAP request failed after all retries for {row.get('VRM', row.name)}: {type(e).__name__}")
             return CAPOutput(note=f"CAP API error: {type(e).__name__}").dict()
 
     def _process_row(self, row: pd.Series, column_mapper: BaseColumnsMapper) -> Optional[dict]:
@@ -383,26 +437,28 @@ class CAPClient(metaclass=Singleton):
         self._retry_count = 0
         self.limiter = RateLimiter(rate_limit=rate_limit, time_window=1)
 
+        with self._counter_lock:
+            self._vrm_requests = 0
+            self._live_requests = 0
+            self._monthly_requests = 0
+            self._vrm_errors = 0
+            self._live_errors = 0
+            self._connection_errors = 0
+            self._abort = False
+            self._error_log: list = []
+
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             for index, row in input_df.iterrows():
                 processed_rows.append(executor.submit(self.process_row, row, column_mapper))
-
-            # Wait for all threads to finish
             processed_rows = [future.result() for future in processed_rows]
 
-        if self._retry_count:
-            logger.warning(f"CAP retries this batch: {self._retry_count}")
-
-        # Filter None values
         processed_rows = [row if row is not None else {} for row in processed_rows]
-
-        # transform processed rows into a DataFrame
         processed_df = pd.DataFrame(processed_rows)
 
         # Add prefix cap_ to all columns
         processed_df.columns = [f'cap_{col}' for col in processed_df.columns]
 
-        return processed_df
+        return processed_df, self._vrm_requests, self._monthly_requests, self._live_requests, self._retry_count, self._vrm_errors, self._live_errors, list(self._error_log)
 
 
 if __name__ == '__main__':

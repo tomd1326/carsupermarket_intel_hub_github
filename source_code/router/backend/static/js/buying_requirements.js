@@ -1,6 +1,7 @@
 /* ── Status helpers ──────────────────────────────────────── */
 const SF_LABEL = '<i class="fas fa-snowflake me-1 text-info"></i>Snowflake';
-const SP_LABEL = '<i class="fas fa-file-excel me-1 text-success"></i>SharePoint';
+const DBS_LABEL = '<i class="fas fa-file-excel me-1 text-success"></i>Daily Buyers Sheet';
+const CB_LABEL = '<i class="fas fa-file-excel me-1 text-success"></i>Cars Bought';
 
 function setStatus(elId, label, state) {
     const el = document.getElementById(elId);
@@ -12,7 +13,7 @@ function setStatus(elId, label, state) {
         error:   `${label} <i class="fas fa-times-circle text-danger ms-1"></i>`,
     };
     el.innerHTML = icons[state] ?? icons.idle;
-    if (elId === 'sp-status') {
+    if (elId === 'dbs-status' || elId === 'cb-status') {
         if (state === 'running') {
             el.style.cssText = 'background:#fde047;color:#000;font-weight:700;padding:2px 8px;border-radius:4px;';
         } else {
@@ -23,34 +24,35 @@ function setStatus(elId, label, state) {
 
 /* ── Column widths ───────────────────────────────────────── */
 const COL_UNITS = [
-    0.7,  // 0  CAP ID
-    2.45, // 1  Make/Model/Deriv/Price Band
-    0.55, // 2  View Vehicles
-    0.7,  // 3  Fuel
-    0.7,  // 4  Total Sales
-    0.7,  // 5  7d Sales
-    0.7,  // 6  Stock
-    0.7,  // 7  Ideal Stock
-    0.7,  // 8  Required
-    0.7,  // 9  Today's Purchases
-    0.7,  // 10 Remaining
-    0.7,  // 11 Avg Days in Stock
-    0.7,  // 12 Avg Days to Sell
-    0.7,  // 13 Avg Sell Price
-    0.7,  // 14 Avg AT PTM
-    0.7,  // 15 Avg AT PTM %
-    0.7,  // 16 Avg AT Rating
-    0.7,  // 17 Avg GPU-M
-    0.7,  // 18 Avg GPU-S
-    0.7,  // 19 Avg GPU-MS
+    0.665, // 0  CAP ID
+    2.40,  // 1  Make/Model/Deriv/Price Band
+    0.55,  // 2  View Vehicles
+    0.665, // 3  Fuel
+    0.665, // 4  Total Sales
+    0.665, // 5  7d Sales
+    0.665, // 6  Stock
+    0.665, // 7  Ideal Stock
+    0.665, // 8  Required
+    0.665, // 9  Daily Buyers Sheet
+    0.665, // 10 Cars Bought
+    0.665, // 11 Remaining
+    0.665, // 12 Avg Days in Stock
+    0.665, // 13 Avg Days to Sell
+    0.665, // 14 Avg Sell Price
+    0.665, // 15 Avg AT PTM
+    0.665, // 16 Avg AT PTM %
+    0.665, // 17 Avg AT Rating
+    0.665, // 18 Avg GPU-M
+    0.665, // 19 Avg GPU-S
+    0.665, // 20 Avg GPU-MS
 ];
 const TOTAL_UNITS = COL_UNITS.reduce((a, b) => a + b, 0);
 
 // Font / column sizing — scale together
 const BASE_FONT_PX  = 12;
 const BASE_FIXED_PX = 65;
-const BASE_DESC_PX  = 541;
-const BASE_OVERRIDE = { 2: 60, 3: 46, 8: 78, 9: 65.5, 10: 79.5 }; // View, Fuel narrow, Required wider, Remaining wider
+const BASE_DESC_PX  = 530;
+const BASE_OVERRIDE = { 2: 60, 3: 46, 8: 78, 9: 65.5, 10: 65.5, 11: 79.5 }; // View, Fuel narrow, Required wider, DBS/CB wider, Remaining wider
 const FONT_STEP     = 0.5; // px per click
 const FONT_MIN      = 8;
 const FONT_MAX      = 16;
@@ -79,7 +81,7 @@ function resetColWidths() {
     requestAnimationFrame(applyColWidths);
 }
 
-const CAP_ONLY_COL_INDICES = new Set([0, 2, 8, 9]); // CAP ID, View Vehicles, Required (cap only), Today's Buying
+const CAP_ONLY_COL_INDICES = new Set([0, 2]); // CAP ID, View Vehicles
 
 function applyColWidths() {
     const table = document.getElementById('data-table');
@@ -155,6 +157,13 @@ function resetTableFilters() {
     if (reqInp) reqInp.value = '';
     const reqClear = document.getElementById('minReqClearBtn');
     if (reqClear) reqClear.style.display = 'none';
+    // Reset VRM search
+    const vrmInp = document.getElementById('vrmSearch');
+    if (vrmInp) vrmInp.value = '';
+    const vrmClear = document.getElementById('vrmClearBtn');
+    if (vrmClear) vrmClear.style.display = 'none';
+    const vrmResult = document.getElementById('vrm-search-result');
+    if (vrmResult) vrmResult.textContent = '';
 
     if (tableData.length) applyFilter();
 }
@@ -246,6 +255,20 @@ function applyFilter() {
         const passGPUM = minGPUM === null || gpu_m === null || gpu_m >= minGPUM;
         return (passDIS && passDTS && passGPUM) ? s + (Number(r[5]) || 0) : s;
     }, 0);
+
+    // In model view, translate filterCapId to all matching model labels (one per price band)
+    let filterModelLabels = null;
+    if (filterCapId !== null && currentView === 'model') {
+        const labels = new Set();
+        rawData.filter(r => Number(r[0]) === filterCapId).forEach(raw => {
+            const makeModel = raw[29] || '';
+            const fuel = normFuel(raw[2]);
+            const band = raw[3] || '';
+            labels.add(makeModel + ' / ' + fuel + ' / ' + band);
+        });
+        if (labels.size > 0) filterModelLabels = labels;
+    }
+
     const visibleRows = [];
     document.querySelectorAll('#table-body tr').forEach((tr, i) => {
         const row = tableData[i];
@@ -254,8 +277,16 @@ function applyFilter() {
         const fuel = normFuel(row[2]);
         const req = row[19] != null ? Math.round(Number(row[19])) : null;
         const passModel = filterModel === null || String(row[1] ?? '').toLowerCase().includes(filterModel);
-        const visible = passModel && (filterCapId !== null
-            ? Number(row[0]) === filterCapId
+        let passCapId;
+        if (filterCapId !== null) {
+            passCapId = currentView === 'model'
+                ? (filterModelLabels !== null && filterModelLabels.has(row[1]))
+                : Number(row[0]) === filterCapId;
+        } else {
+            passCapId = true;
+        }
+        const visible = passModel && passCapId && (filterCapId !== null
+            ? true
             : (filterBand.has('All') || filterBand.has(band)) &&
               (filterFuel.has('All') || filterFuel.has(fuel)) &&
               (filterMinReq === null || (req !== null && req >= filterMinReq)));
@@ -295,7 +326,8 @@ document.querySelectorAll('.filter-btn').forEach(btn => {
 });
 
 /* ── Sortable table ──────────────────────────────────────── */
-let rawData = [], tableData = [], spPurchases = {}, sortCol = null, sortDir = 1;
+let rawData = [], tableData = [], dbsPurchases = {}, cbPurchases = {}, sortCol = null, sortDir = 1;
+let dbsVehicles = [], cbVehicles = [];
 
 function getMaxDIS()  { const v = parseFloat(document.getElementById('maxDIS')?.value);  return isNaN(v) ? null : v; }
 
@@ -325,8 +357,9 @@ const THEAD_COLS = [
     { capOnly: false, html: '<span class="th-label">7d Sales</span><span class="sort-icon"><i class="fas fa-sort"></i></span><div class="resize-handle"></div>', attrs: 'data-col="7" data-type="num"' },
     { capOnly: false, html: '<span class="th-label">Stock</span><span class="sort-icon"><i class="fas fa-sort"></i></span><div class="resize-handle"></div>', attrs: 'data-col="3" data-type="num"' },
     { capOnly: false, html: '<span class="th-label">Ideal Stock</span><span class="sort-icon"><i class="fas fa-sort"></i></span><div class="resize-handle"></div>', attrs: 'data-col="18" data-type="num"' },
-    { capOnly: true, html: '<span class="th-label">Required</span><span class="sort-icon"><i class="fas fa-sort"></i></span><div class="resize-handle"></div>', attrs: 'data-col="19" data-type="num"' },
-    { capOnly: true,  html: '<span class="th-label">Today\'s Buying</span><span class="sort-icon"><i class="fas fa-sort"></i></span><div class="resize-handle"></div>', attrs: 'data-col="6" data-type="num" style="background:#fef08a"' },
+    { capOnly: false, html: '<span class="th-label">Required</span><span class="sort-icon"><i class="fas fa-sort"></i></span><div class="resize-handle"></div>', attrs: 'data-col="19" data-type="num"' },
+    { capOnly: false, html: '<span class="th-label">Daily Buyers Sheet</span><span class="sort-icon"><i class="fas fa-sort"></i></span><div class="resize-handle"></div>', attrs: 'data-col="6" data-type="num" style="background:#fef08a"' },
+    { capOnly: false, html: '<span class="th-label">Cars Bought</span><span class="sort-icon"><i class="fas fa-sort"></i></span><div class="resize-handle"></div>', attrs: 'data-col="20" data-type="num" style="background:#fef08a"' },
     { capOnly: false, html: '<span class="th-label">Remaining</span><span class="sort-icon"><i class="fas fa-sort"></i></span><div class="resize-handle"></div>', attrs: 'data-col="21" data-type="num"' },
     { capOnly: false, html: '<span class="th-label">Avg Days in Stock</span><span class="sort-icon"><i class="fas fa-sort"></i></span><div class="resize-handle"></div>', attrs: 'data-col="8" data-type="num"' },
     { capOnly: false, html: '<span class="th-label">Avg Days to Sell</span><span class="sort-icon"><i class="fas fa-sort"></i></span><div class="resize-handle"></div>', attrs: 'data-col="9" data-type="num"' },
@@ -394,7 +427,8 @@ function applyView() {
     colWidths = new Array(COL_UNITS.length).fill(null);
     applyColWidths();
     if (currentView === 'cap') aggregateRawData(); else aggregateModelData();
-    applySpPurchases(spPurchases);
+    applyDbsPurchases(dbsPurchases);
+    applyCbPurchases(cbPurchases);
     renderTable();
     if (currentView === 'model') {
         sortCol = 21; sortDir = 1; // sortTable toggles to -1 → descending
@@ -481,8 +515,9 @@ function aggregateRawData() {
         if (gpu_m   != null && sold)     { g.gpu_m_sum      += gpu_m;  g.gpu_m_n++;      }
         if (gpu_s   != null && sold)     { g.gpu_s_sum      += gpu_s;  g.gpu_s_n++;      }
         if (gpu_ms  != null && sold)     { g.gpu_ms_sum     += gpu_ms; g.gpu_ms_n++;     }
-        if (sell    != null && sell !== 0 && sold) { g.sell_sum += sell; g.sell_n++; }
-        if (at_val  != null && sold) { g.at_val_sum     += at_val; g.at_val_n++;     }
+        const soldForPrice = g.price_band === 'interest_free' ? sold : soldRate;
+        if (sell    != null && sell !== 0 && soldForPrice) { g.sell_sum += sell; g.sell_n++; }
+        if (at_val  != null && soldForPrice) { g.at_val_sum += at_val; g.at_val_n++;          }
         if (at_rate != null && sold)     { g.at_rating_sum  += at_rate; g.at_rating_n++; }
     }
 
@@ -499,7 +534,7 @@ function aggregateRawData() {
             g.stock,                                    // 3
             g.sales90,                                  // 4
             null,                                       // 5 pct — set in renderTable
-            null,                                       // 6 today's buying — set by SP
+            null,                                       // 6 DBS purchases — set by patchDailyBuyersSheet
             g.sales7,                                   // 7
             avg(g.dis_sum,       g.dis_n),              // 8  avg DIS
             avg(g.dts_sum,       g.dts_n),              // 9  avg DTS
@@ -511,8 +546,10 @@ function aggregateRawData() {
             avgAtVal,                                   // 15 avg AT val
             (avgSell != null && avgAtVal != null && avgAtVal !== 0) ? ((avgSell) / avgAtVal) * 100 : null, // 16 AT pct %
             avg(g.at_rating_sum, g.at_rating_n),        // 17 avg AT rating
-            // 18, 19, 20, 21 set in renderTable (ideal, required, -, remaining)
-            // 22: price_band
+            null,                                       // 18 ideal — set in renderTable
+            null,                                       // 19 required — set in renderTable
+            null,                                       // 20 CB purchases — set by applyCbPurchases
+            null,                                       // 21 remaining — set in renderTable
             g.price_band,                               // 22 price_band
         ]);
     }
@@ -605,7 +642,10 @@ function aggregateModelData() {
             avgAtVal,
             (avgSell != null && avgAtVal != null && avgAtVal !== 0) ? ((avgSell) / avgAtVal) * 100 : null,
             avg(g.at_rating_sum, g.at_rating_n),
-            // 18, 19, 20, 21 set in renderTable
+            null,          // 18 ideal — set in renderTable
+            null,          // 19 required — set in renderTable
+            null,          // 20 CB purchases — set by applyCbPurchases
+            null,          // 21 remaining — set in renderTable
             g.price_band,  // 22
         ]);
     }
@@ -686,13 +726,12 @@ function isInterestFree(r) {
 }
 
 function renderTotalsRow(visibleRows) {
+    const tfoot = document.querySelector('#data-table tfoot');
     if (!visibleRows || !visibleRows.length) {
-        ['totals-row-rate','totals-row-if'].forEach(id => {
-            const tr = document.getElementById(id);
-            if (tr) Array.from(tr.cells).forEach(td => { td.textContent = ''; td.style.background = ''; });
-        });
+        if (tfoot) tfoot.style.display = 'none';
         return;
     }
+    if (tfoot) tfoot.style.display = '';
     // cap view:   blank(3) | fuel(label) | sales | 7d | stock | ideal | req | today | remaining | avgDIS | avgDTS | sell | ATPTM | ATPTM% | ATRating | GPUM | GPUS | GPUMS
     // model view: blank(1) | fuel(label) | sales | 7d | stock | ideal | req |                    avgDIS | avgDTS | sell | ATPTM | ATPTM% | ATRating | GPUM | GPUS | GPUMS
     const isCap = currentView === 'cap';
@@ -702,7 +741,8 @@ function renderTotalsRow(visibleRows) {
         [3,  'sum', fmtInt],
         [18, 'sum', v => fmt(v, 1)],
         [19, 'sum', v => fmt(v, 1)],
-        [6,  'sum', fmtInt],   // Today's Buying (cap only)
+        [6,  'sum', fmtInt],   // Daily Buyers Sheet (cap only)
+        [20, 'sum', fmtInt],   // Cars Bought (cap only)
         null,                  // Remaining (cap only, computed)
         [8,  'avg', v => fmt(v, 1)],
         [9,  'avg', v => fmt(v, 1)],
@@ -719,7 +759,10 @@ function renderTotalsRow(visibleRows) {
         [7,  'sum', fmtInt],
         [3,  'sum', fmtInt],
         [18, 'sum', v => fmt(v, 1)],
-        [21, 'sum', fmtInt],
+        null,                  // Required (computed)
+        [6,  'sum', fmtInt],   // Daily Buyers Sheet
+        [20, 'sum', fmtInt],   // Cars Bought
+        null,                  // Remaining (computed)
         [8,  'avg', v => fmt(v, 1)],
         [9,  'avg', v => fmt(v, 1)],
         [14, 'avg', fmtGBP],
@@ -731,8 +774,9 @@ function renderTotalsRow(visibleRows) {
         [12, 'avg', fmtGBP],
     ];
     const DATA_COLS = isCap ? CAP_DATA_COLS : MODEL_DATA_COLS;
-    const TODAY_CELL_IDX     = 5;  // only used in cap view
-    const REMAINING_CELL_IDX = 6;  // only used in cap view
+    const DBS_CELL_IDX       = isCap ? 5 : 5;
+    const CB_CELL_IDX        = isCap ? 6 : 6;
+    const REMAINING_CELL_IDX = isCap ? 7 : 7;
 
     function fillRow(trEl, rows, label) {
         if (!trEl) return;
@@ -740,24 +784,22 @@ function renderTotalsRow(visibleRows) {
         cells[0].textContent = '';
         if (cells[1]) { cells[1].style.background = ''; cells[1].textContent = label; }
         const reqSum   = rows.reduce((s, r) => s + (Number(r[19]) || 0), 0);
-        const spReady  = isCap && rows.some(r => r[6] !== null);
-        const todaySum = spReady ? rows.reduce((s, r) => s + (Number(r[6]) || 0), 0) : null;
-        const MODEL_REM_IDX = 4; // index in MODEL_DATA_COLS for Remaining
+        const spReady  = rows.some(r => r[6] != null && r[6] !== 0);
+        // REMAINING_CELL_IDX = 7 for both cap and model DATA_COLS
+        // Required slot = 4 in MODEL_DATA_COLS (null → computed)
+        const MODEL_REQ_IDX = 4;
         DATA_COLS.forEach((def, i) => {
             const td = cells[i + 2];
             if (!td) return;
             td.style.background = '';
-            if (isCap && i === REMAINING_CELL_IDX) {
+            if (i === REMAINING_CELL_IDX) {
                 const remSum = rows.reduce((s, r) => s + (Number(r[21]) || 0), 0);
-                td.textContent = spReady ? fmt(remSum, 1) : '';
+                td.textContent = spReady ? fmt(remSum, 1) : fmt(reqSum, 1);
                 return;
             }
-            if (!isCap && i === MODEL_REM_IDX) {
+            if (!isCap && i === MODEL_REQ_IDX) {
                 td.textContent = fmt(reqSum, 1);
                 return;
-            }
-            if (isCap && i === TODAY_CELL_IDX) {
-                td.style.background = spReady ? '#fef08a' : '';
             }
             if (!def) { td.textContent = ''; return; }
             const [di, agg, formatter] = def;
@@ -836,7 +878,7 @@ function renderTable() {
     if (lbl) lbl.textContent = `Ideal total: ${(totalCurrentStock + numberToBuy).toLocaleString()}`;
 
     tableData.forEach(r => {
-        r[21] = (r[19] || 0) - (r[6] || 0);
+        r[21] = (r[19] || 0) - (r[6] || 0) - (r[20] || 0);
         if (r[21] > maxRem) maxRem = r[21];
         if (r[21] < minRem) minRem = r[21];
     });
@@ -876,11 +918,9 @@ function renderTable() {
         { const td = add(row[7] != null ? fmtInt(row[7]) : ''); if ((row[7] || 0) === 0) td.style.background = '#d8d8d8'; }
         { const td = add(fmtInt(row[3])); if ((row[3] || 0) === 0) td.style.background = '#d8d8d8'; }
         add(row[18] != null ? fmt(row[18], 1) : '');
-        if (currentView === 'cap') add(row[19] != null ? fmt(row[19], 1) : '');
-        if (currentView === 'cap') {
-            const tdToday = add(row[6] != null ? fmtInt(row[6]) : '');
-            if ((row[6] || 0) > 0) tdToday.style.background = '#fef08a';
-        }
+        add(row[19] != null ? fmt(row[19], 1) : '');
+        { const td = add(row[6]  != null ? fmtInt(row[6])  : ''); if ((row[6]  || 0) > 0) td.style.background = '#fef08a'; }
+        { const td = add(row[20] != null ? fmtInt(row[20]) : ''); if ((row[20] || 0) > 0) td.style.background = '#fef08a'; }
         add(row[21] != null ? fmt(row[21], 1) : '');
         add(row[8]  != null ? fmt(row[8],  1) : '');
         add(row[9]  != null ? fmt(row[9],  1) : '');
@@ -895,20 +935,18 @@ function renderTable() {
     });
 
     // DOM cell indices depend on view
-    // cap:   CAP_ID(0) label(1) View(2) fuel(3) sales(4) 7d(5) stock(6) ideal(7) req(8) today(9) rem(10) DIS(11) DTS(12) sell(13) ATPTM(14) ATPTM%(15) ATR(16) GPUM(17) GPUS(18) GPUMS(19)
-    // model: label(0) fuel(1) sales(2) 7d(3) stock(4) ideal(5) req(6) DIS(7) DTS(8) sell(9) ATPTM(10) ATPTM%(11) ATR(12) GPUM(13) GPUS(14) GPUMS(15)
+    // cap:   CAP_ID(0) label(1) View(2) fuel(3) sales(4) 7d(5) stock(6) ideal(7) req(8) DBS(9) CB(10) rem(11) DIS(12) DTS(13) sell(14) ATPTM(15) ATPTM%(16) ATR(17) GPUM(18) GPUS(19) GPUMS(20)
+    // model: label(0) fuel(1) sales(2) 7d(3) stock(4) ideal(5) req(6) DBS(7) CB(8) rem(9) DIS(10) DTS(11) sell(12) ATPTM(13) ATPTM%(14) ATR(15) GPUM(16) GPUS(17) GPUMS(18)
     const isCap = currentView === 'cap';
-    // cap:   CAP_ID(0) label(1) View(2) fuel(3) sales(4) 7d(5) stock(6) ideal(7) req(8) today(9) rem(10) DIS(11) DTS(12) sell(13) ATPTM(14) ATPTM%(15) ATR(16) GPUM(17) GPUS(18) GPUMS(19)
-    // model: label(0) fuel(1) sales(2) 7d(3) stock(4) ideal(5) rem(6) DIS(7) DTS(8) sell(9) ATPTM(10) ATPTM%(11) ATR(12) GPUM(13) GPUS(14) GPUMS(15)
     const CI = {
         sales7:    isCap ? 5  : 3,
-        required:  isCap ? 8  : null,
-        remaining: isCap ? 10 : 6,
-        dts:       isCap ? 12 : 8,
-        gpuM:      isCap ? 17 : 13,
-        gpuMS:     isCap ? 19 : 15,
-        atRating:  isCap ? 16 : 12,
-        ifSkip:    isCap ? new Set([4,5,9,10,12,16,17,19]) : new Set([2,3,6,8,12,13,15]),
+        required:  isCap ? 8  : 6,
+        remaining: isCap ? 11 : 9,
+        dts:       isCap ? 13 : 11,
+        gpuM:      isCap ? 18 : 16,
+        gpuMS:     isCap ? 20 : 18,
+        atRating:  isCap ? 17 : 15,
+        ifSkip:    isCap ? new Set([4,5,9,10,11,13,17,18,20]) : new Set([2,3,7,8,9,11,15,16,18]),
     };
     Array.from(fragment.children).forEach((tr, i) => {
         const r = tableData[i];
@@ -1059,18 +1097,50 @@ function autoFitCol(col, th) {
     applyColWidths();
 }
 
-function applySpPurchases(p) {
-    spPurchases = p;
-    let spTotal = 0;
-    for (const v of Object.values(p)) spTotal += v;
-    const badge = document.getElementById('sp-total-badge');
-    if (badge) badge.textContent = spTotal + ' purchases';
-    if (currentView === 'model') return;
+function _applyNotOnApex() {
+    if (currentView === 'model') {
+        // Build label → {dbs, cb} sums by iterating all cap_ids that map to each model label
+        const labelDbs = {}, labelCb = {};
+        for (const [key, qty] of Object.entries(dbsPurchases)) {
+            const [capId, band] = key.split('|');
+            const raw = rawData.find(r => String(r[0]) === capId && r[3] === band);
+            if (!raw) continue;
+            const label = (raw[29] || '') + ' / ' + normFuel(raw[2]) + ' / ' + band;
+            labelDbs[label] = (labelDbs[label] || 0) + qty;
+        }
+        for (const [key, qty] of Object.entries(cbPurchases)) {
+            const [capId, band] = key.split('|');
+            const raw = rawData.find(r => String(r[0]) === capId && r[3] === band);
+            if (!raw) continue;
+            const label = (raw[29] || '') + ' / ' + normFuel(raw[2]) + ' / ' + band;
+            labelCb[label] = (labelCb[label] || 0) + qty;
+        }
+        tableData.forEach(r => {
+            r[6]  = labelDbs[r[1]] || 0;
+            r[20] = labelCb[r[1]]  || 0;
+        });
+        return;
+    }
     tableData.forEach(r => {
         const band = r[22] ?? String(r[1] ?? '').split(' / ').pop().trim();
         const key  = r[0] + '|' + band;
-        r[6] = p[key] || 0;
+        r[6]  = dbsPurchases[key] || 0;
+        r[20] = cbPurchases[key]  || 0;
     });
+}
+
+function applyDbsPurchases(p, vehicles, total) {
+    dbsPurchases = p;
+    if (vehicles) dbsVehicles = vehicles;
+    const badge = document.getElementById('dbs-total-badge');
+    if (badge && total != null) badge.textContent = total + ' vehicles not on stock';
+    _applyNotOnApex();
+}
+
+function applyCbPurchases(p, vehicles) {
+    cbPurchases = p;
+    if (vehicles) cbVehicles = vehicles;
+    _applyNotOnApex();
 }
 
 const _SP_MAX_AGE_SECS = 30 * 60;
@@ -1083,30 +1153,85 @@ function _setSfCachedAt(cachedAt) {
     el.innerHTML = `${SF_LABEL} <span class="text-muted" style="font-size:0.85em">updated ${hhmm}</span>`;
 }
 
-function _setSpUpdatedAt(fetchedAt) {
-    const el = document.getElementById('sp-status');
+function _setDbsUpdatedAt(fetchedAt) {
+    const el = document.getElementById('dbs-status');
     if (!el) return;
     if (fetchedAt) {
         const d = new Date(fetchedAt * 1000);
         const hhmm = d.getHours().toString().padStart(2, '0') + ':' + d.getMinutes().toString().padStart(2, '0');
-        el.innerHTML = `${SP_LABEL} <span class="text-muted" style="font-size:0.85em">updated ${hhmm}</span>`;
+        el.innerHTML = `${DBS_LABEL} <span class="text-muted" style="font-size:0.85em">updated ${hhmm}</span>`;
     }
 }
 
 /* ── SharePoint patch ────────────────────────────────────── */
-function patchSharePoint() {
-    setStatus('sp-status', SP_LABEL, 'running');
+let _dbsDone = false, _cbDone = false;
+function _maybeShowExportBtn() {
+    if (_dbsDone && _cbDone) {
+        const btn = document.getElementById('export-cap-ids-btn');
+        if (btn) { btn.classList.remove('disabled'); btn.removeAttribute('aria-disabled'); }
+    }
+}
 
-    fetch(window.BASE_URL + '/buying-requirements/sp-purchases')
+function patchDailyBuyersSheet() {
+    setStatus('dbs-status', DBS_LABEL, 'running');
+
+    fetch(window.BASE_URL + '/buying-requirements/dbs-purchases')
         .then(r => r.json())
         .then(resp => {
             if (resp.status !== 'ok') return;
-            applySpPurchases(resp.purchases);
+            applyDbsPurchases(resp.purchases, resp.vehicles || [], resp.total);
             renderTable();
-            setStatus('sp-status', SP_LABEL, 'done');
-            _setSpUpdatedAt(resp.fetched_at);
+            setStatus('dbs-status', DBS_LABEL, 'done');
+            _setDbsUpdatedAt(resp.fetched_at);
+            _dbsDone = true; _maybeShowExportBtn();
         })
-        .catch(() => setStatus('sp-status', SP_LABEL, 'error'));
+        .catch(() => setStatus('dbs-status', DBS_LABEL, 'error'));
+}
+
+/* ── Cars Bought patch ───────────────────────────────────── */
+function _setCbUpdatedAt(fetchedAt, total) {
+    const el = document.getElementById('cb-status');
+    if (!el) return;
+    if (fetchedAt) {
+        const d = new Date(fetchedAt * 1000);
+        const hhmm = d.getHours().toString().padStart(2, '0') + ':' + d.getMinutes().toString().padStart(2, '0');
+        el.innerHTML = `${CB_LABEL} <span class="text-muted" style="font-size:0.85em">updated ${hhmm}</span>`;
+    }
+    const badge = document.getElementById('cb-total-badge');
+    if (badge && total != null) badge.textContent = total + ' vehicles not on stock';
+}
+
+function patchCarsBought() {
+    setStatus('cb-status', CB_LABEL, 'running');
+    fetch(window.BASE_URL + '/buying-requirements/cb-purchases')
+        .then(r => r.json())
+        .then(resp => {
+            if (resp.status !== 'ok') { setStatus('cb-status', CB_LABEL, 'error'); return; }
+            applyCbPurchases(resp.purchases, resp.vehicles || []);
+            renderTable();
+            setStatus('cb-status', CB_LABEL, 'done');
+            _setCbUpdatedAt(resp.fetched_at, resp.total);
+            _cbDone = true; _maybeShowExportBtn();
+        })
+        .catch(() => setStatus('cb-status', CB_LABEL, 'error'));
+}
+
+function loadCBFromCache() {
+    fetch(window.BASE_URL + '/buying-requirements/cb-purchases-cached')
+        .then(r => r.json())
+        .then(resp => {
+            if (resp.status !== 'ok') return;
+            const ageSeconds = resp.fetched_at ? (Date.now() / 1000 - resp.fetched_at) : Infinity;
+            if (ageSeconds > _SP_MAX_AGE_SECS || !resp.fetched_at) {
+                patchCarsBought();
+                return;
+            }
+            applyCbPurchases(resp.purchases, resp.vehicles || []);
+            renderTable();
+            _setCbUpdatedAt(resp.fetched_at, resp.total);
+            _cbDone = true; _maybeShowExportBtn();
+        })
+        .catch(() => {});
 }
 
 /* ── Fetch data ──────────────────────────────────────────── */
@@ -1115,7 +1240,8 @@ function fetchData() {
     btn.disabled = true;
     btn.innerHTML = '<span class="spinner-border spinner-border-sm me-2"></span>Fetching...';
     setStatus('sf-status', SF_LABEL, 'running');
-    setStatus('sp-status', SP_LABEL, 'idle');
+    setStatus('dbs-status', DBS_LABEL, 'idle');
+    setStatus('cb-status', CB_LABEL, 'idle');
 
     const sfSource = new EventSource(window.BASE_URL + '/buying-requirements/stream-snowflake');
     sfSource.onmessage = e => {
@@ -1151,8 +1277,13 @@ function applyRawDataToTable(fetchSP) {
     sortCol = null; sortDir = 1;
     sortTable(21, 'num');
     document.getElementById('table-wrap').classList.remove('d-none');
-    if (fetchSP) patchSharePoint();
-    else loadSPFromCache();
+    if (fetchSP) {
+        patchDailyBuyersSheet();
+        patchCarsBought();
+    } else {
+        loadDbsFromCache();
+        loadCBFromCache();
+    }
 }
 
 function resetApplyFilters() {
@@ -1196,7 +1327,7 @@ function refreshTable() {
     if (reqClear) reqClear.style.display = 'none';
     requestAnimationFrame(() => setTimeout(() => {
         if (currentView === 'model') aggregateModelData(); else aggregateRawData();
-        applySpPurchases(spPurchases);
+        applyDbsPurchases(dbsPurchases);
         renderTable();
         sortCol = 21; sortDir = 1;
         sortTable(21, 'num');
@@ -1226,6 +1357,7 @@ function loadFromServer(fetchSP = false, fromFetchData = false) {
                 return;
             }
             rawData = resp.rows;
+            rawData.forEach(r => { if (r[3] === '0%') r[3] = 'interest_free'; });
             setStatus('sf-status', SF_LABEL, 'done');
             _setSfCachedAt(resp.cached_at);
             _setApexUpdatedAt(rawData);
@@ -1241,19 +1373,20 @@ function loadFromServer(fetchSP = false, fromFetchData = false) {
         });
 }
 
-function loadSPFromCache() {
-    fetch(window.BASE_URL + '/buying-requirements/sp-purchases-cached')
+function loadDbsFromCache() {
+    fetch(window.BASE_URL + '/buying-requirements/dbs-purchases-cached')
         .then(r => r.json())
         .then(resp => {
             if (resp.status !== 'ok') return;
             const ageSeconds = resp.fetched_at ? (Date.now() / 1000 - resp.fetched_at) : Infinity;
             if (ageSeconds > _SP_MAX_AGE_SECS || !resp.fetched_at) {
-                patchSharePoint();
+                patchDailyBuyersSheet();
                 return;
             }
-            applySpPurchases(resp.purchases);
+            applyDbsPurchases(resp.purchases, resp.vehicles || [], resp.total);
             renderTable();
-            _setSpUpdatedAt(resp.fetched_at);
+            _setDbsUpdatedAt(resp.fetched_at);
+            _dbsDone = true; _maybeShowExportBtn();
         })
         .catch(() => {});
 }
@@ -1277,7 +1410,7 @@ function exportXLSX() {
                 label: r[1].split(' / ').slice(0, -1).join(' / '),
                 fuel: normFuel(r[2]),
                 stock: 0, sales90: 0, sales7: 0,
-                ideal: 0, required: 0,
+                ideal: 0, required: 0, remaining: 0,
                 dis_sum: 0, dis_n: 0,
                 dts_sum: 0, dts_n: 0,
                 gpu_m_sum: 0, gpu_m_n: 0,
@@ -1285,6 +1418,7 @@ function exportXLSX() {
                 gpu_ms_sum: 0, gpu_ms_n: 0,
                 sell_sum: 0, sell_n: 0,
                 at_val_sum: 0, at_val_n: 0,
+                at_pct_sum: 0, at_pct_n: 0,
                 at_rating_sum: 0, at_rating_n: 0,
             });
         }
@@ -1292,8 +1426,9 @@ function exportXLSX() {
         g.stock    += Number(r[3])  || 0;
         g.sales90  += Number(r[4])  || 0;
         g.sales7   += Number(r[7])  || 0;
-        g.ideal    += Number(r[18]) || 0;
-        g.required += Number(r[19]) || 0;
+        g.ideal     += Number(r[18]) || 0;
+        g.required  += Number(r[19]) || 0;
+        g.remaining += Number(r[21]) || 0;
         if (r[8]  != null) { g.dis_sum      += Number(r[8]);  g.dis_n++;      }
         if (r[9]  != null) { g.dts_sum      += Number(r[9]);  g.dts_n++;      }
         if (r[10] != null) { g.gpu_m_sum    += Number(r[10]); g.gpu_m_n++;    }
@@ -1303,11 +1438,12 @@ function exportXLSX() {
         if (!isIF) {
             if (r[14] != null) { g.sell_sum  += Number(r[14]); g.sell_n++;  }
             if (r[15] != null) { g.at_val_sum+= Number(r[15]); g.at_val_n++;}
+            if (r[16] != null) { g.at_pct_sum+= Number(r[16]); g.at_pct_n++;}
         }
     }
 
-    const headers = ['CAP ID', 'Required', 'Make Model Derivative', 'Fuel',
-        '90d Sales', '7d Sales', 'Stock', 'Ideal Stock', 'Required',
+    const headers = ['CAP ID', 'Remaining', 'Make Model Derivative', 'Fuel',
+        '90d Sales', '7d Sales', 'Stock', 'Ideal Stock', 'Required', 'Remaining',
         'Avg DIS', 'Avg DTS',
         'Avg Sell Price (Rate)', 'Avg AT Val (Rate)', 'Avg AT PTM % (Rate)', 'Avg AT Rating',
         'Avg GPU-M', 'Avg GPU-S', 'Avg GPU-MS'];
@@ -1315,12 +1451,12 @@ function exportXLSX() {
     const rows = [...groups.entries()].sort((a, b) => a[1].label.localeCompare(b[1].label)).map(([cap_id, g]) => {
         const avgSell  = avg(g.sell_sum,  g.sell_n);
         const avgAtVal = avg(g.at_val_sum, g.at_val_n);
-        const atPct    = avgSell != null && avgAtVal != null && avgAtVal !== 0
-            ? Math.round(((avgSell) / avgAtVal) * 1000) / 10
+        const atPct    = g.at_pct_n > 0
+            ? parseFloat((g.at_pct_sum / g.at_pct_n).toFixed(1))
             : null;
         return [
             cap_id,
-            fmt1(g.required),
+            fmt1(g.remaining),
             g.label,
             g.fuel,
             g.sales90,
@@ -1328,6 +1464,7 @@ function exportXLSX() {
             g.stock,
             fmt1(g.ideal),
             fmt1(g.required),
+            fmt1(g.remaining),
             fmt1(avg(g.dis_sum,       g.dis_n)),
             fmt1(avg(g.dts_sum,       g.dts_n)),
             fmtN(avgSell),
@@ -1373,6 +1510,7 @@ function exportXLSX() {
 
 /* ── Vehicle popup ───────────────────────────────────────── */
 let _modalVehicles = [];
+let _modalSpVehicles = [];  // DBS + CB vehicles for current modal cap_id
 let _modalSortCol = 'default';
 let _modalSortAsc = true;
 
@@ -1455,18 +1593,13 @@ function _renderModalRows() {
     const tbody = document.getElementById('vehicle-modal-body');
     tbody.innerHTML = '';
 
-    // accumulators for averages row (mileage onwards)
-    let mileSum = 0, mileN = 0;
-    let disSum  = 0, disN  = 0;
-    let dtsSum  = 0, dtsN  = 0;
-    let ppSum   = 0, ppN   = 0;
-    let capSum  = 0, capN  = 0;
-    let sellSum = 0, sellN = 0;
-    let ptmSum  = 0, ptmN  = 0;
-    let ratingSum = 0, ratingN = 0;
-    let gpumSum = 0, gpumN  = 0;
+    // accumulators for averages rows — split by stock vs sales
+    const _acc = () => ({ mileSum:0,mileN:0, disSum:0,disN:0, dtsSum:0,dtsN:0, ppSum:0,ppN:0, capSum:0,capN:0, sellSum:0,sellN:0, ptmSum:0,ptmN:0, ratingSum:0,ratingN:0, gpumSum:0,gpumN:0 });
+    const accStock = _acc(), accSales = _acc();
 
-    const visibleVehicles = _modalBand === 'All' ? _modalVehicles : _modalVehicles.filter(r => r[3] === _modalBand);
+    const visibleVehicles = _modalBand === 'All' ? _modalVehicles
+        : _modalBand === 'rate' ? _modalVehicles.filter(r => r[3] !== 'interest_free')
+        : _modalVehicles.filter(r => r[3] === _modalBand);
     visibleVehicles.forEach(r => {
         const tr = document.createElement('tr');
         const status = _modalStatus(r);
@@ -1523,61 +1656,147 @@ function _renderModalRows() {
         else if (r[3] === 'interest_free') tr.classList.add('vehicle-row-if');
         tbody.appendChild(tr);
 
-        // accumulate averages
-        if (r[25] != null)                        { mileSum += Number(r[25]); mileN++; }
-        if (r[7]  != null)                        { disSum  += Number(r[7]);  disN++;  }
-        if (r[8]  != null)                        { dtsSum  += Number(r[8]);  dtsN++;  }
-        if (r[12] != null && r[12] !== 0)         { ppSum   += Number(r[12]); ppN++;   }
-        if (r[30] != null && r[30] !== 0)         { capSum  += Number(r[30]); capN++;  }
-        if (r[13] != null && r[13] !== 0)         { sellSum += Number(r[13]); sellN++; }
-        if (r[14] != null)                        { ptmSum  += Number(r[14]); ptmN++;  }
-        if (r[16] != null)                        { ratingSum += Number(r[16]); ratingN++; }
-        if (r[22] != null)                        { gpumSum += Number(r[22]); gpumN++; }
+        // accumulate averages split by stock vs sales
+        const acc = Number(r[4]) === 1 ? accStock : accSales;
+        if (r[25] != null)                { acc.mileSum   += Number(r[25]); acc.mileN++;   }
+        if (r[7]  != null)                { acc.disSum    += Number(r[7]);  acc.disN++;    }
+        if (r[8]  != null)                { acc.dtsSum    += Number(r[8]);  acc.dtsN++;    }
+        if (r[12] != null && r[12] !== 0) { acc.ppSum     += Number(r[12]); acc.ppN++;     }
+        if (r[30] != null && r[30] !== 0) { acc.capSum    += Number(r[30]); acc.capN++;    }
+        if (r[13] != null && r[13] !== 0) { acc.sellSum   += Number(r[13]); acc.sellN++;   }
+        if (r[14] != null)                { acc.ptmSum    += Number(r[14]); acc.ptmN++;    }
+        if (r[16] != null)                { acc.ratingSum += Number(r[16]); acc.ratingN++; }
+        if (r[22] != null)                { acc.gpumSum   += Number(r[22]); acc.gpumN++;   }
     });
 
-    // build averages tfoot row
-    const avgRow = document.getElementById('vehicle-modal-avg-row');
-    avgRow.innerHTML = '';
-    const addAvgTd = (text, align, blank) => {
-        const td = document.createElement('td');
-        td.textContent = blank ? '' : text;
-        if (blank) td.classList.add('tfoot-blank');
-        if (align) td.style.textAlign = align;
-        avgRow.appendChild(td);
-    };
-    const avgMile = mileN ? Math.round(mileSum / mileN) : null;
-    const avgDIS  = disN  ? disSum  / disN  : null;
-    const avgDTS  = dtsN  ? dtsSum  / dtsN  : null;
-    const avgPP   = ppN   ? ppSum   / ppN   : null;
-    const avgCap  = capN  ? capSum  / capN  : null;
-    const avgSell = sellN ? sellSum / sellN : null;
-    const avgPTM  = ptmN  ? ptmSum  / ptmN  : null;
-    const avgRating = ratingN ? ratingSum / ratingN : null;
-    const avgGPUM = gpumN ? gpumSum / gpumN : null;
-    const avgCapPct  = (avgPP  && avgCap)  ? ((avgPP  / avgCap)  * 100) : null;
-    const avgPTMPct  = (avgSell && avgPTM) ? (((avgSell) / avgPTM) * 100) : null;
+    // DBS / CB vehicles section — rendered first (prepended before SF rows)
+    const visibleSpVehicles = _modalBand === 'All' ? _modalSpVehicles
+        : _modalBand === 'rate' ? _modalSpVehicles.filter(v => v.band !== 'interest_free')
+        : _modalSpVehicles.filter(v => v.band === _modalBand);
+    const spFragment = document.createDocumentFragment();
+    visibleSpVehicles.forEach(v => {
+            const tr = document.createElement('tr');
+            tr.style.background = '#ddd6fe';
+            const TOTAL_COLS = 21;
+            const derivText = [v.make, v.model, v.deriv].filter(Boolean).join(' ') || '—';
+            const bandText = v.band === 'interest_free' ? '0%' : (v.band || '—');
+            const sourceText = v.source === 'dbs' ? 'DBS' : 'CB';
+            for (let i = 0; i < TOTAL_COLS; i++) {
+                const td = document.createElement('td');
+                if (i === 0) {
+                    td.textContent = derivText;
+                } else if (i === 1) {
+                    td.textContent = bandText;
+                } else if (i === 2) {
+                    td.textContent = v.vrm || '—';
+                } else if (i === 3) {
+                    td.textContent = 'Not on stock';
+                    td.style.color = '#6b7280';
+                } else if (i === 5) {
+                    if (v.vrm && v.mileage != null) {
+                        const a = document.createElement('a');
+                        a.href = `https://portal.autotrader.co.uk/managing/pricing/vrm/${v.vrm}/${Math.round(v.mileage)}`;
+                        a.target = '_blank';
+                        a.textContent = 'Portal';
+                        a.className = 'apex-link';
+                        td.appendChild(a);
+                    }
+                } else if (i === 8) {
+                    td.textContent = v.supplier || '—';
+                    if (!v.supplier) td.style.color = '#9ca3af';
+                } else if (i === 9) {
+                    td.textContent = v.dor || '—';
+                    if (!v.dor) td.style.color = '#9ca3af';
+                } else if (i === 10) {
+                    td.textContent = v.mileage != null ? Math.round(v.mileage).toLocaleString() : '—';
+                    td.style.textAlign = 'right';
+                    if (v.mileage == null) td.style.color = '#9ca3af';
+                } else if (i === 13) {
+                    td.textContent = v.siv != null ? fmtGBP(v.siv) : '—';
+                    td.style.textAlign = 'right';
+                    if (v.siv == null) td.style.color = '#9ca3af';
+                } else if (i === 14) {
+                    td.textContent = v.cap_live != null ? fmtGBP(v.cap_live) : '—';
+                    td.style.textAlign = 'right';
+                    if (v.cap_live == null) td.style.color = '#9ca3af';
+                } else if (i === 15) {
+                    const capPct = (v.siv != null && v.cap_live != null && v.cap_live !== 0) ? ((v.siv / v.cap_live) * 100).toFixed(1) + '%' : '—';
+                    td.textContent = capPct;
+                    td.style.textAlign = 'right';
+                    if (capPct === '—') td.style.color = '#9ca3af';
+                } else if (i === 16) {
+                    // Sell price = RRP 0% if interest free, else RRP
+                    const sellVal = (v.rrp0 != null && v.rrp0 > 0) ? v.rrp0 : v.rrp;
+                    td.textContent = sellVal != null ? fmtGBP(sellVal) : '—';
+                    td.style.textAlign = 'right';
+                    if (sellVal == null) td.style.color = '#9ca3af';
+                } else if (i === 17) {
+                    td.textContent = v.at_ptm != null ? fmtGBP(v.at_ptm) : '—';
+                    td.style.textAlign = 'right';
+                    if (v.at_ptm == null) td.style.color = '#9ca3af';
+                } else if (i === 18) {
+                    // AT PTM% = RRP (or RRP 0%) / AT PTM
+                    const sellVal = (v.rrp0 != null && v.rrp0 > 0) ? v.rrp0 : v.rrp;
+                    const atPct = (sellVal != null && v.at_ptm != null && v.at_ptm !== 0) ? fmtPct((sellVal / v.at_ptm) * 100) : '—';
+                    td.textContent = atPct;
+                    td.style.textAlign = 'right';
+                    if (atPct === '—') td.style.color = '#9ca3af';
+                } else if (i === 19) {
+                    td.textContent = v.at_rating != null ? fmtInt(v.at_rating) : '—';
+                    td.style.textAlign = 'right';
+                    if (v.at_rating == null) td.style.color = '#9ca3af';
+                } else {
+                    td.textContent = '—';
+                    td.style.color = '#9ca3af';
+                }
+                tr.appendChild(td);
+            }
+            spFragment.appendChild(tr);
+        });
+    tbody.prepend(spFragment);
 
-    addAvgTd('', null, true);   // deriv
-    addAvgTd('', null, true);   // price band
-    addAvgTd('', null, true);   // vrm
-    addAvgTd('', null, true);   // status
-    addAvgTd('', null, true);   // apex
-    addAvgTd('', null, true);   // portal
-    addAvgTd('', null, true);   // location
-    addAvgTd('', null, true);   // delivered
-    addAvgTd('', null, true);   // supplier
-    addAvgTd('Avg', 'left');    // dfr — label cell
-    addAvgTd(avgMile != null ? avgMile.toLocaleString() : '—', 'right');
-    addAvgTd(avgDIS  != null ? fmtInt(avgDIS)  : '—', 'right');
-    addAvgTd(avgDTS  != null ? fmtInt(avgDTS)  : '—', 'right');
-    addAvgTd(avgPP   != null ? fmtGBP(avgPP)   : '—', 'right');
-    addAvgTd(avgCap  != null ? fmtGBP(avgCap)  : '—', 'right');
-    addAvgTd(avgCapPct  != null ? avgCapPct.toFixed(1)  + '%' : '—', 'right');
-    addAvgTd(avgSell != null ? fmtGBP(avgSell) : '—', 'right');
-    addAvgTd(avgPTM  != null ? fmtGBP(avgPTM)  : '—', 'right');
-    addAvgTd(avgPTMPct  != null ? fmtPct(avgPTMPct)  : '—', 'right');
-    addAvgTd(avgRating != null ? fmtInt(avgRating) : '—', 'right');
-    { const td = addAvgTd(avgGPUM != null ? fmtGBP(avgGPUM) : '—', 'right'); if (avgGPUM != null && avgGPUM < 0) td.style.color = '#dc2626'; }
+    // build averages tfoot rows (Stock / Sales)
+    const _fillAvgRow = (rowEl, acc, label) => {
+        rowEl.innerHTML = '';
+        const addTd = (text, align, blank) => {
+            const td = document.createElement('td');
+            td.textContent = blank ? '' : text;
+            if (blank) td.classList.add('tfoot-blank');
+            if (align) td.style.textAlign = align;
+            rowEl.appendChild(td);
+            return td;
+        };
+        const avgMile   = acc.mileN   ? Math.round(acc.mileSum / acc.mileN)     : null;
+        const avgDIS    = acc.disN    ? acc.disSum    / acc.disN                 : null;
+        const avgDTS    = acc.dtsN    ? acc.dtsSum    / acc.dtsN                 : null;
+        const avgPP     = acc.ppN     ? acc.ppSum     / acc.ppN                  : null;
+        const avgCap    = acc.capN    ? acc.capSum    / acc.capN                 : null;
+        const avgSell   = acc.sellN   ? acc.sellSum   / acc.sellN                : null;
+        const avgPTM    = acc.ptmN    ? acc.ptmSum    / acc.ptmN                 : null;
+        const avgRating = acc.ratingN ? acc.ratingSum / acc.ratingN              : null;
+        const avgGPUM   = acc.gpumN   ? acc.gpumSum   / acc.gpumN               : null;
+        const avgCapPct = (avgPP  && avgCap) ? (avgPP  / avgCap)  * 100 : null;
+        const avgPTMPct = (avgSell && avgPTM) ? (avgSell / avgPTM) * 100 : null;
+
+        addTd('', null, true); addTd('', null, true); addTd('', null, true);
+        addTd('', null, true); addTd('', null, true); addTd('', null, true);
+        addTd('', null, true); addTd('', null, true); addTd('', null, true);
+        addTd(label, 'left');
+        addTd(avgMile   != null ? avgMile.toLocaleString()    : '—', 'right');
+        addTd(avgDIS    != null ? fmtInt(avgDIS)              : '—', 'right');
+        addTd(avgDTS    != null ? fmtInt(avgDTS)              : '—', 'right');
+        addTd(avgPP     != null ? fmtGBP(avgPP)              : '—', 'right');
+        addTd(avgCap    != null ? fmtGBP(avgCap)             : '—', 'right');
+        addTd(avgCapPct != null ? avgCapPct.toFixed(1) + '%' : '—', 'right');
+        addTd(avgSell   != null ? fmtGBP(avgSell)            : '—', 'right');
+        addTd(avgPTM    != null ? fmtGBP(avgPTM)             : '—', 'right');
+        addTd(avgPTMPct != null ? fmtPct(avgPTMPct)          : '—', 'right');
+        addTd(avgRating != null ? fmtInt(avgRating)           : '—', 'right');
+        { const td = addTd(avgGPUM != null ? fmtGBP(avgGPUM) : '—', 'right'); if (avgGPUM != null && avgGPUM < 0) td.style.color = '#dc2626'; }
+    };
+
+    _fillAvgRow(document.getElementById('vehicle-modal-avg-row-stock'), accStock, 'Avg Stock');
+    _fillAvgRow(document.getElementById('vehicle-modal-avg-row-sales'), accSales, 'Avg Sales');
 
 }
 
@@ -1586,23 +1805,23 @@ let _modalBand = 'All';
 function _buildModalFilterBar(bands) {
     const bar = document.getElementById('vehicle-modal-filter-bar');
     bar.innerHTML = '';
-    const allBandOrder = ['<10k','10-12.5k','12.5-15k','15-20k','20-25k','25-30k','30k+','interest_free'];
-    const sorted = ['All', ...allBandOrder.filter(b => bands.has(b))];
-    sorted.forEach(val => {
+    const hasRate = [...bands].some(b => b !== 'interest_free');
+    const hasIF   = bands.has('interest_free');
+    const options = [
+        { val: 'All',  label: 'All' },
+        ...(hasRate ? [{ val: 'rate', label: 'Rate' }] : []),
+        ...(hasIF   ? [{ val: 'interest_free', label: '0%' }] : []),
+    ];
+    options.forEach(({ val, label }) => {
         const btn = document.createElement('button');
         btn.className = 'btn btn-sm ' + (val === _modalBand ? 'btn-dark' : 'btn-outline-secondary') + ' modal-band-btn';
-        btn.textContent = val === 'interest_free' ? '0%' : val;
+        btn.textContent = label;
+        btn.dataset.bandVal = val;
         btn.onclick = () => {
             _modalBand = val;
             bar.querySelectorAll('.modal-band-btn').forEach(b => {
-                b.classList.toggle('btn-dark', b.textContent === (val === 'interest_free' ? '0%' : val) && val === _modalBand);
-                b.classList.toggle('btn-outline-secondary', !(b.textContent === (val === 'interest_free' ? '0%' : val) && val === _modalBand));
-            });
-            // re-sync button states cleanly
-            bar.querySelectorAll('.modal-band-btn').forEach((b, i) => {
-                const bVal = sorted[i];
-                b.classList.toggle('btn-dark', bVal === _modalBand);
-                b.classList.toggle('btn-outline-secondary', bVal !== _modalBand);
+                b.classList.toggle('btn-dark', b.dataset.bandVal === _modalBand);
+                b.classList.toggle('btn-outline-secondary', b.dataset.bandVal !== _modalBand);
             });
             _sortModalVehicles();
             _renderModalRows();
@@ -1634,7 +1853,11 @@ function openVehicleModal(capId, label) {
         const passGPUM = minGPUM === null || gpu_m === null || gpu_m >= minGPUM;
         return passDIS && passDTS && passGPUM;
     });
-    const bands = new Set(_modalVehicles.map(r => r[3]).filter(Boolean));
+    _modalSpVehicles = [...dbsVehicles, ...cbVehicles].filter(v => v.cap_id === capId);
+    const bands = new Set([
+        ..._modalVehicles.map(r => r[3]),
+        ..._modalSpVehicles.map(v => v.band),
+    ].filter(Boolean));
     _modalBand = 'All';
     _buildModalFilterBar(bands);
     _modalSortCol = 'default';
@@ -1681,5 +1904,59 @@ document.getElementById('table-body').addEventListener('click', e => {
     const row = tableData[idx];
     if (row) openVehicleModal(row[0], row[1]);
 });
+
+function searchVRM() {
+    const vrm = (document.getElementById('vrmSearch').value || '').trim().toUpperCase().replace(/\s/g, '');
+    const resultEl = document.getElementById('vrm-search-result');
+    if (!vrm) { if (resultEl) resultEl.textContent = ''; return; }
+
+    let capId = null, band = null;
+
+    // Search SP vehicles first (DBS + CB)
+    const spMatch = [...dbsVehicles, ...cbVehicles].find(v => (v.vrm || '').toUpperCase().replace(/\s/g, '') === vrm);
+    if (spMatch) {
+        capId = spMatch.cap_id;
+        band = spMatch.band;
+    } else {
+        // Search Apex stock (rawData index 18 = vrm)
+        const apexMatch = rawData.find(r => (r[18] || '').toUpperCase().replace(/\s/g, '') === vrm);
+        if (apexMatch) { capId = apexMatch[0]; band = apexMatch[3]; }
+    }
+
+    if (!capId) {
+        if (resultEl) resultEl.textContent = 'Not found';
+        return;
+    }
+
+    // Apply CAP ID filter
+    filterCapId = capId;
+    const capInp = document.getElementById('capIdSearch');
+    if (capInp) capInp.value = capId;
+    const capClear = document.getElementById('capIdClearBtn');
+    if (capClear) capClear.style.display = '';
+
+    // Apply band filter (clear others)
+    filterBand.clear(); filterBand.add(band);
+    document.querySelectorAll('.filter-btn[data-group="band"]').forEach(b => {
+        const isMatch = b.dataset.value === band;
+        b.classList.toggle('btn-dark', isMatch);
+        b.classList.toggle('btn-outline-secondary', !isMatch);
+    });
+
+    if (resultEl) resultEl.textContent = '';
+    const clearBtn = document.getElementById('vrmClearBtn');
+    if (clearBtn) clearBtn.style.display = '';
+    if (tableData.length) applyFilter();
+}
+
+function clearVrmSearch() {
+    const inp = document.getElementById('vrmSearch');
+    if (inp) inp.value = '';
+    const clearBtn = document.getElementById('vrmClearBtn');
+    if (clearBtn) clearBtn.style.display = 'none';
+    const resultEl = document.getElementById('vrm-search-result');
+    if (resultEl) resultEl.textContent = '';
+    clearCapIdFilter();
+}
 
 document.addEventListener('DOMContentLoaded', () => loadFromServer(false));

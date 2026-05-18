@@ -12,6 +12,18 @@ import logging
 logger = logging.getLogger(__name__)
 
 
+def _parse_price(value) -> Optional[float]:
+    if value is None:
+        return None
+    try:
+        if isinstance(value, (int, float)):
+            return float(value)
+        cleaned = re.sub(r'[^\d.]', '', str(value))
+        return float(cleaned) if cleaned else None
+    except (ValueError, TypeError):
+        return None
+
+
 def get_registration_date(year: int, vrm_middle_numbers: int) -> datetime.date:
     if vrm_middle_numbers == year % 100:
         month = "03"
@@ -72,9 +84,13 @@ class EnterpriseColumnsMapper(BaseColumnsMapper):
             logger.error("Could not extract both mileage and VRM from row")
             return None
 
+        lowercased_row = {key.lower(): value for key, value in row.items()}
+        asking_price = _parse_price(lowercased_row.get('price'))
+
         return VehicleRow(
             vrm=vrm,
-            mileage=mileage
+            mileage=mileage,
+            asking_price=asking_price,
         )
 
 
@@ -94,11 +110,15 @@ class MotabilityColumnsMapper(BaseColumnsMapper):
         except ValueError:
             capid = None
 
+        lowercased_row = {key.lower(): value for key, value in row.items()}
+        asking_price = _parse_price(lowercased_row.get('buy now price'))
+
         return VehicleRow(
             vrm=row["Reg No."],
             mileage=int(row["Mileage"]),
+            asking_price=asking_price,
             capid=capid,
-            registration_date=registration_date
+            registration_date=registration_date,
         )
 
 
@@ -122,11 +142,15 @@ class OneLinkColumnsMapper(BaseColumnsMapper):
                 except ValueError:
                     pass
 
+        lowercased_row = {key.lower(): value for key, value in row.items()}
+        asking_price = _parse_price(lowercased_row.get('buy now price'))
+
         return VehicleRow(
             vrm=row["Reg No."],
             mileage=int(row["Odometer"]),
+            asking_price=asking_price,
             capid=capid,
-            registration_date=registration_date
+            registration_date=registration_date,
         )
 
 
@@ -195,12 +219,19 @@ class UniversalColumnsMapper(BaseColumnsMapper):
                 if not pd.isnull(row[col]) and "year" in col.lower():
                     registration_date = get_registration_date(int(row[col]), int(vrm[2:4]))
 
+        asking_price = None
+        for col in row.keys():
+            if 'price' in col.lower() and not pd.isnull(row[col]):
+                asking_price = _parse_price(row[col])
+                break
+
         try:
             return VehicleRow(
                 vrm=vrm,
                 mileage=mileage,
+                asking_price=asking_price,
                 capid=capid,
-                registration_date=registration_date
+                registration_date=registration_date,
             )
         except ValidationError as e:
             logger.warning(f"Error validating row: {e}")

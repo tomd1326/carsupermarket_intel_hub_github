@@ -7,10 +7,9 @@
     <link rel="icon" type="image/png" href="{{ BASE_URL }}/static/icon.png">
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css" rel="stylesheet">
-    <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
     <style>
-        body, button, input, select, textarea { font-family: 'DM Sans', system-ui, sans-serif; }
-        .settings-card { max-width: 520px; margin: 60px auto; }
+        body, button, input, select, textarea { font-family: 'Aptos Display', system-ui, sans-serif; }
+        .settings-card { max-width: 960px; margin: 40px auto; padding: 0 16px; }
         .card-header { background-color: #ced4da; }
         .card { border-color: #adb5bd; }
     </style>
@@ -28,29 +27,50 @@
         </div>
 
         <form method="post" action="{{ BASE_URL }}/settings">
-            <div class="card mb-4">
-                <div class="card-header fw-semibold">Buying Requirements</div>
-                <div class="card-body">
-                    <div class="d-flex gap-3 flex-wrap">
-                        <div>
-                            <label for="number_to_buy" class="form-label mb-1">Number to Buy</label>
-                            <input class="form-control" type="number" id="number_to_buy" name="number_to_buy"
-                                   value="{{ settings.number_to_buy }}" min="0" style="width: 110px;" onclick="this.select()">
+            <div class="row g-4 mb-4">
+                <div class="col-md-6">
+                    <div class="card h-100">
+                        <div class="card-header fw-semibold">Buying Requirements</div>
+                        <div class="card-body">
+                            <div class="d-flex gap-3 flex-wrap">
+                                <div>
+                                    <label for="number_to_buy" class="form-label mb-1">Number to Buy</label>
+                                    <input class="form-control" type="number" id="number_to_buy" name="number_to_buy"
+                                           value="{{ settings.number_to_buy }}" min="0" style="width: 110px;" onclick="this.select()">
+                                </div>
+                                <div>
+                                    <label for="max_days_sales" class="form-label mb-1">Max Days Sales</label>
+                                    <input class="form-control" type="number" id="max_days_sales" name="max_days_sales"
+                                           value="{{ settings.max_days_sales }}" min="1" max="90" style="width: 110px;" onclick="this.select()">
+                                </div>
+                                <div>
+                                    <label for="max_dts" class="form-label mb-1">Max DTS</label>
+                                    <input class="form-control" type="number" id="max_dts" name="max_dts"
+                                           value="{{ settings.max_dts }}" min="1" style="width: 100px;" onclick="this.select()">
+                                </div>
+                                <div>
+                                    <label for="min_gpu_m" class="form-label mb-1">Min GPU-M</label>
+                                    <input class="form-control" type="number" id="min_gpu_m" name="min_gpu_m"
+                                           value="{{ settings.min_gpu_m }}" style="width: 100px;" onclick="this.select()">
+                                </div>
+                            </div>
                         </div>
-                        <div>
-                            <label for="max_days_sales" class="form-label mb-1">Max Days Sales</label>
-                            <input class="form-control" type="number" id="max_days_sales" name="max_days_sales"
-                                   value="{{ settings.max_days_sales }}" min="1" max="90" style="width: 110px;" onclick="this.select()">
-                        </div>
-                        <div>
-                            <label for="max_dts" class="form-label mb-1">Max DTS</label>
-                            <input class="form-control" type="number" id="max_dts" name="max_dts"
-                                   value="{{ settings.max_dts }}" min="1" style="width: 100px;" onclick="this.select()">
-                        </div>
-                        <div>
-                            <label for="min_gpu_m" class="form-label mb-1">Min GPU-M</label>
-                            <input class="form-control" type="number" id="min_gpu_m" name="min_gpu_m"
-                                   value="{{ settings.min_gpu_m }}" style="width: 100px;" onclick="this.select()">
+                    </div>
+                </div>
+
+                <div class="col-md-6">
+                    <div class="card h-100">
+                        <div class="card-header fw-semibold">MOT Check</div>
+                        <div class="card-body">
+                            <div class="d-flex gap-3 flex-wrap">
+                                <div>
+                                    <label for="mot_workers" class="form-label mb-1">Workers</label>
+                                    <input class="form-control" type="number" id="mot_workers" name="mot_workers"
+                                           value="{{ settings.mot_workers }}" min="1" max="50" style="width: 110px;">
+                                    <div class="form-text">Default: 10. Max: 50</div>
+                                </div>
+                            </div>
+                            <div class="form-text mt-2">Concurrent DVSA API requests. Higher = faster but more likely to hit rate limits (429s).</div>
                         </div>
                     </div>
                 </div>
@@ -59,30 +79,61 @@
             <div class="card mb-4">
                 <div class="card-header fw-semibold">Supplier Stock Evaluator</div>
                 <div class="card-body">
-                    <div class="d-flex gap-3 flex-wrap mb-3">
-                        <div>
-                            <label for="cap_workers" class="form-label mb-1">CAP Workers</label>
-                            <input class="form-control" type="number" id="cap_workers" name="cap_workers"
-                                   value="{{ settings.cap_workers }}" min="1" max="40" style="width: 110px;">
-                            <div class="form-text">Max: 40</div>
+                    <div class="row g-3">
+                        <div class="col-md-4">
+                            <div class="form-text fw-semibold mb-1">CAP</div>
+                            <div class="d-flex gap-3 flex-wrap">
+                                <div>
+                                    <label for="cap_workers" class="form-label mb-1">Workers</label>
+                                    <input class="form-control" type="number" id="cap_workers" name="cap_workers"
+                                           value="{{ settings.cap_workers }}" min="1" max="40" style="width: 110px;">
+                                    <div class="form-text">Default: 25</div>
+                                </div>
+                                <div>
+                                    <label for="cap_rate_limit" class="form-label mb-1">Rate Limit (req/s)</label>
+                                    <input class="form-control" type="number" id="cap_rate_limit" name="cap_rate_limit"
+                                           value="{{ settings.cap_rate_limit }}" min="1" max="200" style="width: 110px;">
+                                    <div class="form-text">Default: 100</div>
+                                </div>
+                            </div>
                         </div>
-                        <div>
-                            <label for="cap_rate_limit" class="form-label mb-1">Rate Limit (req/s)</label>
-                            <input class="form-control" type="number" id="cap_rate_limit" name="cap_rate_limit"
-                                   value="{{ settings.cap_rate_limit }}" min="1" max="200" style="width: 110px;">
-                            <div class="form-text">Max: 200</div>
+                        <div class="col-md-4">
+                            <div class="form-text fw-semibold mb-1">Autotrader</div>
+                            <div class="d-flex gap-3 flex-wrap">
+                                <div>
+                                    <label for="at_workers" class="form-label mb-1">Workers</label>
+                                    <input class="form-control" type="number" id="at_workers" name="at_workers"
+                                           value="{{ settings.at_workers }}" min="1" max="80" style="width: 110px;">
+                                    <div class="form-text">Default: 40</div>
+                                </div>
+                                <div>
+                                    <label for="at_rate_limit" class="form-label mb-1">Rate Limit (req/s)</label>
+                                    <input class="form-control" type="number" id="at_rate_limit" name="at_rate_limit"
+                                           value="{{ settings.at_rate_limit }}" min="1" max="200" style="width: 110px;">
+                                    <div class="form-text">Default: 60</div>
+                                </div>
+                            </div>
                         </div>
-                    </div>
-                    <div class="form-check">
-                        <input class="form-check-input" type="checkbox" id="calc_buying_reqs" name="calc_buying_reqs"
-                               {% if settings.calc_buying_reqs %}checked{% endif %}>
-                        <label class="form-check-label" for="calc_buying_reqs">Calculate Buying Requirements on download <span class="text-muted">(everyone)</span></label>
-                    </div>
-                    <div class="form-text">Controls the buyer login. Admin always has this enabled. When enabled, downloaded lists include buying requirements calculations using the settings above.</div>
-                    <div class="form-check mt-2">
-                        <input class="form-check-input" type="checkbox" id="get_stock" name="get_stock"
-                               {% if settings.get_stock %}checked{% endif %}>
-                        <label class="form-check-label" for="get_stock">Show Get Stock buttons (Motability / 1link) <span class="text-muted">(everyone)</span></label>
+                        <div class="col-md-4">
+                            <div class="form-text fw-semibold mb-1">Options</div>
+                            <div class="form-check">
+                                <input class="form-check-input" type="checkbox" id="calc_buying_reqs" name="calc_buying_reqs"
+                                       {% if settings.calc_buying_reqs %}checked{% endif %}>
+                                <label class="form-check-label" for="calc_buying_reqs">Calculate Buying Requirements on download <span class="text-muted">(everyone)</span></label>
+                            </div>
+                            <div class="form-text">When enabled, downloaded lists include buying requirements calculations using the settings above.</div>
+                            <div class="form-check mt-2">
+                                <input class="form-check-input" type="checkbox" id="get_stock" name="get_stock"
+                                       {% if settings.get_stock %}checked{% endif %}>
+                                <label class="form-check-label" for="get_stock">Show Get Stock buttons (Motability / 1link) <span class="text-muted">(everyone)</span></label>
+                            </div>
+                            <div class="mt-3">
+                                <label for="evaluator_row_limit" class="form-label mb-1">Evaluator Row Limit</label>
+                                <input class="form-control" type="number" id="evaluator_row_limit" name="evaluator_row_limit"
+                                       value="{{ settings.evaluator_row_limit }}" min="0" style="width: 110px;" onclick="this.select()">
+                                <div class="form-text">Max rows to fetch from supplier feeds. 0 = no limit.</div>
+                            </div>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -90,7 +141,7 @@
             <div class="d-flex align-items-center gap-3">
                 <button type="submit" class="btn btn-primary">Save Settings</button>
                 {% if request.query_params.get('saved') %}
-                <span class="text-success small">Settings saved.</span>
+                <span class="small px-2 py-1 rounded" style="background-color: #d1e7dd; color: #0f5132;">Settings saved.</span>
                 {% endif %}
             </div>
         </form>

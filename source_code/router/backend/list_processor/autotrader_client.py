@@ -4,6 +4,7 @@ import logging
 import os
 from concurrent.futures import ThreadPoolExecutor
 from threading import Lock
+import threading
 import functools
 from inspect import signature
 import pandas as pd
@@ -43,6 +44,16 @@ class AutoTraderClient(metaclass=Singleton):
 
         # Rate limiter
         self.limiter = RateLimiter(rate_limit=60, time_window=1)
+
+        # Request counters and error log (reset per process_file call)
+        self._counter_lock = threading.Lock()
+        self._vehicles_requests = 0
+        self._valuations_requests = 0
+        self._vehicles_errors = 0
+        self._valuations_errors = 0
+        self._rate_limit_hits = 0
+        self._abort = False
+        self._error_log: list = []
 
     def get_access_token(self, session) -> str:
         with self.auth_lock:
@@ -85,12 +96,32 @@ class AutoTraderClient(metaclass=Singleton):
         }
 
         with self.limiter:
+            with self._counter_lock:
+                self._vehicles_requests += 1
             vehicles_response = session.get(self.vehicles_api_url, params=vehicles_params, headers=headers)
             if vehicles_response.status_code == 200:
                 return vehicles_response.json()
             else:
-                # Log the error instead of printing
-                logger.error(f"Error in Vehicles API call for VRM {vrm}: Status code {vehicles_response.status_code}", extra={'extra_vrm': vrm})
+                with self._counter_lock:
+                    self._vehicles_errors += 1
+                    sc = vehicles_response.status_code
+                    error_type = 'NOT_FOUND' if sc == 404 else ('RATE_LIMITED' if sc == 429 else f'HTTP_{sc}')
+                    self._error_log.append({
+                        'timestamp': datetime.datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S'),
+                        'api': 'AT Vehicles',
+                        'vrm': vrm,
+                        'mileage': mileage,
+                        'cap_id': None,
+                        'status_code': sc,
+                        'error_type': error_type,
+                        'detail': vehicles_response.text[:200],
+                    })
+                    if sc == 429:
+                        self._rate_limit_hits += 1
+                        if self._rate_limit_hits >= self._AT_RATE_LIMIT_ABORT:
+                            self._abort = True
+                            logger.error("[AT] Aborting: %d rate limit (429) responses received", self._rate_limit_hits)
+                logger.debug(f"Vehicles API error for VRM {vrm}: Status code {vehicles_response.status_code}", extra={'extra_vrm': vrm})
                 return None
 
     @cache(ignore_args=['session', 'headers'], ex=60*60*24)
@@ -106,14 +137,27 @@ class AutoTraderClient(metaclass=Singleton):
         }
 
         with self.limiter:
+            with self._counter_lock:
+                self._valuations_requests += 1
             valuations_response = session.post(valuations_url, json=valuations_payload, headers=headers)
 
             if valuations_response.status_code == 200:
                 return valuations_response.json()
             else:
-                logger.error(
-                    f"Error in Valuations API call for VRM {vrm}, Derivative ID {derivative_id}: Status code {valuations_response.status_code}",
-                    extra={'extra_vrm': vrm})
+                with self._counter_lock:
+                    self._valuations_errors += 1
+                    sc = valuations_response.status_code
+                    self._error_log.append({
+                        'timestamp': datetime.datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S'),
+                        'api': 'AT Valuations',
+                        'vrm': vrm,
+                        'mileage': mileage,
+                        'cap_id': None,
+                        'status_code': sc,
+                        'error_type': 'NOT_FOUND' if sc == 404 else ('RATE_LIMITED' if sc == 429 else f'HTTP_{sc}'),
+                        'detail': valuations_response.text[:200],
+                    })
+                logger.debug(f"Valuations API error for VRM {vrm}: Status code {valuations_response.status_code}", extra={'extra_vrm': vrm})
                 return None
 
     @classmethod
@@ -136,13 +180,14 @@ class AutoTraderClient(metaclass=Singleton):
                     f'{api_name} API call for VRM {vrm} failed with status code: {status_code} and error: {e}',
                     extra={'extra_vrm': vrm})
         elif json_data is not None and not error_only:
-            logger.info(f'{api_name} API call for VRM {vrm} succeeded with status code: {status_code}',
+            logger.debug(f'{api_name} API call for VRM {vrm} succeeded with status code: {status_code}',
                          extra={'extra_vrm': vrm})
 
+    _AT_RATE_LIMIT_ABORT = 10  # abort if this many 429s received
+
     def process_row(self, row: dict, session, column_mapper: BaseColumnsMapper) -> dict:
-        # Initialize VRM and Mileage with default values
-        # vrm = ''
-        # mileage = ''
+        if self._abort:
+            return None
 
         vehicle = column_mapper.map_row(row)
 
@@ -207,11 +252,12 @@ class AutoTraderClient(metaclass=Singleton):
                             factory_fitted_feature_names.append(feature_name.strip())
                             factory_fitted_features.append({"name": feature_name.strip()})
 
-            # Valuations API call
-            valuations_data = self.send_valuations_post_request(
-                session, headers, vehicle.vrm, derivative_id, first_registration_date, vehicle.mileage, factory_fitted_features
-            )
-            # Check if valuations_data is None and handle it without logging an error
+            # Valuations API call — requires derivative_id, first_registration_date and mileage
+            valuations_data = None
+            if vehicles_data is not None and derivative_id and first_registration_date and vehicle.mileage:
+                valuations_data = self.send_valuations_post_request(
+                    session, headers, vehicle.vrm, derivative_id, first_registration_date, vehicle.mileage, factory_fitted_features
+                )
             if valuations_data is not None:
 
                 valuations_retail_valuation = valuations_data.get('valuations', {}).get('retail', {}).get('amountGBP',
@@ -242,32 +288,36 @@ class AutoTraderClient(metaclass=Singleton):
                 #     if competitor_link != 'N/A':
                 #         total_results = self.competitor_request(session, headers, competitor_link)
 
-            if vehicles_data:
-                self.log_api_response('Vehicles', vehicle.vrm, 200, vehicles_data)
-            else:
-                logger.error(f'Error processing row with VRM {vehicle.vrm}: vehicles_data is None or Vehicles API call failed',
-                              extra={'extra_vrm': vehicle.vrm})
-
-            if valuations_data:
-                self.log_api_response('Valuations', vehicle.vrm, 200, valuations_data)
-            else:
-                logger.error(f'Error processing row with VRM {vehicle.vrm}: valuations_data is None or Valuations API call failed',
-                              extra={'extra_vrm': vehicle.vrm})
+            if not vehicles_data:
+                logger.debug(f'Vehicles data unavailable for VRM {vehicle.vrm}', extra={'extra_vrm': vehicle.vrm})
+            if not valuations_data:
+                logger.debug(f'Valuations data unavailable for VRM {vehicle.vrm}', extra={'extra_vrm': vehicle.vrm})
 
             return {
-                'description': description,  # Vehicle description
-                'vrm': vehicle.vrm,  # Vehicle registration mark
-                'mileage': vehicle.mileage,  # Vehicle mileage
-                'valuations_retail_valuation': valuations_retail_valuation,  # Retail valuation from the Valuations API
-                'rating': rating,  # Rating from the Vehicles API
-                'original_days_to_sell': original_days_to_sell,  # Days to sell from the Vehicles API
-                'market_condition': market_condition,  # Market condition from the Vehicles API
-                # 'total_results': total_results,  # Total results from competitor analysis
-                'factory_fitted_feature_names': ', '.join(factory_fitted_feature_names),  # Comma-separated list of factory-fitted features
-                'at_first_registration_date': first_registration_date,  # Replaces processing_time
+                'description': description,
+                'vrm': vehicle.vrm,
+                'mileage': vehicle.mileage,
+                'valuations_retail_valuation': valuations_retail_valuation,
+                'rating': rating,
+                'original_days_to_sell': original_days_to_sell,
+                'market_condition': market_condition,
+                'factory_fitted_feature_names': ', '.join(factory_fitted_feature_names),
+                'at_first_registration_date': first_registration_date,
             }
 
         except Exception as e:
+            with self._counter_lock:
+                self._vehicles_errors += 1
+                self._error_log.append({
+                    'timestamp': datetime.datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S'),
+                    'api': 'AT Vehicles',
+                    'vrm': vehicle.vrm,
+                    'mileage': vehicle.mileage,
+                    'cap_id': None,
+                    'status_code': None,
+                    'error_type': 'TIMEOUT' if 'timeout' in type(e).__name__.lower() else 'EXCEPTION',
+                    'detail': str(e)[:200],
+                })
             return {
                 'description': 'N/A',
                 'vrm': vehicle.vrm,
@@ -276,37 +326,34 @@ class AutoTraderClient(metaclass=Singleton):
                 'rating': 'N/A',
                 'original_days_to_sell': 'N/A',
                 'market_condition': 'N/A',
-                # 'total_results': 'N/A',
                 'factory_fitted_feature_names': 'N/A',
                 'at_first_registration_date': 'N/A',
             }
 
-    def process_file(self, input_df: pd.DataFrame, column_mapper: BaseColumnsMapper) -> pd.DataFrame:
-        # Initialize session object
+    def process_file(self, input_df: pd.DataFrame, column_mapper: BaseColumnsMapper, max_workers: int = 40, rate_limit: int = 60) -> pd.DataFrame:
         session = requests.Session()
-
-        # Initialize processed rows
         processed_rows = []
 
-        # Initialize thread pool
-        with ThreadPoolExecutor(max_workers=40) as executor:
-            # Process each row in the DataFrame
+        self.limiter = RateLimiter(rate_limit=rate_limit, time_window=1)
+
+        with self._counter_lock:
+            self._vehicles_requests = 0
+            self._valuations_requests = 0
+            self._vehicles_errors = 0
+            self._valuations_errors = 0
+            self._rate_limit_hits = 0
+            self._abort = False
+            self._error_log = []
+
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
             for index, row in input_df.iterrows():
                 processed_rows.append(executor.submit(self.process_row, (row.to_dict()), session, column_mapper))
-
-            # Wait for all threads to finish
             processed_rows = [future.result() for future in processed_rows]
 
-        # Filter None values
         processed_rows = [row if row is not None else {} for row in processed_rows]
-
-        # transform processed rows into a DataFrame
         processed_df = pd.DataFrame(processed_rows)
-
-        # Add prefix at_ to all columns
         processed_df.columns = [f'at_{col}' for col in processed_df.columns]
-
-        return processed_df
+        return processed_df, self._vehicles_requests, self._valuations_requests, self._vehicles_errors, self._valuations_errors, list(self._error_log)
 
         # # Merge new DataFrame with the original DataFrame
         # processed_df = pd.concat([df, processed_df], axis=1)
