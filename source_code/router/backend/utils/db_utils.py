@@ -115,7 +115,7 @@ SETTINGS_DEFAULTS = {
     'calc_buying_reqs':                 '0',
     'get_stock':                        '0',
     'evaluator_row_limit':              0,
-    'mot_workers':                      5,
+    'mot_workers':                      10,
 }
 
 BOOL_SETTINGS = {'calc_buying_reqs', 'get_stock'}
@@ -154,7 +154,7 @@ def get_settings(conn, user: str = None) -> dict:
         return d
 
 
-def save_settings(conn, number_to_buy: int, max_days_sales: int, max_dts: int, min_gpu_m: int, cap_workers: int, cap_rate_limit: int, calc_buying_reqs: bool, get_stock: bool = False, evaluator_row_limit: int = 0, mot_workers: int = 5, at_workers: int = 40, at_rate_limit: int = 60, user: str = None):
+def save_settings(conn, number_to_buy: int, max_days_sales: int, max_dts: int, min_gpu_m: int, cap_workers: int, cap_rate_limit: int, calc_buying_reqs: bool, get_stock: bool = False, evaluator_row_limit: int = 0, mot_workers: int = 10, at_workers: int = 40, at_rate_limit: int = 60, user: str = None):
     values = {
         'number_to_buy':                number_to_buy,
         'max_days_sales':               max_days_sales,
