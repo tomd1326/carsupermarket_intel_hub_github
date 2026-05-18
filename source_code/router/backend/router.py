@@ -1729,7 +1729,7 @@ def tasks_json(page: int = 1, page_size: int = 25, user: str = Depends(get_curre
             total_tasks = cursor.fetchone()[0]
         with conn.cursor() as cursor:
             cursor.execute(
-                "SELECT t.task_id, t.created, t.status, t.filename, t.total_rows, t.reductions, t.execution_time, t.message, s.supplier_name, t.uploaded_by, t.source, t.error_log_s3 "
+                "SELECT t.task_id, t.created, t.status, t.filename, t.total_rows, t.reductions, t.execution_time, t.message, s.supplier_name, t.uploaded_by, t.source, t.error_log_s3, t.aurora_cache_hits "
                 "FROM tasks t LEFT JOIN suppliers s ON t.supplier_id = s.supplier_id "
                 "ORDER BY t.task_id DESC LIMIT %s OFFSET %s",
                 (page_size, offset)
@@ -2855,6 +2855,49 @@ async def fetch_supplier_stock(
     row_limit_setting = settings.get('evaluator_row_limit', 0)
     fetch_row_limit = row_limit_setting if row_limit_setting > 0 else None
 
+    # Fire the actual fetch in a background Lambda and return immediately
+    aws_context = request.scope["aws.context"] if "aws.context" in request.scope else None
+    fetch_data = {
+        'task_id': task_id,
+        'supplier': supplier,
+        'include_preview': bool(include_preview),
+        'fetch_row_limit': fetch_row_limit,
+        'cap_workers': settings['cap_workers'],
+        'cap_rate_limit': settings['cap_rate_limit'],
+        'at_workers': settings['at_workers'],
+        'at_rate_limit': settings['at_rate_limit'],
+    }
+    if aws_context is None:
+        asyncio.create_task(_fetch_supplier_stock_internal(fetch_data))
+    else:
+        LambdaRequestsManager().simulate_http(
+            aws_context=aws_context,
+            path=BASE_URL + "/api/fetch-supplier-stock-internal",
+            method="POST",
+            data=fetch_data,
+        )
+
+    logger.info(f"fetch_supplier_stock: queued task_id={task_id} for {supplier}")
+    return RedirectResponse(url=BASE_URL + "/tasks", status_code=303)
+
+
+@router.post("/api/fetch-supplier-stock-internal")
+async def fetch_supplier_stock_internal(data: dict):
+    await _fetch_supplier_stock_internal(data)
+
+
+async def _fetch_supplier_stock_internal(data: dict):
+    task_id = data['task_id']
+    supplier = data['supplier']
+    include_preview = data.get('include_preview', False)
+    fetch_row_limit = data.get('fetch_row_limit')
+
+    env = 'prod' if os.getenv('AWS_REGION') == 'eu-west-1' else 'dev'
+    secrets = get_secret(f'{env}/carsupermarket/car_pricer/api_access')
+
+    _FETCH_MAX_ATTEMPTS = 3
+    _FETCH_RETRY_DELAY = 5
+
     async with _supplier_fetch_lock:
         last_exc = None
         input_df = None
@@ -2876,7 +2919,7 @@ async def fetch_supplier_stock(
                         password=secrets['1LINK_PASSWORD'],
                     )
                     input_df = client.fetch_dataframe(row_limit=fetch_row_limit)
-                break  # success
+                break
             except Exception as e:
                 last_exc = e
                 logger.warning(f"fetch_supplier_stock attempt {attempt}/{_FETCH_MAX_ATTEMPTS} failed for {supplier}: {e}")
@@ -2892,9 +2935,8 @@ async def fetch_supplier_stock(
                     )
                 conn.commit()
             logger.error(f"fetch_supplier_stock failed for {supplier} after {_FETCH_MAX_ATTEMPTS} attempts: {last_exc}", exc_info=True)
-            raise HTTPException(status_code=500, detail=str(last_exc))
+            return
 
-    # Write DataFrame to a temp CSV and upload to S3 as the raw file
     fd, tmp_path = tempfile.mkstemp(suffix='.csv')
     os.close(fd)
     try:
@@ -2907,19 +2949,8 @@ async def fetch_supplier_stock(
         except OSError:
             pass
 
-    aws_context = request.scope["aws.context"] if "aws.context" in request.scope else None
-    if aws_context is None:
-        asyncio.create_task(elaborate_task({'task_id': task_id, 'cap_workers': settings['cap_workers'], 'cap_rate_limit': settings['cap_rate_limit'], 'at_workers': settings['at_workers'], 'at_rate_limit': settings['at_rate_limit']}))
-    else:
-        LambdaRequestsManager().simulate_http(
-            aws_context=aws_context,
-            path=BASE_URL + "/elaborate-task",
-            method="POST",
-            data={'task_id': task_id, 'cap_workers': settings['cap_workers'], 'cap_rate_limit': settings['cap_rate_limit'], 'at_workers': settings['at_workers'], 'at_rate_limit': settings['at_rate_limit']},
-        )
-
-    logger.info(f"fetch_supplier_stock: created task_id={task_id} for {supplier} ({len(input_df)} rows), row_limit={fetch_row_limit}")
-    return RedirectResponse(url=BASE_URL + "/tasks", status_code=303)
+    logger.info(f"fetch_supplier_stock: fetched task_id={task_id} for {supplier} ({len(input_df)} rows)")
+    await elaborate_task({'task_id': task_id, 'cap_workers': data['cap_workers'], 'cap_rate_limit': data['cap_rate_limit'], 'at_workers': data['at_workers'], 'at_rate_limit': data['at_rate_limit']})
 
 
 @router.post("/elaborate-task")
@@ -2942,6 +2973,7 @@ async def elaborate_task(data: dict):
         total_rows = None
         execution_time = None
         error_log_s3 = None
+        aurora_cache_hits = None
 
         fd_in,  tmp_in  = tempfile.mkstemp(suffix='.' + file_ext)
         fd_out, tmp_out = tempfile.mkstemp(suffix='.xlsx')
@@ -2980,7 +3012,7 @@ async def elaborate_task(data: dict):
                     prev_row = cursor.fetchone()
             prev_task_created = prev_row[0] if prev_row else None
 
-            processed_df, reductions, api_error_log = process_file_with_cache(
+            processed_df, reductions, api_error_log, aurora_cache_hits = process_file_with_cache(
                 input_df=input_df,
                 columns_mapper=columns_mapper,
                 supplier_id=task['supplier_id'],
@@ -3028,9 +3060,10 @@ async def elaborate_task(data: dict):
         with get_database_connection() as conn:
             with conn.cursor() as cursor:
                 cursor.execute("ALTER TABLE tasks ADD COLUMN IF NOT EXISTS error_log_s3 TEXT")
+                cursor.execute("ALTER TABLE tasks ADD COLUMN IF NOT EXISTS aurora_cache_hits INTEGER")
                 cursor.execute(
-                    "UPDATE tasks SET status = %s, message = %s, total_rows = %s, execution_time = %s, s3_location = %s, reductions = %s, error_log_s3 = %s WHERE task_id = %s",
-                    (status, message, total_rows, execution_time, s3_location if status == 'success' else None, reductions if status == 'success' else None, error_log_s3 if status == 'success' else None, data['task_id']),
+                    "UPDATE tasks SET status = %s, message = %s, total_rows = %s, execution_time = %s, s3_location = %s, reductions = %s, error_log_s3 = %s, aurora_cache_hits = %s WHERE task_id = %s",
+                    (status, message, total_rows, execution_time, s3_location if status == 'success' else None, reductions if status == 'success' else None, error_log_s3 if status == 'success' else None, aurora_cache_hits if status == 'success' else None, data['task_id']),
                 )
                 conn.commit()
 

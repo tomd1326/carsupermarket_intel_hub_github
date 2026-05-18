@@ -33,9 +33,9 @@ def get_db_credentials():
 
 
 def get_vehicle_db_credentials():
-    """Always returns prod credentials — vehicle/valuation data is always written to prod."""
+    """Returns prod credentials on prod Lambda (eu-west-1), dev credentials on dev Lambda (us-east-2)."""
     if os.getenv('LOCAL_ENV') == '1':
-        # In local dev, honour explicit overrides; otherwise fall through to prod secret.
+        # In local dev, honour explicit overrides; otherwise fall through to the environment secret.
         host = os.getenv('VEHICLE_DB_HOST') or os.getenv('DB_HOST')
         if host:
             return {
@@ -45,7 +45,10 @@ def get_vehicle_db_credentials():
                 'database': os.getenv('VEHICLE_DB_DATABASE', os.getenv('DB_DATABASE', 'test_db')),
                 'port': int(os.getenv('VEHICLE_DB_PORT', os.getenv('DB_PORT', 5432))),
             }
-    varname = 'prod/aramis_group/data_platform/rds/aurora_pg_core_cluster_admin_credentials'
+    if os.getenv('AWS_REGION') == 'eu-west-1':
+        varname = 'prod/aramis_group/data_platform/rds/aurora_pg_core_cluster_admin_credentials'
+    else:
+        varname = 'dev/aramis_group/data_platform/rds/aurora_pg_core_cluster_admin_credentials'
     data = get_secret(varname)
     return {
         'host': data['endpoint'],

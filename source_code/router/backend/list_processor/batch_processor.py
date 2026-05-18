@@ -382,4 +382,4 @@ def process_file_with_cache(
 
     # Exclude AT Valuations 400s — AT data quality issue (missing firstRegistrationDate), not speed/rate related
     api_error_log = [e for e in _at_errors + _cap_errors if not (e.get('api') == 'AT Valuations' and e.get('status_code') == 400)]
-    return pd.concat([input_df.reset_index(drop=True), at_result, cap_result, price_df], axis=1), reductions, api_error_log
+    return pd.concat([input_df.reset_index(drop=True), at_result, cap_result, price_df], axis=1), reductions, api_error_log, len(cache_hits)
