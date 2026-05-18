@@ -79,7 +79,7 @@ def _load_users_from_aurora():
     except Exception as e:
         logger.warning("Could not load users from Aurora — falling back to hardcoded admin only: %s", e)
 
-threading.Thread(target=_load_users_from_aurora, daemon=True).start()
+_load_users_from_aurora()
 
 # session_id -> {user, login_time} — tracks active sessions server-side
 _active_sessions: dict = {}
@@ -2227,19 +2227,26 @@ def _mot_build_and_upload(results: list, vrms: list, user: str):
     os.close(fd)
     try:
         import boto3 as _boto3
+        s3 = _boto3.client('s3', region_name='eu-west-1')
         wb.save(tmp_path)
         expired_count = sum(1 for r in results if r.get("status") == "EXPIRED")
         unknown_count = sum(1 for r in results if r.get("status") in ("UNKNOWN", "NOT_FOUND"))
+        metadata = {
+            "vrm_count":     str(len(vrms)),
+            "expired_count": str(expired_count),
+            "unknown_count": str(unknown_count),
+            "processed_by":  user,
+        }
         with open(tmp_path, 'rb') as f:
-            _boto3.client('s3').upload_fileobj(
-                f, s3_bucketname, s3_key,
-                ExtraArgs={"Metadata": {
-                    "vrm_count":     str(len(vrms)),
-                    "expired_count": str(expired_count),
-                    "unknown_count": str(unknown_count),
-                    "processed_by":  user,
-                }},
-            )
+            s3.upload_fileobj(f, s3_bucketname, s3_key, ExtraArgs={"Metadata": metadata})
+        # Upload JSON sidecar so load endpoint can serve results without re-parsing XLSX
+        json_key = s3_key.replace('.xlsx', '.json')
+        s3.put_object(
+            Bucket=s3_bucketname, Key=json_key,
+            Body=json.dumps({"columns": columns, "rows": rows}).encode(),
+            ContentType='application/json',
+            Metadata=metadata,
+        )
     finally:
         try:
             os.remove(tmp_path)
@@ -2275,16 +2282,21 @@ def mot_check_history(user: str = Depends(get_current_user)):
             except Exception:
                 return {"vrm_count": None, "expired_count": None, "unknown_count": None, "processed_by": None}
 
+        xlsx_objects = [o for o in objects if o['Key'] != prefix and o['Key'].replace(prefix, '').endswith('.xlsx')]
+
+        from concurrent.futures import ThreadPoolExecutor as _TPE, as_completed as _asc
+        with _TPE(max_workers=10) as pool:
+            futures = {pool.submit(_metadata, o['Key']): o for o in xlsx_objects}
+            meta_map = {fut: futures[fut] for fut in futures}
+            results_map = {}
+            for fut in _asc(futures):
+                results_map[id(meta_map[fut])] = fut.result()
+
         result = []
-        for o in objects:
-            if o['Key'] == prefix:
-                continue
-            filename = o['Key'].replace(prefix, '')
-            if not filename.endswith('.xlsx'):
-                continue
-            meta = _metadata(o['Key'])
+        for o in xlsx_objects:
+            meta = results_map[id(o)]
             result.append({
-                "filename":      filename,
+                "filename":      o['Key'].replace(prefix, ''),
                 "ts":            o['LastModified'].strftime("%d/%m/%Y %H:%M"),
                 "size_kb":       round(o['Size'] / 1024, 1),
                 "vrm_count":     meta["vrm_count"],
@@ -2321,9 +2333,22 @@ def mot_check_download(filename: str, user: str = Depends(get_current_user)):
 def mot_check_load(filename: str, user: str = Depends(get_current_user)):
     if not user:
         raise HTTPException(status_code=403)
-    import openpyxl
+    import boto3 as _boto3
     env = 'prod' if os.getenv('AWS_REGION') == 'eu-west-1' else 'dev'
-    s3_key = _MOT_S3_PREFIX.format(env=env) + filename
+    prefix = _MOT_S3_PREFIX.format(env=env)
+    s3 = _boto3.client('s3', region_name='eu-west-1')
+
+    # Try JSON sidecar first — much faster than downloading and re-parsing XLSX
+    json_key = prefix + filename.replace('.xlsx', '.json')
+    try:
+        obj = s3.get_object(Bucket=s3_bucketname, Key=json_key)
+        return json.loads(obj['Body'].read())
+    except Exception:
+        pass
+
+    # Fall back to XLSX parsing for older files without a sidecar
+    import openpyxl
+    s3_key = prefix + filename
     fd, tmp_path = tempfile.mkstemp(suffix=".xlsx")
     os.close(fd)
     try:
