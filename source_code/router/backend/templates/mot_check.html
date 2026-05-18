@@ -255,33 +255,44 @@
             document.getElementById('progressCard').style.display = '';
             setProgress(0, 0, vrms.length, null);
 
-            let pollInterval = setInterval(() => {
-                fetch(BASE_URL + '/mot-check/progress')
-                    .then(r => r.json())
-                    .then(p => { if (p.total > 0) setProgress(p.pct, p.done, p.total, p.eta_s); })
-                    .catch(() => {});
-            }, 1000);
-
             fetch(BASE_URL + '/mot-check/process', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
                 body: JSON.stringify({vrms})
             })
             .then(r => {
-                if (!r.ok) return r.json().then(e => { throw new Error(e.detail || 'Processing failed'); });
+                if (!r.ok) return r.json().then(e => { throw new Error(e.detail || 'Failed to queue'); });
                 return r.json();
             })
-            .then(data => {
-                clearInterval(pollInterval);
-                setProgress(100, data.rows.length, data.rows.length, null);
-                _currentFilename = data.filename;
-                _currentTs = nowTimestamp();
-                renderResults(data.columns, data.rows, _currentTs);
-                loadHistory();
-                document.getElementById('processBtn').disabled = false;
+            .then(() => {
+                let pollInterval = setInterval(() => {
+                    fetch(BASE_URL + '/mot-check/progress')
+                        .then(r => r.json())
+                        .then(p => {
+                            if (p.total > 0) setProgress(p.pct, p.done, p.total, p.eta_s);
+                            if (p.complete) {
+                                clearInterval(pollInterval);
+                                document.getElementById('processBtn').disabled = false;
+                                if (p.error) {
+                                    alert('Processing error: ' + p.error);
+                                    return;
+                                }
+                                _currentFilename = p.filename;
+                                _currentTs = nowTimestamp();
+                                fetch(BASE_URL + '/mot-check/load/' + encodeURIComponent(p.filename))
+                                    .then(r => r.json())
+                                    .then(data => {
+                                        setProgress(100, p.total, p.total, null);
+                                        renderResults(data.columns, data.rows, _currentTs);
+                                        loadHistory();
+                                    })
+                                    .catch(() => { alert('Failed to load results.'); });
+                            }
+                        })
+                        .catch(() => {});
+                }, 1000);
             })
             .catch(err => {
-                clearInterval(pollInterval);
                 document.getElementById('processBtn').disabled = false;
                 alert('Error: ' + err.message);
             });

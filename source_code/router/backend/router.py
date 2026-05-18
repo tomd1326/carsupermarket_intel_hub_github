@@ -2009,17 +2009,25 @@ def mot_check_progress(request: Request, user: str = Depends(get_current_user)):
         raise HTTPException(status_code=403)
     sid = request.session.get('session_id', '')
     with _mot_lock:
-        p = _mot_progress.get(sid, {"pct": 0, "done": 0, "total": 0, "eta_s": None})
-    return p
+        p = _mot_progress.get(sid)
+    if p is not None:
+        return p
+    # Fall back to S3 completion marker (poll may hit a different Lambda instance)
+    try:
+        import boto3 as _boto3
+        env = 'prod' if os.getenv('AWS_REGION') == 'eu-west-1' else 'dev'
+        s3_key = _MOT_S3_PREFIX.format(env=env) + f"progress_{sid}.json"
+        obj = _boto3.client('s3', region_name='eu-west-1').get_object(Bucket=s3_bucketname, Key=s3_key)
+        return json.loads(obj['Body'].read())
+    except Exception:
+        pass
+    return {"pct": 0, "done": 0, "total": 0, "eta_s": None, "complete": False, "filename": None, "error": None}
 
 
 @router.post("/mot-check/process")
 def mot_check_process(request: Request, payload: dict, user: str = Depends(get_current_user)):
     if not user:
         raise HTTPException(status_code=403)
-
-    from utils.dvsa_client import DVSAClient, NOT_FOUND as DVSA_NOT_FOUND
-    from concurrent.futures import ThreadPoolExecutor, as_completed
 
     vrms = [v.strip().upper() for v in (payload.get("vrms") or []) if v.strip()]
     if not vrms:
@@ -2028,19 +2036,30 @@ def mot_check_process(request: Request, payload: dict, user: str = Depends(get_c
     sid = request.session.get('session_id', '')
     total = len(vrms)
     _track(request, 'mot_check', '/mot-check', {'vrm_count': total})
-    with _mot_lock:
-        _mot_progress[sid] = {"pct": 0, "done": 0, "total": total, "eta_s": None}
 
     with get_database_connection() as conn:
         settings = get_settings(conn, user=user)
-    mot_workers = int(settings.get('mot_workers', 5))
+    mot_workers = int(settings.get('mot_workers', 10))
 
+    with _mot_lock:
+        _mot_progress[sid] = {"pct": 0, "done": 0, "total": total, "eta_s": None, "complete": False, "filename": None, "error": None}
+
+    t = threading.Thread(target=_mot_process_background, args=(sid, vrms, user, mot_workers), daemon=True)
+    t.start()
+
+    return {"queued": True, "total": total}
+
+
+def _mot_process_background(sid: str, vrms: list, user: str, mot_workers: int):
+    from utils.dvsa_client import DVSAClient, NOT_FOUND as DVSA_NOT_FOUND
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    total = len(vrms)
     client = DVSAClient()
     results = [None] * total
     start = time.time()
     done_count = 0
-
-    errored_indices = {}  # idx -> vrm, for any that raised an exception
+    errored_indices = {}
 
     def fetch(idx_vrm):
         idx, vrm = idx_vrm
@@ -2050,43 +2069,95 @@ def mot_check_process(request: Request, payload: dict, user: str = Depends(get_c
             logger.error("[DVSA] %s fetch error: %s", vrm, e)
             return idx, vrm, None, str(e)
 
-    with ThreadPoolExecutor(max_workers=mot_workers) as pool:
-        futures = {pool.submit(fetch, (i, v)): i for i, v in enumerate(vrms)}
-        for fut in as_completed(futures):
-            idx, vrm, vehicle_json, err = fut.result()
-            not_found = vehicle_json is DVSA_NOT_FOUND
-            results[idx] = _build_mot_row(vrm, None if not_found else vehicle_json, not_found=not_found)
-            if err:
-                errored_indices[idx] = vrm
-            done_count += 1
-            elapsed = time.time() - start
-            avg = elapsed / done_count
-            eta_s = (total - done_count) * avg
-            with _mot_lock:
-                _mot_progress[sid] = {
-                    "pct": round(done_count / total * 100, 1),
-                    "done": done_count,
-                    "total": total,
-                    "eta_s": round(eta_s, 1),
-                }
-
-    # Retry failed requests once, sequentially with a short delay
-    if errored_indices:
-        logger.warning("[DVSA] Retrying %d failed VRMs after 5s: %s", len(errored_indices), list(errored_indices.values()))
-        time.sleep(5)
-        for idx, vrm in errored_indices.items():
-            try:
-                vehicle_json = client.get_vehicle_by_vrm(vrm, debug=True)
+    try:
+        with ThreadPoolExecutor(max_workers=mot_workers) as pool:
+            futures = {pool.submit(fetch, (i, v)): i for i, v in enumerate(vrms)}
+            for fut in as_completed(futures):
+                idx, vrm, vehicle_json, err = fut.result()
                 not_found = vehicle_json is DVSA_NOT_FOUND
                 results[idx] = _build_mot_row(vrm, None if not_found else vehicle_json, not_found=not_found)
-                logger.info("[DVSA] Retry succeeded for %s", vrm)
-            except Exception as e:
-                logger.error("[DVSA] Retry failed for %s: %s", vrm, e)
+                if err:
+                    errored_indices[idx] = vrm
+                done_count += 1
+                elapsed = time.time() - start
+                avg = elapsed / done_count
+                eta_s = (total - done_count) * avg
+                with _mot_lock:
+                    _mot_progress[sid] = {
+                        "pct": round(done_count / total * 100, 1),
+                        "done": done_count,
+                        "total": total,
+                        "eta_s": round(eta_s, 1),
+                        "complete": False,
+                        "filename": None,
+                        "error": None,
+                    }
 
-    with _mot_lock:
-        _mot_progress.pop(sid, None)
+        if errored_indices:
+            logger.warning("[DVSA] Retrying %d failed VRMs after 5s: %s", len(errored_indices), list(errored_indices.values()))
+            time.sleep(5)
+            for idx, vrm in errored_indices.items():
+                try:
+                    vehicle_json = client.get_vehicle_by_vrm(vrm, debug=True)
+                    not_found = vehicle_json is DVSA_NOT_FOUND
+                    results[idx] = _build_mot_row(vrm, None if not_found else vehicle_json, not_found=not_found)
+                    logger.info("[DVSA] Retry succeeded for %s", vrm)
+                except Exception as e:
+                    logger.error("[DVSA] Retry failed for %s: %s", vrm, e)
 
-    total_elapsed = round(time.time() - start, 1)
+        total_elapsed = round(time.time() - start, 1)
+        columns, rows, filename = _mot_build_and_upload(results, vrms, user)
+
+        completion = {
+            "pct": 100,
+            "done": total,
+            "total": total,
+            "eta_s": 0,
+            "complete": True,
+            "filename": filename,
+            "error": None,
+        }
+        with _mot_lock:
+            _mot_progress[sid] = completion
+        # Write completion marker to S3 so other Lambda instances can serve the final state
+        try:
+            import boto3 as _boto3
+            env = 'prod' if os.getenv('AWS_REGION') == 'eu-west-1' else 'dev'
+            s3_key = _MOT_S3_PREFIX.format(env=env) + f"progress_{sid}.json"
+            _boto3.client('s3', region_name='eu-west-1').put_object(
+                Bucket=s3_bucketname, Key=s3_key,
+                Body=json.dumps(completion).encode(),
+                ContentType='application/json',
+            )
+        except Exception as s3e:
+            logger.warning("[DVSA] Failed to write S3 progress marker: %s", s3e)
+        logger.info("[DVSA] MOT check complete for sid=%s: %d VRMs in %.1fs", sid, total, total_elapsed)
+
+    except Exception as e:
+        logger.error("[DVSA] MOT background error for sid=%s: %s", sid, e)
+        error_state = {
+            "pct": 0, "done": 0, "total": total, "eta_s": None,
+            "complete": True, "filename": None, "error": str(e),
+        }
+        with _mot_lock:
+            _mot_progress[sid] = error_state
+        try:
+            import boto3 as _boto3
+            env = 'prod' if os.getenv('AWS_REGION') == 'eu-west-1' else 'dev'
+            s3_key = _MOT_S3_PREFIX.format(env=env) + f"progress_{sid}.json"
+            _boto3.client('s3', region_name='eu-west-1').put_object(
+                Bucket=s3_bucketname, Key=s3_key,
+                Body=json.dumps(error_state).encode(),
+                ContentType='application/json',
+            )
+        except Exception:
+            pass
+
+
+def _mot_build_and_upload(results: list, vrms: list, user: str):
+    import openpyxl
+    from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+
     columns = ["Registration", "Make", "Model", "Colour", "Fuel Type",
                "Date Registered", "Most Recent MOT Date", "MOT Expiry Date",
                "Odometer", "Status"]
@@ -2106,11 +2177,6 @@ def mot_check_process(request: Request, payload: dict, user: str = Depends(get_c
         row += ["", ""] * (max_pairs - len(r["test_pairs"]))
         row.append(_build_mot_comments(r))
         rows.append(row)
-
-    # Write XLSX to a temp file and upload to S3
-    import openpyxl
-    from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
-    import io
 
     env = 'prod' if os.getenv('AWS_REGION') == 'eu-west-1' else 'dev'
     ts_str = _uk_now().strftime("%Y%m%d_%H%M%S")
@@ -2180,7 +2246,7 @@ def mot_check_process(request: Request, payload: dict, user: str = Depends(get_c
         except OSError:
             pass
 
-    return {"columns": columns, "rows": rows, "filename": filename}
+    return columns, rows, filename
 
 
 @router.get("/mot-check/history")

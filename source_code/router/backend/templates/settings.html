@@ -115,8 +115,8 @@
                         <div>
                             <label for="mot_workers" class="form-label mb-1">Workers</label>
                             <input class="form-control" type="number" id="mot_workers" name="mot_workers"
-                                   value="{{ settings.mot_workers }}" min="1" max="10" style="width: 110px;">
-                            <div class="form-text">Default: 5. Max: 10</div>
+                                   value="{{ settings.mot_workers }}" min="1" max="50" style="width: 110px;">
+                            <div class="form-text">Default: 10. Max: 50</div>
                         </div>
                     </div>
                     <div class="form-text mt-2">Concurrent DVSA API requests. Higher = faster but more likely to hit rate limits (429s).</div>
