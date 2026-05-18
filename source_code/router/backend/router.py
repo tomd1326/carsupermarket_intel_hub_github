@@ -2087,8 +2087,6 @@ def mot_check_process(request: Request, payload: dict, user: str = Depends(get_c
         _mot_progress.pop(sid, None)
 
     total_elapsed = round(time.time() - start, 1)
-    _write_mot_debug_log(results, total_elapsed, user, retried=len(errored_indices))
-
     columns = ["Registration", "Make", "Model", "Colour", "Fuel Type",
                "Date Registered", "Most Recent MOT Date", "MOT Expiry Date",
                "Odometer", "Status"]
@@ -2308,40 +2306,6 @@ def _to_ddmmyyyy(s: str) -> str:
     return dt.strftime("%d/%m/%Y")
 
 
-def _write_mot_debug_log(results: list, elapsed_s: float, user: str, retried: int = 0):
-    import pathlib
-    log_path = pathlib.Path(__file__).parent.parent.parent / "logs" / "mot_debug.log"
-    log_path.parent.mkdir(parents=True, exist_ok=True)
-
-    statuses = [r.get("status", "UNKNOWN") for r in results]
-    counts = {}
-    for s in statuses:
-        counts[s] = counts.get(s, 0) + 1
-
-    retry_note = f"  retried={retried}" if retried else ""
-    lines = [
-        f"=== MOT run {_uk_now().strftime('%Y-%m-%d %H:%M:%S')} | user={user} | total={len(results)} | elapsed={elapsed_s}s{retry_note} ===",
-        f"  VALID={counts.get('VALID', 0)}  EXPIRED={counts.get('EXPIRED', 0)}  "
-        f"UNKNOWN={counts.get('UNKNOWN', 0)}  NOT_FOUND={counts.get('NOT_FOUND', 0)}",
-    ]
-
-    for r in results:
-        status = r.get("status", "?")
-        vrm = r.get("vrm", "?")
-        make_model = f"{r.get('make', '')} {r.get('model', '')}".strip()
-        expiry = r.get("expiry_date") or ""
-        comments = _build_mot_comments(r)
-        detail = f"  {vrm:<10} {status:<10} {make_model:<30} expiry={expiry or '-':<12}"
-        if comments:
-            detail += f" WARN: {comments}"
-        lines.append(detail)
-
-    lines.append("")
-    try:
-        with open(log_path, "a", encoding="utf-8") as f:
-            f.write("\n".join(lines) + "\n")
-    except Exception as e:
-        logger.warning("Failed to write MOT debug log: %s", e)
 
 
 def _build_mot_comments(r: dict) -> str:
