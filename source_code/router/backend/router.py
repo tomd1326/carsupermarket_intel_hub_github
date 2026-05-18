@@ -299,6 +299,9 @@ def update_settings(
     calc_buying_reqs: str = Form(default=""),
     get_stock: str = Form(default=""),
     evaluator_row_limit: int = Form(default=0),
+    mot_workers: int = Form(default=5),
+    at_workers: int = Form(default=40),
+    at_rate_limit: int = Form(default=60),
     user: str = Depends(get_current_user),
 ):
     if user != 'tdrayson':
@@ -306,11 +309,11 @@ def update_settings(
     calc = calc_buying_reqs == "on"
     gs = get_stock == "on"
     with get_database_connection() as conn:
-        save_settings(conn, number_to_buy, max_days_sales, max_dts, min_gpu_m, cap_workers, cap_rate_limit, calc, gs, evaluator_row_limit=evaluator_row_limit, user='buyer')
+        save_settings(conn, number_to_buy, max_days_sales, max_dts, min_gpu_m, cap_workers, cap_rate_limit, calc, gs, evaluator_row_limit=evaluator_row_limit, mot_workers=mot_workers, at_workers=at_workers, at_rate_limit=at_rate_limit, user='buyer')
     logger.info(
         "Settings updated by %s: number_to_buy=%d, max_days_sales=%d, max_dts=%d, "
-        "min_gpu_m=%d, cap_workers=%d, cap_rate_limit=%d, calc_buying_reqs=%s, get_stock=%s, evaluator_row_limit=%d",
-        user, number_to_buy, max_days_sales, max_dts, min_gpu_m, cap_workers, cap_rate_limit, calc, gs, evaluator_row_limit
+        "min_gpu_m=%d, cap_workers=%d, cap_rate_limit=%d, at_workers=%d, at_rate_limit=%d, calc_buying_reqs=%s, get_stock=%s, evaluator_row_limit=%d, mot_workers=%d",
+        user, number_to_buy, max_days_sales, max_dts, min_gpu_m, cap_workers, cap_rate_limit, at_workers, at_rate_limit, calc, gs, evaluator_row_limit, mot_workers
     )
     return RedirectResponse(url=BASE_URL + "/settings-page?saved=1", status_code=303)
 
@@ -676,7 +679,11 @@ def _load_sf_cache_from_s3() -> tuple[list, float] | None:
         payload = json.loads(obj["Body"].read())
         cached_at = payload.get("cached_at", 0.0)
         if _sf_cache_is_fresh(cached_at):
-            return payload["rows"], cached_at
+            rows = payload["rows"]
+            for r in rows:
+                if r[3] == '0%':
+                    r[3] = 'interest_free'
+            return rows, cached_at
     except Exception:
         pass
     return None
@@ -798,7 +805,7 @@ def _get_sf_rows(force: bool = False) -> list:
     def _s(r, name): v = _g(r, name); return str(v) if v is not None else None
     def _gbp(r, name): v = _g(r, name); return round(v, 2) if v is not None else None
     result = [[
-        _g(r, 'CAP_ID'), _g(r, 'LABEL'), _g(r, 'FUEL_TYPE'), _g(r, 'PRICE_BAND'),
+        _g(r, 'CAP_ID'), _g(r, 'LABEL'), _g(r, 'FUEL_TYPE'), ('interest_free' if _g(r, 'PRICE_BAND') == '0%' else _g(r, 'PRICE_BAND')),
         _g(r, 'STOCK'), _g(r, 'SALES_90_DAYS'), _g(r, 'SALES_7_DAYS'),
         _g(r, 'DAYS_IN_STOCK_ACKNOWLEDGED'), _g(r, 'DAYS_ADVERTISED_ACKNOWLEDGED'),
         _gbp(r, 'GPU_M'), _gbp(r, 'GPU_S'), _gbp(r, 'GPU_MS'),
@@ -1026,6 +1033,9 @@ def _get_dbs_purchases(force: bool = False) -> dict:
 
     vehicles = []
     sf_bands = _get_sf_cap_price_bands()
+    with _cache_lock:
+        _sf_rows_dbs = _sf_cache.get("rows") or []
+    sf_cap_band_pairs_dbs = {(r[0], r[3]) for r in _sf_rows_dbs if r[0] is not None and r[3]}
 
     def _to_float(v):
         if v is None or str(v).strip() in ('', 'None'): return None
@@ -1048,10 +1058,13 @@ def _get_dbs_purchases(force: bool = False) -> dict:
             if not rrp_float:
                 skipped_no_rrp += 1
                 continue
+        band = "interest_free" if is_if else _rrp_to_price_band(r['rrp'])
         if r['cap_id'] not in sf_bands:
             skipped_no_sf += 1
             continue
-        band = "interest_free" if is_if else _rrp_to_price_band(r['rrp'])
+        if (r['cap_id'], band) not in sf_cap_band_pairs_dbs:
+            skipped_no_sf += 1
+            continue
         key = (r['cap_id'], band)
         purchases[key] = purchases.get(key, 0) + 1
         vehicles.append({'vrm': r['vrm'], 'cap_id': r['cap_id'], 'band': band, 'make': r.get('make', ''), 'model': r.get('model', ''), 'deriv': r.get('deriv', ''), 'supplier': r.get('supplier', ''), 'mileage': r.get('mileage'), 'siv': r.get('siv'), 'rrp': _to_float(r.get('rrp')), 'rrp0': _to_float(r.get('rrp0')), 'dor': r.get('dor'), 'cap_live': r.get('cap_live'), 'at_ptm': r.get('at_ptm'), 'at_rating': r.get('at_rating'), 'source': 'dbs'})
@@ -1223,6 +1236,10 @@ def _get_cb_purchases(force: bool = False) -> dict:
     raw_rows = _enrich_cap_ids(raw_rows)
 
     sf_bands = _get_sf_cap_price_bands()
+    # Build exact (cap_id, band) pairs that exist as rows in the SF table
+    with _cache_lock:
+        _sf_rows = _sf_cache.get("rows") or []
+    sf_cap_band_pairs = {(r[0], r[3]) for r in _sf_rows if r[0] is not None and r[3]}
 
     def _to_float(v):
         if v is None or str(v).strip() in ('', 'None'): return None
@@ -1233,6 +1250,8 @@ def _get_cb_purchases(force: bool = False) -> dict:
     vehicles: list = []
     skipped_no_cap = skipped_no_rrp = skipped_no_sf = 0
     for r in raw_rows:
+        vrm = r['vrm']
+        make_model = f"{r.get('make', '')} {r.get('model', '')}".strip()
         if r['cap_id'] is None:
             skipped_no_cap += 1
             continue
@@ -1247,10 +1266,13 @@ def _get_cb_purchases(force: bool = False) -> dict:
             if not rrp_float:
                 skipped_no_rrp += 1
                 continue
+        band = "interest_free" if is_if else _rrp_to_price_band(r['rrp'])
         if r['cap_id'] not in sf_bands:
             skipped_no_sf += 1
             continue
-        band = "interest_free" if is_if else _rrp_to_price_band(r['rrp'])
+        if (r['cap_id'], band) not in sf_cap_band_pairs:
+            skipped_no_sf += 1
+            continue
         key = (r['cap_id'], band)
         purchases[key] = purchases.get(key, 0) + 1
         vehicles.append({'vrm': r['vrm'], 'cap_id': r['cap_id'], 'band': band, 'make': r.get('make', ''), 'model': r.get('model', ''), 'deriv': r.get('deriv', ''), 'supplier': r.get('supplier', ''), 'mileage': r.get('mileage'), 'siv': r.get('siv'), 'rrp': _to_float(r.get('rrp')), 'rrp0': _to_float(r.get('rrp0')), 'dor': r.get('dor'), 'cap_live': r.get('cap_live'), 'at_ptm': r.get('at_ptm'), 'at_rating': r.get('at_rating'), 'source': 'cb'})
@@ -1265,6 +1287,7 @@ def _get_cb_purchases(force: bool = False) -> dict:
     _save_cb_cache_to_s3(purchases, vehicles, fetched_at, _CB_S3_TTL_SECONDS)
     logger.info(f"Cars Bought: {total_vrms} unique VRMs, {sum(purchases.values())} in table ({len(purchases)} cap/band keys), skipped: {skipped_no_cap} no CAP ID, {skipped_no_rrp} no RRP, {skipped_no_sf} not in SF")
     return purchases
+
 
 
 def _get_cb_purchases_cached() -> tuple[dict, list] | None:
@@ -1706,7 +1729,7 @@ def tasks_json(page: int = 1, page_size: int = 25, user: str = Depends(get_curre
             total_tasks = cursor.fetchone()[0]
         with conn.cursor() as cursor:
             cursor.execute(
-                "SELECT t.task_id, t.created, t.status, t.filename, t.total_rows, t.reductions, t.execution_time, t.message, s.supplier_name, t.uploaded_by, t.source "
+                "SELECT t.task_id, t.created, t.status, t.filename, t.total_rows, t.reductions, t.execution_time, t.message, s.supplier_name, t.uploaded_by, t.source, t.error_log_s3 "
                 "FROM tasks t LEFT JOIN suppliers s ON t.supplier_id = s.supplier_id "
                 "ORDER BY t.task_id DESC LIMIT %s OFFSET %s",
                 (page_size, offset)
@@ -1995,7 +2018,7 @@ def mot_check_process(request: Request, payload: dict, user: str = Depends(get_c
     if not user:
         raise HTTPException(status_code=403)
 
-    from utils.dvsa_client import DVSAClient
+    from utils.dvsa_client import DVSAClient, NOT_FOUND as DVSA_NOT_FOUND
     from concurrent.futures import ThreadPoolExecutor, as_completed
 
     vrms = [v.strip().upper() for v in (payload.get("vrms") or []) if v.strip()]
@@ -2008,23 +2031,33 @@ def mot_check_process(request: Request, payload: dict, user: str = Depends(get_c
     with _mot_lock:
         _mot_progress[sid] = {"pct": 0, "done": 0, "total": total, "eta_s": None}
 
+    with get_database_connection() as conn:
+        settings = get_settings(conn, user=user)
+    mot_workers = int(settings.get('mot_workers', 5))
+
     client = DVSAClient()
     results = [None] * total
     start = time.time()
     done_count = 0
 
+    errored_indices = {}  # idx -> vrm, for any that raised an exception
+
     def fetch(idx_vrm):
         idx, vrm = idx_vrm
         try:
-            return idx, vrm, client.get_vehicle_by_vrm(vrm), None
+            return idx, vrm, client.get_vehicle_by_vrm(vrm, debug=True), None
         except Exception as e:
+            logger.error("[DVSA] %s fetch error: %s", vrm, e)
             return idx, vrm, None, str(e)
 
-    with ThreadPoolExecutor(max_workers=10) as pool:
+    with ThreadPoolExecutor(max_workers=mot_workers) as pool:
         futures = {pool.submit(fetch, (i, v)): i for i, v in enumerate(vrms)}
         for fut in as_completed(futures):
             idx, vrm, vehicle_json, err = fut.result()
-            results[idx] = _build_mot_row(vrm, vehicle_json)
+            not_found = vehicle_json is DVSA_NOT_FOUND
+            results[idx] = _build_mot_row(vrm, None if not_found else vehicle_json, not_found=not_found)
+            if err:
+                errored_indices[idx] = vrm
             done_count += 1
             elapsed = time.time() - start
             avg = elapsed / done_count
@@ -2037,8 +2070,24 @@ def mot_check_process(request: Request, payload: dict, user: str = Depends(get_c
                     "eta_s": round(eta_s, 1),
                 }
 
+    # Retry failed requests once, sequentially with a short delay
+    if errored_indices:
+        logger.warning("[DVSA] Retrying %d failed VRMs after 5s: %s", len(errored_indices), list(errored_indices.values()))
+        time.sleep(5)
+        for idx, vrm in errored_indices.items():
+            try:
+                vehicle_json = client.get_vehicle_by_vrm(vrm, debug=True)
+                not_found = vehicle_json is DVSA_NOT_FOUND
+                results[idx] = _build_mot_row(vrm, None if not_found else vehicle_json, not_found=not_found)
+                logger.info("[DVSA] Retry succeeded for %s", vrm)
+            except Exception as e:
+                logger.error("[DVSA] Retry failed for %s: %s", vrm, e)
+
     with _mot_lock:
         _mot_progress.pop(sid, None)
+
+    total_elapsed = round(time.time() - start, 1)
+    _write_mot_debug_log(results, total_elapsed, user, retried=len(errored_indices))
 
     columns = ["Registration", "Make", "Model", "Colour", "Fuel Type",
                "Date Registered", "Most Recent MOT Date", "MOT Expiry Date",
@@ -2116,7 +2165,7 @@ def mot_check_process(request: Request, payload: dict, user: str = Depends(get_c
         import boto3 as _boto3
         wb.save(tmp_path)
         expired_count = sum(1 for r in results if r.get("status") == "EXPIRED")
-        unknown_count = sum(1 for r in results if r.get("status") == "UNKNOWN")
+        unknown_count = sum(1 for r in results if r.get("status") in ("UNKNOWN", "NOT_FOUND"))
         with open(tmp_path, 'rb') as f:
             _boto3.client('s3').upload_fileobj(
                 f, s3_bucketname, s3_key,
@@ -2259,6 +2308,42 @@ def _to_ddmmyyyy(s: str) -> str:
     return dt.strftime("%d/%m/%Y")
 
 
+def _write_mot_debug_log(results: list, elapsed_s: float, user: str, retried: int = 0):
+    import pathlib
+    log_path = pathlib.Path(__file__).parent.parent.parent / "logs" / "mot_debug.log"
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+
+    statuses = [r.get("status", "UNKNOWN") for r in results]
+    counts = {}
+    for s in statuses:
+        counts[s] = counts.get(s, 0) + 1
+
+    retry_note = f"  retried={retried}" if retried else ""
+    lines = [
+        f"=== MOT run {_uk_now().strftime('%Y-%m-%d %H:%M:%S')} | user={user} | total={len(results)} | elapsed={elapsed_s}s{retry_note} ===",
+        f"  VALID={counts.get('VALID', 0)}  EXPIRED={counts.get('EXPIRED', 0)}  "
+        f"UNKNOWN={counts.get('UNKNOWN', 0)}  NOT_FOUND={counts.get('NOT_FOUND', 0)}",
+    ]
+
+    for r in results:
+        status = r.get("status", "?")
+        vrm = r.get("vrm", "?")
+        make_model = f"{r.get('make', '')} {r.get('model', '')}".strip()
+        expiry = r.get("expiry_date") or ""
+        comments = _build_mot_comments(r)
+        detail = f"  {vrm:<10} {status:<10} {make_model:<30} expiry={expiry or '-':<12}"
+        if comments:
+            detail += f" WARN: {comments}"
+        lines.append(detail)
+
+    lines.append("")
+    try:
+        with open(log_path, "a", encoding="utf-8") as f:
+            f.write("\n".join(lines) + "\n")
+    except Exception as e:
+        logger.warning("Failed to write MOT debug log: %s", e)
+
+
 def _build_mot_comments(r: dict) -> str:
     notes = []
 
@@ -2304,7 +2389,10 @@ def _build_mot_comments(r: dict) -> str:
         curr_d = dates[j]
         if prev_d is None or curr_d is None:
             continue
-        due = datetime.date(prev_d.year + 1, prev_d.month, prev_d.day)
+        try:
+            due = datetime.date(prev_d.year + 1, prev_d.month, prev_d.day)
+        except ValueError:
+            due = datetime.date(prev_d.year + 1, 3, 1)
         if (due - curr_d).days >= 60:
             notes.append("Early MOT test")
             break
@@ -2312,9 +2400,14 @@ def _build_mot_comments(r: dict) -> str:
     return "; ".join(notes)
 
 
-def _build_mot_row(vrm: str, vehicle_json) -> dict:
+def _build_mot_row(vrm: str, vehicle_json, not_found: bool = False) -> dict:
     import zoneinfo
     uk_tz = zoneinfo.ZoneInfo("Europe/London")
+
+    if not_found:
+        return {"vrm": vrm, "make": "", "model": "", "colour": "", "fuel": "",
+                "date_registered": "", "last_mot_date": "", "expiry_date": "",
+                "odometer": "", "status": "NOT_FOUND", "test_pairs": [], "pairs": 0}
 
     empty = {"vrm": vrm, "make": "", "model": "", "colour": "", "fuel": "",
               "date_registered": "", "last_mot_date": "", "expiry_date": "",
@@ -2465,13 +2558,13 @@ async def upload_task(request: Request, fileBase64: str = Form(...), supplier_id
         aws_context = request.scope["aws.context"] if "aws.context" in request.scope else None
         if aws_context is None:
             import asyncio
-            asyncio.create_task(elaborate_task({'task_id': task_id, 'cap_workers': cap_workers, 'cap_rate_limit': cap_rate_limit}))
+            asyncio.create_task(elaborate_task({'task_id': task_id, 'cap_workers': cap_workers, 'cap_rate_limit': cap_rate_limit, 'at_workers': 40, 'at_rate_limit': 60}))
         else:
             LambdaRequestsManager().simulate_http(
                 aws_context=aws_context,
                 path=BASE_URL + "/elaborate-task",
                 method="POST",
-                data={'task_id': task_id, 'cap_workers': cap_workers, 'cap_rate_limit': cap_rate_limit},
+                data={'task_id': task_id, 'cap_workers': cap_workers, 'cap_rate_limit': cap_rate_limit, 'at_workers': 40, 'at_rate_limit': 60},
             )
     finally:
         try:
@@ -2533,6 +2626,31 @@ def download_task_file(task_id: str):
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={"Content-Disposition": f'attachment; filename="{output_filename}"'},
     )
+
+@router.get("/download-error-log/{task_id}")
+def download_error_log(task_id: str, user: str = Depends(get_current_user)):
+    if user != 'tdrayson':
+        raise HTTPException(status_code=403)
+    with get_database_connection() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute("SELECT error_log_s3 FROM tasks WHERE task_id = %s", (task_id,))
+            row = cursor.fetchone()
+    if not row or not row[0]:
+        raise HTTPException(status_code=404, detail="No error log for this task")
+    import boto3, tempfile
+    s3 = boto3.client('s3', region_name='eu-west-1')
+    tmp_fd, tmp_path = tempfile.mkstemp(suffix='.csv')
+    os.close(tmp_fd)
+    try:
+        s3.download_file(s3_bucketname, row[0], tmp_path)
+        return FileResponse(
+            tmp_path,
+            media_type='text/csv',
+            headers={"Content-Disposition": f'attachment; filename="api_errors_{task_id}.csv"'},
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 @router.get("/delete-task/{task_id}")
 def delete_task(task_id: str, user: str = Depends(get_current_user)):
@@ -2608,13 +2726,13 @@ async def enterprise_email_start_task(
     aws_context = request.scope["aws.context"] if "aws.context" in request.scope else None
     if aws_context is None:
         import asyncio
-        asyncio.create_task(elaborate_task({'task_id': task_id, 'cap_workers': settings['cap_workers'], 'cap_rate_limit': settings['cap_rate_limit']}))
+        asyncio.create_task(elaborate_task({'task_id': task_id, 'cap_workers': settings['cap_workers'], 'cap_rate_limit': settings['cap_rate_limit'], 'at_workers': settings['at_workers'], 'at_rate_limit': settings['at_rate_limit']}))
     else:
         LambdaRequestsManager().simulate_http(
             aws_context=aws_context,
             path=BASE_URL + "/elaborate-task",
             method="POST",
-            data={'task_id': task_id, 'cap_workers': settings['cap_workers'], 'cap_rate_limit': settings['cap_rate_limit']},
+            data={'task_id': task_id, 'cap_workers': settings['cap_workers'], 'cap_rate_limit': settings['cap_rate_limit'], 'at_workers': settings['at_workers'], 'at_rate_limit': settings['at_rate_limit']},
         )
     logger.info(f"Enterprise email: started elaborate for task_id={task_id}")
     return {"status": "started", "task_id": task_id}
@@ -2733,13 +2851,13 @@ async def fetch_supplier_stock(
 
     aws_context = request.scope["aws.context"] if "aws.context" in request.scope else None
     if aws_context is None:
-        asyncio.create_task(elaborate_task({'task_id': task_id, 'cap_workers': settings['cap_workers'], 'cap_rate_limit': settings['cap_rate_limit']}))
+        asyncio.create_task(elaborate_task({'task_id': task_id, 'cap_workers': settings['cap_workers'], 'cap_rate_limit': settings['cap_rate_limit'], 'at_workers': settings['at_workers'], 'at_rate_limit': settings['at_rate_limit']}))
     else:
         LambdaRequestsManager().simulate_http(
             aws_context=aws_context,
             path=BASE_URL + "/elaborate-task",
             method="POST",
-            data={'task_id': task_id, 'cap_workers': settings['cap_workers'], 'cap_rate_limit': settings['cap_rate_limit']},
+            data={'task_id': task_id, 'cap_workers': settings['cap_workers'], 'cap_rate_limit': settings['cap_rate_limit'], 'at_workers': settings['at_workers'], 'at_rate_limit': settings['at_rate_limit']},
         )
 
     logger.info(f"fetch_supplier_stock: created task_id={task_id} for {supplier} ({len(input_df)} rows), row_limit={fetch_row_limit}")
@@ -2765,6 +2883,7 @@ async def elaborate_task(data: dict):
         s3_location = f'applications/pricing/uk-vehicle-list-evaluator/{env}/raw/{data["task_id"]}.{file_ext}'
         total_rows = None
         execution_time = None
+        error_log_s3 = None
 
         fd_in,  tmp_in  = tempfile.mkstemp(suffix='.' + file_ext)
         fd_out, tmp_out = tempfile.mkstemp(suffix='.xlsx')
@@ -2781,7 +2900,9 @@ async def elaborate_task(data: dict):
 
             cap_workers = int(data.get('cap_workers', 20))
             cap_rate_limit = int(data.get('cap_rate_limit', 100))
-            logger.info(f"CAP settings: workers={cap_workers}, rate_limit={cap_rate_limit}")
+            at_workers = int(data.get('at_workers', 40))
+            at_rate_limit = int(data.get('at_rate_limit', 60))
+            logger.info(f"CAP settings: workers={cap_workers}, rate_limit={cap_rate_limit} | AT settings: workers={at_workers}, rate_limit={at_rate_limit}")
 
             autotrader = AutoTraderClient()
             cap_client = CAPClient()
@@ -2801,7 +2922,7 @@ async def elaborate_task(data: dict):
                     prev_row = cursor.fetchone()
             prev_task_created = prev_row[0] if prev_row else None
 
-            processed_df, reductions = process_file_with_cache(
+            processed_df, reductions, api_error_log = process_file_with_cache(
                 input_df=input_df,
                 columns_mapper=columns_mapper,
                 supplier_id=task['supplier_id'],
@@ -2811,12 +2932,32 @@ async def elaborate_task(data: dict):
                 cap_client=cap_client,
                 cap_workers=cap_workers,
                 cap_rate_limit=cap_rate_limit,
+                at_workers=at_workers,
+                at_rate_limit=at_rate_limit,
                 prev_task_created=prev_task_created,
             )
             write_dataframe_file(processed_df, tmp_out)
 
             s3_location = f'applications/pricing/uk-vehicle-list-evaluator/{env}/elaborated/{data["task_id"]}.xlsx'
             upload_file(tmp_out, s3_bucketname, s3_location)
+
+            error_log_s3 = None
+            if api_error_log:
+                import csv, io as _io
+                buf = _io.StringIO()
+                writer = csv.DictWriter(buf, fieldnames=['timestamp', 'api', 'vrm', 'mileage', 'cap_id', 'status_code', 'error_type', 'detail'])
+                writer.writeheader()
+                writer.writerows(sorted(api_error_log, key=lambda r: r.get('timestamp', '')))
+                error_log_key = f'applications/pricing/uk-vehicle-list-evaluator/{env}/error-logs/{data["task_id"]}.csv'
+                try:
+                    import boto3
+                    boto3.client('s3', region_name='eu-west-1').put_object(
+                        Bucket=s3_bucketname, Key=error_log_key,
+                        Body=buf.getvalue().encode(), ContentType='text/csv',
+                    )
+                    error_log_s3 = error_log_key
+                except Exception as _e:
+                    logger.warning(f"Failed to write API error log to S3: {_e}")
 
             execution_time = time.time() - t
             status = 'success'
@@ -2828,9 +2969,10 @@ async def elaborate_task(data: dict):
 
         with get_database_connection() as conn:
             with conn.cursor() as cursor:
+                cursor.execute("ALTER TABLE tasks ADD COLUMN IF NOT EXISTS error_log_s3 TEXT")
                 cursor.execute(
-                    "UPDATE tasks SET status = %s, message = %s, total_rows = %s, execution_time = %s, s3_location = %s, reductions = %s WHERE task_id = %s",
-                    (status, message, total_rows, execution_time, s3_location if status == 'success' else None, reductions if status == 'success' else None, data['task_id']),
+                    "UPDATE tasks SET status = %s, message = %s, total_rows = %s, execution_time = %s, s3_location = %s, reductions = %s, error_log_s3 = %s WHERE task_id = %s",
+                    (status, message, total_rows, execution_time, s3_location if status == 'success' else None, reductions if status == 'success' else None, error_log_s3 if status == 'success' else None, data['task_id']),
                 )
                 conn.commit()
 

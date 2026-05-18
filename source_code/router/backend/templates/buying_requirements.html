@@ -75,7 +75,7 @@
                     <i class="fas fa-sync-alt me-1"></i>Refresh Table
                 </button>
                 <button class="btn btn-outline-secondary btn-sm" onclick="resetApplyFilters()">Reset to Default</button>
-                <button class="btn btn-outline-success btn-sm" onclick="exportXLSX()">
+                <button id="export-cap-ids-btn" class="btn btn-outline-success btn-sm disabled" aria-disabled="true" onclick="if(!this.classList.contains('disabled'))exportXLSX()">
                     <i class="fas fa-file-excel me-1"></i>Export CAP IDs
                 </button>
                 <span id="filtered-sales-label" class="small text-muted"></span>

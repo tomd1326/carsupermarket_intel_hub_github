@@ -212,6 +212,9 @@
                         {% else %}
                             <a href="#" class="btn btn-secondary btn-sm disabled" aria-disabled="true"><i class="fa fa-download"></i></a>
                         {% endif %}
+                        {% if user == 'tdrayson' and task.get('error_log_s3') %}
+                            <a href="{{ BASE_URL }}/download-error-log/{{ task.task_id }}" class="btn btn-outline-warning btn-sm" title="Download API error log"><i class="fa fa-exclamation-triangle"></i></a>
+                        {% endif %}
                         {% if task.status in ('pending', 'created') %}
                             <a href="#" class="btn btn-outline-danger btn-sm" title="Delete task" onclick="deleteTask({{ task.task_id }}); return false;"><i class="fa fa-trash"></i></a>
                         {% endif %}
@@ -257,6 +260,11 @@
             } else {
                 html += `<a href="#" class="btn btn-secondary btn-sm disabled" aria-disabled="true"><i class="fa fa-download"></i></a>`;
             }
+            {% if user == 'tdrayson' %}
+            if (task.error_log_s3) {
+                html += ` <a href="{{ BASE_URL }}/download-error-log/${task.task_id}" class="btn btn-outline-warning btn-sm" title="Download API error log"><i class="fa fa-exclamation-triangle"></i></a>`;
+            }
+            {% endif %}
             if (task.status === 'pending' || task.status === 'created') {
                 html += ` <a href="#" class="btn btn-outline-danger btn-sm" title="Delete task" onclick="deleteTask(${task.task_id}); return false;"><i class="fa fa-trash"></i></a>`;
             }
