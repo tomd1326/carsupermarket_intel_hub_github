@@ -264,7 +264,8 @@
                 if (!r.ok) return r.json().then(e => { throw new Error(e.detail || 'Failed to queue'); });
                 return r.json();
             })
-            .then(() => {
+            .then(queued => {
+                setProgress(0, 0, queued.total, null);
                 let pollInterval = setInterval(() => {
                     fetch(BASE_URL + '/mot-check/progress')
                         .then(r => r.json())
@@ -279,14 +280,17 @@
                                 }
                                 _currentFilename = p.filename;
                                 _currentTs = nowTimestamp();
+                                setProgress(100, p.total, p.total, null);
                                 fetch(BASE_URL + '/mot-check/load/' + encodeURIComponent(p.filename))
-                                    .then(r => r.json())
+                                    .then(r => {
+                                        if (!r.ok) throw new Error('HTTP ' + r.status);
+                                        return r.json();
+                                    })
                                     .then(data => {
-                                        setProgress(100, p.total, p.total, null);
                                         renderResults(data.columns, data.rows, _currentTs);
                                         loadHistory();
                                     })
-                                    .catch(() => { alert('Failed to load results.'); });
+                                    .catch(err => { alert('Failed to load results: ' + err.message); });
                             }
                         })
                         .catch(() => {});

@@ -2279,9 +2279,12 @@ def mot_check_history(user: str = Depends(get_current_user)):
         for o in objects:
             if o['Key'] == prefix:
                 continue
+            filename = o['Key'].replace(prefix, '')
+            if not filename.endswith('.xlsx'):
+                continue
             meta = _metadata(o['Key'])
             result.append({
-                "filename":      o['Key'].replace(prefix, ''),
+                "filename":      filename,
                 "ts":            o['LastModified'].strftime("%d/%m/%Y %H:%M"),
                 "size_kb":       round(o['Size'] / 1024, 1),
                 "vrm_count":     meta["vrm_count"],
