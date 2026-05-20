@@ -8,7 +8,11 @@
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css" rel="stylesheet">
     <style>
-        body, button, input, select, textarea { font-family: 'Aptos Display', system-ui, sans-serif; }
+        @font-face { font-family: 'DM Sans'; src: url('{{ BASE_URL }}/static/fonts/DMSans-Regular.ttf');  font-weight: 400; }
+        @font-face { font-family: 'DM Sans'; src: url('{{ BASE_URL }}/static/fonts/DMSans-Medium.ttf');   font-weight: 500; }
+        @font-face { font-family: 'DM Sans'; src: url('{{ BASE_URL }}/static/fonts/DMSans-SemiBold.ttf'); font-weight: 600; }
+        @font-face { font-family: 'DM Sans'; src: url('{{ BASE_URL }}/static/fonts/DMSans-Bold.ttf');     font-weight: 700; }
+        body, button, input, select, textarea { font-family: 'DM Sans', system-ui, sans-serif; }
         body { background-color: #003c57; min-height: 100vh; }
 
         .page-wrap {
@@ -36,7 +40,7 @@
         textarea {
             resize: vertical;
             font-size: 0.88rem;
-            font-family: 'Aptos Display', monospace;
+            font-family: 'DM Sans', monospace;
         }
         .btn-process {
             background-color: #7ed321;
@@ -56,10 +60,10 @@
         .progress-bar { background-color: #7ed321; }
 
         .history-empty { color: #adb5bd; font-size: 0.88rem; }
-        .history-scroll { max-height: 520px; overflow-y: auto; overflow-x: auto; }
+        .history-scroll { max-height: 260px; overflow-y: auto; overflow-x: auto; }
         .history-table { font-size: 0.82rem; width: 100%; }
         .history-table th { white-space: nowrap; background-color: #f0f4f8; font-weight: 600; padding: 7px 10px; position: sticky; top: 0; z-index: 1; }
-        .history-table td { white-space: nowrap; padding: 7px 10px; border-top: 1px solid #f0f0f0; vertical-align: middle; }
+        .history-table td { white-space: nowrap; padding: 7px 10px; border-top: 1px solid #dee2e6; vertical-align: middle; }
         .history-table tbody tr { cursor: pointer; transition: background 0.1s; }
         .history-table tbody tr:hover { background-color: #f0f7ff; }
         .history-table tbody tr.active-history-row { background-color: #dbeeff; }
@@ -106,7 +110,7 @@
         }
         .result-table td:last-child,
         .result-table th:last-child { border-right: none; }
-        .result-scroll { max-height: 380px; overflow-y: auto; overflow-x: auto; }
+        .result-scroll { height: 352px; min-height: 352px; overflow-y: auto; overflow-x: auto; }
 
         .results-title { font-weight: 700; }
         .results-timestamp { font-size: 1rem; color: #212529; font-weight: 600; margin-left: 8px; }
@@ -114,6 +118,15 @@
         .history-loading { color: #adb5bd; font-size: 0.88rem; }
 
         .warn-cell { background-color: #f8d7da !important; color: #721c24 !important; font-weight: 600; }
+
+        @keyframes motRowFlash {
+            0%   { background-color: #9ecbf7; }
+            100% { background-color: #dbeeff; }
+        }
+        .history-table tbody tr.new-row {
+            background-color: #dbeeff;
+            animation: motRowFlash 0.8s ease-out 1;
+        }
     </style>
 </head>
 <body>
@@ -164,16 +177,21 @@
                         <div class="progress mb-2">
                             <div class="progress-bar" id="progressBar" style="width:0%"></div>
                         </div>
-                        <div class="d-flex justify-content-between small text-muted">
+                        <div class="d-flex justify-content-between small text-muted mb-3">
                             <span id="progressRows">0 / 0</span>
                             <span id="progressEta">Calculating...</span>
                         </div>
+                        <button class="btn btn-success w-100 fw-bold" id="quickDownloadBtn" style="display:none;font-size:1rem;padding:10px 0;" onclick="quickDownload()">
+                            <i class="fas fa-download me-2"></i>Download XLSX
+                        </button>
                     </div>
                 </div>
             </div>
 
-            <!-- Right: history + results -->
+            <!-- Right: results + history -->
             <div class="col-12 col-lg-7 col-xl-8">
+
+                <!-- Results card -->
                 <div class="card mb-3" id="resultsCard">
                     <div class="card-body">
                         <div class="d-flex justify-content-between align-items-center mb-2">
@@ -181,11 +199,11 @@
                                 Results
                                 <span class="results-timestamp" id="resultsTimestamp"></span>
                             </h6>
-                            <button class="btn btn-sm btn-outline-secondary" onclick="downloadCsv()">
+                            <button class="btn btn-sm btn-outline-secondary" onclick="quickDownload()">
                                 <i class="fas fa-download me-1"></i>Download XLSX
                             </button>
                         </div>
-                        <div id="resultsSummary" class="mb-3" style="font-size:0.88rem;"></div>
+                        <div id="resultsSummary" style="font-size:0.88rem;height:34px;overflow:hidden;"></div>
                         <div class="result-scroll">
                             <table class="table table-sm table-hover result-table mb-0">
                                 <thead><tr id="resultsHeader"></tr></thead>
@@ -195,38 +213,44 @@
                     </div>
                 </div>
 
+                <!-- History card -->
                 <div class="card">
-                    <div class="card-body">
-                        <h6 class="fw-bold mb-3">Previous Tasks <span class="text-muted fw-normal" style="font-size:0.8rem;">(Click to view results)</span></h6>
-                        <div class="history-scroll">
-                            <p class="history-loading mb-0" id="historyLoading"><i class="fas fa-spinner fa-spin me-1"></i>Loading...</p>
-                            <table class="history-table" id="historyTable" style="display:none;">
-                                <thead>
-                                    <tr>
-                                        <th>File Name</th>
-                                        <th>Date &amp; Time</th>
-                                        <th>User</th>
-                                        <th>Size</th>
-                                        <th># Vehicles</th>
-                                        <th># Expired</th>
-                                        <th># Not Found</th>
-                                        <th></th>
-                                    </tr>
-                                </thead>
-                                <tbody id="historyBody"></tbody>
-                            </table>
-                            <p class="history-empty mb-0" id="historyEmpty" style="display:none;">No previous runs found.</p>
+                    <div class="card-body" style="padding-bottom:12px;">
+                        <h6 class="fw-bold mb-3">Previous Tasks <span class="text-muted fw-normal" style="font-size:0.8rem;">(Click row to view results)</span></h6>
+                        <div id="historyCollapse">
+                            <div class="history-scroll">
+                                <p class="history-loading mb-0" id="historyLoading"><i class="fas fa-spinner fa-spin me-1"></i>Loading...</p>
+                                <table class="history-table" id="historyTable" style="display:none;">
+                                    <thead>
+                                        <tr>
+                                            <th>Date &amp; Time</th>
+                                            <th>User</th>
+                                            <th>Total</th>
+                                            <th style="color:#155724;">Valid</th>
+                                            <th>No History</th>
+                                            <th>Not Found</th>
+                                            <th style="color:#842029;">Expired</th>
+                                            <th style="color:#842029;">Mileage</th>
+                                            <th style="color:#842029;">Early MOT</th>
+                                            <th></th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="historyBody"></tbody>
+                                </table>
+                                <p class="history-empty mb-0" id="historyEmpty" style="display:none;">No previous runs found.</p>
+                            </div>
                         </div>
                     </div>
                 </div>
+
             </div>
         </div>
     </div>
 
     <script>
         window.BASE_URL = "{{ BASE_URL }}";
+        window.CURRENT_USER = "{{ user }}";
         let _currentFilename = null;
-        let _currentTs = null;
 
         const vrmInput = document.getElementById('vrmInput');
         vrmInput.addEventListener('input', () => {
@@ -247,11 +271,46 @@
             return `${pad(d.getDate())}/${pad(d.getMonth()+1)}/${d.getFullYear()} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
         }
 
+        function _n(v, style) {
+            if (v == null) return `<td>—</td>`;
+            if (style === 'issue' && v > 0) return `<td style="background:#f8d7da;color:#842029;font-weight:700;">${v}</td>`;
+            if (style === 'good'  && v > 0) return `<td style="color:#155724;font-weight:600;">${v}</td>`;
+            return `<td>${v}</td>`;
+        }
+
+        function _historyRow(item, isNew) {
+            return `<tr data-filename="${item.filename}" data-ts="${item.ts || ''}" class="${isNew ? 'new-row' : ''}" onclick="loadHistoryResult(this)">
+                <td>${item.ts}</td>
+                <td>${item.processed_by ?? '—'}</td>
+                ${_n(item.vrm_count, '')}
+                ${_n(item.valid_count, 'good')}
+                ${_n(item.unknown_count, '')}
+                ${_n(item.not_found_count, '')}
+                ${_n(item.expired_count, 'issue')}
+                ${_n(item.mileage_warn_count, 'issue')}
+                ${_n(item.early_mot_count, 'issue')}
+                <td>
+                    <a href="${BASE_URL}/mot-check/download/${encodeURIComponent(item.filename)}" class="btn btn-sm btn-outline-secondary" onclick="event.stopPropagation()">
+                        <i class="fas fa-download me-1"></i>XLSX
+                    </a>
+                </td>
+            </tr>`;
+        }
+
+        function quickDownload() {
+            if (!_currentFilename) return;
+            window.location.href = BASE_URL + '/mot-check/download/' + encodeURIComponent(_currentFilename);
+        }
+
         function startProcessing() {
             const vrms = parseVrms();
             if (!vrms.length) { alert('Enter at least one VRM.'); return; }
 
             document.getElementById('processBtn').disabled = true;
+            document.getElementById('quickDownloadBtn').style.display = 'none';
+            _currentFilename = null;
+            vrmInput.value = '';
+            document.getElementById('vrmCount').style.display = 'none';
             document.getElementById('progressCard').style.display = '';
             setProgress(0, 0, vrms.length, null);
 
@@ -274,23 +333,34 @@
                             if (p.complete) {
                                 clearInterval(pollInterval);
                                 document.getElementById('processBtn').disabled = false;
-                                if (p.error) {
-                                    alert('Processing error: ' + p.error);
-                                    return;
-                                }
-                                _currentFilename = p.filename;
-                                _currentTs = nowTimestamp();
+                                if (p.error) { alert('Processing error: ' + p.error); return; }
                                 setProgress(100, p.total, p.total, null);
+                                _currentFilename = p.filename;
+                                document.getElementById('quickDownloadBtn').style.display = '';
+                                const ts = nowTimestamp();
                                 fetch(BASE_URL + '/mot-check/load/' + encodeURIComponent(p.filename))
-                                    .then(r => {
-                                        if (!r.ok) throw new Error('HTTP ' + r.status);
-                                        return r.json();
-                                    })
-                                    .then(data => {
-                                        renderResults(data.columns, data.rows, _currentTs);
-                                        loadHistory();
-                                    })
-                                    .catch(err => { alert('Failed to load results: ' + err.message); });
+                                    .then(r => r.json())
+                                    .then(data => renderResults(data.columns, data.rows, ts))
+                                    .catch(() => {});
+                                if (p.counts) {
+                                    const item = {
+                                        filename:           p.filename,
+                                        ts:                 ts,
+                                        processed_by:       window.CURRENT_USER,
+                                        vrm_count:          p.counts.vrm_count,
+                                        valid_count:        p.counts.valid_count,
+                                        expired_count:      p.counts.expired_count,
+                                        unknown_count:      p.counts.unknown_count,
+                                        not_found_count:    p.counts.not_found_count,
+                                        mileage_warn_count: p.counts.mileage_warn_count,
+                                        early_mot_count:    p.counts.early_mot_count,
+                                    };
+                                    const body = document.getElementById('historyBody');
+                                    body.insertAdjacentHTML('afterbegin', _historyRow(item, true));
+                                    document.getElementById('historyTable').style.display = '';
+                                    document.getElementById('historyEmpty').style.display = 'none';
+                                    document.getElementById('historyLoading').style.display = 'none';
+                                }
                             }
                         })
                         .catch(() => {});
@@ -356,7 +426,6 @@
                 const due = new Date(prev); due.setFullYear(due.getFullYear() + 1);
                 if ((due - curr) / 864e5 >= 60) warned.add(histDates[j].idx);
             }
-            // Check most recent MOT date against last historical
             const recentIdx = columns.indexOf('Most Recent MOT Date');
             if (recentIdx >= 0 && histDates.length > 0) {
                 const lastHist = histDates[histDates.length - 1];
@@ -373,38 +442,33 @@
         let _activeFilter = null;
 
         function applyFilter(filter) {
-            // Toggle off if already active
             _activeFilter = _activeFilter === filter ? null : filter;
-
             document.querySelectorAll('#resultsBody tr').forEach(tr => {
                 const cats = (tr.dataset.cats || '').split(',');
                 tr.style.display = (!_activeFilter || cats.includes(_activeFilter)) ? '' : 'none';
             });
-
-            // Update badge outlines to show which is active
             document.querySelectorAll('#resultsSummary [data-filter]').forEach(el => {
-                el.style.outline = (el.dataset.filter === _activeFilter) ? '2px solid #495057' : 'none';
+                el.style.boxShadow = (el.dataset.filter === _activeFilter) ? 'inset 0 0 0 2px #495057' : 'none';
                 el.style.cursor = 'pointer';
             });
         }
 
         function renderResults(columns, rows, ts) {
             const header = document.getElementById('resultsHeader');
-            const body = document.getElementById('resultsBody');
+            const body   = document.getElementById('resultsBody');
             _activeFilter = null;
             header.innerHTML = columns.map(c => `<th>${c}</th>`).join('');
 
             const commentsIdx = columns.indexOf('Comments');
-            const statusIdx = columns.indexOf('Status');
+            const statusIdx   = columns.indexOf('Status');
 
             body.innerHTML = rows.map(row => {
-                const warned = warnedCells(columns, row);
+                const warned     = warnedCells(columns, row);
                 const hasMileage = [...warned].some(i => /MOT Mileage/i.test(columns[i]) || columns[i] === 'Odometer');
                 const hasEarly   = [...warned].some(i => /MOT Date/i.test(columns[i]));
                 const isExpired  = statusIdx >= 0 && row[statusIdx] === 'EXPIRED';
                 const isUnknown  = statusIdx >= 0 && row[statusIdx] === 'UNKNOWN';
-
-                const isNotFound  = statusIdx >= 0 && row[statusIdx] === 'NOT_FOUND';
+                const isNotFound = statusIdx >= 0 && row[statusIdx] === 'NOT_FOUND';
 
                 const cats = [];
                 if (isExpired)  cats.push('expired');
@@ -415,7 +479,7 @@
 
                 const cells = row.map((cell, i) => {
                     if (columns[i] === 'Status') {
-                        const cls = cell === 'VALID' ? 'badge-valid' : cell === 'EXPIRED' ? 'badge-expired' : cell === 'NOT_FOUND' ? 'badge-not-found' : 'badge-unknown';
+                        const cls   = cell === 'VALID' ? 'badge-valid' : cell === 'EXPIRED' ? 'badge-expired' : cell === 'NOT_FOUND' ? 'badge-not-found' : 'badge-unknown';
                         const label = cell === 'NOT_FOUND' ? 'NOT FOUND' : cell;
                         return `<td><span class="status-badge ${cls}">${label}</span></td>`;
                     }
@@ -426,9 +490,9 @@
                 return `<tr data-cats="${cats.join(',')}">${cells}</tr>`;
             }).join('');
 
-            const expired        = statusIdx >= 0 ? rows.filter(r => r[statusIdx] === 'EXPIRED').length : 0;
-            const unknown        = statusIdx >= 0 ? rows.filter(r => r[statusIdx] === 'UNKNOWN').length : 0;
-            const notFound       = statusIdx >= 0 ? rows.filter(r => r[statusIdx] === 'NOT_FOUND').length : 0;
+            const expired   = statusIdx >= 0 ? rows.filter(r => r[statusIdx] === 'EXPIRED').length   : 0;
+            const unknown   = statusIdx >= 0 ? rows.filter(r => r[statusIdx] === 'UNKNOWN').length   : 0;
+            const notFound  = statusIdx >= 0 ? rows.filter(r => r[statusIdx] === 'NOT_FOUND').length : 0;
             let mileageWarnCount = 0, earlyMotWarnCount = 0;
             rows.forEach(row => {
                 const w = warnedCells(columns, row);
@@ -439,28 +503,35 @@
             const badge = (filter, bg, color, icon, label) =>
                 `<span data-filter="${filter}" onclick="applyFilter('${filter}')" style="background:${bg};color:${color};font-weight:600;padding:5px 12px;border-radius:6px;display:inline-block;cursor:pointer;user-select:none;"><i class="fas fa-${icon} me-1"></i>${label}</span>`;
 
-            const summary = document.getElementById('resultsSummary');
             const parts = [];
             if (expired > 0) {
                 parts.push(badge('expired', '#f8d7da', '#842029', 'exclamation-circle', `${expired} expired MOT${expired !== 1 ? 's' : ''}`));
             } else {
                 parts.push(`<span style="background:#d1e7dd;color:#155724;font-weight:600;padding:5px 12px;border-radius:6px;display:inline-block;"><i class="fas fa-check-circle me-1"></i>No expired MOTs</span>`);
             }
-            if (unknown > 0) {
-                parts.push(badge('unknown', '#e2e3e5', '#41464b', 'car', `${unknown} no MOT history`));
-            }
-            if (notFound > 0) {
-                parts.push(badge('not_found', '#e2e3e5', '#41464b', 'question-circle', `${notFound} not found`));
-            }
-            if (mileageWarnCount > 0) {
-                parts.push(badge('mileage', '#f8d7da', '#842029', 'tachometer-alt', `${mileageWarnCount} mileage discrepanc${mileageWarnCount !== 1 ? 'ies' : 'y'}`));
-            }
-            if (earlyMotWarnCount > 0) {
-                parts.push(badge('early', '#f8d7da', '#842029', 'calendar-alt', `${earlyMotWarnCount} early MOT test${earlyMotWarnCount !== 1 ? 's' : ''}`));
-            }
-            summary.innerHTML = `<div class="d-flex gap-2 flex-wrap">${parts.join('')}</div>`;
+            if (unknown > 0)        parts.push(badge('unknown',   '#e2e3e5', '#41464b', 'car',             `${unknown} no MOT history`));
+            if (notFound > 0)       parts.push(badge('not_found', '#e2e3e5', '#41464b', 'question-circle', `${notFound} not found`));
+            if (mileageWarnCount > 0) parts.push(badge('mileage', '#f8d7da', '#842029', 'tachometer-alt', `${mileageWarnCount} mileage discrepanc${mileageWarnCount !== 1 ? 'ies' : 'y'}`));
+            if (earlyMotWarnCount > 0) parts.push(badge('early',  '#f8d7da', '#842029', 'calendar-alt',   `${earlyMotWarnCount} early MOT test${earlyMotWarnCount !== 1 ? 's' : ''}`));
+            document.getElementById('resultsSummary').innerHTML = `<div class="d-flex gap-2 flex-wrap">${parts.join('')}</div>`;
 
             document.getElementById('resultsTimestamp').textContent = ts || '';
+        }
+
+        function loadHistoryResult(row) {
+            const filename = row.dataset.filename;
+            const ts = row.dataset.ts;
+            if (!filename) return;
+            document.querySelectorAll('#historyTable tr').forEach(r => r.classList.remove('active-history-row'));
+            row.classList.add('active-history-row');
+            _currentFilename = filename;
+            fetch(BASE_URL + '/mot-check/load/' + encodeURIComponent(filename))
+                .then(r => {
+                    if (!r.ok) return r.json().then(e => { throw new Error(e.detail || 'Failed to load results'); });
+                    return r.json();
+                })
+                .then(data => renderResults(data.columns, data.rows, ts))
+                .catch(err => alert('Could not load results: ' + err.message));
         }
 
         function loadHistory() {
@@ -475,38 +546,8 @@
                     const table = document.getElementById('historyTable');
                     const body  = document.getElementById('historyBody');
                     const empty = document.getElementById('historyEmpty');
-                    if (!items.length) {
-                        table.style.display = 'none';
-                        empty.style.display = '';
-                        return;
-                    }
-                    body.innerHTML = items.map((item, idx) => {
-                        const expiredCell = item.expired_count != null
-                            ? (item.expired_count > 0
-                                ? `<td style="color:#842029;font-weight:600;">${item.expired_count}</td>`
-                                : `<td style="color:#155724;">0</td>`)
-                            : `<td>—</td>`;
-                        const unknownCell = item.unknown_count != null
-                            ? (item.unknown_count > 0
-                                ? `<td style="color:#41464b;font-weight:600;">${item.unknown_count}</td>`
-                                : `<td>0</td>`)
-                            : `<td>—</td>`;
-                        return `
-                        <tr data-filename="${item.filename}" data-ts="${item.ts}" onclick="loadHistoryResult(this)">
-                            <td>${item.filename}</td>
-                            <td>${item.ts}</td>
-                            <td>${item.processed_by ?? '—'}</td>
-                            <td>${item.size_kb} KB</td>
-                            <td>${item.vrm_count != null ? item.vrm_count : '—'}</td>
-                            ${expiredCell}
-                            ${unknownCell}
-                            <td>
-                                <a href="${BASE_URL}/mot-check/download/${encodeURIComponent(item.filename)}" class="btn btn-sm btn-outline-secondary" onclick="event.stopPropagation()">
-                                    <i class="fas fa-download me-1"></i>XLSX
-                                </a>
-                            </td>
-                        </tr>`;
-                    }).join('');
+                    if (!items.length) { table.style.display = 'none'; empty.style.display = ''; return; }
+                    body.innerHTML = items.map(item => _historyRow(item, false)).join('');
                     table.style.display = '';
                     empty.style.display = 'none';
                 })
@@ -514,35 +555,6 @@
                     document.getElementById('historyLoading').style.display = 'none';
                     document.getElementById('historyEmpty').style.display = '';
                 });
-        }
-
-        function loadHistoryResult(row) {
-            const filename = row.dataset.filename;
-            const ts = row.dataset.ts;
-            if (!filename) return;
-
-            // Highlight the clicked row
-            document.querySelectorAll('#historyBody tr').forEach(r => r.classList.remove('active-history-row'));
-            row.classList.add('active-history-row');
-
-            _currentFilename = filename;
-
-            fetch(BASE_URL + '/mot-check/load/' + encodeURIComponent(filename))
-                .then(r => {
-                    if (!r.ok) return r.json().then(e => { throw new Error(e.detail || 'Failed to load results'); });
-                    return r.json();
-                })
-                .then(data => {
-                    renderResults(data.columns, data.rows, ts);
-                })
-                .catch(err => {
-                    alert('Could not load results: ' + err.message);
-                });
-        }
-
-        function downloadCsv() {
-            if (!_currentFilename) return;
-            window.location.href = BASE_URL + '/mot-check/download/' + encodeURIComponent(_currentFilename);
         }
 
         loadHistory();

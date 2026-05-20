@@ -252,6 +252,7 @@
             maxDTS:       {{ settings.max_dts }},
             minGPUM:      {{ settings.min_gpu_m }},
         };
+        window.ENABLE_CARS_BOUGHT = {{ 'true' if enable_cars_bought else 'false' }};
     </script>
     <script src="{{ BASE_URL }}/static/js/buying_requirements.js"></script>
 </body>

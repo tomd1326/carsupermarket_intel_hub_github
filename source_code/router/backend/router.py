@@ -1,5 +1,6 @@
 import asyncio
 import base64
+import re
 import tempfile
 import threading
 import traceback
@@ -298,22 +299,24 @@ def update_settings(
     cap_rate_limit: int = Form(...),
     calc_buying_reqs: str = Form(default=""),
     get_stock: str = Form(default=""),
-    evaluator_row_limit: int = Form(default=0),
+    enable_cars_bought: str = Form(default=""),
     mot_workers: int = Form(default=5),
     at_workers: int = Form(default=40),
     at_rate_limit: int = Form(default=60),
+    valuation_cache_hours: int = Form(default=36),
     user: str = Depends(get_current_user),
 ):
     if user != 'tdrayson':
         raise HTTPException(status_code=403, detail="Forbidden")
     calc = calc_buying_reqs == "on"
     gs = get_stock == "on"
+    ecb = enable_cars_bought == "on"
     with get_database_connection() as conn:
-        save_settings(conn, number_to_buy, max_days_sales, max_dts, min_gpu_m, cap_workers, cap_rate_limit, calc, gs, evaluator_row_limit=evaluator_row_limit, mot_workers=mot_workers, at_workers=at_workers, at_rate_limit=at_rate_limit, user='buyer')
+        save_settings(conn, number_to_buy, max_days_sales, max_dts, min_gpu_m, cap_workers, cap_rate_limit, calc, gs, enable_cars_bought=ecb, mot_workers=mot_workers, at_workers=at_workers, at_rate_limit=at_rate_limit, valuation_cache_hours=valuation_cache_hours, user='buyer')
     logger.info(
         "Settings updated by %s: number_to_buy=%d, max_days_sales=%d, max_dts=%d, "
-        "min_gpu_m=%d, cap_workers=%d, cap_rate_limit=%d, at_workers=%d, at_rate_limit=%d, calc_buying_reqs=%s, get_stock=%s, evaluator_row_limit=%d, mot_workers=%d",
-        user, number_to_buy, max_days_sales, max_dts, min_gpu_m, cap_workers, cap_rate_limit, at_workers, at_rate_limit, calc, gs, evaluator_row_limit, mot_workers
+        "min_gpu_m=%d, cap_workers=%d, cap_rate_limit=%d, at_workers=%d, at_rate_limit=%d, calc_buying_reqs=%s, get_stock=%s, enable_cars_bought=%s, mot_workers=%d",
+        user, number_to_buy, max_days_sales, max_dts, min_gpu_m, cap_workers, cap_rate_limit, at_workers, at_rate_limit, calc, gs, ecb, mot_workers
     )
     return RedirectResponse(url=BASE_URL + "/settings-page?saved=1", status_code=303)
 
@@ -362,7 +365,8 @@ def buying_requirements(request: Request, user: str = Depends(get_current_user))
     with get_database_connection() as conn:
         settings = get_settings(conn, user=user)
     _track(request, 'page_view', '/buying-requirements')
-    return templates.TemplateResponse("buying_requirements.html", {"request": request, "user": user, "BASE_URL": BASE_URL, "settings": settings})
+    enable_cars_bought = user == 'tdrayson' or settings.get('enable_cars_bought', False)
+    return templates.TemplateResponse("buying_requirements.html", {"request": request, "user": user, "BASE_URL": BASE_URL, "settings": settings, "enable_cars_bought": enable_cars_bought})
 
 
 # NEW
@@ -955,42 +959,52 @@ def _get_dbs_purchases(force: bool = False) -> dict:
             time.sleep(3)
     purchases: dict = {}
 
-    # Find the header row — search first 5 rows for the one containing "CAP ID"
+    # Find the header row — search first 5 rows for a row containing a REG/VRM and CAP ID variant
+    def _norm_hdr(v): return re.sub(r'[\s_]+', '', str(v).strip().upper())
+
+    def _col(hdrs, *aliases):
+        for a in aliases:
+            a = re.sub(r'[\s_]+', '', a.upper())
+            for i, h in enumerate(hdrs):
+                if h == a:
+                    return i
+        return None
+
     header_row_idx = None
-    headers = []
-    for i, row in enumerate(values[:5]):
-        if row and "CAP ID" in [str(c).strip() for c in row]:
+    headers_norm = []
+    for i in ([1] + [j for j in range(min(5, len(values))) if j != 1]):
+        row = values[i] if i < len(values) else []
+        norm = [_norm_hdr(c) for c in row]
+        has_reg = any(h in ('REG', 'VRM', 'REGISTRATION') for h in norm)
+        has_cap = any(h in ('CAPID',) for h in norm)
+        if row and has_reg and has_cap:
             header_row_idx = i
-            headers = [str(c).strip() for c in row]
+            headers_norm = norm
             break
 
+    if header_row_idx is None:
+        logger.warning(f"Daily Buyers Sheet: no header row found in first {min(5, len(values))} rows — sheet may have changed structure")
+
     raw_rows = []
-    if headers:
-        try:
-            reg_idx   = headers.index("REG")
-            cap_idx   = headers.index("CAP ID")
-            rrp_idx   = headers.index("RRP")
-            rrp0_idx  = headers.index("RRP 0%")
-        except ValueError:
-            pass
+    if headers_norm:
+        reg_idx  = _col(headers_norm, 'REG', 'VRM', 'REGISTRATION')
+        cap_idx  = _col(headers_norm, 'CAP ID', 'CAPID')
+        rrp_idx  = _col(headers_norm, 'RRP')
+        rrp0_idx = _col(headers_norm, 'RRP 0%')
+
+        if None in (reg_idx, cap_idx, rrp_idx, rrp0_idx):
+            logger.warning(f"Daily Buyers Sheet: missing required column(s) — REG={reg_idx} CAP ID={cap_idx} RRP={rrp_idx} RRP 0%={rrp0_idx}. Headers: {headers_norm}")
         else:
-            make_idx     = headers.index("MAKE")           if "MAKE"           in headers else None
-            model_idx    = headers.index("MODEL")          if "MODEL"          in headers else None
-            deriv_idx    = headers.index("DERIVATIVE")     if "DERIVATIVE"     in headers else (
-                           headers.index("VARIANT")        if "VARIANT"        in headers else None)
-            supplier_idx = headers.index("SUPPLIER")       if "SUPPLIER"       in headers else None
-            mileage_idx  = headers.index("MILEAGE")        if "MILEAGE"        in headers else None
-            siv_idx      = headers.index("SIV")            if "SIV"            in headers else (
-                           headers.index("PURCHASE PRICE") if "PURCHASE PRICE" in headers else (
-                           headers.index("PURCHASE_PRICE") if "PURCHASE_PRICE" in headers else None))
-            dor_idx      = headers.index("DOR")              if "DOR"              in headers else None
-            cap_live_idx = headers.index("CAP CLEAN LIVE")  if "CAP CLEAN LIVE"  in headers else (
-                           headers.index("CAP LIVE CLEAN")  if "CAP LIVE CLEAN"  in headers else (
-                           headers.index("CAP CLEAN")       if "CAP CLEAN"       in headers else None))
-            at_ptm_idx    = headers.index("AUTOTRADER RRP")  if "AUTOTRADER RRP"  in headers else (
-                            headers.index("AT RRP")          if "AT RRP"          in headers else (
-                            headers.index("AT PTM")          if "AT PTM"          in headers else None))
-            at_rating_idx = headers.index("RR")              if "RR"              in headers else None
+            make_idx     = _col(headers_norm, 'MAKE')
+            model_idx    = _col(headers_norm, 'MODEL')
+            deriv_idx    = _col(headers_norm, 'DERIVATIVE', 'VARIANT')
+            supplier_idx = _col(headers_norm, 'SUPPLIER')
+            mileage_idx  = _col(headers_norm, 'MILEAGE')
+            siv_idx      = _col(headers_norm, 'SIV', 'PURCHASE PRICE', 'PURCHASE_PRICE')
+            dor_idx      = _col(headers_norm, 'DOR')
+            cap_live_idx = _col(headers_norm, 'CAP CLEAN LIVE', 'CAP LIVE CLEAN', 'CAP CLEAN')
+            at_ptm_idx   = _col(headers_norm, 'AUTOTRADER RRP', 'AT RRP', 'AT PTM')
+            at_rating_idx = _col(headers_norm, 'RR')
             for row in values[header_row_idx + 1:]:
                 vrm = str(row[reg_idx]).strip().replace(' ', '').upper() if reg_idx < len(row) and row[reg_idx] not in (None, '') else ''
                 if not vrm or vrm in ('NONE', 'N/A'):
@@ -1024,12 +1038,7 @@ def _get_dbs_purchases(force: bool = False) -> dict:
 
     raw_rows = _enrich_cap_ids(raw_rows)
 
-    total_dbs_vrms = len(raw_rows)  # badge count — before CB dedup
-
-    # Exclude DBS VRMs that are also in CB (CB wins when duplicated)
-    cb_cached = _get_cb_purchases_cached()
-    cb_vrms = {v['vrm'] for v in cb_cached[1]} if cb_cached else set()
-    raw_rows = [r for r in raw_rows if r['vrm'] not in cb_vrms]
+    total_dbs_vrms = len(raw_rows)
 
     vehicles = []
     sf_bands = _get_sf_cap_price_bands()
@@ -1070,7 +1079,7 @@ def _get_dbs_purchases(force: bool = False) -> dict:
         vehicles.append({'vrm': r['vrm'], 'cap_id': r['cap_id'], 'band': band, 'make': r.get('make', ''), 'model': r.get('model', ''), 'deriv': r.get('deriv', ''), 'supplier': r.get('supplier', ''), 'mileage': r.get('mileage'), 'siv': r.get('siv'), 'rrp': _to_float(r.get('rrp')), 'rrp0': _to_float(r.get('rrp0')), 'dor': r.get('dor'), 'cap_live': r.get('cap_live'), 'at_ptm': r.get('at_ptm'), 'at_rating': r.get('at_rating'), 'source': 'dbs'})
 
     data_rows = len(values) - (header_row_idx + 1) if header_row_idx is not None else 0
-    logger.info(f"Daily Buyers Sheet: {sum(purchases.values())} purchases in {len(purchases)} cap/band keys (from {data_rows} rows, {total_dbs_vrms} unique VRMs, {len(cb_vrms)} deduped to CB, skipped: {skipped_no_cap} no CAP ID, {skipped_no_rrp} no RRP, {skipped_no_sf} not in SF)")
+    logger.info(f"Daily Buyers Sheet: {sum(purchases.values())} purchases in {len(purchases)} cap/band keys (from {data_rows} rows, {total_dbs_vrms} unique VRMs, skipped: {skipped_no_cap} no CAP ID, {skipped_no_rrp} no RRP, {skipped_no_sf} not in SF)")
     fetched_at = time.time()
     with _cache_lock:
         _dbs_cache["purchases"]  = purchases
@@ -1125,11 +1134,24 @@ def _get_cb_purchases(force: bool = False) -> dict:
                 time.sleep(3)
 
     def _fetch_apex_vrms():
-        with SnowflakeClient() as sf:
-            rows, _ = sf.execute(
-                "SELECT VRM FROM PROD_CARSUPERMARKET_DB.product_vehicle_journey.buying_requirements WHERE STOCK = 1"
-            )
-        return {row[0].strip().upper() for row in rows if row[0]}
+        try:
+            with SnowflakeClient() as sf:
+                rows, _ = sf.execute("""
+                    SELECT DISTINCT VRM
+                    FROM PROD_CARSUPERMARKET_DB.product_vehicle_journey.buying_requirements
+                    WHERE VRM IS NOT NULL AND VRM != ''
+                """)
+            result = {str(r[0]).strip().upper() for r in rows if r[0]}
+            logger.info(f"Cars Bought: fetched {len(result)} Apex VRMs from Snowflake for dedup")
+            return result
+        except Exception as e:
+            logger.warning(f"CB fetch: could not fetch Apex VRMs from Snowflake: {e}")
+            # Fallback: extract non-empty VRMs from the in-process SF cache
+            with _cache_lock:
+                sf_rows = _sf_cache.get("rows") or []
+            result = {str(r[18]).strip().upper() for r in sf_rows if len(r) > 18 and r[18]}
+            logger.info(f"Cars Bought: using SF cache fallback — {len(result)} Apex VRMs for dedup")
+            return result
 
     def _fetch_dbs_vrms():
         try:
@@ -2041,8 +2063,9 @@ def mot_check_process(request: Request, payload: dict, user: str = Depends(get_c
         settings = get_settings(conn, user=user)
     mot_workers = int(settings.get('mot_workers', 10))
 
+    initial_state = {"pct": 0, "done": 0, "total": total, "eta_s": None, "complete": False, "filename": None, "error": None}
     with _mot_lock:
-        _mot_progress[sid] = {"pct": 0, "done": 0, "total": total, "eta_s": None, "complete": False, "filename": None, "error": None}
+        _mot_progress[sid] = initial_state
 
     t = threading.Thread(target=_mot_process_background, args=(sid, vrms, user, mot_workers), daemon=True)
     t.start()
@@ -2055,16 +2078,37 @@ def _mot_process_background(sid: str, vrms: list, user: str, mot_workers: int):
     from concurrent.futures import ThreadPoolExecutor, as_completed
 
     total = len(vrms)
-    client = DVSAClient()
     results = [None] * total
     start = time.time()
     done_count = 0
     errored_indices = {}
+    _last_s3_write = [0.0]  # mutable for closure
+
+    env = 'prod' if os.getenv('AWS_REGION') == 'eu-west-1' else 'dev'
+    s3_progress_key = _MOT_S3_PREFIX.format(env=env) + f"progress_{sid}.json"
+
+    def _write_progress_to_s3(state: dict):
+        try:
+            import boto3 as _boto3
+            _boto3.client('s3', region_name='eu-west-1').put_object(
+                Bucket=s3_bucketname, Key=s3_progress_key,
+                Body=json.dumps(state).encode(), ContentType='application/json',
+            )
+        except Exception as _e:
+            logger.warning("[DVSA] S3 progress write failed: %s", _e)
+
+    # Write initial state to S3 as first thing in the thread — cold-start poll instances
+    # need to see total > 0 from their first poll, before any DVSA requests complete.
+    with _mot_lock:
+        _initial = _mot_progress.get(sid, {"pct": 0, "done": 0, "total": total, "eta_s": None, "complete": False, "filename": None, "error": None})
+    threading.Thread(target=_write_progress_to_s3, args=(_initial,), daemon=True).start()
+
+    client = DVSAClient()
 
     def fetch(idx_vrm):
         idx, vrm = idx_vrm
         try:
-            return idx, vrm, client.get_vehicle_by_vrm(vrm, debug=True), None
+            return idx, vrm, client.get_vehicle_by_vrm(vrm), None
         except Exception as e:
             logger.error("[DVSA] %s fetch error: %s", vrm, e)
             return idx, vrm, None, str(e)
@@ -2082,23 +2126,29 @@ def _mot_process_background(sid: str, vrms: list, user: str, mot_workers: int):
                 elapsed = time.time() - start
                 avg = elapsed / done_count
                 eta_s = (total - done_count) * avg
+                state = {
+                    "pct": round(done_count / total * 100, 1),
+                    "done": done_count,
+                    "total": total,
+                    "eta_s": round(eta_s, 1),
+                    "complete": False,
+                    "filename": None,
+                    "error": None,
+                }
                 with _mot_lock:
-                    _mot_progress[sid] = {
-                        "pct": round(done_count / total * 100, 1),
-                        "done": done_count,
-                        "total": total,
-                        "eta_s": round(eta_s, 1),
-                        "complete": False,
-                        "filename": None,
-                        "error": None,
-                    }
+                    _mot_progress[sid] = state
+                # Write to S3 at most every 2s so cold-start poll instances see live progress
+                now = time.time()
+                if now - _last_s3_write[0] >= 2.0:
+                    _last_s3_write[0] = now
+                    threading.Thread(target=_write_progress_to_s3, args=(state,), daemon=True).start()
 
         if errored_indices:
             logger.warning("[DVSA] Retrying %d failed VRMs after 5s: %s", len(errored_indices), list(errored_indices.values()))
             time.sleep(5)
             for idx, vrm in errored_indices.items():
                 try:
-                    vehicle_json = client.get_vehicle_by_vrm(vrm, debug=True)
+                    vehicle_json = client.get_vehicle_by_vrm(vrm)
                     not_found = vehicle_json is DVSA_NOT_FOUND
                     results[idx] = _build_mot_row(vrm, None if not_found else vehicle_json, not_found=not_found)
                     logger.info("[DVSA] Retry succeeded for %s", vrm)
@@ -2106,7 +2156,7 @@ def _mot_process_background(sid: str, vrms: list, user: str, mot_workers: int):
                     logger.error("[DVSA] Retry failed for %s: %s", vrm, e)
 
         total_elapsed = round(time.time() - start, 1)
-        columns, rows, filename = _mot_build_and_upload(results, vrms, user)
+        columns, rows, filename, counts = _mot_build_and_upload(results, vrms, user)
 
         completion = {
             "pct": 100,
@@ -2116,21 +2166,11 @@ def _mot_process_background(sid: str, vrms: list, user: str, mot_workers: int):
             "complete": True,
             "filename": filename,
             "error": None,
+            "counts": counts,
         }
         with _mot_lock:
             _mot_progress[sid] = completion
-        # Write completion marker to S3 so other Lambda instances can serve the final state
-        try:
-            import boto3 as _boto3
-            env = 'prod' if os.getenv('AWS_REGION') == 'eu-west-1' else 'dev'
-            s3_key = _MOT_S3_PREFIX.format(env=env) + f"progress_{sid}.json"
-            _boto3.client('s3', region_name='eu-west-1').put_object(
-                Bucket=s3_bucketname, Key=s3_key,
-                Body=json.dumps(completion).encode(),
-                ContentType='application/json',
-            )
-        except Exception as s3e:
-            logger.warning("[DVSA] Failed to write S3 progress marker: %s", s3e)
+        _write_progress_to_s3(completion)
         logger.info("[DVSA] MOT check complete for sid=%s: %d VRMs in %.1fs", sid, total, total_elapsed)
 
     except Exception as e:
@@ -2141,17 +2181,7 @@ def _mot_process_background(sid: str, vrms: list, user: str, mot_workers: int):
         }
         with _mot_lock:
             _mot_progress[sid] = error_state
-        try:
-            import boto3 as _boto3
-            env = 'prod' if os.getenv('AWS_REGION') == 'eu-west-1' else 'dev'
-            s3_key = _MOT_S3_PREFIX.format(env=env) + f"progress_{sid}.json"
-            _boto3.client('s3', region_name='eu-west-1').put_object(
-                Bucket=s3_bucketname, Key=s3_key,
-                Body=json.dumps(error_state).encode(),
-                ContentType='application/json',
-            )
-        except Exception:
-            pass
+        _write_progress_to_s3(error_state)
 
 
 def _mot_build_and_upload(results: list, vrms: list, user: str):
@@ -2229,13 +2259,56 @@ def _mot_build_and_upload(results: list, vrms: list, user: str):
         import boto3 as _boto3
         s3 = _boto3.client('s3', region_name='eu-west-1')
         wb.save(tmp_path)
-        expired_count = sum(1 for r in results if r.get("status") == "EXPIRED")
-        unknown_count = sum(1 for r in results if r.get("status") in ("UNKNOWN", "NOT_FOUND"))
+        expired_count   = sum(1 for r in results if r.get("status") == "EXPIRED")
+        unknown_count   = sum(1 for r in results if r.get("status") == "UNKNOWN")
+        not_found_count = sum(1 for r in results if r.get("status") == "NOT_FOUND")
+
+        def _has_mileage_warn(r):
+            pairs = r.get("test_pairs", [])
+            for j in range(1, len(pairs)):
+                prev_m = pairs[j-1][1]
+                curr_m = pairs[j][1]
+                try:
+                    if curr_m is not None and prev_m is not None and int(str(curr_m).replace(',','')) < int(str(prev_m).replace(',','')):
+                        return True
+                except (ValueError, TypeError):
+                    pass
+            return False
+
+        def _has_early_mot(r):
+            import datetime as _dt
+            pairs = r.get("test_pairs", [])
+            def _parse(s):
+                if not s: return None
+                for fmt in ('%d/%m/%Y', '%Y-%m-%d'):
+                    try: return _dt.datetime.strptime(s, fmt).date()
+                    except ValueError: pass
+                return None
+            dates = [_parse(p[0]) for p in pairs]
+            for j in range(1, len(dates)):
+                if dates[j-1] and dates[j]:
+                    prev = dates[j-1]
+                    try:
+                        due = prev.replace(year=prev.year + 1)
+                    except ValueError:
+                        due = prev.replace(year=prev.year + 1, day=28)
+                    if (due - dates[j]).days >= 60:
+                        return True
+            return False
+
+        mileage_warn_count = sum(1 for r in results if _has_mileage_warn(r))
+        early_mot_count    = sum(1 for r in results if _has_early_mot(r))
+        valid_count        = sum(1 for r in results if r.get("status") == "VALID")
+
         metadata = {
-            "vrm_count":     str(len(vrms)),
-            "expired_count": str(expired_count),
-            "unknown_count": str(unknown_count),
-            "processed_by":  user,
+            "vrm_count":          str(len(vrms)),
+            "valid_count":        str(valid_count),
+            "expired_count":      str(expired_count),
+            "unknown_count":      str(unknown_count),
+            "not_found_count":    str(not_found_count),
+            "mileage_warn_count": str(mileage_warn_count),
+            "early_mot_count":    str(early_mot_count),
+            "processed_by":       user,
         }
         with open(tmp_path, 'rb') as f:
             s3.upload_fileobj(f, s3_bucketname, s3_key, ExtraArgs={"Metadata": metadata})
@@ -2253,7 +2326,15 @@ def _mot_build_and_upload(results: list, vrms: list, user: str):
         except OSError:
             pass
 
-    return columns, rows, filename
+    return columns, rows, filename, {
+        "vrm_count":          len(vrms),
+        "valid_count":        valid_count,
+        "expired_count":      expired_count,
+        "unknown_count":      unknown_count,
+        "not_found_count":    not_found_count,
+        "mileage_warn_count": mileage_warn_count,
+        "early_mot_count":    early_mot_count,
+    }
 
 
 @router.get("/mot-check/history")
@@ -2273,16 +2354,21 @@ def mot_check_history(user: str = Depends(get_current_user)):
         def _metadata(key):
             try:
                 m = s3.head_object(Bucket=s3_bucketname, Key=key).get('Metadata', {})
+                def _int(k): return int(m[k]) if m.get(k) else None
                 return {
-                    "vrm_count":     int(m['vrm_count'])     if m.get('vrm_count')     else None,
-                    "expired_count": int(m['expired_count']) if m.get('expired_count') else None,
-                    "unknown_count": int(m['unknown_count']) if m.get('unknown_count') else None,
-                    "processed_by":  m.get('processed_by'),
+                    "vrm_count":          _int("vrm_count"),
+                    "valid_count":        _int("valid_count"),
+                    "expired_count":      _int("expired_count"),
+                    "unknown_count":      _int("unknown_count"),
+                    "not_found_count":    _int("not_found_count"),
+                    "mileage_warn_count": _int("mileage_warn_count"),
+                    "early_mot_count":    _int("early_mot_count"),
+                    "processed_by":       m.get('processed_by'),
                 }
             except Exception:
-                return {"vrm_count": None, "expired_count": None, "unknown_count": None, "processed_by": None}
+                return {"vrm_count": None, "valid_count": None, "expired_count": None, "unknown_count": None, "not_found_count": None, "mileage_warn_count": None, "early_mot_count": None, "processed_by": None}
 
-        xlsx_objects = [o for o in objects if o['Key'] != prefix and o['Key'].replace(prefix, '').endswith('.xlsx')]
+        xlsx_objects = [o for o in objects if o['Key'] != prefix and o['Key'].replace(prefix, '').endswith('.xlsx')][:20]
 
         from concurrent.futures import ThreadPoolExecutor as _TPE, as_completed as _asc
         with _TPE(max_workers=10) as pool:
@@ -2296,13 +2382,16 @@ def mot_check_history(user: str = Depends(get_current_user)):
         for o in xlsx_objects:
             meta = results_map[id(o)]
             result.append({
-                "filename":      o['Key'].replace(prefix, ''),
-                "ts":            o['LastModified'].strftime("%d/%m/%Y %H:%M"),
-                "size_kb":       round(o['Size'] / 1024, 1),
-                "vrm_count":     meta["vrm_count"],
-                "expired_count": meta["expired_count"],
-                "unknown_count": meta["unknown_count"],
-                "processed_by":  meta["processed_by"],
+                "filename":           o['Key'].replace(prefix, ''),
+                "ts":                 o['LastModified'].strftime("%d/%m/%Y %H:%M"),
+                "vrm_count":          meta["vrm_count"],
+                "valid_count":        meta["valid_count"],
+                "expired_count":      meta["expired_count"],
+                "unknown_count":      meta["unknown_count"],
+                "not_found_count":    meta["not_found_count"],
+                "mileage_warn_count": meta["mileage_warn_count"],
+                "early_mot_count":    meta["early_mot_count"],
+                "processed_by":       meta["processed_by"],
             })
         return result
     except Exception as e:
@@ -2614,15 +2703,17 @@ async def upload_task(request: Request, fileBase64: str = Form(...), supplier_id
 
         # Execute the task elaboration
         aws_context = request.scope["aws.context"] if "aws.context" in request.scope else None
+        with get_database_connection() as conn:
+            _upload_settings = get_settings(conn)
         if aws_context is None:
             import asyncio
-            asyncio.create_task(elaborate_task({'task_id': task_id, 'cap_workers': cap_workers, 'cap_rate_limit': cap_rate_limit, 'at_workers': 40, 'at_rate_limit': 60}))
+            asyncio.create_task(elaborate_task({'task_id': task_id, 'cap_workers': cap_workers, 'cap_rate_limit': cap_rate_limit, 'at_workers': 40, 'at_rate_limit': 60, 'valuation_cache_hours': _upload_settings['valuation_cache_hours']}))
         else:
             LambdaRequestsManager().simulate_http(
                 aws_context=aws_context,
                 path=BASE_URL + "/elaborate-task",
                 method="POST",
-                data={'task_id': task_id, 'cap_workers': cap_workers, 'cap_rate_limit': cap_rate_limit, 'at_workers': 40, 'at_rate_limit': 60},
+                data={'task_id': task_id, 'cap_workers': cap_workers, 'cap_rate_limit': cap_rate_limit, 'at_workers': 40, 'at_rate_limit': 60, 'valuation_cache_hours': _upload_settings['valuation_cache_hours']},
             )
     finally:
         try:
@@ -2784,13 +2875,13 @@ async def enterprise_email_start_task(
     aws_context = request.scope["aws.context"] if "aws.context" in request.scope else None
     if aws_context is None:
         import asyncio
-        asyncio.create_task(elaborate_task({'task_id': task_id, 'cap_workers': settings['cap_workers'], 'cap_rate_limit': settings['cap_rate_limit'], 'at_workers': settings['at_workers'], 'at_rate_limit': settings['at_rate_limit']}))
+        asyncio.create_task(elaborate_task({'task_id': task_id, 'cap_workers': settings['cap_workers'], 'cap_rate_limit': settings['cap_rate_limit'], 'at_workers': settings['at_workers'], 'at_rate_limit': settings['at_rate_limit'], 'valuation_cache_hours': settings['valuation_cache_hours']}))
     else:
         LambdaRequestsManager().simulate_http(
             aws_context=aws_context,
             path=BASE_URL + "/elaborate-task",
             method="POST",
-            data={'task_id': task_id, 'cap_workers': settings['cap_workers'], 'cap_rate_limit': settings['cap_rate_limit'], 'at_workers': settings['at_workers'], 'at_rate_limit': settings['at_rate_limit']},
+            data={'task_id': task_id, 'cap_workers': settings['cap_workers'], 'cap_rate_limit': settings['cap_rate_limit'], 'at_workers': settings['at_workers'], 'at_rate_limit': settings['at_rate_limit'], 'valuation_cache_hours': settings['valuation_cache_hours']},
         )
     logger.info(f"Enterprise email: started elaborate for task_id={task_id}")
     return {"status": "started", "task_id": task_id}
@@ -2852,20 +2943,18 @@ async def fetch_supplier_stock(
 
     with get_database_connection() as conn:
         settings = get_settings(conn, user=user)
-    row_limit_setting = settings.get('evaluator_row_limit', 0)
-    fetch_row_limit = row_limit_setting if row_limit_setting > 0 else None
-
     # Fire the actual fetch in a background Lambda and return immediately
     aws_context = request.scope["aws.context"] if "aws.context" in request.scope else None
     fetch_data = {
         'task_id': task_id,
         'supplier': supplier,
         'include_preview': bool(include_preview),
-        'fetch_row_limit': fetch_row_limit,
         'cap_workers': settings['cap_workers'],
         'cap_rate_limit': settings['cap_rate_limit'],
         'at_workers': settings['at_workers'],
         'at_rate_limit': settings['at_rate_limit'],
+        'valuation_cache_hours': settings['valuation_cache_hours'],
+        'fetch_start_time': time.time(),
     }
     if aws_context is None:
         asyncio.create_task(_fetch_supplier_stock_internal(fetch_data))
@@ -2890,7 +2979,6 @@ async def _fetch_supplier_stock_internal(data: dict):
     task_id = data['task_id']
     supplier = data['supplier']
     include_preview = data.get('include_preview', False)
-    fetch_row_limit = data.get('fetch_row_limit')
 
     env = 'prod' if os.getenv('AWS_REGION') == 'eu-west-1' else 'dev'
     secrets = get_secret(f'{env}/carsupermarket/car_pricer/api_access')
@@ -2908,7 +2996,7 @@ async def _fetch_supplier_stock_internal(data: dict):
                         username=secrets['MOTABILITY_ID'],
                         password=secrets['MOTABILITY_PASSWORD'],
                     )
-                    input_df = client.fetch_dataframe(row_limit=fetch_row_limit)
+                    input_df = client.fetch_dataframe()
                     if not include_preview:
                         type_col = input_df.columns[1] if len(input_df.columns) > 1 else None
                         if type_col is not None:
@@ -2918,7 +3006,7 @@ async def _fetch_supplier_stock_internal(data: dict):
                         username=secrets['1LINK_ID'],
                         password=secrets['1LINK_PASSWORD'],
                     )
-                    input_df = client.fetch_dataframe(row_limit=fetch_row_limit)
+                    input_df = client.fetch_dataframe()
                 break
             except Exception as e:
                 last_exc = e
@@ -2950,7 +3038,7 @@ async def _fetch_supplier_stock_internal(data: dict):
             pass
 
     logger.info(f"fetch_supplier_stock: fetched task_id={task_id} for {supplier} ({len(input_df)} rows)")
-    await elaborate_task({'task_id': task_id, 'cap_workers': data['cap_workers'], 'cap_rate_limit': data['cap_rate_limit'], 'at_workers': data['at_workers'], 'at_rate_limit': data['at_rate_limit']})
+    await elaborate_task({'task_id': task_id, 'cap_workers': data['cap_workers'], 'cap_rate_limit': data['cap_rate_limit'], 'at_workers': data['at_workers'], 'at_rate_limit': data['at_rate_limit'], 'valuation_cache_hours': data.get('valuation_cache_hours'), 'start_time': data.get('fetch_start_time')})
 
 
 @router.post("/elaborate-task")
@@ -2981,7 +3069,7 @@ async def elaborate_task(data: dict):
         os.close(fd_out)
 
         try:
-            t = time.time()
+            t = data.get('start_time') or time.time()
 
             download_file(tmp_in, s3_bucketname, s3_location)
 
@@ -2992,7 +3080,8 @@ async def elaborate_task(data: dict):
             cap_rate_limit = int(data.get('cap_rate_limit', 100))
             at_workers = int(data.get('at_workers', 40))
             at_rate_limit = int(data.get('at_rate_limit', 60))
-            logger.info(f"CAP settings: workers={cap_workers}, rate_limit={cap_rate_limit} | AT settings: workers={at_workers}, rate_limit={at_rate_limit}")
+            valuation_cache_hours = int(data['valuation_cache_hours']) if data.get('valuation_cache_hours') is not None else None
+            logger.info(f"CAP settings: workers={cap_workers}, rate_limit={cap_rate_limit} | AT settings: workers={at_workers}, rate_limit={at_rate_limit} | valuation_cache_hours={valuation_cache_hours}")
 
             autotrader = AutoTraderClient()
             cap_client = CAPClient()
@@ -3025,6 +3114,7 @@ async def elaborate_task(data: dict):
                 at_workers=at_workers,
                 at_rate_limit=at_rate_limit,
                 prev_task_created=prev_task_created,
+                valuation_cache_hours=valuation_cache_hours,
             )
             write_dataframe_file(processed_df, tmp_out)
 

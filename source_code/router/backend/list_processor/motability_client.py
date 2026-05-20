@@ -73,7 +73,7 @@ class MotabilityFetchClient:
         self.username = username
         self.password = password
 
-    def fetch_dataframe(self, row_limit: int = 100) -> pd.DataFrame:
+    def fetch_dataframe(self) -> pd.DataFrame:
         import concurrent.futures
         def _run_in_thread():
             import sys
@@ -89,8 +89,6 @@ class MotabilityFetchClient:
             csv_text = pool.submit(_run_in_thread).result()
 
         df = pd.read_csv(io.StringIO(csv_text))
-        if row_limit:
-            df = df.head(row_limit)
         logger.info(f"Motability: fetched {len(df)} rows")
         return df
 

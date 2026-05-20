@@ -117,11 +117,12 @@ SETTINGS_DEFAULTS = {
     'at_rate_limit':                    60,
     'calc_buying_reqs':                 '0',
     'get_stock':                        '0',
-    'evaluator_row_limit':              0,
+    'enable_cars_bought':               '0',
     'mot_workers':                      10,
+    'valuation_cache_hours':            36,
 }
 
-BOOL_SETTINGS = {'calc_buying_reqs', 'get_stock'}
+BOOL_SETTINGS = {'calc_buying_reqs', 'get_stock', 'enable_cars_bought'}
 
 # Per-user bool settings stored as e.g. calc_buying_reqs__buyer, get_stock__buyer.
 PER_USER_BOOL_SETTINGS = {'calc_buying_reqs', 'get_stock'}
@@ -149,15 +150,23 @@ def get_settings(conn, user: str = None) -> dict:
             else:
                 scoped_key = f'{key}__{user}' if user else key
                 result[key] = row_map.get(scoped_key, '0') == '1'
+        # Global bool settings (not per-user).
+        result['enable_cars_bought'] = row_map.get('enable_cars_bought', '0') == '1'
+        # valuation_cache_hours: integer, global.
+        try:
+            result['valuation_cache_hours'] = int(row_map.get('valuation_cache_hours', SETTINGS_DEFAULTS['valuation_cache_hours']))
+        except (TypeError, ValueError):
+            result['valuation_cache_hours'] = SETTINGS_DEFAULTS['valuation_cache_hours']
         return result
     except Exception:
         d = dict(SETTINGS_DEFAULTS)
         for key in PER_USER_BOOL_SETTINGS:
             d[key] = user in ALWAYS_ENABLED_USERS
+        d['enable_cars_bought'] = False
         return d
 
 
-def save_settings(conn, number_to_buy: int, max_days_sales: int, max_dts: int, min_gpu_m: int, cap_workers: int, cap_rate_limit: int, calc_buying_reqs: bool, get_stock: bool = False, evaluator_row_limit: int = 0, mot_workers: int = 10, at_workers: int = 40, at_rate_limit: int = 60, user: str = None):
+def save_settings(conn, number_to_buy: int, max_days_sales: int, max_dts: int, min_gpu_m: int, cap_workers: int, cap_rate_limit: int, calc_buying_reqs: bool, get_stock: bool = False, enable_cars_bought: bool = False, mot_workers: int = 10, at_workers: int = 40, at_rate_limit: int = 60, valuation_cache_hours: int = 36, user: str = None):
     values = {
         'number_to_buy':                number_to_buy,
         'max_days_sales':               max_days_sales,
@@ -167,14 +176,16 @@ def save_settings(conn, number_to_buy: int, max_days_sales: int, max_dts: int, m
         'cap_rate_limit':               cap_rate_limit,
         'at_workers':                   at_workers,
         'at_rate_limit':                at_rate_limit,
-        'evaluator_row_limit':          evaluator_row_limit,
         'mot_workers':                  mot_workers,
+        'valuation_cache_hours':        valuation_cache_hours,
     }
     # Per-user bool settings; always-enabled users' preferences are not stored (always True at read time).
     if user not in ALWAYS_ENABLED_USERS:
         suffix = f'__{user}' if user else ''
         values[f'calc_buying_reqs{suffix}'] = '1' if calc_buying_reqs else '0'
         values[f'get_stock{suffix}'] = '1' if get_stock else '0'
+    # Global bool settings.
+    values['enable_cars_bought'] = '1' if enable_cars_bought else '0'
 
     with conn.cursor() as cur:
         cur.execute(
