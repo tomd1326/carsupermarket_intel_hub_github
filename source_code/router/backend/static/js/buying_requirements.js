@@ -1180,7 +1180,10 @@ function patchDailyBuyersSheet() {
         .then(resp => {
             if (resp.status !== 'ok') return;
             applyDbsPurchases(resp.purchases, resp.vehicles || [], resp.total);
+            applyCbPurchases(cbPurchases);
             renderTable();
+            sortCol = 21; sortDir = 1;
+            sortTable(21, 'num');
             setStatus('dbs-status', DBS_LABEL, 'done');
             _setDbsUpdatedAt(resp.fetched_at);
             _dbsDone = true; _maybeShowExportBtn();
@@ -1209,6 +1212,8 @@ function patchCarsBought() {
             if (resp.status !== 'ok') { setStatus('cb-status', CB_LABEL, 'error'); return; }
             applyCbPurchases(resp.purchases, resp.vehicles || []);
             renderTable();
+            sortCol = 21; sortDir = 1;
+            sortTable(21, 'num');
             setStatus('cb-status', CB_LABEL, 'done');
             _setCbUpdatedAt(resp.fetched_at, resp.total);
             _cbDone = true; _maybeShowExportBtn();
@@ -1228,6 +1233,8 @@ function loadCBFromCache() {
             }
             applyCbPurchases(resp.purchases, resp.vehicles || []);
             renderTable();
+            sortCol = 21; sortDir = 1;
+            sortTable(21, 'num');
             _setCbUpdatedAt(resp.fetched_at, resp.total);
             _cbDone = true; _maybeShowExportBtn();
         })
@@ -1279,11 +1286,12 @@ function applyRawDataToTable(fetchSP) {
     document.getElementById('table-wrap').classList.remove('d-none');
     if (fetchSP) {
         patchDailyBuyersSheet();
-        patchCarsBought();
+        if (window.ENABLE_CARS_BOUGHT) patchCarsBought();
     } else {
         loadDbsFromCache();
-        loadCBFromCache();
+        if (window.ENABLE_CARS_BOUGHT) loadCBFromCache();
     }
+    if (!window.ENABLE_CARS_BOUGHT) { _cbDone = true; _maybeShowExportBtn(); }
 }
 
 function resetApplyFilters() {
@@ -1328,6 +1336,7 @@ function refreshTable() {
     requestAnimationFrame(() => setTimeout(() => {
         if (currentView === 'model') aggregateModelData(); else aggregateRawData();
         applyDbsPurchases(dbsPurchases);
+        applyCbPurchases(cbPurchases);
         renderTable();
         sortCol = 21; sortDir = 1;
         sortTable(21, 'num');
@@ -1384,7 +1393,10 @@ function loadDbsFromCache() {
                 return;
             }
             applyDbsPurchases(resp.purchases, resp.vehicles || [], resp.total);
+            applyCbPurchases(cbPurchases);
             renderTable();
+            sortCol = 21; sortDir = 1;
+            sortTable(21, 'num');
             _setDbsUpdatedAt(resp.fetched_at);
             _dbsDone = true; _maybeShowExportBtn();
         })

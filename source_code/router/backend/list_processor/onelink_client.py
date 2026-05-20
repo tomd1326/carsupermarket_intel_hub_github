@@ -21,12 +21,10 @@ class OneLinkFetchClient:
         self.username = username
         self.password = password
 
-    def fetch_dataframe(self, row_limit: int = 100) -> pd.DataFrame:
+    def fetch_dataframe(self) -> pd.DataFrame:
         token = self._get_token()
         csv_text = self._fetch_stocklist(token)
         df = pd.read_csv(io.StringIO(csv_text))
-        if row_limit:
-            df = df.head(row_limit)
         logger.info(f"1link: fetched {len(df)} rows")
         return df
 
