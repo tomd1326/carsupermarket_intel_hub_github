@@ -8,7 +8,11 @@
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css" rel="stylesheet">
     <style>
-        body, button, input, select, textarea { font-family: 'Aptos Display', system-ui, sans-serif; }
+        @font-face { font-family: 'DM Sans'; src: url('{{ BASE_URL }}/static/fonts/DMSans-Regular.ttf');  font-weight: 400; }
+        @font-face { font-family: 'DM Sans'; src: url('{{ BASE_URL }}/static/fonts/DMSans-Medium.ttf');   font-weight: 500; }
+        @font-face { font-family: 'DM Sans'; src: url('{{ BASE_URL }}/static/fonts/DMSans-SemiBold.ttf'); font-weight: 600; }
+        @font-face { font-family: 'DM Sans'; src: url('{{ BASE_URL }}/static/fonts/DMSans-Bold.ttf');     font-weight: 700; }
+        body, button, input, select, textarea { font-family: 'DM Sans', system-ui, sans-serif; }
         body { overflow-x: hidden; }
         .settings-cog {
             position: fixed;
@@ -145,12 +149,10 @@
                 <button class="btn btn-outline-secondary" onclick="location.reload()">
                     <i class="fas fa-sync-alt"></i>
                 </button>
-                {% if at_least_one_pending %}
-                    <div class="form-check ms-1">
-                        <input type="checkbox" class="form-check-input" id="auto-refresh-checkbox" checked>
-                        <label class="form-check-label countdown-label" for="auto-refresh-checkbox">Auto-refresh in <span id="countdown">5</span></label>
-                    </div>
-                {% endif %}
+                <div class="form-check ms-1" id="auto-refresh-container" style="{{ '' if at_least_one_pending else 'display:none' }}">
+                    <input type="checkbox" class="form-check-input" id="auto-refresh-checkbox" checked>
+                    <label class="form-check-label countdown-label" for="auto-refresh-checkbox">Auto-refresh in <span id="countdown">5</span></label>
+                </div>
             </div>
         </div>
 
@@ -359,8 +361,8 @@
                 _bindDownloadBtns();
                 if (!data.has_pending) {
                     stopCountdown();
-                    const countdown = document.getElementById('countdown');
-                    if (countdown) countdown.closest('.form-check')?.remove();
+                } else {
+                    startCountdown();
                 }
             } catch (e) {}
         }
@@ -368,6 +370,7 @@
         let _countdownTimer = null;
 
         function startCountdown() {
+            document.getElementById('auto-refresh-container').style.display = '';
             if (_countdownTimer) return;
             var countdownElement = document.getElementById('countdown');
             var timeLeft = 5;
@@ -387,6 +390,7 @@
 
         function stopCountdown() {
             if (_countdownTimer) { clearInterval(_countdownTimer); _countdownTimer = null; }
+            document.getElementById('auto-refresh-container').style.display = 'none';
         }
 
         document.addEventListener("DOMContentLoaded", function() {
@@ -432,9 +436,7 @@
                 }
             });
 
-            {% if at_least_one_pending %}
-                startCountdown();
-            {% endif %}
+            {% if at_least_one_pending %}startCountdown();{% endif %}
         });
 
         let _anyFetchInFlight = false;
@@ -452,10 +454,6 @@
             const select = document.getElementById('fetchSupplierSelect');
             const statusEl = document.getElementById('fetchStatusMsg');
 
-            const steps = supplier === 'motability'
-                ? ['Connecting...', 'Logging in...', 'Retrieving stock file...', 'Creating task...']
-                : ['Connecting...', 'Retrieving stock file...', 'Creating task...'];
-
             const setStatus = (msg, isError) => {
                 statusEl.style.display = '';
                 statusEl.textContent = msg;
@@ -465,13 +463,7 @@
             _anyFetchInFlight = true;
             btn.disabled = true;
             select.disabled = true;
-
-            let stepIdx = 0;
-            setStatus(steps[stepIdx]);
-            const stepInterval = setInterval(() => {
-                stepIdx = Math.min(stepIdx + 1, steps.length - 2);
-                setStatus(steps[stepIdx]);
-            }, supplier === 'motability' ? 8000 : 2000);
+            setStatus('Creating task...');
 
             const formData = new FormData();
             formData.append('supplier', supplier);
@@ -486,9 +478,8 @@
                     redirect: 'manual',
                 });
 
-                clearInterval(stepInterval);
                 if (resp.ok || resp.type === 'opaqueredirect') {
-                    setStatus('Processing - check task list below');
+                    statusEl.style.display = 'none';
                     _anyFetchInFlight = false;
                     btn.disabled = false;
                     select.disabled = false;
@@ -501,7 +492,6 @@
                 const match = text.match(/"detail"\s*:\s*"([^"]+)"/);
                 setStatus('Error: ' + (match ? match[1] : resp.status), true);
             } catch (e) {
-                clearInterval(stepInterval);
                 setStatus('Error: ' + e.message, true);
             }
             btn.disabled = false;

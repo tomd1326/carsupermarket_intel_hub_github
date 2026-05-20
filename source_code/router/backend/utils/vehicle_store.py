@@ -6,7 +6,7 @@ import psycopg2.extras
 
 logger = logging.getLogger(__name__)
 
-VALUATION_TTL_HOURS = 24
+VALUATION_TTL_HOURS = 36
 
 
 def _to_int(value):
@@ -32,15 +32,15 @@ def _to_float(value):
         return None
 
 
-def fetch_cached_valuations(conn, vrm_mileage_pairs: list[tuple[str, int]]) -> dict[tuple[str, int], dict]:
+def fetch_cached_valuations(conn, vrm_mileage_pairs: list[tuple[str, int]], ttl_hours: int = None) -> dict[tuple[str, int], dict]:
     """
     Batch fetch the most recent valuation for each (vrm, mileage) pair.
-    Returns a dict keyed by (vrm, mileage) for pairs with a valuation under 24 hours old.
+    Returns a dict keyed by (vrm, mileage) for pairs with a valuation within ttl_hours old.
     """
     if not vrm_mileage_pairs:
         return {}
 
-    cutoff = datetime.datetime.utcnow() - datetime.timedelta(hours=VALUATION_TTL_HOURS)
+    cutoff = datetime.datetime.utcnow() - datetime.timedelta(hours=ttl_hours if ttl_hours is not None else VALUATION_TTL_HOURS)
 
     with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
         cur.execute(

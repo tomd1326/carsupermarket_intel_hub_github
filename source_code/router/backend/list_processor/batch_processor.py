@@ -51,7 +51,7 @@ def _parse_rows(input_df: pd.DataFrame, columns_mapper: BaseColumnsMapper) -> li
     return rows
 
 
-def _fetch_cache(vehicle_rows) -> tuple[dict, dict]:
+def _fetch_cache(vehicle_rows, valuation_cache_hours: int = None) -> tuple[dict, dict]:
     """
     Returns (cached_valuations, known_vehicles). On any DB error returns empty dicts
     so all vehicles fall through to API calls.
@@ -60,7 +60,7 @@ def _fetch_cache(vehicle_rows) -> tuple[dict, dict]:
         with get_vehicle_database_connection() as conn:
             vrm_mileage_pairs = [(v.vrm, v.mileage) for v in vehicle_rows]
             vrms = [v.vrm for v in vehicle_rows]
-            cached = fetch_cached_valuations(conn, vrm_mileage_pairs)
+            cached = fetch_cached_valuations(conn, vrm_mileage_pairs, ttl_hours=valuation_cache_hours)
             known = fetch_known_vehicles(conn, vrms)
             return cached, known
     except Exception:
@@ -175,6 +175,7 @@ def process_file_with_cache(
     at_workers: int = 40,
     at_rate_limit: int = 60,
     prev_task_created=None,
+    valuation_cache_hours: int = None,
 ) -> pd.DataFrame:
     """
     Drop-in replacement for the parallel process_df calls in router.py.
@@ -183,7 +184,7 @@ def process_file_with_cache(
     vehicle_rows = _parse_rows(input_df, columns_mapper)
 
     # Step 1: batch DB reads
-    cached_valuations, known_vehicles = _fetch_cache(vehicle_rows)
+    cached_valuations, known_vehicles = _fetch_cache(vehicle_rows, valuation_cache_hours=valuation_cache_hours)
 
     cache_hits = {(v.vrm, v.mileage) for v in vehicle_rows if (v.vrm, v.mileage) in cached_valuations}
     cache_misses = [v for v in vehicle_rows if (v.vrm, v.mileage) not in cached_valuations]
@@ -375,7 +376,7 @@ def process_file_with_cache(
         price_rows.append({
             'Previous Price':     float(prev) if prev is not None else None,
             'Price Change':       price_change,
-            'Price Change Date':  changed_at.date() if changed_at is not None else None,
+            'Price Change Date':  changed_at.replace(tzinfo=None) if changed_at is not None else None,
         })
 
     price_df = pd.DataFrame(price_rows)
