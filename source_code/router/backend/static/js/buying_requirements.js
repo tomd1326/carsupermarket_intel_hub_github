@@ -1627,6 +1627,17 @@ function _renderModalRows() {
         addTd(r[3] === 'interest_free' ? '0%' : (r[3] || '—'));
         addTd(r[18] || '—');
         addTd(status);
+        const tdWebsite = document.createElement('td');
+        const _websiteLocations = new Set(['READY TODAY','FORECOURT','GL COMPOUND','GL LIVE','SF COMPOUND','SF LIVE','TEMP LOAN CAR','COMPANY CAR']);
+        if (r[34] && _websiteLocations.has((r[23] || '').toUpperCase())) {
+            const a = document.createElement('a');
+            a.href = r[34];
+            a.target = '_blank';
+            a.textContent = 'Website';
+            a.className = 'apex-link';
+            tdWebsite.appendChild(a);
+        }
+        tr.appendChild(tdWebsite);
         const tdApex = document.createElement('td');
         if (r[20]) {
             const a = document.createElement('a');
@@ -1689,7 +1700,7 @@ function _renderModalRows() {
     visibleSpVehicles.forEach(v => {
             const tr = document.createElement('tr');
             tr.style.background = '#ddd6fe';
-            const TOTAL_COLS = 21;
+            const TOTAL_COLS = 22;
             const derivText = [v.make, v.model, v.deriv].filter(Boolean).join(' ') || '—';
             const bandText = v.band === 'interest_free' ? '0%' : (v.band || '—');
             const sourceText = v.source === 'dbs' ? 'DBS' : 'CB';
@@ -1704,7 +1715,7 @@ function _renderModalRows() {
                 } else if (i === 3) {
                     td.textContent = 'Not on stock';
                     td.style.color = '#6b7280';
-                } else if (i === 5) {
+                } else if (i === 6) {
                     if (v.vrm && v.mileage != null) {
                         const a = document.createElement('a');
                         a.href = `https://portal.autotrader.co.uk/managing/pricing/vrm/${v.vrm}/${Math.round(v.mileage)}`;
@@ -1847,7 +1858,9 @@ function openVehicleModal(capId, label) {
     //                6:sales7, 7:dis, 8:dts, 9:gpu_m(sales), ..., 17:ack_date,
     //                18:vrm, 19:supplier_name, 20:vehicle_url, 21:vehicle_status,
     //                22:gpu_m_resolved, 23:vehicle_location, 24:date_first_registered, 25:mileage,
-    //                26:autotrader_portal_link, 27:invoice_posted_date]
+    //                26:autotrader_portal_link, 27:invoice_posted_date,
+    //                28:vehicle_updated_at, 29:make_model, 30:cap_live_clean,
+    //                31:vehicle_costs, 32:gpu_m_costs, 33:mileage_band, 34:website_url]
     const maxDIS = getMaxDIS();
     const maxDTS = getMaxDTS();
     const minGPUM = getMinGPUM();
