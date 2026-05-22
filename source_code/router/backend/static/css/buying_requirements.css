@@ -408,6 +408,12 @@ button.settings-cog:hover { color: #343a40 !important; background: #e9ecef !impo
 #vehicle-modal-table .vehicle-row-sold td { background: #fde8d8; color: #000; }
 #vehicle-modal-table .vehicle-row-ordered td { background: #d1d5db; color: #000; }
 #vehicle-modal-table .vehicle-row-if td { background: #bfdbfe; color: #000; }
+#vehicle-modal-table th:nth-child(5),
+#vehicle-modal-table th:nth-child(6),
+#vehicle-modal-table th:nth-child(7),
+#vehicle-modal-table td:nth-child(5),
+#vehicle-modal-table td:nth-child(6),
+#vehicle-modal-table td:nth-child(7) { text-align: center; }
 .apex-link {
     font-size: 11px;
     padding: 1px 6px;

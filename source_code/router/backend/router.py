@@ -67,20 +67,24 @@ s3_bucketname = 'aa-raw-sources-uk'
 s3_bucket_region = 'eu-west-1'  # bucket is always in eu-west-1 regardless of Lambda region
 
 
-VALID_USERS = {
+_ADMIN_FALLBACK = {
     'tdrayson': 'e026581a53dc97e3381566ad0f74e99ae65e0297f9eb41bb76596627885bf8a0',
 }
+VALID_USERS: dict = {}
 
-def _load_users_from_aurora():
+def _reload_users_from_aurora():
+    """Reload all users from Aurora into VALID_USERS. Admin is always valid regardless of DB state."""
     try:
         with get_database_connection() as conn:
             users = load_all_users(conn)
+        VALID_USERS.clear()
         VALID_USERS.update(users)
         logger.info("Loaded %d users from Aurora", len(users))
     except Exception as e:
         logger.warning("Could not load users from Aurora — falling back to hardcoded admin only: %s", e)
+    VALID_USERS.update(_ADMIN_FALLBACK)
 
-_load_users_from_aurora()
+_reload_users_from_aurora()
 
 # session_id -> {user, login_time} — tracks active sessions server-side
 _active_sessions: dict = {}
@@ -131,7 +135,7 @@ def login(request: Request):
 
 @router.post("/login")
 def login(request: Request, username: str = Form(...), password: str = Form(...)):
-    # calculate sha256 hash of the password
+    _reload_users_from_aurora()
     pwd_hash = hashlib.sha256(password.encode()).hexdigest()
     if pwd_hash == VALID_USERS.get(username):
         session_id = hashlib.sha256(os.urandom(16)).hexdigest()
@@ -620,7 +624,7 @@ _CB_TTL_SECONDS     = 30 * 60
 _CB_S3_TTL_SECONDS  = 30 * 60
 _S3_BUCKET         = "aa-raw-sources-uk"
 _S3_ENV            = 'prod' if os.getenv('AWS_REGION') == 'eu-west-1' else 'dev'
-_SF_S3_KEY         = f"applications/pricing/uk-vehicle-list-evaluator/{_S3_ENV}/cache/buying_requirements_v20.json"
+_SF_S3_KEY         = f"applications/pricing/uk-vehicle-list-evaluator/{_S3_ENV}/cache/buying_requirements_v21.json"
 _DBS_S3_KEY        = f"applications/pricing/uk-vehicle-list-evaluator/{_S3_ENV}/cache/dbs_purchases_v17.json"
 _CB_S3_KEY         = f"applications/pricing/uk-vehicle-list-evaluator/{_S3_ENV}/cache/cb_purchases_v13.json"
 _VRM_CAP_S3_KEY    = f"applications/pricing/uk-vehicle-list-evaluator/shared/vrm_cap_id_cache.json"
@@ -792,7 +796,8 @@ def _get_sf_rows(force: bool = False) -> list:
                 CAP_LIVE_CLEAN_LATEST,
                 VEHICLE_COSTS,
                 GPU_M_COSTS,
-                COALESCE(MILEAGE_BAND, '') AS MILEAGE_BAND
+                COALESCE(MILEAGE_BAND, '') AS MILEAGE_BAND,
+                WEBSITE_URL
             FROM PROD_CARSUPERMARKET_DB.product_vehicle_journey.buying_requirements
             ORDER BY CAP_ID
         """)
@@ -803,7 +808,8 @@ def _get_sf_rows(force: bool = False) -> list:
     #  17:order_acknowledged_date (ISO string), 18:vrm, 19:supplier_name, 20:vehicle_url,
     #  21:vehicle_status, 22:gpu_m_resolved, 23:vehicle_location,
     #  24:date_first_registered, 25:mileage, 26:autotrader_portal_link,
-    #  27:invoice_posted_date, 28:vehicle_updated_at, 29:make_model, 30:cap_live_clean]
+    #  27:invoice_posted_date, 28:vehicle_updated_at, 29:make_model, 30:cap_live_clean,
+    #  31:vehicle_costs, 32:gpu_m_costs, 33:mileage_band, 34:website_url]
     col_map = {name.upper(): i for i, name in enumerate(col_names)}
     def _g(r, name): return r[col_map[name]] if name in col_map else None
     def _s(r, name): v = _g(r, name); return str(v) if v is not None else None
@@ -824,6 +830,7 @@ def _get_sf_rows(force: bool = False) -> list:
         _s(r, 'INVOICE_POSTED_DATE'), _s(r, 'VEHICLE_UPDATED_AT'),
         _g(r, 'MAKE_MODEL'), _g(r, 'CAP_LIVE_CLEAN_LATEST'),
         _gbp(r, 'VEHICLE_COSTS'), _gbp(r, 'GPU_M_COSTS'), _g(r, 'MILEAGE_BAND'),
+        _g(r, 'WEBSITE_URL'),
     ] for r in rows]
     _save_sf_cache_to_s3(result, cached_at)
 
