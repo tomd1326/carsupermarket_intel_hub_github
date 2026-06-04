@@ -57,12 +57,25 @@ class CAPClient(metaclass=Singleton):
         self.monthly_valuation_url = "https://soap.cap.co.uk/vrm/capvrm.asmx/CAPIDValuation"
         self.vrm_url = "https://soap.cap.co.uk/vrm/capvrm.asmx/VRMValuation"
 
-        # Auth data
+        # Auth data — use override creds from settings if enabled, otherwise fall back to AWS secret
         env = 'prod' if os.getenv('AWS_REGION') == 'eu-west-1' else 'dev'
-        secrets = get_secret(f'{env}/carsupermarket/car_pricer/api_access')
-
-        self.subscriber_id = secrets['CAP_SUBSCRIBER_ID']
-        self.cap_password = secrets['CAP_PASSWORD']
+        try:
+            from utils.db_utils import get_database_connection, get_settings
+            with get_database_connection() as _conn:
+                _settings = get_settings(_conn)
+            if _settings.get('cap_override_enabled') and _settings.get('cap_override_subscriber_id') and _settings.get('cap_override_password'):
+                self.subscriber_id = _settings['cap_override_subscriber_id']
+                self.cap_password = _settings['cap_override_password']
+                logger.warning("[CAP] Using override credentials (subscriber_id=%s)", self.subscriber_id)
+            else:
+                secrets = get_secret(f'{env}/carsupermarket/car_pricer/api_access')
+                self.subscriber_id = secrets['CAP_SUBSCRIBER_ID']
+                self.cap_password = secrets['CAP_PASSWORD']
+        except Exception as _e:
+            logger.warning("[CAP] Could not load override settings, falling back to AWS secret: %s", _e)
+            secrets = get_secret(f'{env}/carsupermarket/car_pricer/api_access')
+            self.subscriber_id = secrets['CAP_SUBSCRIBER_ID']
+            self.cap_password = secrets['CAP_PASSWORD']
         self.database = "CAR"
 
         # Rate limiter
@@ -142,6 +155,14 @@ class CAPClient(metaclass=Singleton):
         namespace_live = {'ns': 'https://soap.cap.co.uk/usedvalueslive'}
         namespace_vrm = {'ns': 'https://soap.cap.co.uk/vrm'}
 
+        # Check the top-level FailReason only (direct child of root) — nested ones e.g. inside
+        # <StandardEquipment> are per-feature failures and should not abort the whole request.
+        for ns in (namespace_vrm, namespace_live):
+            fail_node = root.find('ns:FailReason', ns)
+            if fail_node is not None and fail_node.text and fail_node.text.strip():
+                logger.error("[CAP] %s returned FailReason for VRM %s: %s", endpoint, vrm, fail_node.text)
+                raise RuntimeError(f"CAP API error ({endpoint}): {fail_node.text}")
+
         if url == self.live_valuation_url:
             valuations = root.findall('.//ns:Valuations/ns:Valuation', namespace_live)
             valuation_list = []
@@ -153,20 +174,22 @@ class CAPClient(metaclass=Singleton):
             return valuation_list
 
         elif url == self.monthly_valuation_url:
-            # Ensure the response is successful
-            if root.find('.//ns:Success', namespace_vrm).text == 'true':
-                capid_lookup = root.find('.//ns:CAPIDLookup', namespace_vrm)
-                valuation = root.find('.//ns:Valuation', namespace_vrm)
-                if capid_lookup is not None and valuation is not None and valuation.find('ns:Success',
-                                                                                         namespace_vrm).text == 'true':
-                    return {
-                        'Retail': valuation.find('ns:Retail', namespace_vrm).text,
-                        'Clean': valuation.find('ns:Clean', namespace_vrm).text,
-                        'CAPMan': capid_lookup.find('ns:CAPMan', namespace_vrm).text,
-                        'CAPMod': capid_lookup.find('ns:CAPMod', namespace_vrm).text,
-                        'CAPDer': capid_lookup.find('ns:CAPDer', namespace_vrm).text,
-                        'CAPcode': capid_lookup.find('ns:CAPcode', namespace_vrm).text
-                    }
+            success_node = root.find('.//ns:Success', namespace_vrm)
+            if success_node is None or success_node.text != 'true':
+                logger.error("[CAP] %s returned no Success=true for VRM %s. Response: %s", endpoint, vrm, response.text[:500])
+                raise RuntimeError(f"CAP API error ({endpoint}): unexpected response (no Success element)")
+            capid_lookup = root.find('.//ns:CAPIDLookup', namespace_vrm)
+            valuation = root.find('.//ns:Valuation', namespace_vrm)
+            if capid_lookup is not None and valuation is not None and valuation.find('ns:Success',
+                                                                                     namespace_vrm).text == 'true':
+                return {
+                    'Retail': valuation.find('ns:Retail', namespace_vrm).text,
+                    'Clean': valuation.find('ns:Clean', namespace_vrm).text,
+                    'CAPMan': capid_lookup.find('ns:CAPMan', namespace_vrm).text,
+                    'CAPMod': capid_lookup.find('ns:CAPMod', namespace_vrm).text,
+                    'CAPDer': capid_lookup.find('ns:CAPDer', namespace_vrm).text,
+                    'CAPcode': capid_lookup.find('ns:CAPcode', namespace_vrm).text
+                }
             return {}  # Return empty dictionary if conditions aren't met
 
     def get_valuations(self, mileage, valuations):
@@ -262,14 +285,14 @@ class CAPClient(metaclass=Singleton):
         capder = root.find('.//ns:VRMLookup/ns:CAPDer', namespaces)
         capcode = root.find('.//ns:VRMLookup/ns:CAPcode', namespaces)
 
-        database_text = database.text if database is not None else 'Not Found'
-        capid_text = capid.text if capid is not None else 'Not Found'
-        clean_text = clean.text if clean is not None else 'Not Found'
-        retail_text = retail.text if retail is not None else 'Not Found'
-        capman_text = capman.text if capman is not None else 'Not Found'
-        capmod_text = capmod.text if capmod is not None else 'Not Found'
-        capder_text = capder.text if capder is not None else 'Not Found'
-        capcode_text = capcode.text if capcode is not None else 'Not Found'
+        database_text = database.text if database is not None else None
+        capid_text = capid.text if capid is not None else None
+        clean_text = clean.text if clean is not None else None
+        retail_text = retail.text if retail is not None else None
+        capman_text = capman.text if capman is not None else None
+        capmod_text = capmod.text if capmod is not None else None
+        capder_text = capder.text if capder is not None else None
+        capcode_text = capcode.text if capcode is not None else None
 
         registered_date = root.find('.//ns:VRMLookup/ns:RegisteredDate', namespaces)
         if registered_date is not None and registered_date.text:
@@ -278,7 +301,7 @@ class CAPClient(metaclass=Singleton):
             # Format it to the desired format
             registered_date_text = registered_date_obj.strftime('%d/%m/%Y')
         else:
-            registered_date_text = 'Not Found'
+            registered_date_text = None
 
         # Existing return statement with the addition of registered_date_text
         return CAPVRMResponse(
@@ -349,8 +372,22 @@ class CAPClient(metaclass=Singleton):
                         'detail': result.get('note', '')[:200],
                     })
             return result
-        except (requests.exceptions.ReadTimeout, requests.exceptions.ConnectionError) as e:
+        except RuntimeError as e:
             vehicle = column_mapper.map_row(row)
+            with self._counter_lock:
+                self._vrm_errors += 1
+                self._error_log.append({
+                    'timestamp': datetime.datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S'),
+                    'api': 'CAP',
+                    'vrm': vehicle.vrm if vehicle else str(row.name),
+                    'mileage': vehicle.mileage if vehicle else None,
+                    'cap_id': vehicle.capid if vehicle else None,
+                    'status_code': None,
+                    'error_type': 'CAP_ERROR',
+                    'detail': str(e)[:200],
+                })
+            return CAPOutput().dict()
+        except (requests.exceptions.ReadTimeout, requests.exceptions.ConnectionError) as e:
             vehicle = column_mapper.map_row(row)
             error_type = 'TIMEOUT' if 'timeout' in type(e).__name__.lower() else 'CONNECTION_ERROR'
             with self._counter_lock:

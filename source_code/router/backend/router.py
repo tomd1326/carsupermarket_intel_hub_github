@@ -67,20 +67,24 @@ s3_bucketname = 'aa-raw-sources-uk'
 s3_bucket_region = 'eu-west-1'  # bucket is always in eu-west-1 regardless of Lambda region
 
 
-VALID_USERS = {
+_ADMIN_FALLBACK = {
     'tdrayson': 'e026581a53dc97e3381566ad0f74e99ae65e0297f9eb41bb76596627885bf8a0',
 }
+VALID_USERS: dict = {}
 
-def _load_users_from_aurora():
+def _reload_users_from_aurora():
+    """Reload all users from Aurora into VALID_USERS. Admin is always valid regardless of DB state."""
     try:
         with get_database_connection() as conn:
             users = load_all_users(conn)
+        VALID_USERS.clear()
         VALID_USERS.update(users)
         logger.info("Loaded %d users from Aurora", len(users))
     except Exception as e:
         logger.warning("Could not load users from Aurora — falling back to hardcoded admin only: %s", e)
+    VALID_USERS.update(_ADMIN_FALLBACK)
 
-_load_users_from_aurora()
+_reload_users_from_aurora()
 
 # session_id -> {user, login_time} — tracks active sessions server-side
 _active_sessions: dict = {}
@@ -131,7 +135,7 @@ def login(request: Request):
 
 @router.post("/login")
 def login(request: Request, username: str = Form(...), password: str = Form(...)):
-    # calculate sha256 hash of the password
+    _reload_users_from_aurora()
     pwd_hash = hashlib.sha256(password.encode()).hexdigest()
     if pwd_hash == VALID_USERS.get(username):
         session_id = hashlib.sha256(os.urandom(16)).hexdigest()
@@ -300,10 +304,14 @@ def update_settings(
     calc_buying_reqs: str = Form(default=""),
     get_stock: str = Form(default=""),
     enable_cars_bought: str = Form(default=""),
+    kpi_ai_summary: str = Form(default=""),
     mot_workers: int = Form(default=5),
     at_workers: int = Form(default=40),
     at_rate_limit: int = Form(default=60),
     valuation_cache_hours: int = Form(default=36),
+    cap_override_enabled: str = Form(default=""),
+    cap_override_subscriber_id: str = Form(default=""),
+    cap_override_password: str = Form(default=""),
     user: str = Depends(get_current_user),
 ):
     if user != 'tdrayson':
@@ -311,8 +319,14 @@ def update_settings(
     calc = calc_buying_reqs == "on"
     gs = get_stock == "on"
     ecb = enable_cars_bought == "on"
+    kai = kpi_ai_summary == "on"
+    coe = cap_override_enabled == "on"
     with get_database_connection() as conn:
-        save_settings(conn, number_to_buy, max_days_sales, max_dts, min_gpu_m, cap_workers, cap_rate_limit, calc, gs, enable_cars_bought=ecb, mot_workers=mot_workers, at_workers=at_workers, at_rate_limit=at_rate_limit, valuation_cache_hours=valuation_cache_hours, user='buyer')
+        save_settings(conn, number_to_buy, max_days_sales, max_dts, min_gpu_m, cap_workers, cap_rate_limit, calc, gs, enable_cars_bought=ecb, kpi_ai_summary=kai, mot_workers=mot_workers, at_workers=at_workers, at_rate_limit=at_rate_limit, valuation_cache_hours=valuation_cache_hours, cap_override_enabled=coe, cap_override_subscriber_id=cap_override_subscriber_id.strip(), cap_override_password=cap_override_password.strip(), user='buyer')
+    # Reset CAPClient singleton so the next task picks up the new creds
+    from list_processor.cap_client import CAPClient
+    from utils.singleton import Singleton
+    Singleton._instances.pop(CAPClient, None)
     logger.info(
         "Settings updated by %s: number_to_buy=%d, max_days_sales=%d, max_dts=%d, "
         "min_gpu_m=%d, cap_workers=%d, cap_rate_limit=%d, at_workers=%d, at_rate_limit=%d, calc_buying_reqs=%s, get_stock=%s, enable_cars_bought=%s, mot_workers=%d",
@@ -342,8 +356,20 @@ def home(request: Request, user: str = Depends(get_current_user)):
                 _get_cb_purchases()
             except Exception as e:
                 logger.warning(f"Home cache warm (CB) failed: {e}")
-        with ThreadPoolExecutor(max_workers=3) as ex:
-            ex.submit(_sf); ex.submit(_dbs); ex.submit(_cb)
+        def _sp():
+            global _kpi_sp_cache_date
+            try:
+                today = datetime.date.today()
+                if not _kpi_sp_cache or _kpi_sp_cache_date != today:
+                    result = _build_kpi_sharepoint_data()
+                    _kpi_sp_cache.clear()
+                    _kpi_sp_cache.update(result)
+                    _kpi_sp_cache_date = today
+                    logger.info("Home cache warm (SharePoint KPI) complete")
+            except Exception as e:
+                logger.warning(f"Home cache warm (SharePoint KPI) failed: {e}")
+        with ThreadPoolExecutor(max_workers=4) as ex:
+            ex.submit(_sf); ex.submit(_dbs); ex.submit(_cb); ex.submit(_sp)
     threading.Thread(target=_warm_caches, daemon=True).start()
     _track(request, 'page_view', '/home')
     return templates.TemplateResponse("home.html", {"request": request, "user": user, "BASE_URL": BASE_URL})
@@ -356,6 +382,416 @@ def stock_list(request: Request, user: str = Depends(get_current_user)):
         return RedirectResponse(url=BASE_URL + "/home", status_code=303)
     _track(request, 'page_view', '/stock-list')
     return templates.TemplateResponse("stock_list.html", {"request": request, "user": user, "BASE_URL": BASE_URL})
+
+
+@router.get("/kpi", response_class=HTMLResponse)
+def kpi_page(request: Request, user: str = Depends(get_current_user)):
+    if user != 'tdrayson':
+        return RedirectResponse(url=BASE_URL + "/home", status_code=303)
+    _track(request, 'page_view', '/kpi')
+    with get_database_connection() as conn:
+        settings = get_settings(conn, user=user)
+    return templates.TemplateResponse("kpi.html", {"request": request, "user": user, "BASE_URL": BASE_URL, "kpi_ai_summary": settings.get("kpi_ai_summary", False)})
+
+
+@router.get("/kpi/data")
+def kpi_data(request: Request, user: str = Depends(get_current_user)):
+    """Return daily_summary KPI data: daily window + 13 months of monthly totals."""
+    if user != 'tdrayson':
+        raise HTTPException(status_code=403)
+    try:
+        import calendar
+        today = datetime.date.today()
+
+        # ── Date windows ──────────────────────────────────────────────────────
+        window_start = today - datetime.timedelta(days=24)
+        daily_end    = today + datetime.timedelta(days=10)
+        # Extend fetch to end of next month so monthly/weekly target sums are complete
+        _nm = (today.replace(day=1) + datetime.timedelta(days=32)).replace(day=1)
+        window_end = (_nm + datetime.timedelta(days=32)).replace(day=1) - datetime.timedelta(days=1)
+
+        first_of_this_month = today.replace(day=1)
+        monthly_end = first_of_this_month - datetime.timedelta(days=1)
+        monthly_start_dt = (first_of_this_month - datetime.timedelta(days=1)).replace(day=1)
+        for _ in range(12):
+            monthly_start_dt = (monthly_start_dt - datetime.timedelta(days=1)).replace(day=1)
+
+        days_since_monday = today.weekday()
+        last_sunday = today - datetime.timedelta(days=days_since_monday + 1)
+        weekly_end = last_sunday
+        weekly_start = weekly_end - datetime.timedelta(weeks=9) + datetime.timedelta(days=1)
+
+        fetch_start = min(window_start, monthly_start_dt, weekly_start)
+
+        with SnowflakeClient() as sf:
+            rows, cols = sf.execute("""
+                SELECT
+                    SNAPSHOT_DATE,
+                    ORDERS,
+                    ORDERS_N_MINUS_1,
+                    ORDERS_TARGET,
+                    ORDERS_TARGET_N_MINUS_1,
+                    SESSIONS_TARGET,
+                    SESSIONS_TARGET_N_MINUS_1
+                FROM PROD_CARSUPERMARKET_DB.product_slt_kpis.daily_summary
+                WHERE SNAPSHOT_DATE >= %s AND SNAPSHOT_DATE <= %s
+                ORDER BY SNAPSHOT_DATE
+            """, [str(fetch_start), str(window_end)])
+
+        col_map = {c.upper(): i for i, c in enumerate(cols)}
+
+        def _col(r, name):
+            i = col_map.get(name)
+            return r[i] if i is not None else None
+
+        # Index all columns by date
+        by_date: dict[str, dict] = {}
+        for r in rows:
+            d = _col(r, 'SNAPSHOT_DATE')
+            d = d.isoformat() if isinstance(d, datetime.date) else str(d)[:10]
+            by_date[d] = {
+                'orders':                   _col(r, 'ORDERS'),
+                'orders_n1':                _col(r, 'ORDERS_N_MINUS_1'),
+                'orders_target':            _col(r, 'ORDERS_TARGET'),
+                'orders_target_n1':         _col(r, 'ORDERS_TARGET_N_MINUS_1'),
+                'sessions_target':          _col(r, 'SESSIONS_TARGET'),
+                'sessions_target_n1':       _col(r, 'SESSIONS_TARGET_N_MINUS_1'),
+            }
+
+        def _int(val):
+            try:
+                return int(val) if val is not None else None
+            except (TypeError, ValueError):
+                return None
+
+        def _int0(val):
+            v = _int(val)
+            return v if v is not None else 0
+
+        month_abbrs = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']
+
+        def _week_monday(d: datetime.date) -> datetime.date:
+            return d - datetime.timedelta(days=d.weekday())
+
+        def _sum_month(ym: str, field: str) -> int:
+            y, mo = int(ym[:4]), int(ym[5:7])
+            days_in = calendar.monthrange(y, mo)[1]
+            return sum(_int0(by_date.get(datetime.date(y, mo, day).isoformat(), {}).get(field)) for day in range(1, days_in + 1))
+
+        def _sum_week(monday: datetime.date, field: str) -> int:
+            return sum(_int0(by_date.get((monday + datetime.timedelta(days=i)).isoformat(), {}).get(field)) for i in range(7))
+
+        # ── Daily arrays ──────────────────────────────────────────────────────
+        dates = []
+        d_iter = window_start
+        while d_iter <= daily_end:
+            dates.append(d_iter.isoformat())
+            d_iter += datetime.timedelta(days=1)
+
+        orders            = [_int(by_date.get(d, {}).get('orders'))            for d in dates]
+        orders_ly         = [_int(by_date.get(d, {}).get('orders_n1'))         for d in dates]
+        orders_target     = [_int(by_date.get(d, {}).get('orders_target'))     for d in dates]
+        sessions_target   = [_int(by_date.get(d, {}).get('sessions_target'))   for d in dates]
+
+        known = [v for v in orders if v is not None]
+        average = round(sum(known) / len(known), 1) if known else None
+
+        # ── Monthly arrays ────────────────────────────────────────────────────
+        months = []
+        m_iter = monthly_start_dt
+        while m_iter <= monthly_end:
+            months.append(m_iter.strftime('%Y-%m'))
+            days_in = calendar.monthrange(m_iter.year, m_iter.month)[1]
+            m_iter = (m_iter.replace(day=days_in) + datetime.timedelta(days=1)).replace(day=1)
+        months.append(first_of_this_month.strftime('%Y-%m'))
+
+        current_ym = first_of_this_month.strftime('%Y-%m')
+        monthly_orders            = [None if m == current_ym else _sum_month(m, 'orders')            for m in months]
+        monthly_orders_ly         = [_sum_month(m, 'orders_n1')                                       for m in months]
+        monthly_orders_target     = [_sum_month(m, 'orders_target')      for m in months]
+        monthly_sessions_target   = [_sum_month(m, 'sessions_target')    for m in months]
+        monthly_labels            = [month_abbrs[int(m[5:7]) - 1] + ' ' + m[2:4]                     for m in months]
+        monthly_days              = [calendar.monthrange(int(m[:4]), int(m[5:7]))[1]                  for m in months]
+
+        # ── Weekly arrays ─────────────────────────────────────────────────────
+        week_mondays = []
+        w = _week_monday(weekly_end)
+        for _ in range(9):
+            week_mondays.append(w)
+            w -= datetime.timedelta(weeks=1)
+        week_mondays = list(reversed(week_mondays))
+        current_week_monday = _week_monday(today)
+        week_mondays.append(current_week_monday)
+
+        weekly_labels             = [f"W{m.isocalendar()[1]} ({m.day}-{month_abbrs[m.month-1]})" for m in week_mondays]
+        weekly_n1_labels          = [f"W{(m - datetime.timedelta(weeks=52)).isocalendar()[1]} ({(m - datetime.timedelta(weeks=52)).day}-{month_abbrs[(m - datetime.timedelta(weeks=52)).month-1]})" for m in week_mondays]
+        weekly_orders             = [None if m == current_week_monday else _sum_week(m, 'orders')             for m in week_mondays]
+        weekly_orders_ly          = [_sum_week(m, 'orders_n1')                                                 for m in week_mondays]
+        weekly_orders_target      = [_sum_week(m, 'orders_target')       for m in week_mondays]
+        weekly_sessions_target    = [_sum_week(m, 'sessions_target')     for m in week_mondays]
+
+        return {
+            "status": "ok",
+            "today": today.isoformat(),
+            # daily
+            "dates": dates,
+            "orders": orders,
+            "orders_ly": orders_ly,
+            "orders_target": orders_target,
+            "sessions_target": sessions_target,
+            "average": average,
+            # monthly
+            "monthly_labels": monthly_labels,
+            "monthly_days": monthly_days,
+            "monthly_orders": monthly_orders,
+            "monthly_orders_ly": monthly_orders_ly,
+            "monthly_orders_target": monthly_orders_target,
+            "monthly_sessions_target": monthly_sessions_target,
+            # weekly
+            "weekly_labels": weekly_labels,
+            "weekly_n1_labels": weekly_n1_labels,
+            "weekly_orders": weekly_orders,
+            "weekly_orders_ly": weekly_orders_ly,
+            "weekly_orders_target": weekly_orders_target,
+            "weekly_sessions_target": weekly_sessions_target,
+        }
+    except Exception as e:
+        logger.error(f"KPI data failed: {e}")
+        return {"status": "error", "message": str(e)}
+
+
+def _get_gemini_api_key() -> str | None:
+    api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
+    if api_key:
+        return api_key
+
+    # Local-only fallback for testing until the Gemini key can be moved into AWS Secrets Manager.
+    fallback_api_key = (
+        None
+        if os.getenv("LOCAL_ENV") == "1" or not os.getenv("AWS_LAMBDA_FUNCTION_NAME")
+        else None
+    )
+
+    secret_name = os.getenv("GEMINI_SECRET_NAME")
+    if not secret_name:
+        return fallback_api_key
+
+    try:
+        secret = get_secret(secret_name)
+    except Exception as e:
+        logger.warning("Could not load Gemini secret %s: %s", secret_name, e)
+        return fallback_api_key
+
+    return (
+        secret.get("GEMINI_API_KEY")
+        or secret.get("GOOGLE_API_KEY")
+        or secret.get("api_key")
+        or secret.get("key")
+        or fallback_api_key
+    )
+
+
+@router.post("/kpi/ai-summary")
+def kpi_ai_summary(request: Request, payload: dict, user: str = Depends(get_current_user)):
+    if user != 'tdrayson':
+        raise HTTPException(status_code=403)
+
+    prompt = (payload or {}).get("prompt")
+    if not isinstance(prompt, str) or not prompt.strip():
+        return {"status": "error", "message": "Missing prompt"}
+
+    api_key = _get_gemini_api_key()
+    if not api_key:
+        return {"status": "error", "message": "Gemini API key is not configured"}
+
+    try:
+        resp = requests.post(
+            "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent",
+            params={"key": api_key},
+            headers={"Content-Type": "application/json"},
+            json={
+                "contents": [{"parts": [{"text": prompt}]}],
+                "generationConfig": {"maxOutputTokens": 4096, "temperature": 0.3},
+            },
+            timeout=30,
+        )
+        try:
+            data = resp.json()
+        except ValueError:
+            data = {}
+
+        if not resp.ok:
+            error = data.get("error") if isinstance(data, dict) else None
+            message = error.get("message") if isinstance(error, dict) else None
+            return {"status": "error", "message": message or resp.reason or "Gemini request failed"}
+
+        candidate = data["candidates"][0]
+        finish_reason = candidate.get("finishReason", "unknown")
+        usage = data.get("usageMetadata", {})
+        logger.info(
+            "Gemini AI summary: finishReason=%s tokens_in=%s tokens_out=%s",
+            finish_reason,
+            usage.get("promptTokenCount"),
+            usage.get("candidatesTokenCount"),
+        )
+        parts = candidate["content"]["parts"]
+        summary = "".join(part.get("text", "") for part in parts).strip()
+        return {"status": "ok", "summary": summary}
+    except requests.exceptions.RequestException as e:
+        logger.error("KPI AI summary request failed: %s", e)
+        return {"status": "error", "message": str(e)}
+    except (KeyError, IndexError, TypeError) as e:
+        logger.error("KPI AI summary response parse failed: %s", e)
+        return {"status": "error", "message": "Could not read Gemini response"}
+
+
+_kpi_sp_cache: dict = {}
+_kpi_sp_cache_date: datetime.date | None = None
+
+
+def _build_kpi_sharepoint_data() -> dict:
+    """Fetch Table1 and aggregate Sessions. Result is cached in _kpi_sp_cache."""
+    import calendar
+
+    client = SharePointClient()
+    rows = client.get_table_rows(
+        table_name="Table1",
+        sharepoint_url="https://carsmkt.sharepoint.com/teams/marketing/Reports/Daily%20Spend%20and%20Enquiries.xlsx",
+    )
+
+    if not rows:
+        return {"status": "error", "message": "No rows returned from SharePoint"}
+
+    columns = list(rows[0].keys())
+    col_map = {c.lower(): c for c in columns}
+    date_col = col_map.get("date")
+    sessions_col = next((col_map[k] for k in col_map if "session" in k), None)
+    if not date_col or not sessions_col:
+        return {"status": "error", "message": f"Could not find Date/Sessions columns. Found: {columns}"}
+
+    def _parse_date(val) -> str | None:
+        if val is None or val == "":
+            return None
+        if isinstance(val, (int, float)):
+            try:
+                return (datetime.date(1899, 12, 30) + datetime.timedelta(days=int(val))).isoformat()
+            except Exception:
+                return None
+        s = str(val).strip()[:10]
+        try:
+            datetime.date.fromisoformat(s)
+            return s
+        except ValueError:
+            return None
+
+    today = datetime.date.today()
+
+    # 13 months back — same window as the Snowflake query
+    first_of_this_month = today.replace(day=1)
+    cutoff = (first_of_this_month - datetime.timedelta(days=1)).replace(day=1)
+    for _ in range(12):
+        cutoff = (cutoff - datetime.timedelta(days=1)).replace(day=1)
+    cutoff_str = cutoff.isoformat()
+
+    by_date: dict[str, int] = {}
+    for row in rows:
+        d = _parse_date(row.get(date_col))
+        if not d or d < cutoff_str:
+            continue
+        v = row.get(sessions_col)
+        try:
+            by_date[d] = int(float(v)) if v not in (None, "") else 0
+        except (ValueError, TypeError):
+            by_date[d] = 0
+    month_abbrs = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']
+
+    def _sum_month_sp(ym: str) -> int:
+        y, mo = int(ym[:4]), int(ym[5:7])
+        days_in = calendar.monthrange(y, mo)[1]
+        return sum(by_date.get(datetime.date(y, mo, day).isoformat(), 0) for day in range(1, days_in + 1))
+
+    def _sum_week_sp(monday: datetime.date) -> int:
+        return sum(by_date.get((monday + datetime.timedelta(days=i)).isoformat(), 0) for i in range(7))
+
+    def _week_monday(d: datetime.date) -> datetime.date:
+        return d - datetime.timedelta(days=d.weekday())
+
+    first_of_this_month = today.replace(day=1)
+    monthly_end = first_of_this_month - datetime.timedelta(days=1)
+    m_iter = (first_of_this_month - datetime.timedelta(days=1)).replace(day=1)
+    for _ in range(12):
+        m_iter = (m_iter - datetime.timedelta(days=1)).replace(day=1)
+    months = []
+    while m_iter <= monthly_end:
+        months.append(m_iter.strftime('%Y-%m'))
+        days_in = calendar.monthrange(m_iter.year, m_iter.month)[1]
+        m_iter = (m_iter.replace(day=days_in) + datetime.timedelta(days=1)).replace(day=1)
+    months.append(first_of_this_month.strftime('%Y-%m'))
+
+    monthly_sessions = [None if m == first_of_this_month.strftime('%Y-%m') else _sum_month_sp(m) for m in months]
+    monthly_sessions_ly = [_sum_month_sp(f"{int(m[:4])-1}-{m[5:7]}") for m in months]
+    monthly_labels = [month_abbrs[int(m[5:7]) - 1] + ' ' + m[2:4] for m in months]
+
+    days_since_monday = today.weekday()
+    last_sunday = today - datetime.timedelta(days=days_since_monday + 1)
+    week_mondays = []
+    w = _week_monday(last_sunday)
+    for _ in range(9):
+        week_mondays.append(w)
+        w -= datetime.timedelta(weeks=1)
+    week_mondays = list(reversed(week_mondays))
+    current_week_monday = _week_monday(today)
+    week_mondays.append(current_week_monday)
+
+    weekly_labels = [f"W{m.isocalendar()[1]} ({m.day}-{month_abbrs[m.month-1]})" for m in week_mondays]
+    weekly_sessions = [None if m == current_week_monday else _sum_week_sp(m) for m in week_mondays]
+    weekly_sessions_ly = [_sum_week_sp(m - datetime.timedelta(weeks=52)) for m in week_mondays]
+
+    window_start = today - datetime.timedelta(days=24)
+    window_end = today + datetime.timedelta(days=10)
+    dates = []
+    d_iter = window_start
+    while d_iter <= window_end:
+        dates.append(d_iter.isoformat())
+        d_iter += datetime.timedelta(days=1)
+
+    daily_sessions = [by_date.get(d) if d <= today.isoformat() else None for d in dates]
+    daily_sessions_ly = [by_date.get((datetime.date.fromisoformat(d) - datetime.timedelta(days=365)).isoformat()) for d in dates]
+
+    return {
+        "status": "ok",
+        "sessions_col": sessions_col,
+        "today": today.isoformat(),
+        "monthly_labels": monthly_labels,
+        "monthly_sessions": monthly_sessions,
+        "monthly_sessions_ly": monthly_sessions_ly,
+        "weekly_labels": weekly_labels,
+        "weekly_sessions": weekly_sessions,
+        "weekly_sessions_ly": weekly_sessions_ly,
+        "dates": dates,
+        "daily_sessions": daily_sessions,
+        "daily_sessions_ly": daily_sessions_ly,
+    }
+
+
+@router.get("/kpi/sharepoint")
+def kpi_sharepoint(request: Request, user: str = Depends(get_current_user)):
+    global _kpi_sp_cache, _kpi_sp_cache_date
+    if user != 'tdrayson':
+        raise HTTPException(status_code=403)
+    try:
+        today = datetime.date.today()
+        if _kpi_sp_cache_date == today and _kpi_sp_cache:
+            logger.info("KPI SharePoint: serving from cache (date=%s)", today)
+            return _kpi_sp_cache
+        logger.info("KPI SharePoint: cache miss (date=%s, cached=%s), fetching", today, _kpi_sp_cache_date)
+        result = _build_kpi_sharepoint_data()
+        _kpi_sp_cache = result
+        _kpi_sp_cache_date = today
+        return _kpi_sp_cache
+    except Exception as e:
+        logger.error("KPI SharePoint fetch failed: %s", e)
+        return {"status": "error", "message": str(e)}
 
 
 @router.get("/buying-requirements", response_class=HTMLResponse)
@@ -620,7 +1056,7 @@ _CB_TTL_SECONDS     = 30 * 60
 _CB_S3_TTL_SECONDS  = 30 * 60
 _S3_BUCKET         = "aa-raw-sources-uk"
 _S3_ENV            = 'prod' if os.getenv('AWS_REGION') == 'eu-west-1' else 'dev'
-_SF_S3_KEY         = f"applications/pricing/uk-vehicle-list-evaluator/{_S3_ENV}/cache/buying_requirements_v20.json"
+_SF_S3_KEY         = f"applications/pricing/uk-vehicle-list-evaluator/{_S3_ENV}/cache/buying_requirements_v21.json"
 _DBS_S3_KEY        = f"applications/pricing/uk-vehicle-list-evaluator/{_S3_ENV}/cache/dbs_purchases_v17.json"
 _CB_S3_KEY         = f"applications/pricing/uk-vehicle-list-evaluator/{_S3_ENV}/cache/cb_purchases_v13.json"
 _VRM_CAP_S3_KEY    = f"applications/pricing/uk-vehicle-list-evaluator/shared/vrm_cap_id_cache.json"
@@ -792,7 +1228,8 @@ def _get_sf_rows(force: bool = False) -> list:
                 CAP_LIVE_CLEAN_LATEST,
                 VEHICLE_COSTS,
                 GPU_M_COSTS,
-                COALESCE(MILEAGE_BAND, '') AS MILEAGE_BAND
+                COALESCE(MILEAGE_BAND, '') AS MILEAGE_BAND,
+                WEBSITE_URL
             FROM PROD_CARSUPERMARKET_DB.product_vehicle_journey.buying_requirements
             ORDER BY CAP_ID
         """)
@@ -803,7 +1240,8 @@ def _get_sf_rows(force: bool = False) -> list:
     #  17:order_acknowledged_date (ISO string), 18:vrm, 19:supplier_name, 20:vehicle_url,
     #  21:vehicle_status, 22:gpu_m_resolved, 23:vehicle_location,
     #  24:date_first_registered, 25:mileage, 26:autotrader_portal_link,
-    #  27:invoice_posted_date, 28:vehicle_updated_at, 29:make_model, 30:cap_live_clean]
+    #  27:invoice_posted_date, 28:vehicle_updated_at, 29:make_model, 30:cap_live_clean,
+    #  31:vehicle_costs, 32:gpu_m_costs, 33:mileage_band, 34:website_url]
     col_map = {name.upper(): i for i, name in enumerate(col_names)}
     def _g(r, name): return r[col_map[name]] if name in col_map else None
     def _s(r, name): v = _g(r, name); return str(v) if v is not None else None
@@ -824,6 +1262,7 @@ def _get_sf_rows(force: bool = False) -> list:
         _s(r, 'INVOICE_POSTED_DATE'), _s(r, 'VEHICLE_UPDATED_AT'),
         _g(r, 'MAKE_MODEL'), _g(r, 'CAP_LIVE_CLEAN_LATEST'),
         _gbp(r, 'VEHICLE_COSTS'), _gbp(r, 'GPU_M_COSTS'), _g(r, 'MILEAGE_BAND'),
+        _g(r, 'WEBSITE_URL'),
     ] for r in rows]
     _save_sf_cache_to_s3(result, cached_at)
 
@@ -3062,6 +3501,7 @@ async def elaborate_task(data: dict):
         execution_time = None
         error_log_s3 = None
         aurora_cache_hits = None
+        api_error_log = []
 
         fd_in,  tmp_in  = tempfile.mkstemp(suffix='.' + file_ext)
         fd_out, tmp_out = tempfile.mkstemp(suffix='.xlsx')
@@ -3145,7 +3585,34 @@ async def elaborate_task(data: dict):
         except Exception as e:
             logger.error(f"Error processing file: {e}, traceback: {traceback.format_exc()}")
             status = 'error'
-            message = str(e)
+            message = str(e)[:250]
+            # Write the traceback to S3 so it's downloadable from the UI
+            try:
+                import csv, io as _io, boto3 as _boto3
+                buf = _io.StringIO()
+                writer = csv.DictWriter(buf, fieldnames=['timestamp', 'api', 'vrm', 'mileage', 'cap_id', 'status_code', 'error_type', 'detail'])
+                writer.writeheader()
+                rows_to_write = sorted(api_error_log, key=lambda r: r.get('timestamp', '')) if api_error_log else []
+                rows_to_write.append({
+                    'timestamp': _uk_now().strftime('%Y-%m-%d %H:%M:%S'),
+                    'api': 'TASK',
+                    'vrm': None,
+                    'mileage': None,
+                    'cap_id': None,
+                    'status_code': None,
+                    'error_type': 'EXCEPTION',
+                    'detail': traceback.format_exc()[:2000],
+                })
+                writer.writerows(rows_to_write)
+                _env = 'prod' if os.getenv('AWS_REGION') == 'eu-west-1' else 'dev'
+                error_log_key = f'applications/pricing/uk-vehicle-list-evaluator/{_env}/error-logs/{data["task_id"]}.csv'
+                _boto3.client('s3', region_name='eu-west-1').put_object(
+                    Bucket=s3_bucketname, Key=error_log_key,
+                    Body=buf.getvalue().encode(), ContentType='text/csv',
+                )
+                error_log_s3 = error_log_key
+            except Exception as _e:
+                logger.warning(f"Failed to write error log to S3: {_e}")
 
         with get_database_connection() as conn:
             with conn.cursor() as cursor:
@@ -3153,12 +3620,23 @@ async def elaborate_task(data: dict):
                 cursor.execute("ALTER TABLE tasks ADD COLUMN IF NOT EXISTS aurora_cache_hits INTEGER")
                 cursor.execute(
                     "UPDATE tasks SET status = %s, message = %s, total_rows = %s, execution_time = %s, s3_location = %s, reductions = %s, error_log_s3 = %s, aurora_cache_hits = %s WHERE task_id = %s",
-                    (status, message, total_rows, execution_time, s3_location if status == 'success' else None, reductions if status == 'success' else None, error_log_s3 if status == 'success' else None, aurora_cache_hits if status == 'success' else None, data['task_id']),
+                    (status, message, total_rows, execution_time, s3_location if status == 'success' else None, reductions if status == 'success' else None, error_log_s3, aurora_cache_hits if status == 'success' else None, data['task_id']),
                 )
                 conn.commit()
 
     except Exception as e:
         logger.error(f"Unhandled error in elaborate_task: {e}, traceback: {traceback.format_exc()}")
+        # Last-resort: mark the task as error so it never stays stuck at pending
+        try:
+            with get_database_connection() as conn:
+                with conn.cursor() as cursor:
+                    cursor.execute(
+                        "UPDATE tasks SET status = 'error', message = %s WHERE task_id = %s AND status = 'pending'",
+                        (str(e)[:250], data['task_id']),
+                    )
+                conn.commit()
+        except Exception as _e:
+            logger.error(f"Failed to mark task as error after unhandled exception: {_e}")
 
     finally:
         for p in (tmp_in, tmp_out):

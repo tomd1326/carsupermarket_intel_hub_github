@@ -186,101 +186,189 @@ def process_file_with_cache(
     # Step 1: batch DB reads
     cached_valuations, known_vehicles = _fetch_cache(vehicle_rows, valuation_cache_hours=valuation_cache_hours)
 
-    cache_hits = {(v.vrm, v.mileage) for v in vehicle_rows if (v.vrm, v.mileage) in cached_valuations}
-    cache_misses = [v for v in vehicle_rows if (v.vrm, v.mileage) not in cached_valuations]
+    def _has_cap(cached: dict) -> bool:
+        return cached.get('cap_live_clean') is not None or cached.get('cap_monthly_clean') is not None
 
-    logger.info('Supplier %s: %d total, %d from cache, %d API requests', supplier_name, len(vehicle_rows), len(cache_hits), len(cache_misses))
+    def _has_at(cached: dict) -> bool:
+        return cached.get('at_retail_valuation') is not None
 
-    # Step 2: build a partial-input df for cache misses only, run AT+CAP in parallel
+    # Full cache hit = AT + CAP both present. Partial = one is missing and needs re-requesting.
+    full_cache_hits = {(v.vrm, v.mileage) for v in vehicle_rows
+                       if (v.vrm, v.mileage) in cached_valuations
+                       and _has_at(cached_valuations[(v.vrm, v.mileage)])
+                       and _has_cap(cached_valuations[(v.vrm, v.mileage)])}
+    cap_only_misses = [v for v in vehicle_rows
+                       if (v.vrm, v.mileage) in cached_valuations
+                       and _has_at(cached_valuations[(v.vrm, v.mileage)])
+                       and not _has_cap(cached_valuations[(v.vrm, v.mileage)])]
+    at_only_misses = [v for v in vehicle_rows
+                      if (v.vrm, v.mileage) in cached_valuations
+                      and not _has_at(cached_valuations[(v.vrm, v.mileage)])
+                      and _has_cap(cached_valuations[(v.vrm, v.mileage)])]
+    full_misses = [v for v in vehicle_rows if (v.vrm, v.mileage) not in cached_valuations]
+
+    # Vehicles that need at least one API call
+    cap_needed = {v.vrm for v in cap_only_misses + full_misses}
+    at_needed = {v.vrm for v in at_only_misses + full_misses}
+
+    logger.info(
+        'Supplier %s: %d total, %d full cache hits, %d cap-only misses, %d at-only misses, %d full misses',
+        supplier_name, len(vehicle_rows), len(full_cache_hits), len(cap_only_misses), len(at_only_misses), len(full_misses),
+    )
+
+    # Step 2: build partial-input dfs and run AT+CAP in parallel for only what's needed
     api_results: dict[str, dict] = {}
     _at_veh = _at_val = _at_veh_err = _at_val_err = 0
     _cap_vrm = _cap_monthly = _cap_live = _cap_retries = _cap_vrm_err = _cap_live_err = 0
     _at_errors: list = []
     _cap_errors: list = []
 
-    if cache_misses:
-        miss_vrms = {v.vrm for v in cache_misses}
+    api_needed_vrms = cap_needed | at_needed
+    if api_needed_vrms:
         # VRMs with a CAP ID but no derivable registration date (e.g. Irish plates) are
         # not AT-searchable — exclude them from the AT call to avoid wasted error requests.
-        at_skip_vrms = {v.vrm for v in cache_misses if v.capid and not v.registration_date}
-        miss_df = input_df[input_df.apply(
-            lambda row: columns_mapper.map_row(row.to_dict()) is not None and
-                        columns_mapper.map_row(row.to_dict()).vrm in miss_vrms,
-            axis=1
-        )]
-        at_miss_df = miss_df[miss_df.apply(
-            lambda row: columns_mapper.map_row(row.to_dict()) is not None and
-                        columns_mapper.map_row(row.to_dict()).vrm not in at_skip_vrms,
-            axis=1
-        )]
+        at_skip_vrms = {v.vrm for v in cap_only_misses + full_misses if v.capid and not v.registration_date}
+
+        def _make_df(vrm_set):
+            return input_df[input_df.apply(
+                lambda row: columns_mapper.map_row(row.to_dict()) is not None and
+                            columns_mapper.map_row(row.to_dict()).vrm in vrm_set,
+                axis=1
+            )]
+
+        cap_df_input = _make_df(cap_needed) if cap_needed else pd.DataFrame()
+        at_df_input = _make_df(at_needed - at_skip_vrms) if (at_needed - at_skip_vrms) else pd.DataFrame()
 
         with ThreadPoolExecutor(max_workers=2) as executor:
-            at_future = executor.submit(at_client.process_file, at_miss_df, columns_mapper, at_workers, at_rate_limit)
-            cap_future = executor.submit(cap_client.process_file, miss_df, columns_mapper, cap_workers, cap_rate_limit)
-            at_df, _at_veh, _at_val, _at_veh_err, _at_val_err, _at_errors = at_future.result()
-            cap_df, _cap_vrm, _cap_monthly, _cap_live, _cap_retries, _cap_vrm_err, _cap_live_err, _cap_errors = cap_future.result()
+            at_future = executor.submit(at_client.process_file, at_df_input, columns_mapper, at_workers, at_rate_limit) if not at_df_input.empty else None
+            cap_future = executor.submit(cap_client.process_file, cap_df_input, columns_mapper, cap_workers, cap_rate_limit) if not cap_df_input.empty else None
+
+            at_df = pd.DataFrame()
+            if at_future:
+                at_df, _at_veh, _at_val, _at_veh_err, _at_val_err, _at_errors = at_future.result()
+            cap_df = pd.DataFrame()
+            if cap_future:
+                cap_df, _cap_vrm, _cap_monthly, _cap_live, _cap_retries, _cap_vrm_err, _cap_live_err, _cap_errors = cap_future.result()
 
         if at_client._abort:
             raise RuntimeError(f"AT API aborted after {at_client._rate_limit_hits} rate limit (429) responses — reduce AT workers or rate limit")
         if cap_client._abort:
             raise RuntimeError(f"CAP API aborted after {cap_client._connection_errors} connection/timeout errors — reduce CAP workers or rate limit")
 
-        # Build AT results keyed by VRM (at_miss_df may be smaller than miss_df)
+        # Build AT results keyed by VRM
         at_by_vrm: dict[str, pd.Series] = {}
-        at_miss_df_reset = at_miss_df.reset_index(drop=True)
-        at_df_reset = at_df.reset_index(drop=True)
-        for i, at_row in at_miss_df_reset.iterrows():
+        if not at_df_input.empty and not at_df.empty:
+            at_df_input_reset = at_df_input.reset_index(drop=True)
+            at_df_reset = at_df.reset_index(drop=True)
+            for i, at_row in at_df_input_reset.iterrows():
+                try:
+                    v = columns_mapper.map_row(at_row.to_dict())
+                    if v and i < len(at_df_reset):
+                        at_by_vrm[v.vrm] = at_df_reset.iloc[i]
+                except Exception:
+                    pass
+
+        # Build CAP results keyed by VRM
+        cap_by_vrm: dict[str, pd.Series] = {}
+        if not cap_df_input.empty and not cap_df.empty:
+            cap_df_input_reset = cap_df_input.reset_index(drop=True)
+            cap_df_reset = cap_df.reset_index(drop=True)
+            for i, cap_row in cap_df_input_reset.iterrows():
+                try:
+                    v = columns_mapper.map_row(cap_row.to_dict())
+                    if v and i < len(cap_df_reset):
+                        cap_by_vrm[v.vrm] = cap_df_reset.iloc[i]
+                except Exception:
+                    pass
+
+        # Merge AT+CAP results into api_results, filling from cache where one side was not re-requested
+        for vrow in cap_only_misses + at_only_misses + full_misses:
+            if vrow.vrm in api_results:
+                continue
             try:
-                v = columns_mapper.map_row(at_row.to_dict())
-                if v and i < len(at_df_reset):
-                    at_by_vrm[v.vrm] = at_df_reset.iloc[i]
-            except Exception:
-                pass
+                cached = cached_valuations.get((vrow.vrm, vrow.mileage), {})
+                known = known_vehicles.get(vrow.vrm, {})
+                at_row = at_by_vrm.get(vrow.vrm, pd.Series(dtype=object))
+                cap_row = cap_by_vrm.get(vrow.vrm, pd.Series(dtype=object))
 
-        # Merge AT+CAP results into api_results keyed by vrm
-        miss_df_reset = miss_df.reset_index(drop=True)
-        cap_df_reset = cap_df.reset_index(drop=True)
+                # AT: use fresh API result if available, else fall back to cache
+                if vrow.vrm in at_needed and vrow.vrm in at_by_vrm:
+                    description = at_row.get('at_description', '')
+                    has_at_data = bool(description and description != 'N/A')
+                    at_retail_valuation = _to_int(at_row.get('at_valuations_retail_valuation'))
+                    at_rating = _to_float(at_row.get('at_rating'))
+                    at_days_to_sell = _to_float(at_row.get('at_original_days_to_sell'))
+                    at_market_condition = _to_float(at_row.get('at_market_condition'))
+                    at_factory_fitted_features = at_row.get('at_factory_fitted_feature_names') or None
+                    at_first_registration_date = at_row.get('at_at_first_registration_date') or None
+                    at_derivative_id = at_row.get('at_derivative_id') or None
+                    at_description = description if has_at_data else None
+                else:
+                    has_at_data = True
+                    at_description = known.get('at_description')
+                    at_factory_fitted_features = known.get('at_factory_fitted_features')
+                    at_first_registration_date = known.get('at_first_registration_date')
+                    at_derivative_id = known.get('at_derivative_id')
+                    at_retail_valuation = cached.get('at_retail_valuation')
+                    at_rating = cached.get('at_rating')
+                    at_days_to_sell = cached.get('at_days_to_sell')
+                    at_market_condition = cached.get('at_market_condition')
 
-        for i, row in miss_df_reset.iterrows():
-            try:
-                vehicle = columns_mapper.map_row(row.to_dict())
-                if vehicle is None:
-                    continue
-                at_row = at_by_vrm.get(vehicle.vrm, pd.Series(dtype=object))
-                cap_row = cap_df_reset.iloc[i] if i < len(cap_df_reset) else pd.Series(dtype=object)
+                # CAP: use fresh API result if available, else fall back to cache
+                if vrow.vrm in cap_needed and vrow.vrm in cap_by_vrm:
+                    cap_capid = _to_int(cap_row.get('cap_capid'))
+                    cap_capcode = cap_row.get('cap_capcode') or None
+                    cap_manufacturer = cap_row.get('cap_manufacturer') or None
+                    cap_model = cap_row.get('cap_model') or None
+                    cap_derivative = cap_row.get('cap_derivative') or None
+                    cap_registration_date = cap_row.get('cap_registration_date') or None
+                    cap_live_clean = _to_int(cap_row.get('cap_live_clean'))
+                    cap_live_retail = _to_int(cap_row.get('cap_live_retail'))
+                    cap_monthly_clean = _to_int(cap_row.get('cap_monthly_clean'))
+                    cap_monthly_retail = _to_int(cap_row.get('cap_monthly_retail'))
+                    cap_rounded_mileage = _to_int(cap_row.get('cap_rounded_mileage'))
+                else:
+                    cap_capid = known.get('cap_capid')
+                    cap_capcode = known.get('cap_capcode')
+                    cap_manufacturer = known.get('cap_manufacturer')
+                    cap_model = known.get('cap_model')
+                    cap_derivative = known.get('cap_derivative')
+                    cap_registration_date = known.get('cap_registration_date')
+                    cap_live_clean = cached.get('cap_live_clean')
+                    cap_live_retail = cached.get('cap_live_retail')
+                    cap_monthly_clean = cached.get('cap_monthly_clean')
+                    cap_monthly_retail = cached.get('cap_monthly_retail')
+                    cap_rounded_mileage = cached.get('cap_rounded_mileage')
 
-                description = at_row.get('at_description', '')
-                has_at_data = bool(description and description != 'N/A')
-
-                api_results[vehicle.vrm] = {
+                api_results[vrow.vrm] = {
                     'has_at_data': has_at_data,
-                    'at_description': description if has_at_data else None,
-                    'at_factory_fitted_features': at_row.get('at_factory_fitted_feature_names') or None,
-                    'at_first_registration_date': at_row.get('at_at_first_registration_date') or None,
-                    'at_derivative_id': at_row.get('at_derivative_id') or None,
-                    'at_retail_valuation': _to_int(at_row.get('at_valuations_retail_valuation')),
-                    'at_rating': _to_float(at_row.get('at_rating')),
-                    'at_days_to_sell': _to_float(at_row.get('at_original_days_to_sell')),
-                    'at_market_condition': _to_float(at_row.get('at_market_condition')),
-                    'cap_capid': _to_int(cap_row.get('cap_capid')),
-                    'cap_capcode': cap_row.get('cap_capcode') or None,
-                    'cap_manufacturer': cap_row.get('cap_manufacturer') or None,
-                    'cap_model': cap_row.get('cap_model') or None,
-                    'cap_derivative': cap_row.get('cap_derivative') or None,
-                    'cap_registration_date': cap_row.get('cap_registration_date') or None,
-                    'cap_live_clean': _to_int(cap_row.get('cap_live_clean')),
-                    'cap_live_retail': _to_int(cap_row.get('cap_live_retail')),
-                    'cap_monthly_clean': _to_int(cap_row.get('cap_monthly_clean')),
-                    'cap_monthly_retail': _to_int(cap_row.get('cap_monthly_retail')),
-                    'cap_rounded_mileage': _to_int(cap_row.get('cap_rounded_mileage')),
+                    'at_description': at_description,
+                    'at_factory_fitted_features': at_factory_fitted_features,
+                    'at_first_registration_date': at_first_registration_date,
+                    'at_derivative_id': at_derivative_id,
+                    'at_retail_valuation': at_retail_valuation,
+                    'at_rating': at_rating,
+                    'at_days_to_sell': at_days_to_sell,
+                    'at_market_condition': at_market_condition,
+                    'cap_capid': cap_capid,
+                    'cap_capcode': cap_capcode,
+                    'cap_manufacturer': cap_manufacturer,
+                    'cap_model': cap_model,
+                    'cap_derivative': cap_derivative,
+                    'cap_registration_date': cap_registration_date,
+                    'cap_live_clean': cap_live_clean,
+                    'cap_live_retail': cap_live_retail,
+                    'cap_monthly_clean': cap_monthly_clean,
+                    'cap_monthly_retail': cap_monthly_retail,
+                    'cap_rounded_mileage': cap_rounded_mileage,
                 }
             except Exception:
                 pass
 
-    # Step 3: fill cache hits from DB (valuations + vehicle identity)
+    # Step 3: fill full cache hits from DB (no API calls needed)
     for vrow in vehicle_rows:
         key = (vrow.vrm, vrow.mileage)
-        if key in cached_valuations and vrow.vrm not in api_results:
+        if key in full_cache_hits and vrow.vrm not in api_results:
             cached = cached_valuations[key]
             known = known_vehicles.get(vrow.vrm, {})
             api_results[vrow.vrm] = {
@@ -383,4 +471,4 @@ def process_file_with_cache(
 
     # Exclude AT Valuations 400s — AT data quality issue (missing firstRegistrationDate), not speed/rate related
     api_error_log = [e for e in _at_errors + _cap_errors if not (e.get('api') == 'AT Valuations' and e.get('status_code') == 400)]
-    return pd.concat([input_df.reset_index(drop=True), at_result, cap_result, price_df], axis=1), reductions, api_error_log, len(cache_hits)
+    return pd.concat([input_df.reset_index(drop=True), at_result, cap_result, price_df], axis=1), reductions, api_error_log, len(full_cache_hits)
