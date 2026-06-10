@@ -83,6 +83,20 @@
                         </div>
                     </div>
                 </div>
+
+                <div class="col-md-6">
+                    <div class="card h-100">
+                        <div class="card-header fw-semibold">KPI Dashboard</div>
+                        <div class="card-body">
+                            <div class="form-check">
+                                <input class="form-check-input" type="checkbox" id="kpi_ai_summary" name="kpi_ai_summary"
+                                       {% if settings.kpi_ai_summary %}checked{% endif %}>
+                                <label class="form-check-label" for="kpi_ai_summary">Enable AI Summary panel <span class="text-muted">(tdrayson only)</span></label>
+                            </div>
+                            <div class="form-text mt-1">Shows an AI-generated commentary panel alongside the KPI charts.</div>
+                        </div>
+                    </div>
+                </div>
             </div>
 
             <div class="card mb-4">
@@ -148,6 +162,35 @@
                                 </div>
                             </div>
                         </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="card mb-4 border-warning">
+                <div class="card-header fw-semibold text-warning-emphasis bg-warning-subtle">CAP Credential Override</div>
+                <div class="card-body">
+                    <div class="form-check mb-3">
+                        <input class="form-check-input" type="checkbox" id="cap_override_enabled" name="cap_override_enabled"
+                               {% if settings.cap_override_enabled %}checked{% endif %}
+                               onchange="document.getElementById('cap-override-fields').style.display = this.checked ? '' : 'none'">
+                        <label class="form-check-label" for="cap_override_enabled">
+                            Use manual CAP credentials instead of AWS secret
+                        </label>
+                    </div>
+                    <div id="cap-override-fields" {% if not settings.cap_override_enabled %}style="display:none"{% endif %}>
+                        <div class="d-flex gap-3 flex-wrap">
+                            <div>
+                                <label for="cap_override_subscriber_id" class="form-label mb-1">Subscriber ID</label>
+                                <input class="form-control" type="text" id="cap_override_subscriber_id" name="cap_override_subscriber_id"
+                                       value="{{ settings.cap_override_subscriber_id }}" style="width: 160px;" autocomplete="off">
+                            </div>
+                            <div>
+                                <label for="cap_override_password" class="form-label mb-1">Password</label>
+                                <input class="form-control" type="password" id="cap_override_password" name="cap_override_password"
+                                       value="{{ settings.cap_override_password }}" style="width: 200px;" autocomplete="off">
+                            </div>
+                        </div>
+                        <div class="form-text mt-2 text-warning-emphasis">Remove these credentials and uncheck the box once CAP restore your account access.</div>
                     </div>
                 </div>
             </div>

@@ -1,0 +1,706 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>KPI Dashboard</title>
+    <link rel="icon" type="image/png" href="{{ BASE_URL }}/static/icon.png">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+    <style>
+        @font-face { font-family: 'DM Sans'; src: url('{{ BASE_URL }}/static/fonts/DMSans-Regular.ttf');  font-weight: 400; }
+        @font-face { font-family: 'DM Sans'; src: url('{{ BASE_URL }}/static/fonts/DMSans-Bold.ttf');     font-weight: 700; }
+        body, button, input, select, textarea { font-family: 'DM Sans', system-ui, sans-serif; font-size: 14px; }
+        body { background: #f1f5f9; }
+
+        .top-bar {
+            background: #fff;
+            border-bottom: 1px solid #e2e8f0;
+            padding: 12px 28px;
+            display: flex;
+            align-items: center;
+            gap: 16px;
+            position: sticky;
+            top: 0;
+            z-index: 100;
+        }
+        .top-bar h1 { font-size: 1.1rem; font-weight: 700; margin: 0; color: #0f172a; }
+        .top-bar .back-link { color: #64748b; text-decoration: none; font-size: 0.9rem; }
+        .top-bar .back-link:hover { color: #0f172a; }
+        .user-info { margin-left: auto; color: #64748b; font-size: 0.875rem; display: flex; align-items: center; gap: 8px; }
+        .user-info a { color: #64748b; text-decoration: none; }
+        .user-info a:hover { color: #0f172a; }
+
+        .page-content { padding: 24px 32px; }
+
+        .charts-row {
+            display: grid;
+            grid-template-columns: 32.5% 32.5% 35%;
+            gap: 16px;
+            align-items: start;
+        }
+        .charts-row.with-ai {
+            grid-template-columns: 1.1fr 1.1fr 1.8fr auto;
+        }
+
+        .btn-ai {
+            background: #6366f1; border: none; color: #fff; font-weight: 700;
+            border-radius: 6px; padding: 7px 16px; font-size: 0.9rem;
+            display: inline-flex; align-items: center; gap: 7px; white-space: nowrap;
+        }
+        .btn-ai:hover { background: #4f46e5; color: #fff; }
+        .btn-ai:disabled { opacity: 0.6; cursor: not-allowed; }
+
+        .ai-panel {
+            background: #fff;
+            border: 1px solid #e2e8f0;
+            border-radius: 10px;
+            padding: 18px 20px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.06);
+            width: 280px;
+            min-height: 100px;
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }
+        .ai-panel h2 { font-size: 0.88rem; font-weight: 700; color: #0f172a; margin: 0; display: flex; align-items: center; gap: 6px; }
+        .ai-panel-body { font-size: 0.82rem; color: #334155; line-height: 1.55; white-space: pre-wrap; }
+        .ai-placeholder { font-size: 0.82rem; color: #94a3b8; font-style: italic; }
+
+        .chart-card {
+            background: #fff;
+            border: 1px solid #e2e8f0;
+            border-radius: 10px;
+            padding: 18px 20px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.06);
+        }
+        .chart-card h2 { font-size: 0.88rem; font-weight: 700; color: #0f172a; margin-bottom: 8px; }
+
+        .btn-load {
+            background: #7ed321; border: none; color: #0d3d5f; font-weight: 700;
+            border-radius: 6px; padding: 7px 20px; font-size: 0.9rem;
+            display: inline-flex; align-items: center; gap: 7px;
+        }
+        .btn-load:hover { background: #6cba18; color: #0d3d5f; }
+        .btn-load:disabled { opacity: 0.6; cursor: not-allowed; }
+        .status-text { font-size: 0.82rem; color: #64748b; }
+
+        .chart-legend {
+            display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+            margin-bottom: 8px; font-size: 0.75rem; color: #475569;
+        }
+        .legend-item { display: flex; align-items: center; gap: 4px; }
+        .legend-dot { width: 14px; height: 3px; border-radius: 2px; display: inline-block; }
+        .legend-dot-dashed { width: 14px; height: 0; border-top: 2px dashed #9ca3af; display: inline-block; }
+
+        .category-header {
+            display: flex; align-items: center; gap: 10px;
+            padding: 9px 16px; margin-bottom: 0;
+            background: #e2e8f0; border-radius: 8px;
+            cursor: pointer; user-select: none;
+            font-size: 0.82rem; font-weight: 700; color: #0f172a;
+            border: 1px solid #cbd5e1;
+        }
+        .category-header:hover { background: #d1d9e2; }
+        .category-header .chevron { font-size: 0.7rem; color: #64748b; transition: transform 0.2s; }
+        .category-header.open .chevron { transform: rotate(90deg); }
+        .category-body { display: none; margin-top: 12px; }
+        .category-body.open { display: block; }
+        .category-section { margin-bottom: 12px; }
+    </style>
+</head>
+<body>
+    <div class="top-bar">
+        <a href="{{ BASE_URL }}/home" class="back-link"><i class="fas fa-arrow-left"></i></a>
+        <h1>KPI Dashboard</h1>
+        <button class="btn btn-load" id="loadBtn" onclick="loadAll()">
+            <i class="fas fa-sync-alt" id="loadIcon"></i> Load Data
+        </button>
+        <span class="status-text" id="statusText"></span>
+        <div class="user-info">
+            <span>{{ user }}</span>
+            <span>·</span>
+            <a href="{{ BASE_URL }}/logout"><i class="fas fa-sign-out-alt"></i> Logout</a>
+        </div>
+    </div>
+
+    <div class="page-content">
+
+        <!-- Upper Funnel category -->
+        <div class="category-section">
+            <div class="category-header" id="upperFunnelHeader" onclick="toggleCategory('upperFunnel')">
+                <i class="fas fa-chevron-right chevron"></i>
+                Upper Funnel
+            </div>
+            <div class="category-body" id="upperFunnelBody">
+                <div class="charts-row" id="sessionsRow">
+                    <div class="chart-card">
+                        <h2>Sessions - month</h2>
+                        <div class="chart-legend">
+                            <div class="legend-item"><span class="legend-dot" style="background:#004a8f;height:3px;"></span> Sessions</div>
+                            <div class="legend-item"><span class="legend-dot-dashed"></span> N-1</div>
+                            <div class="legend-item"><span style="width:14px;height:0;border-top:2px solid #e53e3e;display:inline-block;"></span> Target</div>
+                        </div>
+                        <div style="position:relative; height: 280px;">
+                            <canvas id="sessionsMonthlyChart"></canvas>
+                        </div>
+                    </div>
+                    <div class="chart-card">
+                        <h2>Sessions - week</h2>
+                        <div class="chart-legend">
+                            <div class="legend-item"><span class="legend-dot" style="background:#004a8f;height:3px;"></span> Sessions</div>
+                            <div class="legend-item"><span class="legend-dot-dashed"></span> N-1</div>
+                            <div class="legend-item"><span style="width:14px;height:0;border-top:2px solid #e53e3e;display:inline-block;"></span> Target</div>
+                        </div>
+                        <div style="position:relative; height: 280px;">
+                            <canvas id="sessionsWeeklyChart"></canvas>
+                        </div>
+                    </div>
+                    <div class="chart-card">
+                        <h2>Sessions - day</h2>
+                        <div class="chart-legend">
+                            <div class="legend-item"><span class="legend-dot" style="background:#004a8f;height:3px;"></span> Sessions</div>
+                            <div class="legend-item"><span class="legend-dot-dashed"></span> N-1</div>
+                            <div class="legend-item"><span style="width:14px;height:0;border-top:2px solid #e53e3e;display:inline-block;"></span> Target</div>
+                        </div>
+                        <div style="position:relative; height: 280px;">
+                            <canvas id="sessionsDailyChart"></canvas>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Results category -->
+        <div class="category-section">
+            <div class="category-header" id="resultsHeader" onclick="toggleCategory('results')">
+                <i class="fas fa-chevron-right chevron"></i>
+                Results
+            </div>
+            <div class="category-body" id="resultsBody">
+                <div class="charts-row{% if kpi_ai_summary %} with-ai{% endif %}" id="chartsRow">
+                    <div class="chart-card">
+                        <h2>Apex Orders - month</h2>
+                        <div class="chart-legend">
+                            <div class="legend-item"><span class="legend-dot" style="background:#0d3d6e;height:3px;"></span> Orders</div>
+                            <div class="legend-item"><span class="legend-dot-dashed"></span> N-1</div>
+                            <div class="legend-item"><span style="width:14px;height:0;border-top:2px solid #e53e3e;display:inline-block;"></span> Target</div>
+                        </div>
+                        <div style="position:relative; height: 320px;">
+                            <canvas id="monthlyChart"></canvas>
+                        </div>
+                    </div>
+                    <div class="chart-card">
+                        <h2>Apex Orders - week</h2>
+                        <div class="chart-legend">
+                            <div class="legend-item"><span class="legend-dot" style="background:#0d3d6e;height:3px;"></span> Orders</div>
+                            <div class="legend-item"><span class="legend-dot-dashed"></span> N-1</div>
+                            <div class="legend-item"><span style="width:14px;height:0;border-top:2px solid #e53e3e;display:inline-block;"></span> Target</div>
+                        </div>
+                        <div style="position:relative; height: 320px;">
+                            <canvas id="weeklyChart"></canvas>
+                        </div>
+                    </div>
+                    <div class="chart-card">
+                        <h2>Apex Orders - day</h2>
+                        <div class="chart-legend">
+                            <div class="legend-item"><span class="legend-dot" style="background:#0d3d6e;height:3px;"></span> Orders</div>
+                            <div class="legend-item"><span class="legend-dot-dashed"></span> N-1</div>
+                            <div class="legend-item"><span style="width:14px;height:0;border-top:2px solid #e53e3e;display:inline-block;"></span> Target</div>
+                        </div>
+                        <div style="position:relative; height: 320px;">
+                            <canvas id="ordersChart"></canvas>
+                        </div>
+                    </div>
+
+                    {% if kpi_ai_summary %}
+                    <div class="ai-panel" id="aiPanel">
+                        <h2><i class="fas fa-robot" style="color:#6366f1;"></i> AI Summary</h2>
+                        <p class="ai-placeholder" id="aiPlaceholder">Load data first, then click "AI Summary" to analyse the charts.</p>
+                        <div class="ai-panel-body" id="aiOutput" style="display:none;"></div>
+                        <button class="btn btn-ai" id="aiBtn" onclick="getAiSummary()" disabled>
+                            <i class="fas fa-wand-magic-sparkles" id="aiIcon"></i> AI Summary
+                        </button>
+                    </div>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+
+    </div>
+
+    <script>
+    const BASE_URL = "{{ BASE_URL }}";
+    const DAY_NAMES = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+
+    function toggleCategory(id) {
+        const header = document.getElementById(id + 'Header');
+        const body   = document.getElementById(id + 'Body');
+        const isOpen = body.classList.contains('open');
+        header.classList.toggle('open', !isOpen);
+        body.classList.toggle('open', !isOpen);
+        if (!isOpen) {
+            // Trigger chart resize after the section becomes visible
+            setTimeout(() => {
+                [ordersChart, monthlyChart, weeklyChart,
+                 sessionsMonthlyChart, sessionsWeeklyChart, sessionsDailyChart]
+                    .forEach(c => c && c.resize());
+            }, 10);
+        }
+    }
+    const BG_GREEN = 'rgba(147, 196, 125, 0.30)';
+    const BG_RED   = 'rgba(224, 102, 102, 0.30)';
+
+    // Disable animations globally for all charts
+    Chart.defaults.animation = false;
+
+    let ordersChart = null;
+    let monthlyChart = null;
+    let weeklyChart = null;
+    let kpiSnapshot = null;
+
+    let sessionsMonthlyChart = null;
+    let sessionsWeeklyChart = null;
+    let sessionsDailyChart = null;
+
+    function loadAll() {
+        const btn    = document.getElementById('loadBtn');
+        const icon   = document.getElementById('loadIcon');
+        const status = document.getElementById('statusText');
+        btn.disabled = true;
+        icon.classList.add('fa-spin');
+        status.textContent = 'Loading...';
+
+        const snfPromise = fetch(BASE_URL + '/kpi/data').then(r => r.json());
+        const spPromise  = fetch(BASE_URL + '/kpi/sharepoint').then(r => r.json());
+
+        Promise.all([snfPromise, spPromise])
+            .then(([snf, sp]) => {
+                btn.disabled = false;
+                icon.classList.remove('fa-spin');
+
+                const errors = [];
+                if (snf.status !== 'ok') errors.push('Snowflake: ' + snf.message);
+                if (sp.status  !== 'ok') errors.push('SharePoint: ' + sp.message);
+                if (errors.length) { status.textContent = errors.join(' | '); return; }
+
+                renderMonthlyChart(snf);
+                renderWeeklyChart(snf);
+                renderDailyChart(snf);
+                kpiSnapshot = snf;
+                const aiBtn = document.getElementById('aiBtn');
+                if (aiBtn) {
+                    aiBtn.disabled = false;
+                    document.getElementById('aiPlaceholder').textContent = 'Click "AI Summary" to analyse the charts.';
+                }
+
+                const today = sp.today;
+                const dailyLabels = sp.dates.map(d => {
+                    const dt = new Date(d + 'T00:00:00');
+                    const dd = String(dt.getDate()).padStart(2, '0');
+                    const mm = String(dt.getMonth() + 1).padStart(2, '0');
+                    return DAY_NAMES[dt.getDay()] + ' ' + dd + '/' + mm;
+                });
+                const dailySessions = sp.daily_sessions.map((v, i) => sp.dates[i] <= today ? v : null);
+
+                sessionsMonthlyChart = buildSessionsChart('sessionsMonthlyChart', sp.monthly_labels, sp.monthly_sessions, sp.monthly_sessions_ly, snf.monthly_sessions_target, sessionsMonthlyChart);
+                sessionsWeeklyChart  = buildSessionsChart('sessionsWeeklyChart',  sp.weekly_labels,  sp.weekly_sessions,  sp.weekly_sessions_ly,  snf.weekly_sessions_target,  sessionsWeeklyChart, snf.weekly_n1_labels);
+                sessionsDailyChart   = buildSessionsChart('sessionsDailyChart',   dailyLabels,        dailySessions,        sp.daily_sessions_ly,   snf.sessions_target,         sessionsDailyChart);
+
+                status.textContent = 'Loaded';
+            })
+            .catch(err => {
+                btn.disabled = false;
+                icon.classList.remove('fa-spin');
+                status.textContent = 'Failed: ' + err;
+            });
+    }
+
+    // ── Y-range calculator ────────────────────────────────────────────────────
+    // seriesArrays: first N-1 are actual series, last is target (included in max but not min zoom)
+    function calcYRange(seriesArrays) {
+        const allVals = seriesArrays.flat().filter(v => v !== null && v !== undefined && !isNaN(v) && v > 0);
+        if (!allVals.length) return { yMin: 0, yMax: 100, unit: 20 };
+        // Use all series for min/mid, but ensure yMax covers every value
+        const dataMin = Math.min(...allVals);
+        const dataMax = Math.max(...allVals);
+        const dataMid = (dataMin + dataMax) / 2;
+        const halfSpan = Math.max((dataMax - dataMin) * 0.7, dataMid * 0.15, 5);
+        const rawMin = Math.max(0, dataMid - halfSpan);
+        const rawMax = Math.max(dataMid + halfSpan, dataMax * 1.05);
+        const unit = rawMax >= 2000 ? 200
+                   : rawMax >= 500  ? 100
+                   : rawMax >= 100  ? 20
+                   : rawMax >= 20   ? 10
+                   : 5;
+        return {
+            yMin: Math.max(0, Math.floor(rawMin / unit) * unit),
+            yMax: Math.ceil(rawMax / unit) * unit,
+            unit,
+        };
+    }
+
+    // ── Y-range calculator for thousands-scale (sessions) ────────────────────
+    function calcYRangeK(seriesArrays, targetArray) {
+        const toK = arr => (arr || []).map(v => (v !== null && v !== undefined && !isNaN(v) && v > 0) ? v / 1000 : null);
+        const kSeries = seriesArrays.map(toK);
+        const kTarget = toK(targetArray);
+        // Include target in range so yMax always covers the target line
+        const allVals = [...kSeries, kTarget].flat().filter(v => v !== null);
+        if (!allVals.length) return { yMin: 0, yMax: 10, unit: 1, kSeries, kTarget };
+        const seriesVals = kSeries.flat().filter(v => v !== null);
+        const vals = seriesVals.length ? seriesVals : allVals;
+        const dataMin = Math.min(...vals);
+        const dataMax = Math.max(...allVals);
+        const dataMid = (dataMin + dataMax) / 2;
+        const halfSpan = Math.max((dataMax - dataMin) * 0.7, dataMid * 0.15, 0.5);
+        const rawMin = Math.max(0, dataMid - halfSpan);
+        const rawMax = Math.max(dataMid + halfSpan, dataMax * 1.05);
+        const unit = rawMax >= 200 ? 20
+                   : rawMax >= 50  ? 10
+                   : rawMax >= 20  ? 5
+                   : rawMax >= 10  ? 2
+                   : 1;
+        return {
+            yMin: Math.max(0, Math.floor(rawMin / unit) * unit),
+            yMax: Math.ceil(rawMax / unit) * unit,
+            unit,
+            kSeries,
+            kTarget,
+        };
+    }
+
+    // ── Background shading plugin ─────────────────────────────────────────────
+    // Draws a smooth green/red filled area that follows the target line.
+    // Green above target, red below. Full green where target is null/0.
+    function makeBgPlugin(targetArr, yMin, yMax) {
+        return {
+            id: 'bgShading',
+            beforeDatasetsDraw(chart) {
+                const { ctx, chartArea: { left, right, top, bottom }, scales: { x, y } } = chart;
+                const n = targetArr.length;
+                if (!n) return;
+
+                // Build (px, targetPx) points for each label using the chart's x scale
+                const points = targetArr.map((t, i) => {
+                    const px = x.getPixelForValue(i);
+                    const hasTarget = t !== null && t !== undefined && t > 0;
+                    const tpx = hasTarget
+                        ? Math.min(Math.max(y.getPixelForValue(t), top), bottom)
+                        : top; // treat no-target as full-green (target at top)
+                    return { px, tpx, hasTarget };
+                });
+
+                ctx.save();
+
+                // Red area: polygon bottom=bottom, top follows target line
+                ctx.beginPath();
+                ctx.moveTo(points[0].px, bottom);
+                points.forEach(p => ctx.lineTo(p.px, p.tpx));
+                ctx.lineTo(points[n - 1].px, bottom);
+                ctx.closePath();
+                ctx.fillStyle = BG_RED;
+                ctx.fill();
+
+                // Green area: polygon bottom follows target line, top=top
+                ctx.beginPath();
+                ctx.moveTo(points[0].px, top);
+                points.forEach(p => ctx.lineTo(p.px, p.tpx));
+                ctx.lineTo(points[n - 1].px, top);
+                ctx.closePath();
+                ctx.fillStyle = BG_GREEN;
+                ctx.fill();
+
+                ctx.restore();
+            }
+        };
+    }
+
+    // ── Data-label plugin ─────────────────────────────────────────────────────
+    function makeDataLabelPlugin(id, dsLabel, fontSize) {
+        return {
+            id,
+            afterDatasetsDraw(chart) {
+                const dsIdx = chart.data.datasets.findIndex(d => d.label === dsLabel);
+                if (dsIdx < 0) return;
+                const meta = chart.getDatasetMeta(dsIdx);
+                const c2 = chart.ctx;
+                c2.save();
+                c2.font = `bold ${fontSize}px DM Sans, system-ui, sans-serif`;
+                c2.fillStyle = '#0f172a';
+                c2.textAlign = 'center';
+                c2.textBaseline = 'bottom';
+                meta.data.forEach((point, i) => {
+                    const v = chart.data.datasets[dsIdx].data[i];
+                    if (v === null || v === undefined) return;
+                    c2.fillText(String(v), point.x, point.y - 5);
+                });
+                c2.restore();
+            }
+        };
+    }
+
+    // ── Shared line chart builder ─────────────────────────────────────────────
+    function buildLineChart(canvasId, labels, ordersData, lyData, targetData, existingChart, yMin, yMax, unit, labelFontSize, n1Labels) {
+        const ctx = document.getElementById(canvasId).getContext('2d');
+        if (existingChart) existingChart.destroy();
+
+        return new Chart(ctx, {
+            type: 'line',
+            data: {
+                labels,
+                datasets: [
+                    {
+                        label: 'N-1',
+                        data: lyData,
+                        fill: false,
+                        borderColor: '#9ca3af',
+                        borderWidth: 1.5,
+                        borderDash: [5, 4],
+                        pointRadius: 0,
+                        tension: 0,
+                        spanGaps: true,
+                        order: 3,
+                    },
+                    {
+                        label: 'Target',
+                        data: targetData,
+                        fill: false,
+                        borderColor: '#e53e3e',
+                        borderWidth: 1.5,
+                        borderDash: [],
+                        pointRadius: 0,
+                        tension: 0,
+                        spanGaps: true,
+                        order: 2,
+                    },
+                    {
+                        label: 'Orders',
+                        data: ordersData,
+                        fill: false,
+                        borderColor: '#0d3d6e',
+                        borderWidth: 2.5,
+                        pointRadius: ctx => ctx.dataset.data[ctx.dataIndex] !== null ? 4 : 0,
+                        pointBackgroundColor: '#0d3d6e',
+                        pointBorderColor: '#fff',
+                        pointBorderWidth: 1.5,
+                        tension: 0,
+                        spanGaps: false,
+                        order: 1,
+                    },
+                ]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                interaction: { mode: 'index', intersect: false },
+                plugins: {
+                    legend: { display: false },
+                    tooltip: {
+                        callbacks: {
+                            label: ctx => {
+                                const v = ctx.parsed.y;
+                                if (v === null || isNaN(v)) return null;
+                                if (ctx.dataset.label === 'N-1' && n1Labels) {
+                                    return `N-1 (${n1Labels[ctx.dataIndex]}): ${v}`;
+                                }
+                                return ctx.dataset.label + ': ' + v;
+                            }
+                        }
+                    }
+                },
+                scales: {
+                    x: {
+                        grid: { color: 'rgba(0,0,0,0.06)' },
+                        ticks: { font: { size: 10 }, maxRotation: 45, minRotation: 30 }
+                    },
+                    y: {
+                        min: yMin,
+                        max: yMax,
+                        grid: { color: 'rgba(0,0,0,0.06)' },
+                        ticks: { font: { size: 10 }, stepSize: unit }
+                    }
+                }
+            },
+            plugins: [
+                makeBgPlugin(targetData, yMin, yMax),
+                makeDataLabelPlugin(canvasId + 'Labels', 'Orders', labelFontSize)
+            ]
+        });
+    }
+
+    // ── Monthly chart ─────────────────────────────────────────────────────────
+    function renderMonthlyChart(data) {
+        const { yMin, yMax, unit } = calcYRange([data.monthly_orders, data.monthly_orders_ly, data.monthly_orders_target]);
+        monthlyChart = buildLineChart(
+            'monthlyChart', data.monthly_labels,
+            data.monthly_orders, data.monthly_orders_ly, data.monthly_orders_target,
+            monthlyChart, yMin, yMax, unit, 10
+        );
+    }
+
+    // ── Weekly chart ──────────────────────────────────────────────────────────
+    function renderWeeklyChart(data) {
+        const { yMin, yMax, unit } = calcYRange([data.weekly_orders, data.weekly_orders_ly, data.weekly_orders_target]);
+        weeklyChart = buildLineChart(
+            'weeklyChart', data.weekly_labels,
+            data.weekly_orders, data.weekly_orders_ly, data.weekly_orders_target,
+            weeklyChart, yMin, yMax, unit, 10, data.weekly_n1_labels
+        );
+    }
+
+    // ── Daily chart ───────────────────────────────────────────────────────────
+    function renderDailyChart(data) {
+        const dates      = data.dates;
+        const today      = data.today;
+        const ordersPast = data.orders.map((v, i) => dates[i] <= today ? v : null);
+
+        const labels = dates.map(d => {
+            const dt = new Date(d + 'T00:00:00');
+            const dd = String(dt.getDate()).padStart(2, '0');
+            const mm = String(dt.getMonth() + 1).padStart(2, '0');
+            return DAY_NAMES[dt.getDay()] + ' ' + dd + '/' + mm;
+        });
+
+        const { yMin, yMax, unit } = calcYRange([ordersPast, data.orders_ly, data.orders_target]);
+        ordersChart = buildLineChart(
+            'ordersChart', labels,
+            ordersPast, data.orders_ly, data.orders_target,
+            ordersChart, yMin, yMax, unit, 11
+        );
+    }
+
+    // ── Sessions chart builder (values in thousands) ──────────────────────────
+    function buildSessionsChart(canvasId, labels, sessionsData, lyData, targetData, existingChart, n1Labels) {
+        const { yMin, yMax, unit, kSeries, kTarget } = calcYRangeK([sessionsData, lyData], targetData);
+        const [kSessions, kLy] = kSeries;
+        const ctx = document.getElementById(canvasId).getContext('2d');
+        if (existingChart) existingChart.destroy();
+
+        return new Chart(ctx, {
+            type: 'line',
+            data: {
+                labels,
+                datasets: [
+                    {
+                        label: 'N-1',
+                        data: kLy,
+                        fill: false,
+                        borderColor: '#9ca3af',
+                        borderWidth: 1.5,
+                        borderDash: [5, 4],
+                        pointRadius: 0,
+                        tension: 0,
+                        spanGaps: true,
+                        order: 3,
+                    },
+                    {
+                        label: 'Target',
+                        data: kTarget,
+                        fill: false,
+                        borderColor: '#e53e3e',
+                        borderWidth: 1.5,
+                        borderDash: [],
+                        pointRadius: 0,
+                        tension: 0,
+                        spanGaps: true,
+                        order: 2,
+                    },
+                    {
+                        label: 'Sessions',
+                        data: kSessions,
+                        fill: false,
+                        borderColor: '#004a8f',
+                        borderWidth: 2.5,
+                        pointRadius: ctx => ctx.dataset.data[ctx.dataIndex] !== null ? 4 : 0,
+                        pointBackgroundColor: '#004a8f',
+                        pointBorderColor: '#fff',
+                        pointBorderWidth: 1.5,
+                        tension: 0,
+                        spanGaps: false,
+                        order: 1,
+                    },
+                ]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                interaction: { mode: 'index', intersect: false },
+                plugins: {
+                    legend: { display: false },
+                    tooltip: {
+                        callbacks: {
+                            label: ctx => {
+                                const v = ctx.parsed.y;
+                                if (v === null || isNaN(v)) return null;
+                                if (ctx.dataset.label === 'N-1' && n1Labels) {
+                                    return `N-1 (${n1Labels[ctx.dataIndex]}): ${v.toFixed(1)}k`;
+                                }
+                                return ctx.dataset.label + ': ' + v.toFixed(1) + 'k';
+                            }
+                        }
+                    }
+                },
+                scales: {
+                    x: { grid: { color: 'rgba(0,0,0,0.06)' }, ticks: { font: { size: 10 }, maxRotation: 45, minRotation: 30 } },
+                    y: { min: yMin, max: yMax, grid: { color: 'rgba(0,0,0,0.06)' }, ticks: { font: { size: 10 }, stepSize: unit, callback: v => v + 'k' } }
+                }
+            },
+            plugins: [makeBgPlugin(kTarget, yMin, yMax)]
+        });
+    }
+
+    // ── AI Summary ────────────────────────────────────────────────────────────
+    async function getAiSummary() {
+        if (!kpiSnapshot) return;
+        const btn  = document.getElementById('aiBtn');
+        const icon = document.getElementById('aiIcon');
+        const out  = document.getElementById('aiOutput');
+        const placeholder = document.getElementById('aiPlaceholder');
+
+        btn.disabled = true;
+        icon.className = 'fas fa-spinner fa-spin';
+        placeholder.style.display = 'none';
+        out.style.display = 'none';
+        out.textContent = '';
+
+        const d = kpiSnapshot;
+        const today = d.today;
+
+        const dailyRows = d.dates
+            .map((date, i) => ({ date, orders: d.orders[i], ly: d.orders_ly[i] }))
+            .filter(r => r.date <= today && r.orders !== null);
+
+        const prompt = `You are analysing Apex (online car sales) order data for Car Supermarket UK. Today is ${today}. Give exactly 2-3 short bullet points. Lead with the headline YoY trend (up or down, by how much). Call out one standout week or month. Flag anything unusual. Numbers only where they add meaning. No waffle, no headers, no intro sentence.
+
+Monthly orders (current year vs last year, last 13 months):
+${d.monthly_labels.map((lbl, i) => `${lbl}: ${d.monthly_orders[i] ?? 'in progress'} (LY: ${d.monthly_orders_ly[i] ?? 'n/a'})`).join('\n')}
+
+Weekly orders (current year vs last year, last 10 weeks):
+${d.weekly_labels.map((lbl, i) => `${lbl}: ${d.weekly_orders[i] ?? 'in progress'} (LY: ${d.weekly_orders_ly[i] ?? 'n/a'})`).join('\n')}
+
+Daily orders (last 24 days):
+${dailyRows.map(r => `${r.date}: ${r.orders} (LY: ${r.ly ?? 'n/a'})`).join('\n')}`;
+
+        try {
+            const resp = await fetch(BASE_URL + '/kpi/ai-summary', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ prompt })
+            });
+            const json = await resp.json();
+            if (!resp.ok || json.status !== 'ok') throw new Error(json.message || resp.statusText);
+            out.textContent = (json.summary || '').trim();
+            out.style.display = 'block';
+        } catch (err) {
+            out.textContent = 'Error: ' + err.message;
+            out.style.display = 'block';
+        } finally {
+            btn.disabled = false;
+            icon.className = 'fas fa-wand-magic-sparkles';
+        }
+    }
+    </script>
+</body>
+</html>
