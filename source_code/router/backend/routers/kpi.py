@@ -440,3 +440,91 @@ def kpi_sharepoint(request: Request, user: str = Depends(get_current_user)):
     except Exception as e:
         logger.error("KPI SharePoint fetch failed: %s", e)
         return {"status": "error", "message": str(e)}
+
+
+@router.get("/weekly-business-review", response_class=HTMLResponse)
+def weekly_business_review_page(request: Request, user: str = Depends(get_current_user)):
+    if user != 'tdrayson':
+        return RedirectResponse(url=BASE_URL + "/home", status_code=303)
+    _track(request, 'page_view', '/weekly-business-review')
+    return templates.TemplateResponse("weekly_business_review.html", {"request": request, "user": user, "BASE_URL": BASE_URL})
+
+
+@router.get("/weekly-business-review/data")
+def weekly_business_review_data(request: Request, user: str = Depends(get_current_user)):
+    """Return monthly orders: last 3 complete months, current month, next 3 months."""
+    if user != 'tdrayson':
+        raise HTTPException(status_code=403)
+    try:
+        import calendar
+        today = datetime.date.today()
+        first_of_this_month = today.replace(day=1)
+
+        def _shift_month(d: datetime.date, n: int) -> datetime.date:
+            m = d.month - 1 + n
+            return datetime.date(d.year + m // 12, m % 12 + 1, 1)
+
+        month_firsts = [_shift_month(first_of_this_month, n) for n in range(-3, 4)]
+        fetch_start = month_firsts[0]
+        last_mf = month_firsts[-1]
+        fetch_end = datetime.date(last_mf.year, last_mf.month, calendar.monthrange(last_mf.year, last_mf.month)[1])
+
+        with SnowflakeClient() as sf:
+            rows, cols = sf.execute("""
+                SELECT
+                    SNAPSHOT_DATE,
+                    ORDERS,
+                    ORDERS_N_MINUS_1,
+                    ORDERS_TARGET
+                FROM PROD_CARSUPERMARKET_DB.product_slt_kpis.daily_summary
+                WHERE SNAPSHOT_DATE >= %s AND SNAPSHOT_DATE <= %s
+                ORDER BY SNAPSHOT_DATE
+            """, [str(fetch_start), str(fetch_end)])
+
+        col_map = {c.upper(): i for i, c in enumerate(cols)}
+
+        def _col(r, name):
+            i = col_map.get(name)
+            return r[i] if i is not None else None
+
+        by_date: dict[str, dict] = {}
+        for r in rows:
+            d = _col(r, 'SNAPSHOT_DATE')
+            d = d.isoformat() if isinstance(d, datetime.date) else str(d)[:10]
+            by_date[d] = {
+                'orders':         _col(r, 'ORDERS'),
+                'orders_n1':      _col(r, 'ORDERS_N_MINUS_1'),
+                'orders_target':  _col(r, 'ORDERS_TARGET'),
+            }
+
+        def _int(val):
+            try:
+                return int(val) if val is not None else None
+            except (TypeError, ValueError):
+                return None
+
+        def _sum_month(mf: datetime.date, field: str):
+            """Sum field over the month; None if the month has no data at all."""
+            days_in = calendar.monthrange(mf.year, mf.month)[1]
+            vals = [_int(by_date.get(datetime.date(mf.year, mf.month, day).isoformat(), {}).get(field)) for day in range(1, days_in + 1)]
+            known = [v for v in vals if v is not None]
+            return sum(known) if known else None
+
+        month_abbrs = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']
+
+        monthly_labels        = [month_abbrs[mf.month - 1] + ' ' + str(mf.year)[2:] for mf in month_firsts]
+        monthly_orders        = [_sum_month(mf, 'orders') if mf < first_of_this_month else None for mf in month_firsts]
+        monthly_orders_ly     = [_sum_month(mf, 'orders_n1')     for mf in month_firsts]
+        monthly_orders_target = [_sum_month(mf, 'orders_target') for mf in month_firsts]
+
+        return {
+            "status": "ok",
+            "today": today.isoformat(),
+            "monthly_labels": monthly_labels,
+            "monthly_orders": monthly_orders,
+            "monthly_orders_ly": monthly_orders_ly,
+            "monthly_orders_target": monthly_orders_target,
+        }
+    except Exception as e:
+        logger.error(f"Weekly Business Review data failed: {e}")
+        return {"status": "error", "message": str(e)}
