@@ -18,7 +18,7 @@ from utils.secrets_manager_client import get_secret
 from utils.lambda_http import LambdaRequestsManager
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import Response
-import router
+import routers
 
 
 app = FastAPI()
@@ -145,7 +145,7 @@ def test_execution(data: dict):
     return {}
 
 
-app.include_router(router.router)
+app.include_router(routers.router)
 app.add_exception_handler(HTTPException, http_exception_handler)
 app.add_exception_handler(Exception, unhandled_exception_handler)
 app.mount("/static", StaticFiles(directory=os.path.join(os.path.dirname(__file__), "static")), name="static")
