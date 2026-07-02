@@ -1129,11 +1129,13 @@ function _applyNotOnApex() {
     });
 }
 
-function applyDbsPurchases(p, vehicles, total) {
+function applyDbsPurchases(p, vehicles, total, noRrp) {
     dbsPurchases = p;
     if (vehicles) dbsVehicles = vehicles;
     const badge = document.getElementById('dbs-total-badge');
-    if (badge && total != null) badge.textContent = total + ' vehicles not on stock';
+    if (badge && total != null) {
+        badge.textContent = total + ' vehicles not on stock' + (noRrp != null ? ` (${noRrp} no RRP)` : '');
+    }
     _applyNotOnApex();
 }
 
@@ -1179,7 +1181,7 @@ function patchDailyBuyersSheet() {
         .then(r => r.json())
         .then(resp => {
             if (resp.status !== 'ok') return;
-            applyDbsPurchases(resp.purchases, resp.vehicles || [], resp.total);
+            applyDbsPurchases(resp.purchases, resp.vehicles || [], resp.total, resp.no_rrp);
             applyCbPurchases(cbPurchases);
             renderTable();
             sortCol = 21; sortDir = 1;
@@ -1192,7 +1194,7 @@ function patchDailyBuyersSheet() {
 }
 
 /* ── Cars Bought patch ───────────────────────────────────── */
-function _setCbUpdatedAt(fetchedAt, total) {
+function _setCbUpdatedAt(fetchedAt, total, noRrp) {
     const el = document.getElementById('cb-status');
     if (!el) return;
     if (fetchedAt) {
@@ -1201,7 +1203,9 @@ function _setCbUpdatedAt(fetchedAt, total) {
         el.innerHTML = `${CB_LABEL} <span class="text-muted" style="font-size:0.85em">updated ${hhmm}</span>`;
     }
     const badge = document.getElementById('cb-total-badge');
-    if (badge && total != null) badge.textContent = total + ' vehicles not on stock';
+    if (badge && total != null) {
+        badge.textContent = total + ' vehicles not on stock' + (noRrp != null ? ` (${noRrp} no RRP)` : '');
+    }
 }
 
 function patchCarsBought() {
@@ -1215,7 +1219,7 @@ function patchCarsBought() {
             sortCol = 21; sortDir = 1;
             sortTable(21, 'num');
             setStatus('cb-status', CB_LABEL, 'done');
-            _setCbUpdatedAt(resp.fetched_at, resp.total);
+            _setCbUpdatedAt(resp.fetched_at, resp.total, resp.no_rrp);
             _cbDone = true; _maybeShowExportBtn();
         })
         .catch(() => setStatus('cb-status', CB_LABEL, 'error'));
@@ -1235,7 +1239,7 @@ function loadCBFromCache() {
             renderTable();
             sortCol = 21; sortDir = 1;
             sortTable(21, 'num');
-            _setCbUpdatedAt(resp.fetched_at, resp.total);
+            _setCbUpdatedAt(resp.fetched_at, resp.total, resp.no_rrp);
             _cbDone = true; _maybeShowExportBtn();
         })
         .catch(() => {});
@@ -1392,7 +1396,7 @@ function loadDbsFromCache() {
                 patchDailyBuyersSheet();
                 return;
             }
-            applyDbsPurchases(resp.purchases, resp.vehicles || [], resp.total);
+            applyDbsPurchases(resp.purchases, resp.vehicles || [], resp.total, resp.no_rrp);
             applyCbPurchases(cbPurchases);
             renderTable();
             sortCol = 21; sortDir = 1;
@@ -1724,47 +1728,47 @@ function _renderModalRows() {
                         a.className = 'apex-link';
                         td.appendChild(a);
                     }
-                } else if (i === 8) {
+                } else if (i === 9) {
                     td.textContent = v.supplier || '—';
                     if (!v.supplier) td.style.color = '#9ca3af';
-                } else if (i === 9) {
+                } else if (i === 10) {
                     td.textContent = v.dor || '—';
                     if (!v.dor) td.style.color = '#9ca3af';
-                } else if (i === 10) {
+                } else if (i === 11) {
                     td.textContent = v.mileage != null ? Math.round(v.mileage).toLocaleString() : '—';
                     td.style.textAlign = 'right';
                     if (v.mileage == null) td.style.color = '#9ca3af';
-                } else if (i === 13) {
+                } else if (i === 14) {
                     td.textContent = v.siv != null ? fmtGBP(v.siv) : '—';
                     td.style.textAlign = 'right';
                     if (v.siv == null) td.style.color = '#9ca3af';
-                } else if (i === 14) {
+                } else if (i === 15) {
                     td.textContent = v.cap_live != null ? fmtGBP(v.cap_live) : '—';
                     td.style.textAlign = 'right';
                     if (v.cap_live == null) td.style.color = '#9ca3af';
-                } else if (i === 15) {
+                } else if (i === 16) {
                     const capPct = (v.siv != null && v.cap_live != null && v.cap_live !== 0) ? ((v.siv / v.cap_live) * 100).toFixed(1) + '%' : '—';
                     td.textContent = capPct;
                     td.style.textAlign = 'right';
                     if (capPct === '—') td.style.color = '#9ca3af';
-                } else if (i === 16) {
+                } else if (i === 17) {
                     // Sell price = RRP 0% if interest free, else RRP
                     const sellVal = (v.rrp0 != null && v.rrp0 > 0) ? v.rrp0 : v.rrp;
                     td.textContent = sellVal != null ? fmtGBP(sellVal) : '—';
                     td.style.textAlign = 'right';
                     if (sellVal == null) td.style.color = '#9ca3af';
-                } else if (i === 17) {
+                } else if (i === 18) {
                     td.textContent = v.at_ptm != null ? fmtGBP(v.at_ptm) : '—';
                     td.style.textAlign = 'right';
                     if (v.at_ptm == null) td.style.color = '#9ca3af';
-                } else if (i === 18) {
+                } else if (i === 19) {
                     // AT PTM% = RRP (or RRP 0%) / AT PTM
                     const sellVal = (v.rrp0 != null && v.rrp0 > 0) ? v.rrp0 : v.rrp;
                     const atPct = (sellVal != null && v.at_ptm != null && v.at_ptm !== 0) ? fmtPct((sellVal / v.at_ptm) * 100) : '—';
                     td.textContent = atPct;
                     td.style.textAlign = 'right';
                     if (atPct === '—') td.style.color = '#9ca3af';
-                } else if (i === 19) {
+                } else if (i === 20) {
                     td.textContent = v.at_rating != null ? fmtInt(v.at_rating) : '—';
                     td.style.textAlign = 'right';
                     if (v.at_rating == null) td.style.color = '#9ca3af';
@@ -1804,6 +1808,7 @@ function _renderModalRows() {
         addTd('', null, true); addTd('', null, true); addTd('', null, true);
         addTd('', null, true); addTd('', null, true); addTd('', null, true);
         addTd('', null, true); addTd('', null, true); addTd('', null, true);
+        addTd('', null, true);
         addTd(label, 'left');
         addTd(avgMile   != null ? avgMile.toLocaleString()    : '—', 'right');
         addTd(avgDIS    != null ? fmtInt(avgDIS)              : '—', 'right');
