@@ -86,9 +86,9 @@
     <div class="page-content">
         <div class="charts-row">
             <div class="chart-card">
-                <h2>Apex Orders - month</h2>
+                <h2>Net Deliveries B2C</h2>
                 <div class="chart-legend">
-                    <div class="legend-item"><span class="legend-dot" style="background:#0d3d6e;height:3px;"></span> Orders</div>
+                    <div class="legend-item"><span class="legend-dot" style="background:#0d3d6e;height:3px;"></span> Net Deliveries B2C</div>
                     <div class="legend-item"><span class="legend-dot-dashed"></span> N-1</div>
                     <div class="legend-item"><span style="width:14px;height:0;border-top:2px solid #e53e3e;display:inline-block;"></span> Target</div>
                 </div>
@@ -159,7 +159,7 @@
 
     // ── Background shading plugin ─────────────────────────────────────────────
     // Draws a smooth green/red filled area that follows the target line.
-    // Green above target, red below. Full green where target is null/0.
+    // Green above target, red below. No shading where target is null/0.
     function makeBgPlugin(targetArr, yMin, yMax) {
         return {
             id: 'bgShading',
@@ -172,31 +172,41 @@
                 const points = targetArr.map((t, i) => {
                     const px = x.getPixelForValue(i);
                     const hasTarget = t !== null && t !== undefined && t > 0;
-                    const tpx = hasTarget
-                        ? Math.min(Math.max(y.getPixelForValue(t), top), bottom)
-                        : top; // treat no-target as full-green (target at top)
+                    const tpx = hasTarget ? Math.min(Math.max(y.getPixelForValue(t), top), bottom) : null;
                     return { px, tpx, hasTarget };
                 });
 
                 ctx.save();
 
-                // Red area: polygon bottom=bottom, top follows target line
-                ctx.beginPath();
-                ctx.moveTo(points[0].px, bottom);
-                points.forEach(p => ctx.lineTo(p.px, p.tpx));
-                ctx.lineTo(points[n - 1].px, bottom);
-                ctx.closePath();
-                ctx.fillStyle = BG_RED;
-                ctx.fill();
+                // Shade only contiguous runs of points that have a target
+                let run = [];
+                const flushRun = () => {
+                    if (run.length < 2) { run = []; return; }
+                    const first = run[0], last = run[run.length - 1];
 
-                // Green area: polygon bottom follows target line, top=top
-                ctx.beginPath();
-                ctx.moveTo(points[0].px, top);
-                points.forEach(p => ctx.lineTo(p.px, p.tpx));
-                ctx.lineTo(points[n - 1].px, top);
-                ctx.closePath();
-                ctx.fillStyle = BG_GREEN;
-                ctx.fill();
+                    ctx.beginPath();
+                    ctx.moveTo(first.px, bottom);
+                    run.forEach(p => ctx.lineTo(p.px, p.tpx));
+                    ctx.lineTo(last.px, bottom);
+                    ctx.closePath();
+                    ctx.fillStyle = BG_RED;
+                    ctx.fill();
+
+                    ctx.beginPath();
+                    ctx.moveTo(first.px, top);
+                    run.forEach(p => ctx.lineTo(p.px, p.tpx));
+                    ctx.lineTo(last.px, top);
+                    ctx.closePath();
+                    ctx.fillStyle = BG_GREEN;
+                    ctx.fill();
+
+                    run = [];
+                };
+                points.forEach(p => {
+                    if (p.hasTarget) { run.push(p); }
+                    else { flushRun(); }
+                });
+                flushRun();
 
                 ctx.restore();
             }
@@ -204,23 +214,26 @@
     }
 
     // ── Data-label plugin ─────────────────────────────────────────────────────
+    // Labels every dataset matching dsLabel (there may be two: the history
+    // line and the disconnected current-month dot).
     function makeDataLabelPlugin(id, dsLabel, fontSize) {
         return {
             id,
             afterDatasetsDraw(chart) {
-                const dsIdx = chart.data.datasets.findIndex(d => d.label === dsLabel);
-                if (dsIdx < 0) return;
-                const meta = chart.getDatasetMeta(dsIdx);
                 const c2 = chart.ctx;
                 c2.save();
                 c2.font = `bold ${fontSize}px DM Sans, system-ui, sans-serif`;
                 c2.fillStyle = '#0f172a';
                 c2.textAlign = 'center';
                 c2.textBaseline = 'bottom';
-                meta.data.forEach((point, i) => {
-                    const v = chart.data.datasets[dsIdx].data[i];
-                    if (v === null || v === undefined) return;
-                    c2.fillText(String(v), point.x, point.y - 5);
+                chart.data.datasets.forEach((ds, dsIdx) => {
+                    if (ds.label !== dsLabel) return;
+                    const meta = chart.getDatasetMeta(dsIdx);
+                    meta.data.forEach((point, i) => {
+                        const v = ds.data[i];
+                        if (v === null || v === undefined) return;
+                        c2.fillText(String(v), point.x, point.y - 5);
+                    });
                 });
                 c2.restore();
             }
@@ -228,9 +241,16 @@
     }
 
     // ── Shared line chart builder ─────────────────────────────────────────────
+    // The last non-null point in ordersData is treated as the current/forecast
+    // month and rendered as a disconnected dot (its own dataset) rather than
+    // joined to the history line.
     function buildLineChart(canvasId, labels, ordersData, lyData, targetData, existingChart, yMin, yMax, unit, labelFontSize, n1Labels) {
         const ctx = document.getElementById(canvasId).getContext('2d');
         if (existingChart) existingChart.destroy();
+
+        const lastIdx = ordersData.reduce((acc, v, i) => v !== null && v !== undefined ? i : acc, -1);
+        const historyData = ordersData.map((v, i) => i === lastIdx ? null : v);
+        const currentData = ordersData.map((v, i) => i === lastIdx ? v : null);
 
         return new Chart(ctx, {
             type: 'line',
@@ -263,7 +283,7 @@
                     },
                     {
                         label: 'Orders',
-                        data: ordersData,
+                        data: historyData,
                         fill: false,
                         borderColor: '#0d3d6e',
                         borderWidth: 2.5,
@@ -273,6 +293,16 @@
                         pointBorderWidth: 1.5,
                         tension: 0,
                         spanGaps: false,
+                        order: 1,
+                    },
+                    {
+                        label: 'Orders',
+                        data: currentData,
+                        showLine: false,
+                        pointRadius: ctx => ctx.dataset.data[ctx.dataIndex] !== null ? 4 : 0,
+                        pointBackgroundColor: '#0d3d6e',
+                        pointBorderColor: '#fff',
+                        pointBorderWidth: 1.5,
                         order: 1,
                     },
                 ]
@@ -318,10 +348,10 @@
 
     // ── Monthly chart ─────────────────────────────────────────────────────────
     function renderMonthlyChart(data) {
-        const { yMin, yMax, unit } = calcYRange([data.monthly_orders, data.monthly_orders_ly, data.monthly_orders_target]);
+        const { yMin, yMax, unit } = calcYRange([data.monthly_b2c_units, data.monthly_b2c_units_ly, data.monthly_b2c_units_target]);
         monthlyChart = buildLineChart(
             'monthlyChart', data.monthly_labels,
-            data.monthly_orders, data.monthly_orders_ly, data.monthly_orders_target,
+            data.monthly_b2c_units, data.monthly_b2c_units_ly, data.monthly_b2c_units_target,
             monthlyChart, yMin, yMax, unit, 10
         );
     }

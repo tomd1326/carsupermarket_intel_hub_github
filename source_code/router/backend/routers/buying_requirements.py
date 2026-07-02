@@ -101,7 +101,8 @@ def buying_requirements_dbs_purchases(request: Request, user: str = Depends(get_
             fetched_at  = _dbs_cache.get("fetched_at")
             vehicles    = _dbs_cache.get("vehicles") or []
             total_vrms  = _dbs_cache.get("total_vrms", len(vehicles))
-        return {"status": "ok", "purchases": out, "vehicles": vehicles, "total": total_vrms, "fetched_at": fetched_at}
+            no_rrp      = _dbs_cache.get("no_rrp")
+        return {"status": "ok", "purchases": out, "vehicles": vehicles, "total": total_vrms, "no_rrp": no_rrp, "fetched_at": fetched_at}
     except Exception as e:
         logger.error(f"Buying requirements DBS purchases failed: {e}")
         return {"status": "error", "message": str(e)}
@@ -115,16 +116,17 @@ def buying_requirements_dbs_purchases_cached(request: Request, user: str = Depen
     try:
         result = _get_dbs_purchases_cached()
         if result is None:
-            return {"status": "ok", "purchases": {}, "vehicles": [], "total": None, "fetched_at": None}
+            return {"status": "ok", "purchases": {}, "vehicles": [], "total": None, "no_rrp": None, "fetched_at": None}
         purchases, vehicles = result
         if purchases and isinstance(next(iter(purchases)), tuple):
             purchases = {f"{k[0]}|{k[1]}": v for k, v in purchases.items()}
         with _cache_lock:
             fetched_at = _dbs_cache.get("fetched_at")
             total_vrms = _dbs_cache.get("total_vrms", len(vehicles))
+            no_rrp     = _dbs_cache.get("no_rrp")
         if fetched_at is None:
             fetched_at = _load_dbs_fetched_at_from_s3()
-        return {"status": "ok", "purchases": purchases, "vehicles": vehicles, "total": total_vrms, "fetched_at": fetched_at}
+        return {"status": "ok", "purchases": purchases, "vehicles": vehicles, "total": total_vrms, "no_rrp": no_rrp, "fetched_at": fetched_at}
     except Exception as e:
         logger.error(f"Buying requirements DBS cached failed: {e}")
         return {"status": "error", "message": str(e)}
@@ -142,7 +144,8 @@ def buying_requirements_cb_purchases(request: Request, user: str = Depends(get_c
             fetched_at  = _cb_cache.get("fetched_at")
             vehicles    = _cb_cache.get("vehicles") or []
             total_vrms  = _cb_cache.get("total_vrms", sum(purchases.values()))
-        return {"status": "ok", "purchases": out, "vehicles": vehicles, "total": total_vrms, "fetched_at": fetched_at}
+            no_rrp      = _cb_cache.get("no_rrp")
+        return {"status": "ok", "purchases": out, "vehicles": vehicles, "total": total_vrms, "no_rrp": no_rrp, "fetched_at": fetched_at}
     except Exception as e:
         logger.error(f"Buying requirements CB purchases failed: {e}")
         return {"status": "error", "message": str(e)}
@@ -156,14 +159,15 @@ def buying_requirements_cb_purchases_cached(request: Request, user: str = Depend
     try:
         result = _get_cb_purchases_cached()
         if result is None:
-            return {"status": "ok", "purchases": {}, "vehicles": [], "total": None, "fetched_at": None}
+            return {"status": "ok", "purchases": {}, "vehicles": [], "total": None, "no_rrp": None, "fetched_at": None}
         purchases, vehicles = result
         if purchases and isinstance(next(iter(purchases)), tuple):
             purchases = {f"{k[0]}|{k[1]}": v for k, v in purchases.items()}
         with _cache_lock:
             fetched_at = _cb_cache.get("fetched_at")
             total_vrms = _cb_cache.get("total_vrms", sum(purchases.values()) if purchases else 0)
-        return {"status": "ok", "purchases": purchases, "vehicles": vehicles, "total": total_vrms, "fetched_at": fetched_at}
+            no_rrp     = _cb_cache.get("no_rrp")
+        return {"status": "ok", "purchases": purchases, "vehicles": vehicles, "total": total_vrms, "no_rrp": no_rrp, "fetched_at": fetched_at}
     except Exception as e:
         logger.error(f"Buying requirements CB cached failed: {e}")
         return {"status": "error", "message": str(e)}
@@ -276,8 +280,8 @@ def _safe_float(v):
 #   recent scheduled window. Persisted to S3 so Lambda cold starts are instant.
 # SharePoint: live buyer activity — 30-min TTL, in-process + S3.
 _sf_cache: dict = {"rows": None, "cached_at": 0.0}   # cached_at = unix epoch (wall clock)
-_dbs_cache: dict = {"purchases": None, "vehicles": None, "expires": 0.0, "fetched_at": None}
-_cb_cache: dict  = {"purchases": None, "vehicles": None, "expires": 0.0, "fetched_at": None}
+_dbs_cache: dict = {"purchases": None, "vehicles": None, "expires": 0.0, "fetched_at": None, "no_rrp": None}
+_cb_cache: dict  = {"purchases": None, "vehicles": None, "expires": 0.0, "fetched_at": None, "no_rrp": None}
 _cache_lock = threading.Lock()
 
 # dbt run hours (UK local time) — data available 15 min after each
@@ -390,11 +394,12 @@ def _load_dbs_cache_from_s3() -> tuple[dict, list] | None:
     vehicles  = payload.get("vehicles", [])
     with _cache_lock:
         _dbs_cache["total_vrms"] = payload.get("total_vrms", len(vehicles))
+        _dbs_cache["no_rrp"]     = payload.get("no_rrp")
     return purchases, vehicles
 
 
-def _save_dbs_cache_to_s3(purchases: dict, vehicles: list, ttl: int = _DBS_TTL_SECONDS, total_vrms: int = None) -> None:
-    _s3_save(_DBS_S3_KEY, {"purchases": {f"{k[0]}|{k[1]}": v for k, v in purchases.items()}, "vehicles": vehicles, "total_vrms": total_vrms, "fetched_at": time.time()}, ttl)
+def _save_dbs_cache_to_s3(purchases: dict, vehicles: list, ttl: int = _DBS_TTL_SECONDS, total_vrms: int = None, no_rrp: int = None) -> None:
+    _s3_save(_DBS_S3_KEY, {"purchases": {f"{k[0]}|{k[1]}": v for k, v in purchases.items()}, "vehicles": vehicles, "total_vrms": total_vrms, "no_rrp": no_rrp, "fetched_at": time.time()}, ttl)
 
 
 def _load_dbs_fetched_at_from_s3() -> float | None:
@@ -758,9 +763,10 @@ def _get_dbs_purchases(force: bool = False) -> dict:
         _dbs_cache["purchases"]  = purchases
         _dbs_cache["vehicles"]   = vehicles
         _dbs_cache["total_vrms"] = total_dbs_vrms
+        _dbs_cache["no_rrp"]     = skipped_no_rrp
         _dbs_cache["expires"]    = time.monotonic() + _DBS_TTL_SECONDS
         _dbs_cache["fetched_at"] = fetched_at
-    _save_dbs_cache_to_s3(purchases, vehicles, _DBS_S3_TTL_SECONDS, total_dbs_vrms)
+    _save_dbs_cache_to_s3(purchases, vehicles, _DBS_S3_TTL_SECONDS, total_dbs_vrms, skipped_no_rrp)
     return purchases
 
 
@@ -778,11 +784,14 @@ def _load_cb_cache_from_s3() -> tuple[dict, list] | None:
     payload = _s3_load(_CB_S3_KEY)
     if not payload:
         return None
+    with _cache_lock:
+        _cb_cache["total_vrms"] = payload.get("total_vrms")
+        _cb_cache["no_rrp"]     = payload.get("no_rrp")
     return payload.get("purchases", {}), payload.get("vehicles", [])
 
 
-def _save_cb_cache_to_s3(purchases: dict, vehicles: list, fetched_at: float, ttl: int = _CB_S3_TTL_SECONDS) -> None:
-    _s3_save(_CB_S3_KEY, {"purchases": {f"{k[0]}|{k[1]}": v for k, v in purchases.items()}, "vehicles": vehicles, "fetched_at": fetched_at}, ttl)
+def _save_cb_cache_to_s3(purchases: dict, vehicles: list, fetched_at: float, ttl: int = _CB_S3_TTL_SECONDS, total_vrms: int = None, no_rrp: int = None) -> None:
+    _s3_save(_CB_S3_KEY, {"purchases": {f"{k[0]}|{k[1]}": v for k, v in purchases.items()}, "vehicles": vehicles, "total_vrms": total_vrms, "no_rrp": no_rrp, "fetched_at": fetched_at}, ttl)
 
 
 class _CarsBoughtSharePointClient(SharePointClient):
@@ -977,9 +986,10 @@ def _get_cb_purchases(force: bool = False) -> dict:
         _cb_cache["purchases"]   = purchases
         _cb_cache["vehicles"]    = vehicles
         _cb_cache["total_vrms"]  = total_vrms
+        _cb_cache["no_rrp"]      = skipped_no_rrp
         _cb_cache["expires"]     = time.monotonic() + _CB_TTL_SECONDS
         _cb_cache["fetched_at"]  = fetched_at
-    _save_cb_cache_to_s3(purchases, vehicles, fetched_at, _CB_S3_TTL_SECONDS)
+    _save_cb_cache_to_s3(purchases, vehicles, fetched_at, _CB_S3_TTL_SECONDS, total_vrms, skipped_no_rrp)
     logger.info(f"Cars Bought: {total_vrms} unique VRMs, {sum(purchases.values())} in table ({len(purchases)} cap/band keys), skipped: {skipped_no_cap} no CAP ID, {skipped_no_rrp} no RRP, {skipped_no_sf} not in SF")
     return purchases
 

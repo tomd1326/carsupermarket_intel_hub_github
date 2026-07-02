@@ -36,12 +36,12 @@
 
         .charts-row {
             display: grid;
-            grid-template-columns: 32.5% 32.5% 35%;
+            grid-template-columns: 30.5fr 30.5fr 39fr;
             gap: 16px;
             align-items: start;
         }
         .charts-row.with-ai {
-            grid-template-columns: 1.1fr 1.1fr 1.8fr auto;
+            grid-template-columns: 1.02fr 1.02fr 1.96fr auto;
         }
 
         .btn-ai {
@@ -86,6 +86,20 @@
         .btn-load:disabled { opacity: 0.6; cursor: not-allowed; }
         .status-text { font-size: 0.82rem; color: #64748b; }
 
+        .btn-edit {
+            background: #fff; border: 1px solid #cbd5e1; color: #334155; font-weight: 700;
+            border-radius: 6px; padding: 7px 16px; font-size: 0.9rem;
+            display: inline-flex; align-items: center; gap: 7px;
+        }
+        .btn-edit:hover { background: #f1f5f9; color: #0f172a; }
+        .btn-apply {
+            background: #0d3d6e; border: none; color: #fff; font-weight: 700;
+            border-radius: 6px; padding: 7px 16px; font-size: 0.9rem;
+            display: inline-flex; align-items: center; gap: 7px;
+        }
+        .btn-apply:hover { background: #0a2f56; color: #fff; }
+        .btn-apply:disabled { opacity: 0.6; cursor: not-allowed; }
+
         .chart-legend {
             display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
             margin-bottom: 8px; font-size: 0.75rem; color: #475569;
@@ -108,6 +122,59 @@
         .category-body { display: none; margin-top: 12px; }
         .category-body.open { display: block; }
         .category-section { margin-bottom: 12px; }
+
+        .chart-row + .chart-row { margin-top: 16px; }
+
+        /* ── Edit mode ──────────────────────────────────────────────────────── */
+        .row-toolbar {
+            display: none;
+            align-items: center; gap: 8px;
+            margin-bottom: 8px; padding: 7px 12px;
+            background: #fffbeb; border: 1px dashed #f59e0b; border-radius: 8px;
+            font-size: 0.82rem; color: #475569;
+        }
+        body.edit-mode .row-toolbar { display: flex; }
+        .row-toolbar .row-title { font-weight: 700; color: #0f172a; }
+        .row-toolbar .row-desc { color: #94a3b8; font-size: 0.78rem; }
+        .row-toolbar .toolbar-right { margin-left: auto; display: flex; align-items: center; gap: 6px; }
+        .btn-toolbar {
+            background: #fff; border: 1px solid #cbd5e1; color: #334155;
+            border-radius: 6px; padding: 3px 9px; font-size: 0.78rem;
+        }
+        .btn-toolbar:hover { background: #f1f5f9; }
+        .btn-toolbar:disabled { opacity: 0.4; cursor: not-allowed; }
+        .btn-toolbar.btn-remove { color: #b91c1c; border-color: #fca5a5; }
+        .btn-toolbar.btn-remove:hover { background: #fef2f2; }
+        .row-toolbar select {
+            padding: 3px 8px; border: 1px solid #cbd5e1; border-radius: 6px;
+            font-size: 0.8rem; background: #fff; color: #334155;
+        }
+        .row-toolbar { flex-wrap: wrap; }
+        .toolbar-title-input {
+            padding: 3px 8px; border: 1px solid #cbd5e1; border-radius: 6px;
+            font-size: 0.82rem; font-weight: 700; color: #0f172a; width: 220px;
+        }
+
+        /* ── Add-chart modal ────────────────────────────────────────────────── */
+        .modal-overlay {
+            position: fixed; inset: 0; background: rgba(15, 23, 42, 0.45);
+            display: none; align-items: flex-start; justify-content: center;
+            padding-top: 10vh; z-index: 200;
+        }
+        .modal-overlay.open { display: flex; }
+        .modal-box {
+            background: #fff; border-radius: 12px; padding: 22px 24px;
+            width: 480px; max-width: 92vw;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.25);
+        }
+        .modal-box h2 { font-size: 1rem; font-weight: 700; color: #0f172a; margin-bottom: 16px; }
+        .modal-field { margin-bottom: 14px; }
+        .modal-field label { display: block; font-size: 0.8rem; font-weight: 700; color: #334155; margin-bottom: 4px; }
+        .modal-field select { width: 100%; padding: 6px 10px; border: 1px solid #cbd5e1; border-radius: 6px; background: #fff; color: #0f172a; }
+        .metric-desc { font-size: 0.8rem; color: #64748b; margin-top: 5px; min-height: 18px; }
+        .agg-options { display: flex; gap: 18px; font-size: 0.85rem; color: #334155; }
+        .agg-options label { display: flex; align-items: center; gap: 5px; font-weight: 400; margin: 0; }
+        .modal-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 18px; }
     </style>
 </head>
 <body>
@@ -116,6 +183,15 @@
         <h1>KPI Dashboard</h1>
         <button class="btn btn-load" id="loadBtn" onclick="loadAll()">
             <i class="fas fa-sync-alt" id="loadIcon"></i> Load Data
+        </button>
+        <button class="btn btn-edit" id="editBtn" onclick="enterEditMode()">
+            <i class="fas fa-pen"></i> Edit
+        </button>
+        <button class="btn btn-edit" id="addChartBtn" onclick="openAddModal()" style="display:none;">
+            <i class="fas fa-plus"></i> Add Chart
+        </button>
+        <button class="btn btn-apply" id="applyBtn" onclick="applyEdit()" style="display:none;">
+            <i class="fas fa-check"></i> Apply
         </button>
         <span class="status-text" id="statusText"></span>
         <div class="user-info">
@@ -126,129 +202,161 @@
     </div>
 
     <div class="page-content">
+        <div id="sectionsContainer"></div>
+    </div>
 
-        <!-- Upper Funnel category -->
-        <div class="category-section">
-            <div class="category-header" id="upperFunnelHeader" onclick="toggleCategory('upperFunnel')">
-                <i class="fas fa-chevron-right chevron"></i>
-                Upper Funnel
-            </div>
-            <div class="category-body" id="upperFunnelBody">
-                <div class="charts-row" id="sessionsRow">
-                    <div class="chart-card">
-                        <h2>Sessions - month</h2>
-                        <div class="chart-legend">
-                            <div class="legend-item"><span class="legend-dot" style="background:#004a8f;height:3px;"></span> Sessions</div>
-                            <div class="legend-item"><span class="legend-dot-dashed"></span> N-1</div>
-                            <div class="legend-item"><span style="width:14px;height:0;border-top:2px solid #e53e3e;display:inline-block;"></span> Target</div>
-                        </div>
-                        <div style="position:relative; height: 280px;">
-                            <canvas id="sessionsMonthlyChart"></canvas>
-                        </div>
+    <!-- Built-in chart rows: moved into their sections by renderLayout() -->
+    <div id="builtinStore" style="display:none;">
+
+        <div class="chart-row" id="row-sessions">
+            <div class="row-toolbar"></div>
+            <div class="charts-row">
+                <div class="chart-card">
+                    <h2>Sessions - month</h2>
+                    <div class="chart-legend">
+                        <div class="legend-item"><span class="legend-dot" style="background:#004a8f;height:3px;"></span> Sessions</div>
+                        <div class="legend-item"><span class="legend-dot-dashed"></span> N-1</div>
+                        <div class="legend-item"><span style="width:14px;height:0;border-top:2px solid #e53e3e;display:inline-block;"></span> Target</div>
                     </div>
-                    <div class="chart-card">
-                        <h2>Sessions - week</h2>
-                        <div class="chart-legend">
-                            <div class="legend-item"><span class="legend-dot" style="background:#004a8f;height:3px;"></span> Sessions</div>
-                            <div class="legend-item"><span class="legend-dot-dashed"></span> N-1</div>
-                            <div class="legend-item"><span style="width:14px;height:0;border-top:2px solid #e53e3e;display:inline-block;"></span> Target</div>
-                        </div>
-                        <div style="position:relative; height: 280px;">
-                            <canvas id="sessionsWeeklyChart"></canvas>
-                        </div>
+                    <div style="position:relative; height: 280px;">
+                        <canvas id="sessionsMonthlyChart"></canvas>
                     </div>
-                    <div class="chart-card">
-                        <h2>Sessions - day</h2>
-                        <div class="chart-legend">
-                            <div class="legend-item"><span class="legend-dot" style="background:#004a8f;height:3px;"></span> Sessions</div>
-                            <div class="legend-item"><span class="legend-dot-dashed"></span> N-1</div>
-                            <div class="legend-item"><span style="width:14px;height:0;border-top:2px solid #e53e3e;display:inline-block;"></span> Target</div>
-                        </div>
-                        <div style="position:relative; height: 280px;">
-                            <canvas id="sessionsDailyChart"></canvas>
-                        </div>
+                </div>
+                <div class="chart-card">
+                    <h2>Sessions - week</h2>
+                    <div class="chart-legend">
+                        <div class="legend-item"><span class="legend-dot" style="background:#004a8f;height:3px;"></span> Sessions</div>
+                        <div class="legend-item"><span class="legend-dot-dashed"></span> N-1</div>
+                        <div class="legend-item"><span style="width:14px;height:0;border-top:2px solid #e53e3e;display:inline-block;"></span> Target</div>
+                    </div>
+                    <div style="position:relative; height: 280px;">
+                        <canvas id="sessionsWeeklyChart"></canvas>
+                    </div>
+                </div>
+                <div class="chart-card">
+                    <h2>Sessions - day</h2>
+                    <div class="chart-legend">
+                        <div class="legend-item"><span class="legend-dot" style="background:#004a8f;height:3px;"></span> Sessions</div>
+                        <div class="legend-item"><span class="legend-dot-dashed"></span> N-1</div>
+                        <div class="legend-item"><span style="width:14px;height:0;border-top:2px solid #e53e3e;display:inline-block;"></span> Target</div>
+                    </div>
+                    <div style="position:relative; height: 280px;">
+                        <canvas id="sessionsDailyChart"></canvas>
                     </div>
                 </div>
             </div>
         </div>
 
-        <!-- Results category -->
-        <div class="category-section">
-            <div class="category-header" id="resultsHeader" onclick="toggleCategory('results')">
-                <i class="fas fa-chevron-right chevron"></i>
-                Results
-            </div>
-            <div class="category-body" id="resultsBody">
-                <div class="charts-row{% if kpi_ai_summary %} with-ai{% endif %}" id="chartsRow">
-                    <div class="chart-card">
-                        <h2>Apex Orders - month</h2>
-                        <div class="chart-legend">
-                            <div class="legend-item"><span class="legend-dot" style="background:#0d3d6e;height:3px;"></span> Orders</div>
-                            <div class="legend-item"><span class="legend-dot-dashed"></span> N-1</div>
-                            <div class="legend-item"><span style="width:14px;height:0;border-top:2px solid #e53e3e;display:inline-block;"></span> Target</div>
-                        </div>
-                        <div style="position:relative; height: 320px;">
-                            <canvas id="monthlyChart"></canvas>
-                        </div>
+        <div class="chart-row" id="row-orders">
+            <div class="row-toolbar"></div>
+            <div class="charts-row{% if kpi_ai_summary %} with-ai{% endif %}">
+                <div class="chart-card">
+                    <h2>Apex Orders - month</h2>
+                    <div class="chart-legend">
+                        <div class="legend-item"><span class="legend-dot" style="background:#0d3d6e;height:3px;"></span> Orders</div>
+                        <div class="legend-item"><span class="legend-dot-dashed"></span> N-1</div>
+                        <div class="legend-item"><span style="width:14px;height:0;border-top:2px solid #e53e3e;display:inline-block;"></span> Target</div>
                     </div>
-                    <div class="chart-card">
-                        <h2>Apex Orders - week</h2>
-                        <div class="chart-legend">
-                            <div class="legend-item"><span class="legend-dot" style="background:#0d3d6e;height:3px;"></span> Orders</div>
-                            <div class="legend-item"><span class="legend-dot-dashed"></span> N-1</div>
-                            <div class="legend-item"><span style="width:14px;height:0;border-top:2px solid #e53e3e;display:inline-block;"></span> Target</div>
-                        </div>
-                        <div style="position:relative; height: 320px;">
-                            <canvas id="weeklyChart"></canvas>
-                        </div>
+                    <div style="position:relative; height: 320px;">
+                        <canvas id="monthlyChart"></canvas>
                     </div>
-                    <div class="chart-card">
-                        <h2>Apex Orders - day</h2>
-                        <div class="chart-legend">
-                            <div class="legend-item"><span class="legend-dot" style="background:#0d3d6e;height:3px;"></span> Orders</div>
-                            <div class="legend-item"><span class="legend-dot-dashed"></span> N-1</div>
-                            <div class="legend-item"><span style="width:14px;height:0;border-top:2px solid #e53e3e;display:inline-block;"></span> Target</div>
-                        </div>
-                        <div style="position:relative; height: 320px;">
-                            <canvas id="ordersChart"></canvas>
-                        </div>
-                    </div>
-
-                    {% if kpi_ai_summary %}
-                    <div class="ai-panel" id="aiPanel">
-                        <h2><i class="fas fa-robot" style="color:#6366f1;"></i> AI Summary</h2>
-                        <p class="ai-placeholder" id="aiPlaceholder">Load data first, then click "AI Summary" to analyse the charts.</p>
-                        <div class="ai-panel-body" id="aiOutput" style="display:none;"></div>
-                        <button class="btn btn-ai" id="aiBtn" onclick="getAiSummary()" disabled>
-                            <i class="fas fa-wand-magic-sparkles" id="aiIcon"></i> AI Summary
-                        </button>
-                    </div>
-                    {% endif %}
                 </div>
+                <div class="chart-card">
+                    <h2>Apex Orders - week</h2>
+                    <div class="chart-legend">
+                        <div class="legend-item"><span class="legend-dot" style="background:#0d3d6e;height:3px;"></span> Orders</div>
+                        <div class="legend-item"><span class="legend-dot-dashed"></span> N-1</div>
+                        <div class="legend-item"><span style="width:14px;height:0;border-top:2px solid #e53e3e;display:inline-block;"></span> Target</div>
+                    </div>
+                    <div style="position:relative; height: 320px;">
+                        <canvas id="weeklyChart"></canvas>
+                    </div>
+                </div>
+                <div class="chart-card">
+                    <h2>Apex Orders - day</h2>
+                    <div class="chart-legend">
+                        <div class="legend-item"><span class="legend-dot" style="background:#0d3d6e;height:3px;"></span> Orders</div>
+                        <div class="legend-item"><span class="legend-dot-dashed"></span> N-1</div>
+                        <div class="legend-item"><span style="width:14px;height:0;border-top:2px solid #e53e3e;display:inline-block;"></span> Target</div>
+                    </div>
+                    <div style="position:relative; height: 320px;">
+                        <canvas id="ordersChart"></canvas>
+                    </div>
+                </div>
+
+                {% if kpi_ai_summary %}
+                <div class="ai-panel" id="aiPanel">
+                    <h2><i class="fas fa-robot" style="color:#6366f1;"></i> AI Summary</h2>
+                    <p class="ai-placeholder" id="aiPlaceholder">Load data first, then click "AI Summary" to analyse the charts.</p>
+                    <div class="ai-panel-body" id="aiOutput" style="display:none;"></div>
+                    <button class="btn btn-ai" id="aiBtn" onclick="getAiSummary()" disabled>
+                        <i class="fas fa-wand-magic-sparkles" id="aiIcon"></i> AI Summary
+                    </button>
+                </div>
+                {% endif %}
             </div>
         </div>
 
     </div>
 
+    <!-- Add chart modal -->
+    <div class="modal-overlay" id="addModal">
+        <div class="modal-box">
+            <h2><i class="fas fa-chart-line"></i> Add Chart</h2>
+            <div class="modal-field">
+                <label for="metricSelect">Metric</label>
+                <select id="metricSelect" onchange="onMetricChange()"></select>
+                <div class="metric-desc" id="metricDesc"></div>
+            </div>
+            <div class="modal-field">
+                <label for="titleInput">Title</label>
+                <input type="text" id="titleInput" maxlength="100" style="width:100%; padding:6px 10px; border:1px solid #cbd5e1; border-radius:6px; color:#0f172a;">
+            </div>
+            <div class="modal-field">
+                <label>Weekly / monthly aggregation</label>
+                <div class="agg-options">
+                    <label><input type="radio" name="aggRadio" value="sum"> Sum</label>
+                    <label><input type="radio" name="aggRadio" value="avg"> Average</label>
+                </div>
+            </div>
+            <div class="modal-field" style="display:flex; gap:12px;">
+                <div style="flex:1;">
+                    <label for="fmtSelect">Label format</label>
+                    <select id="fmtSelect">
+                        <option value="num">Number</option>
+                        <option value="pct">Percent (%)</option>
+                    </select>
+                </div>
+                <div style="flex:1;">
+                    <label for="decimalsSelect">Decimals</label>
+                    <select id="decimalsSelect">
+                        <option value="0">0</option>
+                        <option value="1">1</option>
+                        <option value="2">2</option>
+                    </select>
+                </div>
+            </div>
+            <div class="modal-field">
+                <label for="invertSelect">Colour vs target</label>
+                <select id="invertSelect">
+                    <option value="0">Green above target (higher is better)</option>
+                    <option value="1">Green below target (lower is better)</option>
+                </select>
+            </div>
+            <div class="modal-field">
+                <label for="sectionSelect">Section</label>
+                <select id="sectionSelect"></select>
+            </div>
+            <div class="modal-actions">
+                <button class="btn btn-edit" onclick="closeAddModal()">Cancel</button>
+                <button class="btn btn-apply" onclick="addChart()"><i class="fas fa-plus"></i> Add</button>
+            </div>
+        </div>
+    </div>
+
     <script>
     const BASE_URL = "{{ BASE_URL }}";
     const DAY_NAMES = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
-
-    function toggleCategory(id) {
-        const header = document.getElementById(id + 'Header');
-        const body   = document.getElementById(id + 'Body');
-        const isOpen = body.classList.contains('open');
-        header.classList.toggle('open', !isOpen);
-        body.classList.toggle('open', !isOpen);
-        if (!isOpen) {
-            // Trigger chart resize after the section becomes visible
-            setTimeout(() => {
-                [ordersChart, monthlyChart, weeklyChart,
-                 sessionsMonthlyChart, sessionsWeeklyChart, sessionsDailyChart]
-                    .forEach(c => c && c.resize());
-            }, 10);
-        }
-    }
     const BG_GREEN = 'rgba(147, 196, 125, 0.30)';
     const BG_RED   = 'rgba(224, 102, 102, 0.30)';
 
@@ -264,6 +372,422 @@
     let sessionsWeeklyChart = null;
     let sessionsDailyChart = null;
 
+    // ── Layout / sections state ──────────────────────────────────────────────
+    let SECTIONS = ['Upper Funnel', 'Results', 'Stock', 'Pricing', 'Margin'];
+    let layout = { rows: [] };
+    let metricsCatalogue = [];
+    let metricsByCol = {};
+    let editMode = false;
+    let rowCharts = {};        // rowId -> [Chart, Chart, Chart]
+    const customRowEls = {};   // rowId -> element
+    const customRowData = {};  // rowId -> last /kpi/custom-data response
+    const BUILTIN_TITLES = { sessions: 'Sessions', orders: 'Apex Orders' };
+
+    function sectionDomId(name) {
+        return 'sec-' + name.toLowerCase().replace(/[^a-z0-9]+/g, '-');
+    }
+
+    async function init() {
+        try {
+            const [layoutResp, metricsResp] = await Promise.all([
+                fetch(BASE_URL + '/kpi/layout').then(r => r.json()),
+                fetch(BASE_URL + '/kpi/metrics').then(r => r.json()),
+            ]);
+            if (layoutResp.sections) SECTIONS = layoutResp.sections;
+            layout = layoutResp.layout || { rows: [] };
+            metricsCatalogue = metricsResp.metrics || [];
+            metricsByCol = Object.fromEntries(metricsCatalogue.map(m => [m.column, m]));
+        } catch (err) {
+            document.getElementById('statusText').textContent = 'Layout load failed: ' + err;
+            layout = {
+                rows: [
+                    { id: 'sessions', type: 'builtin', section: 'Upper Funnel' },
+                    { id: 'orders', type: 'builtin', section: 'Results' },
+                ]
+            };
+        }
+        renderLayout();
+        loadAll();
+    }
+    document.addEventListener('DOMContentLoaded', init);
+
+    // ── Layout rendering ─────────────────────────────────────────────────────
+    function renderLayout() {
+        const container = document.getElementById('sectionsContainer');
+
+        // Ensure section blocks exist, in order (existing blocks keep their open state)
+        SECTIONS.forEach(name => {
+            let sec = document.getElementById(sectionDomId(name));
+            if (!sec) {
+                sec = document.createElement('div');
+                sec.className = 'category-section';
+                sec.id = sectionDomId(name);
+                const header = document.createElement('div');
+                header.className = 'category-header';
+                header.innerHTML = '<i class="fas fa-chevron-right chevron"></i> ' + name;
+                header.onclick = () => toggleSection(name);
+                const body = document.createElement('div');
+                body.className = 'category-body';
+                sec.appendChild(header);
+                sec.appendChild(body);
+            }
+            container.appendChild(sec);
+        });
+
+        // Place rows into section bodies, in layout order
+        layout.rows.forEach(row => {
+            const el = getRowElement(row);
+            if (!el) return;
+            document.getElementById(sectionDomId(row.section)).querySelector('.category-body').appendChild(el);
+            updateRowToolbar(row, el);
+        });
+
+        // Hide sections with no rows when not editing
+        SECTIONS.forEach(name => {
+            const sec = document.getElementById(sectionDomId(name));
+            const hasRows = layout.rows.some(r => r.section === name);
+            sec.style.display = (hasRows || editMode) ? '' : 'none';
+        });
+
+        setTimeout(resizeAllCharts, 10);
+    }
+
+    function getRowElement(row) {
+        if (row.type === 'builtin') return document.getElementById('row-' + row.id);
+        if (!customRowEls[row.id]) customRowEls[row.id] = buildCustomRowElement(row);
+        return customRowEls[row.id];
+    }
+
+    function escHtml(s) {
+        return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    }
+
+    function rowTitle(row) {
+        return row.title || row.metric;
+    }
+
+    function buildCustomRowElement(row) {
+        const m = metricsByCol[row.metric] || {};
+        const el = document.createElement('div');
+        el.className = 'chart-row';
+        el.id = 'row-' + row.id;
+
+        const title = escHtml(rowTitle(row));
+        const legendFor = (showN1) => {
+            const items = [
+                `<div class="legend-item"><span class="legend-dot" style="background:#0d3d6e;height:3px;"></span> ${title}</div>`,
+            ];
+            if (showN1) items.push('<div class="legend-item"><span class="legend-dot-dashed"></span> N-1</div>');
+            if (m.has_target) items.push('<div class="legend-item"><span style="width:14px;height:0;border-top:2px solid #e53e3e;display:inline-block;"></span> Target</div>');
+            return `<div class="chart-legend">${items.join('')}</div>`;
+        };
+
+        const card = (period, suffix, showN1) => `
+            <div class="chart-card">
+                <h2>${title} - ${period}</h2>
+                ${legendFor(showN1)}
+                <div style="position:relative; height: 280px;">
+                    <canvas id="cv-${row.id}-${suffix}"></canvas>
+                </div>
+            </div>`;
+
+        // Weekly N-1 is always available (computed from the metric's own
+        // history); month/day need an _N_MINUS_1 column in daily_summary
+        el.innerHTML = `
+            <div class="row-toolbar"></div>
+            <div class="charts-row">
+                ${card('month', 'm', m.has_n1)}
+                ${card('week', 'w', true)}
+                ${card('day', 'd', m.has_n1)}
+            </div>`;
+        return el;
+    }
+
+    function updateRowToolbar(row, el) {
+        const toolbar = el.querySelector('.row-toolbar');
+        if (!toolbar) return;
+        const sectionOptions = SECTIONS.map(s => `<option value="${s}"${s === row.section ? ' selected' : ''}>${s}</option>`).join('');
+        const removeBtn = row.type === 'custom'
+            ? `<button class="btn-toolbar btn-remove" title="Remove chart" onclick="removeRow('${row.id}')"><i class="fas fa-trash"></i></button>`
+            : '';
+
+        let leftPart, settings = '';
+        if (row.type === 'builtin') {
+            leftPart = `<span class="row-title">${BUILTIN_TITLES[row.id]}</span>
+                        <span class="row-desc">Built-in charts</span>`;
+        } else {
+            const desc = escHtml((metricsByCol[row.metric] || {}).description || '');
+            leftPart = `<input type="text" class="toolbar-title-input" maxlength="100" value="${escHtml(rowTitle(row))}"
+                            title="${desc}" onchange="renameRow('${row.id}', this.value)">
+                        <span class="row-desc">${row.metric}</span>`;
+            settings = `
+                <select title="Weekly/monthly aggregation" onchange="changeRowAgg('${row.id}', this.value)">
+                    <option value="sum"${row.agg === 'sum' ? ' selected' : ''}>Sum</option>
+                    <option value="avg"${row.agg === 'avg' ? ' selected' : ''}>Average</option>
+                </select>
+                <select title="Label format" onchange="changeRowFmt('${row.id}', this.value)">
+                    <option value="num"${(row.fmt || 'num') === 'num' ? ' selected' : ''}>Number</option>
+                    <option value="pct"${row.fmt === 'pct' ? ' selected' : ''}>Percent</option>
+                </select>
+                <select title="Decimals" onchange="changeRowDecimals('${row.id}', this.value)">
+                    ${[0, 1, 2].map(n => `<option value="${n}"${(row.decimals || 0) === n ? ' selected' : ''}>${n} dp</option>`).join('')}
+                </select>
+                <select title="Colour vs target" onchange="changeRowInvert('${row.id}', this.value)">
+                    <option value="0"${!row.invert ? ' selected' : ''}>Green above</option>
+                    <option value="1"${row.invert ? ' selected' : ''}>Green below</option>
+                </select>`;
+        }
+
+        toolbar.innerHTML = `
+            ${leftPart}
+            <div class="toolbar-right">
+                ${settings}
+                <button class="btn-toolbar" title="Move up" onclick="moveRow('${row.id}', -1)"><i class="fas fa-arrow-up"></i></button>
+                <button class="btn-toolbar" title="Move down" onclick="moveRow('${row.id}', 1)"><i class="fas fa-arrow-down"></i></button>
+                <select title="Section" onchange="changeRowSection('${row.id}', this.value)">${sectionOptions}</select>
+                ${removeBtn}
+            </div>`;
+    }
+
+    // Rebuild a custom row's DOM + charts after a config change.
+    // refetch=true when the change affects the data (agg); otherwise re-render from cache.
+    function rebuildCustomRow(row, refetch) {
+        (rowCharts[row.id] || []).forEach(c => c && c.destroy());
+        delete rowCharts[row.id];
+        const el = customRowEls[row.id];
+        if (el) el.remove();
+        delete customRowEls[row.id];
+        renderLayout();
+        if (refetch || !customRowData[row.id]) loadCustomRow(row);
+        else renderCustomRow(row, customRowData[row.id]);
+    }
+
+    function findRow(id) {
+        return layout.rows.find(r => r.id === id);
+    }
+
+    function renameRow(id, title) {
+        const row = findRow(id);
+        if (!row) return;
+        row.title = title.trim() || row.metric;
+        rebuildCustomRow(row, false);
+    }
+
+    function changeRowAgg(id, agg) {
+        const row = findRow(id);
+        if (!row) return;
+        row.agg = agg;
+        rebuildCustomRow(row, true);
+    }
+
+    function changeRowFmt(id, fmt) {
+        const row = findRow(id);
+        if (!row) return;
+        row.fmt = fmt;
+        rebuildCustomRow(row, false);
+    }
+
+    function changeRowDecimals(id, decimals) {
+        const row = findRow(id);
+        if (!row) return;
+        row.decimals = parseInt(decimals, 10);
+        rebuildCustomRow(row, false);
+    }
+
+    function changeRowInvert(id, invert) {
+        const row = findRow(id);
+        if (!row) return;
+        row.invert = invert === '1';
+        rebuildCustomRow(row, false);
+    }
+
+    function toggleSection(name) {
+        const sec = document.getElementById(sectionDomId(name));
+        const header = sec.querySelector('.category-header');
+        const body = sec.querySelector('.category-body');
+        const isOpen = body.classList.contains('open');
+        header.classList.toggle('open', !isOpen);
+        body.classList.toggle('open', !isOpen);
+        if (!isOpen) setTimeout(resizeAllCharts, 10);
+    }
+
+    function resizeAllCharts() {
+        Object.values(rowCharts).flat().forEach(c => c && c.resize());
+    }
+
+    // ── Edit mode ────────────────────────────────────────────────────────────
+    function enterEditMode() {
+        editMode = true;
+        document.body.classList.add('edit-mode');
+        document.getElementById('editBtn').style.display = 'none';
+        document.getElementById('addChartBtn').style.display = '';
+        document.getElementById('applyBtn').style.display = '';
+        renderLayout();
+    }
+
+    async function applyEdit() {
+        const btn = document.getElementById('applyBtn');
+        const status = document.getElementById('statusText');
+        btn.disabled = true;
+        try {
+            const resp = await fetch(BASE_URL + '/kpi/layout', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ layout }),
+            });
+            const json = await resp.json();
+            if (json.status !== 'ok') throw new Error(json.message || 'Save failed');
+            editMode = false;
+            document.body.classList.remove('edit-mode');
+            document.getElementById('editBtn').style.display = '';
+            document.getElementById('addChartBtn').style.display = 'none';
+            document.getElementById('applyBtn').style.display = 'none';
+            renderLayout();
+            status.textContent = 'Layout saved';
+        } catch (err) {
+            status.textContent = 'Layout save failed: ' + err.message;
+        } finally {
+            btn.disabled = false;
+        }
+    }
+
+    function moveRow(id, dir) {
+        const rows = layout.rows;
+        const idx = rows.findIndex(r => r.id === id);
+        if (idx < 0) return;
+        const row = rows[idx];
+        const sameSection = rows.map((r, i) => ({ r, i })).filter(x => x.r.section === row.section);
+        const pos = sameSection.findIndex(x => x.i === idx);
+        const swapWith = sameSection[pos + dir];
+        if (!swapWith) return;
+        [rows[idx], rows[swapWith.i]] = [rows[swapWith.i], rows[idx]];
+        renderLayout();
+    }
+
+    function changeRowSection(id, section) {
+        const idx = layout.rows.findIndex(r => r.id === id);
+        if (idx < 0) return;
+        const [row] = layout.rows.splice(idx, 1);
+        row.section = section;
+        layout.rows.push(row);  // appears last in its new section
+        renderLayout();
+    }
+
+    function removeRow(id) {
+        const row = layout.rows.find(r => r.id === id);
+        if (!row || row.type !== 'custom') return;
+        if (!confirm(`Remove the ${row.metric} charts?`)) return;
+        (rowCharts[id] || []).forEach(c => c && c.destroy());
+        delete rowCharts[id];
+        delete customRowData[id];
+        layout.rows = layout.rows.filter(r => r.id !== id);
+        const el = customRowEls[id];
+        if (el) el.remove();
+        delete customRowEls[id];
+        renderLayout();
+    }
+
+    // ── Add-chart modal ──────────────────────────────────────────────────────
+    function openAddModal() {
+        const metricSelect = document.getElementById('metricSelect');
+        metricSelect.innerHTML = metricsCatalogue
+            .map(m => `<option value="${m.column}">${m.column}</option>`)
+            .join('');
+        const sectionSelect = document.getElementById('sectionSelect');
+        sectionSelect.innerHTML = SECTIONS.map(s => `<option value="${s}">${s}</option>`).join('');
+        onMetricChange();
+        document.getElementById('addModal').classList.add('open');
+    }
+
+    function closeAddModal() {
+        document.getElementById('addModal').classList.remove('open');
+    }
+
+    function onMetricChange() {
+        const col = document.getElementById('metricSelect').value;
+        const m = metricsByCol[col] || {};
+        document.getElementById('metricDesc').textContent = m.description || '';
+        const suggested = m.suggested_agg || 'sum';
+        document.querySelectorAll('input[name="aggRadio"]').forEach(r => { r.checked = r.value === suggested; });
+        document.getElementById('titleInput').value = col;
+        document.getElementById('fmtSelect').value = 'num';
+        document.getElementById('decimalsSelect').value = suggested === 'avg' ? '1' : '0';
+        document.getElementById('invertSelect').value = '0';
+    }
+
+    function addChart() {
+        const metric = document.getElementById('metricSelect').value;
+        if (!metric) return;
+        const aggEl = document.querySelector('input[name="aggRadio"]:checked');
+        const row = {
+            id: 'c' + Date.now().toString(36),
+            type: 'custom',
+            metric,
+            title: document.getElementById('titleInput').value.trim() || metric,
+            agg: aggEl ? aggEl.value : 'sum',
+            fmt: document.getElementById('fmtSelect').value,
+            decimals: parseInt(document.getElementById('decimalsSelect').value, 10),
+            invert: document.getElementById('invertSelect').value === '1',
+            section: document.getElementById('sectionSelect').value,
+        };
+        layout.rows.push(row);
+        closeAddModal();
+        renderLayout();
+        // Make sure the target section is open so the new charts are visible
+        const sec = document.getElementById(sectionDomId(row.section));
+        if (!sec.querySelector('.category-body').classList.contains('open')) toggleSection(row.section);
+        loadCustomRow(row);
+    }
+
+    // ── Custom chart data + rendering ────────────────────────────────────────
+    function dateLabel(d) {
+        const dt = new Date(d + 'T00:00:00');
+        const dd = String(dt.getDate()).padStart(2, '0');
+        const mm = String(dt.getMonth() + 1).padStart(2, '0');
+        return DAY_NAMES[dt.getDay()] + ' ' + dd + '/' + mm;
+    }
+
+    async function loadCustomRow(row) {
+        try {
+            const d = await fetch(`${BASE_URL}/kpi/custom-data?metric=${encodeURIComponent(row.metric)}&agg=${encodeURIComponent(row.agg)}`)
+                .then(r => r.json());
+            if (d.status !== 'ok') throw new Error(d.message || 'load failed');
+            renderCustomRow(row, d);
+        } catch (err) {
+            document.getElementById('statusText').textContent = `${row.metric}: ${err.message}`;
+        }
+    }
+
+    function renderCustomRow(row, d) {
+        customRowData[row.id] = d;
+        const nulls = arr => arr.map(() => null);
+        const dailyLabels = d.dates.map(dateLabel);
+        const valuesPast = d.values.map((v, i) => d.dates[i] <= d.today ? v : null);
+
+        const decimals = row.decimals || 0;
+        const suffix = row.fmt === 'pct' ? '%' : '';
+        const fmt = v => v.toFixed(decimals) + suffix;
+        const opts = { seriesLabel: rowTitle(row), fontSize: 10, fmt, invert: !!row.invert };
+
+        const ranges = calcRowRanges([
+            { series: [d.monthly_values, d.monthly_values_n1], target: d.monthly_values_target },
+            { series: [d.weekly_values, d.weekly_values_n1],   target: d.weekly_values_target },
+            { series: [valuesPast, d.values_n1],               target: d.values_target },
+        ]);
+
+        const existing = rowCharts[row.id] || [];
+        const cm = buildMetricChart(`cv-${row.id}-m`, d.monthly_labels, d.monthly_values,
+            d.monthly_values_n1, d.monthly_values_target || nulls(d.monthly_labels),
+            existing[0], { ...opts, range: ranges[0] });
+        const cw = buildMetricChart(`cv-${row.id}-w`, d.weekly_labels, d.weekly_values,
+            d.weekly_values_n1, d.weekly_values_target || nulls(d.weekly_labels),
+            existing[1], { ...opts, n1Labels: d.weekly_n1_labels, range: ranges[1] });
+        const cd = buildMetricChart(`cv-${row.id}-d`, dailyLabels, valuesPast,
+            d.values_n1, d.values_target || nulls(d.dates),
+            existing[2], { ...opts, range: ranges[2] });
+        rowCharts[row.id] = [cm, cw, cd];
+    }
+
     function loadAll() {
         const btn    = document.getElementById('loadBtn');
         const icon   = document.getElementById('loadIcon');
@@ -274,9 +798,15 @@
 
         const snfPromise = fetch(BASE_URL + '/kpi/data').then(r => r.json());
         const spPromise  = fetch(BASE_URL + '/kpi/sharepoint').then(r => r.json());
+        const customRows = layout.rows.filter(r => r.type === 'custom');
+        const customPromises = customRows.map(row =>
+            fetch(`${BASE_URL}/kpi/custom-data?metric=${encodeURIComponent(row.metric)}&agg=${encodeURIComponent(row.agg)}`)
+                .then(r => r.json())
+                .catch(err => ({ status: 'error', message: String(err) }))
+        );
 
-        Promise.all([snfPromise, spPromise])
-            .then(([snf, sp]) => {
+        Promise.all([snfPromise, spPromise, Promise.all(customPromises)])
+            .then(([snf, sp, customResults]) => {
                 btn.disabled = false;
                 icon.classList.remove('fa-spin');
 
@@ -285,9 +815,8 @@
                 if (sp.status  !== 'ok') errors.push('SharePoint: ' + sp.message);
                 if (errors.length) { status.textContent = errors.join(' | '); return; }
 
-                renderMonthlyChart(snf);
-                renderWeeklyChart(snf);
-                renderDailyChart(snf);
+                renderOrdersRow(snf);
+                rowCharts['orders'] = [monthlyChart, weeklyChart, ordersChart];
                 kpiSnapshot = snf;
                 const aiBtn = document.getElementById('aiBtn');
                 if (aiBtn) {
@@ -296,19 +825,32 @@
                 }
 
                 const today = sp.today;
-                const dailyLabels = sp.dates.map(d => {
-                    const dt = new Date(d + 'T00:00:00');
-                    const dd = String(dt.getDate()).padStart(2, '0');
-                    const mm = String(dt.getMonth() + 1).padStart(2, '0');
-                    return DAY_NAMES[dt.getDay()] + ' ' + dd + '/' + mm;
-                });
+                const dailyLabels = sp.dates.map(dateLabel);
                 const dailySessions = sp.daily_sessions.map((v, i) => sp.dates[i] <= today ? v : null);
 
-                sessionsMonthlyChart = buildSessionsChart('sessionsMonthlyChart', sp.monthly_labels, sp.monthly_sessions, sp.monthly_sessions_ly, snf.monthly_sessions_target, sessionsMonthlyChart);
-                sessionsWeeklyChart  = buildSessionsChart('sessionsWeeklyChart',  sp.weekly_labels,  sp.weekly_sessions,  sp.weekly_sessions_ly,  snf.weekly_sessions_target,  sessionsWeeklyChart, snf.weekly_n1_labels);
-                sessionsDailyChart   = buildSessionsChart('sessionsDailyChart',   dailyLabels,        dailySessions,        sp.daily_sessions_ly,   snf.sessions_target,         sessionsDailyChart);
+                const kMonthly = { s: toK(sp.monthly_sessions), ly: toK(sp.monthly_sessions_ly), t: toK(snf.monthly_sessions_target) };
+                const kWeekly  = { s: toK(sp.weekly_sessions),  ly: toK(sp.weekly_sessions_ly),  t: toK(snf.weekly_sessions_target) };
+                const kDaily   = { s: toK(dailySessions),       ly: toK(sp.daily_sessions_ly),   t: toK(snf.sessions_target) };
+                const sRanges = calcRowRanges([
+                    { series: [kMonthly.s, kMonthly.ly], target: kMonthly.t },
+                    { series: [kWeekly.s, kWeekly.ly],   target: kWeekly.t },
+                    { series: [kDaily.s, kDaily.ly],     target: kDaily.t },
+                ]);
+                sessionsMonthlyChart = buildSessionsChart('sessionsMonthlyChart', sp.monthly_labels, kMonthly, sRanges[0], sessionsMonthlyChart);
+                sessionsWeeklyChart  = buildSessionsChart('sessionsWeeklyChart',  sp.weekly_labels,  kWeekly,  sRanges[1], sessionsWeeklyChart, snf.weekly_n1_labels);
+                sessionsDailyChart   = buildSessionsChart('sessionsDailyChart',   dailyLabels,       kDaily,   sRanges[2], sessionsDailyChart);
+                rowCharts['sessions'] = [sessionsMonthlyChart, sessionsWeeklyChart, sessionsDailyChart];
 
-                status.textContent = 'Loaded';
+                const customErrors = [];
+                customResults.forEach((d, i) => {
+                    if (d.status === 'ok') renderCustomRow(customRows[i], d);
+                    else customErrors.push(`${customRows[i].metric}: ${d.message}`);
+                });
+
+                const notes = [];
+                if (sp.stale) notes.push('SharePoint unavailable — sessions from ' + (sp.stale_date || 'older cache'));
+                if (customErrors.length) notes.push('errors: ' + customErrors.join(' | '));
+                status.textContent = notes.length ? 'Loaded (' + notes.join('; ') + ')' : 'Loaded';
             })
             .catch(err => {
                 btn.disabled = false;
@@ -317,64 +859,75 @@
             });
     }
 
-    // ── Y-range calculator ────────────────────────────────────────────────────
-    // seriesArrays: first N-1 are actual series, last is target (included in max but not min zoom)
-    function calcYRange(seriesArrays) {
-        const allVals = seriesArrays.flat().filter(v => v !== null && v !== undefined && !isNaN(v) && v > 0);
-        if (!allVals.length) return { yMin: 0, yMax: 100, unit: 20 };
-        // Use all series for min/mid, but ensure yMax covers every value
-        const dataMin = Math.min(...allVals);
-        const dataMax = Math.max(...allVals);
-        const dataMid = (dataMin + dataMax) / 2;
-        const halfSpan = Math.max((dataMax - dataMin) * 0.7, dataMid * 0.15, 5);
-        const rawMin = Math.max(0, dataMid - halfSpan);
-        const rawMax = Math.max(dataMid + halfSpan, dataMax * 1.05);
-        const unit = rawMax >= 2000 ? 200
-                   : rawMax >= 500  ? 100
-                   : rawMax >= 100  ? 20
-                   : rawMax >= 20   ? 10
-                   : 5;
-        return {
-            yMin: Math.max(0, Math.floor(rawMin / unit) * unit),
-            yMax: Math.ceil(rawMax / unit) * unit,
-            unit,
-        };
+    // ── Row range calculator ──────────────────────────────────────────────────
+    // Computes the y-ranges for a metric's month/week/day charts TOGETHER.
+    // Each chart is centred on its own actual-data mean (actuals sit mid-chart),
+    // and the half-spans are scaled so the target line sits at the same
+    // relative height on all three charts — red/green areas match across the row.
+    const _cleanVals = arr => (arr || []).filter(v => v !== null && v !== undefined && !isNaN(v));
+    const _mean = a => a.reduce((x, y) => x + y, 0) / a.length;
+    const toK = arr => (arr || []).map(v => (v !== null && v !== undefined && !isNaN(v) && v > 0) ? v / 1000 : null);
+
+    function _niceUnit(span) {
+        const rawStep = span / 8;
+        const pow = Math.pow(10, Math.floor(Math.log10(rawStep)));
+        return [1, 2, 5, 10].map(m => m * pow).find(u => u >= rawStep) || 10 * pow;
     }
 
-    // ── Y-range calculator for thousands-scale (sessions) ────────────────────
-    function calcYRangeK(seriesArrays, targetArray) {
-        const toK = arr => (arr || []).map(v => (v !== null && v !== undefined && !isNaN(v) && v > 0) ? v / 1000 : null);
-        const kSeries = seriesArrays.map(toK);
-        const kTarget = toK(targetArray);
-        // Include target in range so yMax always covers the target line
-        const allVals = [...kSeries, kTarget].flat().filter(v => v !== null);
-        if (!allVals.length) return { yMin: 0, yMax: 10, unit: 1, kSeries, kTarget };
-        const seriesVals = kSeries.flat().filter(v => v !== null);
-        const vals = seriesVals.length ? seriesVals : allVals;
-        const dataMin = Math.min(...vals);
-        const dataMax = Math.max(...allVals);
-        const dataMid = (dataMin + dataMax) / 2;
-        const halfSpan = Math.max((dataMax - dataMin) * 0.7, dataMid * 0.15, 0.5);
-        const rawMin = Math.max(0, dataMid - halfSpan);
-        const rawMax = Math.max(dataMid + halfSpan, dataMax * 1.05);
-        const unit = rawMax >= 200 ? 20
-                   : rawMax >= 50  ? 10
-                   : rawMax >= 20  ? 5
-                   : rawMax >= 10  ? 2
-                   : 1;
-        return {
-            yMin: Math.max(0, Math.floor(rawMin / unit) * unit),
-            yMax: Math.ceil(rawMax / unit) * unit,
-            unit,
-            kSeries,
-            kTarget,
-        };
+    function _rangeFrom(center, half, nonNegative) {
+        const unit = _niceUnit(half * 2);
+        const grid = unit / 10;
+        const c = Math.round(center / grid) * grid;
+        const h = Math.ceil(half / grid) * grid;
+        let yMin = c - h;
+        const yMax = c + h;
+        if (yMin < 0 && nonNegative) yMin = 0;
+        return { yMin, yMax, unit };
+    }
+
+    function calcRowRanges(specs) {
+        const charts = specs.map(spec => {
+            const seriesVals = (spec.series || []).flatMap(_cleanVals);
+            const targetVals = _cleanVals(spec.target);
+            const baseVals = seriesVals.length ? seriesVals : targetVals;
+            if (!baseVals.length) return { center: 50, baseHalf: 57.5, tMean: null, nonNegative: true };
+            const center = _mean(baseVals);
+            const maxDev = Math.max(...baseVals.map(v => Math.abs(v - center)), Math.abs(center) * 0.04, 1e-9);
+            const tMean = targetVals.length ? _mean(targetVals) : null;
+            const nonNegative = baseVals.every(v => v >= 0) && targetVals.every(v => v >= 0);
+            return { center, baseHalf: maxDev * 1.15, tMean, nonNegative };
+        });
+
+        // Common signed target-offset fraction g = (target - centre) / half.
+        // Using the row's smallest |g| keeps every chart's data inside its range.
+        const withT = charts.filter(ch => ch.tMean !== null);
+        let g = null;
+        if (withT.length) {
+            const gs = withT.map(ch => (ch.tMean - ch.center) / ch.baseHalf);
+            const sameSign = gs.every(v => v >= 0) || gs.every(v => v <= 0);
+            const minAbs = Math.min(...gs.map(Math.abs));
+            if (sameSign && minAbs >= 0.05) {
+                const sign = gs[0] >= 0 ? 1 : -1;
+                g = sign * Math.min(Math.max(minAbs, 0.2), 0.75);
+            }
+        }
+
+        return charts.map(ch => {
+            let half = ch.baseHalf;
+            if (ch.tMean !== null) {
+                half = (g !== null && (ch.tMean - ch.center) / g > 0)
+                    ? Math.max(ch.baseHalf, (ch.tMean - ch.center) / g)
+                    : Math.max(ch.baseHalf, Math.abs(ch.tMean - ch.center) * 1.3);
+            }
+            return _rangeFrom(ch.center, half, ch.nonNegative);
+        });
     }
 
     // ── Background shading plugin ─────────────────────────────────────────────
     // Draws a smooth green/red filled area that follows the target line.
-    // Green above target, red below. Full green where target is null/0.
-    function makeBgPlugin(targetArr, yMin, yMax) {
+    // Default: green above target, red below; invert swaps them (lower is
+    // better). Full green where the chart has no target at all.
+    function makeBgPlugin(targetArr, yMin, yMax, invert) {
         return {
             id: 'bgShading',
             beforeDatasetsDraw(chart) {
@@ -382,34 +935,47 @@
                 const n = targetArr.length;
                 if (!n) return;
 
+                const anyTarget = targetArr.some(t => t !== null && t !== undefined && t > 0);
+                if (!anyTarget) {
+                    // No target → whole chart green regardless of invert
+                    ctx.save();
+                    ctx.fillStyle = BG_GREEN;
+                    ctx.fillRect(left, top, right - left, bottom - top);
+                    ctx.restore();
+                    return;
+                }
+
+                const aboveColor = invert ? BG_RED : BG_GREEN;
+                const belowColor = invert ? BG_GREEN : BG_RED;
+
                 // Build (px, targetPx) points for each label using the chart's x scale
                 const points = targetArr.map((t, i) => {
                     const px = x.getPixelForValue(i);
                     const hasTarget = t !== null && t !== undefined && t > 0;
                     const tpx = hasTarget
                         ? Math.min(Math.max(y.getPixelForValue(t), top), bottom)
-                        : top; // treat no-target as full-green (target at top)
+                        : top; // gaps in target → treat as above-target colour
                     return { px, tpx, hasTarget };
                 });
 
                 ctx.save();
 
-                // Red area: polygon bottom=bottom, top follows target line
+                // Below-target area: polygon bottom=bottom, top follows target line
                 ctx.beginPath();
                 ctx.moveTo(points[0].px, bottom);
                 points.forEach(p => ctx.lineTo(p.px, p.tpx));
                 ctx.lineTo(points[n - 1].px, bottom);
                 ctx.closePath();
-                ctx.fillStyle = BG_RED;
+                ctx.fillStyle = belowColor;
                 ctx.fill();
 
-                // Green area: polygon bottom follows target line, top=top
+                // Above-target area: polygon bottom follows target line, top=top
                 ctx.beginPath();
                 ctx.moveTo(points[0].px, top);
                 points.forEach(p => ctx.lineTo(p.px, p.tpx));
                 ctx.lineTo(points[n - 1].px, top);
                 ctx.closePath();
-                ctx.fillStyle = BG_GREEN;
+                ctx.fillStyle = aboveColor;
                 ctx.fill();
 
                 ctx.restore();
@@ -417,8 +983,15 @@
         };
     }
 
+    // ── Value formatter (custom metrics can be floats) ────────────────────────
+    function fmtVal(v) {
+        if (v === null || v === undefined) return '';
+        return Number.isInteger(v) ? String(v) : String(Math.round(v * 100) / 100);
+    }
+
     // ── Data-label plugin ─────────────────────────────────────────────────────
-    function makeDataLabelPlugin(id, dsLabel, fontSize) {
+    function makeDataLabelPlugin(id, dsLabel, fontSize, fmt) {
+        const format = fmt || fmtVal;
         return {
             id,
             afterDatasetsDraw(chart) {
@@ -434,7 +1007,7 @@
                 meta.data.forEach((point, i) => {
                     const v = chart.data.datasets[dsIdx].data[i];
                     if (v === null || v === undefined) return;
-                    c2.fillText(String(v), point.x, point.y - 5);
+                    c2.fillText(format(v), point.x, point.y - 5);
                 });
                 c2.restore();
             }
@@ -442,55 +1015,61 @@
     }
 
     // ── Shared line chart builder ─────────────────────────────────────────────
-    function buildLineChart(canvasId, labels, ordersData, lyData, targetData, existingChart, yMin, yMax, unit, labelFontSize, n1Labels) {
+    // lyData may be null (no N-1 dataset). targetData of all-nulls = full-green chart.
+    function buildMetricChart(canvasId, labels, data, lyData, targetData, existingChart, opts) {
+        const { seriesLabel, fontSize, n1Labels, invert } = opts;
+        const fmt = opts.fmt || fmtVal;
+        const { yMin, yMax, unit } = opts.range;
         const ctx = document.getElementById(canvasId).getContext('2d');
         if (existingChart) existingChart.destroy();
 
+        const datasets = [];
+        if (lyData) {
+            datasets.push({
+                label: 'N-1',
+                data: lyData,
+                fill: false,
+                borderColor: '#9ca3af',
+                borderWidth: 1.5,
+                borderDash: [5, 4],
+                pointRadius: 0,
+                tension: 0,
+                spanGaps: true,
+                order: 3,
+            });
+        }
+        if (targetData && targetData.some(v => v !== null)) {
+            datasets.push({
+                label: 'Target',
+                data: targetData,
+                fill: false,
+                borderColor: '#e53e3e',
+                borderWidth: 1.5,
+                borderDash: [],
+                pointRadius: 0,
+                tension: 0,
+                spanGaps: true,
+                order: 2,
+            });
+        }
+        datasets.push({
+            label: seriesLabel,
+            data: data,
+            fill: false,
+            borderColor: '#0d3d6e',
+            borderWidth: 2.5,
+            pointRadius: ctx => ctx.dataset.data[ctx.dataIndex] !== null ? 4 : 0,
+            pointBackgroundColor: '#0d3d6e',
+            pointBorderColor: '#fff',
+            pointBorderWidth: 1.5,
+            tension: 0,
+            spanGaps: false,
+            order: 1,
+        });
+
         return new Chart(ctx, {
             type: 'line',
-            data: {
-                labels,
-                datasets: [
-                    {
-                        label: 'N-1',
-                        data: lyData,
-                        fill: false,
-                        borderColor: '#9ca3af',
-                        borderWidth: 1.5,
-                        borderDash: [5, 4],
-                        pointRadius: 0,
-                        tension: 0,
-                        spanGaps: true,
-                        order: 3,
-                    },
-                    {
-                        label: 'Target',
-                        data: targetData,
-                        fill: false,
-                        borderColor: '#e53e3e',
-                        borderWidth: 1.5,
-                        borderDash: [],
-                        pointRadius: 0,
-                        tension: 0,
-                        spanGaps: true,
-                        order: 2,
-                    },
-                    {
-                        label: 'Orders',
-                        data: ordersData,
-                        fill: false,
-                        borderColor: '#0d3d6e',
-                        borderWidth: 2.5,
-                        pointRadius: ctx => ctx.dataset.data[ctx.dataIndex] !== null ? 4 : 0,
-                        pointBackgroundColor: '#0d3d6e',
-                        pointBorderColor: '#fff',
-                        pointBorderWidth: 1.5,
-                        tension: 0,
-                        spanGaps: false,
-                        order: 1,
-                    },
-                ]
-            },
+            data: { labels, datasets },
             options: {
                 responsive: true,
                 maintainAspectRatio: false,
@@ -503,9 +1082,9 @@
                                 const v = ctx.parsed.y;
                                 if (v === null || isNaN(v)) return null;
                                 if (ctx.dataset.label === 'N-1' && n1Labels) {
-                                    return `N-1 (${n1Labels[ctx.dataIndex]}): ${v}`;
+                                    return `N-1 (${n1Labels[ctx.dataIndex]}): ${fmt(v)}`;
                                 }
-                                return ctx.dataset.label + ': ' + v;
+                                return ctx.dataset.label + ': ' + fmt(v);
                             }
                         }
                     }
@@ -524,57 +1103,47 @@
                 }
             },
             plugins: [
-                makeBgPlugin(targetData, yMin, yMax),
-                makeDataLabelPlugin(canvasId + 'Labels', 'Orders', labelFontSize)
+                makeBgPlugin(targetData || labels.map(() => null), yMin, yMax, invert),
+                makeDataLabelPlugin(canvasId + 'Labels', seriesLabel, fontSize, fmt)
             ]
         });
     }
 
-    // ── Monthly chart ─────────────────────────────────────────────────────────
-    function renderMonthlyChart(data) {
-        const { yMin, yMax, unit } = calcYRange([data.monthly_orders, data.monthly_orders_ly, data.monthly_orders_target]);
-        monthlyChart = buildLineChart(
-            'monthlyChart', data.monthly_labels,
-            data.monthly_orders, data.monthly_orders_ly, data.monthly_orders_target,
-            monthlyChart, yMin, yMax, unit, 10
-        );
-    }
-
-    // ── Weekly chart ──────────────────────────────────────────────────────────
-    function renderWeeklyChart(data) {
-        const { yMin, yMax, unit } = calcYRange([data.weekly_orders, data.weekly_orders_ly, data.weekly_orders_target]);
-        weeklyChart = buildLineChart(
-            'weeklyChart', data.weekly_labels,
-            data.weekly_orders, data.weekly_orders_ly, data.weekly_orders_target,
-            weeklyChart, yMin, yMax, unit, 10, data.weekly_n1_labels
-        );
-    }
-
-    // ── Daily chart ───────────────────────────────────────────────────────────
-    function renderDailyChart(data) {
+    // ── Orders row (month/week/day share row-consistent y-ranges) ────────────
+    function renderOrdersRow(data) {
         const dates      = data.dates;
         const today      = data.today;
         const ordersPast = data.orders.map((v, i) => dates[i] <= today ? v : null);
+        const dailyLabels = dates.map(dateLabel);
 
-        const labels = dates.map(d => {
-            const dt = new Date(d + 'T00:00:00');
-            const dd = String(dt.getDate()).padStart(2, '0');
-            const mm = String(dt.getMonth() + 1).padStart(2, '0');
-            return DAY_NAMES[dt.getDay()] + ' ' + dd + '/' + mm;
-        });
+        const ranges = calcRowRanges([
+            { series: [data.monthly_orders, data.monthly_orders_ly], target: data.monthly_orders_target },
+            { series: [data.weekly_orders, data.weekly_orders_ly],   target: data.weekly_orders_target },
+            { series: [ordersPast, data.orders_ly],                  target: data.orders_target },
+        ]);
 
-        const { yMin, yMax, unit } = calcYRange([ordersPast, data.orders_ly, data.orders_target]);
-        ordersChart = buildLineChart(
-            'ordersChart', labels,
+        monthlyChart = buildMetricChart(
+            'monthlyChart', data.monthly_labels,
+            data.monthly_orders, data.monthly_orders_ly, data.monthly_orders_target,
+            monthlyChart, { seriesLabel: 'Orders', fontSize: 10, range: ranges[0] }
+        );
+        weeklyChart = buildMetricChart(
+            'weeklyChart', data.weekly_labels,
+            data.weekly_orders, data.weekly_orders_ly, data.weekly_orders_target,
+            weeklyChart, { seriesLabel: 'Orders', fontSize: 10, n1Labels: data.weekly_n1_labels, range: ranges[1] }
+        );
+        ordersChart = buildMetricChart(
+            'ordersChart', dailyLabels,
             ordersPast, data.orders_ly, data.orders_target,
-            ordersChart, yMin, yMax, unit, 11
+            ordersChart, { seriesLabel: 'Orders', fontSize: 11, range: ranges[2] }
         );
     }
 
     // ── Sessions chart builder (values in thousands) ──────────────────────────
-    function buildSessionsChart(canvasId, labels, sessionsData, lyData, targetData, existingChart, n1Labels) {
-        const { yMin, yMax, unit, kSeries, kTarget } = calcYRangeK([sessionsData, lyData], targetData);
-        const [kSessions, kLy] = kSeries;
+    // k = { s, ly, t } already converted to thousands; range from calcRowRanges
+    function buildSessionsChart(canvasId, labels, k, range, existingChart, n1Labels) {
+        const { yMin, yMax, unit } = range;
+        const kSessions = k.s, kLy = k.ly, kTarget = k.t;
         const ctx = document.getElementById(canvasId).getContext('2d');
         if (existingChart) existingChart.destroy();
 
