@@ -1808,6 +1808,7 @@ function _renderModalRows() {
         addTd('', null, true); addTd('', null, true); addTd('', null, true);
         addTd('', null, true); addTd('', null, true); addTd('', null, true);
         addTd('', null, true); addTd('', null, true); addTd('', null, true);
+        addTd('', null, true);
         addTd(label, 'left');
         addTd(avgMile   != null ? avgMile.toLocaleString()    : '—', 'right');
         addTd(avgDIS    != null ? fmtInt(avgDIS)              : '—', 'right');

@@ -467,6 +467,15 @@ async def _fetch_supplier_stock_internal(data: dict):
                         password=secrets['1LINK_PASSWORD'],
                     )
                     input_df = client.fetch_dataframe()
+                    # LCV rows carry incorrect CAP IDs so lookups fail — drop them entirely
+                    make_col = next((c for c in input_df.columns if str(c).strip().lower() == 'make'), None)
+                    if make_col is not None:
+                        lcv_mask = input_df[make_col].astype(str).str.startswith('LCV ')
+                        if lcv_mask.any():
+                            logger.info(f"1link: excluding {int(lcv_mask.sum())} rows with Make beginning 'LCV '")
+                            input_df = input_df[~lcv_mask]
+                    else:
+                        logger.warning(f"1link: no Make column found for LCV filter. Columns: {list(input_df.columns)[:20]}")
                 break
             except Exception as e:
                 last_exc = e
