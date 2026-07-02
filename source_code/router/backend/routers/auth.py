@@ -1,0 +1,74 @@
+"""Login, logout and root redirect."""
+
+from fastapi import APIRouter, Request, Form, Depends
+from fastapi.responses import HTMLResponse, RedirectResponse
+import os
+import time
+import hashlib
+import logging
+
+
+from utils.db_utils import (get_database_connection, record_login, record_logout)
+
+from .core import (BASE_URL, _ENV, templates, VALID_USERS, _active_sessions, _reload_users_from_aurora,
+                   get_current_user, _uk_now)
+
+logger = logging.getLogger(__name__)
+
+router = APIRouter()
+
+
+@router.get("/", response_class=HTMLResponse)
+def root(request: Request, user: str = Depends(get_current_user)):
+    if not user:
+        return RedirectResponse(url=BASE_URL + "/login", status_code=303)
+    #
+    return RedirectResponse(url=BASE_URL + "/home", status_code=303)  # CHANGED: was /tasks
+    # return templates.TemplateResponse("supplier_stock_evaluator.html", {"request": request, "user": user})
+
+
+@router.get("/login", response_class=HTMLResponse)
+def login(request: Request):
+    return templates.TemplateResponse("login.html", {"request": request, 'BASE_URL': BASE_URL})
+
+
+@router.post("/login")
+def login(request: Request, username: str = Form(...), password: str = Form(...)):
+    _reload_users_from_aurora()
+    pwd_hash = hashlib.sha256(password.encode()).hexdigest()
+    if pwd_hash == VALID_USERS.get(username):
+        session_id = hashlib.sha256(os.urandom(16)).hexdigest()
+        login_epoch = time.time()
+        request.session['user'] = username
+        request.session['pwd_hash'] = pwd_hash
+        request.session['session_id'] = session_id
+        request.session['login_time_epoch'] = login_epoch
+        _active_sessions[session_id] = {'user': username, 'login_time': _uk_now().strftime('%Y-%m-%d %H:%M:%S')}
+        try:
+            with get_database_connection() as conn:
+                record_login(conn, session_id, username, _ENV, _uk_now())
+        except Exception as e:
+            logger.warning("Failed to record login for %s: %s", username, e)
+        return RedirectResponse(url=BASE_URL + "/home", status_code=303)  # CHANGED: was /tasks
+    return templates.TemplateResponse(
+        "login.html",
+        {
+            "request": request,
+            "error": "Invalid username or password",
+            'BASE_URL': BASE_URL
+        }
+    )
+
+
+@router.get("/logout")
+def logout(request: Request):
+    session_id = request.session.get('session_id')
+    _active_sessions.pop(session_id, None)
+    if session_id:
+        try:
+            with get_database_connection() as conn:
+                record_logout(conn, session_id, _uk_now())
+        except Exception as e:
+            logger.warning("Failed to record logout for session %s: %s", session_id, e)
+    request.session.clear()
+    return RedirectResponse(url=BASE_URL + "/login", status_code=303)
