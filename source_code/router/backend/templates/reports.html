@@ -1,0 +1,366 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Reports</title>
+    <link rel="icon" type="image/png" href="{{ BASE_URL }}/static/icon.png">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css" rel="stylesheet">
+    <style>
+        @font-face { font-family: 'DM Sans'; src: url('{{ BASE_URL }}/static/fonts/DMSans-Regular.ttf');  font-weight: 400; }
+        @font-face { font-family: 'DM Sans'; src: url('{{ BASE_URL }}/static/fonts/DMSans-Medium.ttf');   font-weight: 500; }
+        @font-face { font-family: 'DM Sans'; src: url('{{ BASE_URL }}/static/fonts/DMSans-SemiBold.ttf'); font-weight: 600; }
+        @font-face { font-family: 'DM Sans'; src: url('{{ BASE_URL }}/static/fonts/DMSans-Bold.ttf');     font-weight: 700; }
+        body, button, input, select, textarea { font-family: 'DM Sans', system-ui, sans-serif; }
+        body { background-color: #003c57; }
+        .page-header { color: #ffffff; font-weight: 600; letter-spacing: -0.3px; }
+        .back-link { color: rgba(255,255,255,0.6) !important; text-decoration: none; }
+        .back-link:hover { color: #ffffff !important; }
+
+        .panel {
+            background: #ffffff;
+            border-radius: 12px;
+            padding: 18px 20px;
+        }
+        .panel-title { font-weight: 600; font-size: 0.95rem; color: #0d3d5f; margin-bottom: 14px; }
+
+        /* Run report bar */
+        .run-panel { max-width: 720px; }
+        .run-row { display: flex; align-items: center; gap: 10px; }
+        .report-select {
+            flex: 0 0 280px; border: 1px solid #d6dee5; border-radius: 6px;
+            padding: 8px 10px; font-size: 0.9rem; color: #0d3d5f; font-weight: 500;
+        }
+        .report-notes {
+            flex: 1; border: 1px solid #d6dee5; border-radius: 6px;
+            padding: 8px 10px; font-size: 0.9rem; color: #33424f;
+        }
+        .btn-run {
+            background-color: #7ed321; border: none; color: #0d3d5f; font-weight: 600;
+            flex-shrink: 0;
+        }
+        .btn-run:hover { background-color: #6cba18; color: #0d3d5f; }
+        .btn-run:disabled { background-color: #b8d98a; color: #4a5a45; }
+
+        /* Task history table */
+        .task-search {
+            width: 280px; border: 1px solid #d6dee5; border-radius: 6px;
+            padding: 6px 10px; font-size: 0.85rem; color: #33424f;
+        }
+        .btn-search {
+            background-color: #0d3d5f; border: none; color: #ffffff;
+            font-weight: 600; font-size: 0.85rem; padding: 6px 16px;
+        }
+        .btn-search:hover { background-color: #003c57; color: #ffffff; }
+        .task-table-wrap { max-height: 620px; overflow-y: auto; overflow-x: hidden; }
+        /* Fixed layout + explicit column widths: the columns never move,
+           whether showing the empty placeholder or loaded rows.
+           min-width matches the colgroup total so nothing wraps/shrinks. */
+        table.task-table { width: 100%; min-width: 1140px; border-collapse: collapse; table-layout: fixed; }
+        .task-table td { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .task-table thead th {
+            position: sticky; top: 0; background: #ffffff;
+            text-align: left; font-size: 0.72rem; font-weight: 600;
+            color: #8a96a3; text-transform: uppercase; letter-spacing: 0.02em;
+            padding: 0 12px 10px; border-bottom: 2px solid #e6edf2;
+        }
+        .task-table tbody tr { height: 52px; }
+        .task-table tbody tr:nth-child(odd) { background-color: #f7f9fb; }
+        .task-table td { padding: 8px 12px; font-size: 0.85rem; color: #33424f; vertical-align: middle; }
+        .task-table td.col-download { text-align: center; width: 56px; }
+        .task-user { font-weight: 500; }
+        .task-badge { font-size: 0.72rem; font-weight: 600; padding: 3px 10px; border-radius: 20px; white-space: nowrap; }
+        .badge-running { background-color: #e6f0ff; color: #1a5fd6; }
+        .badge-done { background-color: #e6f7e3; color: #2b8a2b; }
+        .badge-error { background-color: #fbe7e7; color: #c53030; }
+        .task-progress-cell { display: flex; align-items: center; gap: 8px; }
+        .task-progress { height: 18px; width: 140px; flex: 0 0 140px; background-color: #cfd9e2; position: relative; }
+        .task-progress-bar { background-color: #7ed321; transition: width 0.6s ease; }
+        .task-progress-pct {
+            position: absolute; inset: 0; display: flex; align-items: center;
+            justify-content: center; font-size: 0.72rem; font-weight: 600; color: #33424f;
+        }
+        .task-stage { font-size: 0.72rem; color: #8a96a3; white-space: nowrap; min-width: 52px; font-variant-numeric: tabular-nums; }
+        .task-error-text { font-size: 0.78rem; color: #c53030; }
+        .btn-download-icon {
+            border: none; background: transparent; color: #1a5fd6; font-size: 1rem;
+            padding: 4px 8px; cursor: pointer;
+        }
+        .btn-download-icon:hover { color: #0d3d5f; }
+        .empty-state { color: #8a96a3; font-size: 0.85rem; text-align: center; padding: 30px 0; }
+    </style>
+</head>
+<body>
+    <div class="container py-4" style="max-width: 1300px;">
+        <div class="d-flex align-items-center justify-content-between mb-4">
+            <h3 class="page-header mb-0">Reports</h3>
+            <a href="{{ BASE_URL }}/home" class="back-link"><i class="fas fa-arrow-left"></i> Home</a>
+        </div>
+
+        <div class="panel shadow-sm mb-3 run-panel">
+            <div class="panel-title">Run a Report</div>
+            <div class="run-row">
+                <select id="report-select" class="report-select">
+                    {% for opt in report_options %}
+                    <option value="{{ opt.type }}">{{ opt.label }}</option>
+                    {% endfor %}
+                </select>
+                <input id="report-notes" class="report-notes" type="text" maxlength="100"
+                       placeholder="Notes (optional, e.g. price changes)">
+                <button id="run-btn" class="btn btn-run" onclick="runReport()">
+                    <i class="fas fa-play"></i> Run
+                </button>
+            </div>
+        </div>
+
+        <div class="panel shadow-sm">
+            <div class="panel-title mb-3">Task History</div>
+            <div class="d-flex align-items-center gap-2 mb-3">
+                <input id="task-search" class="task-search" type="text"
+                       placeholder="Search reports...">
+                <button class="btn btn-search" onclick="applySearch()">
+                    <i class="fas fa-search"></i> Search
+                </button>
+            </div>
+            <div class="task-table-wrap">
+                <table class="task-table">
+                    <colgroup>
+                        <col style="width: 280px">
+                        <col style="width: 90px">
+                        <col style="width: 180px">
+                        <col style="width: 105px">
+                        <col style="width: 160px">
+                        <col style="width: 248px">
+                        <col style="width: 60px">
+                    </colgroup>
+                    <thead>
+                        <tr>
+                            <th>Report Name</th>
+                            <th>User</th>
+                            <th>Notes</th>
+                            <th>Status</th>
+                            <th>Started</th>
+                            <th>Completion</th>
+                            <th class="col-download"></th>
+                        </tr>
+                    </thead>
+                    <tbody id="task-tbody">
+                        <tr><td colspan="7" class="empty-state">No report runs yet</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const BASE_URL = "{{ BASE_URL }}";
+
+        // Smoothed display percentages per task: the bar creeps forward a
+        // little between server updates (never past serverPct+6 or 99), so
+        // long opaque stages don't look frozen — works for any report
+        // without needing its stage percentages to be perfectly tuned.
+        const displayPcts = {};
+
+        function displayedPct(task) {
+            const server = task.pct || 0;
+            const current = displayPcts[task.task_id] || 0;
+            displayPcts[task.task_id] = Math.max(current, server);
+            return Math.round(displayPcts[task.task_id]);
+        }
+
+        function creepPct(task) {
+            const server = task.pct || 0;
+            const current = Math.max(displayPcts[task.task_id] || 0, server);
+            displayPcts[task.task_id] = Math.min(current + 0.4, server + 6, 99);
+            return Math.round(displayPcts[task.task_id]);
+        }
+
+        let tasks = [];          // full history, newest first
+        let pollTimer = null;
+        let tickTimer = null;
+
+        async function runReport() {
+            const reportType = document.getElementById('report-select').value;
+            const notesInput = document.getElementById('report-notes');
+            try {
+                // If this report is already running, the server attaches us
+                // to the in-flight task instead of starting a duplicate.
+                const resp = await fetch(BASE_URL + '/api/reports/' + reportType + '/start', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ notes: notesInput.value.trim() }),
+                });
+                if (!resp.ok) throw new Error('Failed to start report (' + resp.status + ')');
+                notesInput.value = '';
+                await refreshTasks();
+            } catch (e) {
+                alert(e.message);
+            }
+        }
+
+        async function refreshTasks() {
+            try {
+                const resp = await fetch(BASE_URL + '/api/reports/tasks');
+                if (!resp.ok) return;
+                const data = await resp.json();
+                tasks = data.tasks || [];
+                renderTasks();
+            } catch (e) {
+                // transient network error - leave whatever is rendered
+            }
+            updateRunButton();
+            updatePolling();
+        }
+
+        function anyRunning() {
+            return tasks.some(t => t.status === 'running');
+        }
+
+        function updateRunButton() {
+            // Only block running the report that's already in flight;
+            // different reports can run concurrently.
+            const selected = document.getElementById('report-select').value;
+            document.getElementById('run-btn').disabled =
+                tasks.some(t => t.status === 'running' && t.report_type === selected);
+        }
+
+        function updatePolling() {
+            // Poll the task list while anything is running (covers tasks
+            // started by other users too), stop when everything is settled.
+            if (anyRunning() && !pollTimer) {
+                pollTimer = setInterval(refreshTasks, 2000);
+            } else if (!anyRunning() && pollTimer) {
+                clearInterval(pollTimer);
+                pollTimer = null;
+            }
+        }
+
+        function elapsedSeconds(task) {
+            const start = new Date(task.started_at + 'Z').getTime();
+            const end = task.completed_at ? new Date(task.completed_at + 'Z').getTime() : Date.now();
+            return Math.max(0, Math.round((end - start) / 1000));
+        }
+
+        function formatDuration(totalSeconds) {
+            const m = Math.floor(totalSeconds / 60);
+            const s = totalSeconds % 60;
+            return m > 0 ? `${m}m ${s}s` : `${s}s`;
+        }
+
+        // Applied search: every space-separated word must appear somewhere
+        // in the task's title (report name + notes), case-insensitive.
+        // e.g. "sales chang" matches "Sales - Status Changed".
+        let searchTerms = [];
+
+        function applySearch() {
+            const raw = document.getElementById('task-search').value.trim().toLowerCase();
+            searchTerms = raw ? raw.split(/\s+/) : [];
+            renderTasks();
+        }
+
+        function matchesSearch(task) {
+            if (!searchTerms.length) return true;
+            const title = ((task.report_label || '') + ' ' + (task.notes || '')).toLowerCase();
+            return searchTerms.every(term => title.includes(term));
+        }
+
+        function renderTasks() {
+            const tbody = document.getElementById('task-tbody');
+            if (!tasks.length) {
+                tbody.innerHTML = '<tr><td colspan="7" class="empty-state">No report runs yet</td></tr>';
+                return;
+            }
+            const visible = tasks.filter(matchesSearch);
+            if (!visible.length) {
+                tbody.innerHTML = '<tr><td colspan="7" class="empty-state">No reports match your search</td></tr>';
+                return;
+            }
+            tbody.innerHTML = visible.map(taskRowHtml).join('');
+        }
+
+        function taskRowHtml(task) {
+            const badgeClass = task.status === 'done' ? 'badge-done'
+                              : task.status === 'error' ? 'badge-error' : 'badge-running';
+            const badgeText = task.status === 'done' ? 'Complete'
+                             : task.status === 'error' ? 'Failed' : 'Running';
+
+            let completionCell;
+            if (task.status === 'running') {
+                const pct = displayedPct(task);
+                completionCell = `
+                    <div class="task-progress-cell">
+                        <div class="task-progress progress">
+                            <div class="progress-bar task-progress-bar" style="width: ${pct}%"></div>
+                            <span class="task-progress-pct">${pct}%</span>
+                        </div>
+                        <span class="task-stage"><span class="task-duration">${formatDuration(elapsedSeconds(task))}</span></span>
+                    </div>`;
+            } else if (task.status === 'error') {
+                completionCell = `<span class="task-error-text">${escapeHtml(task.error || 'Report failed')}</span>`;
+            } else {
+                completionCell = `<span class="task-duration">${formatDuration(elapsedSeconds(task))}</span>`;
+            }
+
+            const downloadCell = task.status === 'done'
+                ? `<button class="btn-download-icon" title="Download" onclick="downloadTask('${task.task_id}')"><i class="fas fa-download"></i></button>`
+                : '';
+
+            return `
+                <tr data-task-id="${task.task_id}" data-status="${task.status}">
+                    <td>${escapeHtml(task.report_label)}</td>
+                    <td class="task-user">${escapeHtml(task.user || '—')}</td>
+                    <td title="${escapeHtml(task.notes || '')}">${escapeHtml(task.notes || '')}</td>
+                    <td><span class="task-badge ${badgeClass}">${badgeText}</span></td>
+                    <td>${formatStartedAt(task.started_at)}</td>
+                    <td>${completionCell}</td>
+                    <td class="col-download">${downloadCell}</td>
+                </tr>`;
+        }
+
+        function formatStartedAt(iso) {
+            if (!iso) return '';
+            const d = new Date(iso + 'Z');
+            return d.toLocaleString([], { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit' });
+        }
+
+        function escapeHtml(str) {
+            const div = document.createElement('div');
+            div.textContent = str;
+            return div.innerHTML;
+        }
+
+        function downloadTask(taskId) {
+            window.location.href = BASE_URL + '/api/reports/download/' + taskId;
+        }
+
+        // Live-tick the duration label and creep the smoothed progress bar
+        // for running tasks every second, without a full re-render (keeps
+        // the DOM/scroll position stable).
+        function tickDurations() {
+            document.querySelectorAll('tr[data-status="running"]').forEach(row => {
+                const taskId = row.getAttribute('data-task-id');
+                const task = tasks.find(t => t.task_id === taskId);
+                if (!task) return;
+                const el = row.querySelector('.task-duration');
+                if (el) el.textContent = formatDuration(elapsedSeconds(task));
+                const pct = creepPct(task);
+                const bar = row.querySelector('.task-progress-bar');
+                if (bar) bar.style.width = pct + '%';
+                const pctLabel = row.querySelector('.task-progress-pct');
+                if (pctLabel) pctLabel.textContent = pct + '%';
+            });
+        }
+
+        document.getElementById('report-select').addEventListener('change', updateRunButton);
+        document.getElementById('report-notes').addEventListener('keydown', e => {
+            if (e.key === 'Enter') runReport();
+        });
+        document.getElementById('task-search').addEventListener('keydown', e => {
+            if (e.key === 'Enter') applySearch();
+        });
+        refreshTasks();
+        tickTimer = setInterval(tickDurations, 1000);
+    </script>
+</body>
+</html>
