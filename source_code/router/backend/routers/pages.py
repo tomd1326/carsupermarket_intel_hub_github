@@ -27,7 +27,7 @@ def home(request: Request, user: str = Depends(get_current_user)):
             try:
                 _get_sf_rows()
             except Exception as e:
-                logger.warning(f"Home cache warm (SF) failed: {e}")
+                logger.warning(f"Home cache warm (Snowflake) failed: {e}")
         def _dbs():
             try:
                 _get_dbs_purchases()
