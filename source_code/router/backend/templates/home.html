@@ -22,7 +22,14 @@
             flex-direction: column;
             align-items: center;
             justify-content: center;
-            padding-bottom: 20vh;
+            padding: 40px 16px 8vh;
+        }
+        .menu-grid {
+            display: flex;
+            flex-wrap: wrap;
+            justify-content: center;
+            gap: 20px;
+            max-width: 600px;
         }
         .brand-logo {
             width: 80px;
@@ -92,7 +99,7 @@
     <div class="home-container">
         <img src="{{ BASE_URL }}/static/icon.png" alt="CarSupermarket" class="brand-logo">
         <h2 class="home-title mb-5">CarSupermarket.com Buying Tools</h2>
-        <div class="d-flex flex-column gap-4">
+        <div class="menu-grid">
             <a href="{{ BASE_URL }}/buying-requirements" class="btn menu-btn">
                 Buying Requirements
             </a>
@@ -114,6 +121,9 @@
             </a>
             <a href="{{ BASE_URL }}/cap-lookup" class="btn menu-btn">
                 CAP ID Lookup
+            </a>
+            <a href="{{ BASE_URL }}/reports" class="btn menu-btn">
+                Reports
             </a>
             <a href="{{ BASE_URL }}/settings-page" class="btn menu-btn-settings">
                 <i class="fas fa-cog"></i> Settings

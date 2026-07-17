@@ -85,7 +85,7 @@ def buying_requirements_sf_data(request: Request, force: bool = False, user: str
             cached_at = _sf_cache.get("cached_at", 0.0)
         return {"status": "ok", "rows": sf_rows, "cached_at": cached_at}
     except Exception as e:
-        logger.error(f"Buying requirements SF data failed: {e}")
+        logger.error(f"Buying requirements Snowflake data failed: {e}")
         return {"status": "error", "message": str(e)}
 
 
@@ -405,7 +405,7 @@ def _save_sf_cache_to_s3(rows: list, cached_at: float) -> None:
             ContentType="application/json",
         )
     except Exception as e:
-        logger.warning(f"Failed to write SF S3 cache: {e}")
+        logger.warning(f"Failed to write Snowflake S3 cache: {e}")
 
 
 def _load_dbs_cache_from_s3() -> tuple[dict, list] | None:
@@ -779,7 +779,7 @@ def _get_dbs_purchases(force: bool = False) -> dict:
         vehicles.append({'vrm': r['vrm'], 'cap_id': r['cap_id'], 'band': band, 'make': r.get('make', ''), 'model': r.get('model', ''), 'deriv': r.get('deriv', ''), 'supplier': r.get('supplier', ''), 'mileage': r.get('mileage'), 'siv': r.get('siv'), 'rrp': _to_float(r.get('rrp')), 'rrp0': _to_float(r.get('rrp0')), 'dor': r.get('dor'), 'cap_live': r.get('cap_live'), 'at_ptm': r.get('at_ptm'), 'at_rating': r.get('at_rating'), 'source': 'dbs'})
 
     data_rows = len(values) - (header_row_idx + 1) if header_row_idx is not None else 0
-    logger.info(f"Daily Buyers Sheet: {sum(purchases.values())} purchases in {len(purchases)} cap/band keys (from {data_rows} rows, {total_dbs_vrms} unique VRMs, skipped: {skipped_no_cap} no CAP ID, {skipped_no_rrp} no RRP, {skipped_no_sf} not in SF)")
+    logger.info(f"Daily Buyers Sheet: {sum(purchases.values())} purchases in {len(purchases)} cap/band keys (from {data_rows} rows, {total_dbs_vrms} unique VRMs, skipped: {skipped_no_cap} no CAP ID, {skipped_no_rrp} no RRP, {skipped_no_sf} not in Snowflake)")
     fetched_at = time.time()
     with _cache_lock:
         _dbs_cache["purchases"]  = purchases
@@ -850,11 +850,11 @@ def _get_cb_purchases(force: bool = False) -> dict:
             return result
         except Exception as e:
             logger.warning(f"CB fetch: could not fetch Apex VRMs from Snowflake: {e}")
-            # Fallback: extract non-empty VRMs from the in-process SF cache
+            # Fallback: extract non-empty VRMs from the in-process Snowflake cache
             with _cache_lock:
                 sf_rows = _sf_cache.get("rows") or []
             result = {str(r[18]).strip().upper() for r in sf_rows if len(r) > 18 and r[18]}
-            logger.info(f"Cars Bought: using SF cache fallback — {len(result)} Apex VRMs for dedup")
+            logger.info(f"Cars Bought: using Snowflake cache fallback — {len(result)} Apex VRMs for dedup")
             return result
 
     def _fetch_dbs_vrms():
@@ -1012,7 +1012,7 @@ def _get_cb_purchases(force: bool = False) -> dict:
         _cb_cache["expires"]     = time.monotonic() + _CB_TTL_SECONDS
         _cb_cache["fetched_at"]  = fetched_at
     _save_cb_cache_to_s3(purchases, vehicles, fetched_at, _CB_S3_TTL_SECONDS, total_vrms, skipped_no_rrp)
-    logger.info(f"Cars Bought: {total_vrms} unique VRMs, {sum(purchases.values())} in table ({len(purchases)} cap/band keys), skipped: {skipped_no_cap} no CAP ID, {skipped_no_rrp} no RRP, {skipped_no_sf} not in SF")
+    logger.info(f"Cars Bought: {total_vrms} unique VRMs, {sum(purchases.values())} in table ({len(purchases)} cap/band keys), skipped: {skipped_no_cap} no CAP ID, {skipped_no_rrp} no RRP, {skipped_no_sf} not in Snowflake")
     return purchases
 
 
