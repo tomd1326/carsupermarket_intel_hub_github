@@ -22,6 +22,43 @@ function setStatus(elId, label, state) {
     }
 }
 
+/* ── Page loading indicator ──────────────────────────────────
+ * Everything below the title (buttons, statuses, filters, table) stays
+ * hidden — and the big "Loading…" indicator below the title stays up — for
+ * the whole of any rebuild (initial load, Refresh Table, Apply view),
+ * including the DBS/Cars Bought patch that follows a Snowflake fetch, so the
+ * page appears once, fully settled, instead of loading then visibly shifting
+ * as each source lands. Ref-counted so overlapping callers (e.g.
+ * loadFromServer + loadDbsFromCache) don't release it early.
+ */
+let _tableOverlayDepth = 0;
+
+function showTableOverlay() {
+    _tableOverlayDepth++;
+    const loading = document.getElementById('fetch-loading');
+    const content = document.getElementById('page-content');
+    if (loading) loading.style.display = 'flex';
+    if (content) content.style.display = 'none';
+}
+
+const _spWarnings = new Set();
+function showSpWarning(message) {
+    _spWarnings.add(message);
+    const el = document.getElementById('sp-warning');
+    if (!el) return;
+    el.textContent = [..._spWarnings].join(' — ');
+    el.classList.remove('d-none');
+}
+
+function hideTableOverlay() {
+    _tableOverlayDepth = Math.max(0, _tableOverlayDepth - 1);
+    if (_tableOverlayDepth > 0) return;
+    const loading = document.getElementById('fetch-loading');
+    const content = document.getElementById('page-content');
+    if (loading) loading.style.display = 'none';
+    if (content) content.style.display = 'block';
+}
+
 /* ── Column widths ───────────────────────────────────────── */
 const COL_UNITS = [
     0.665, // 0  CAP ID
@@ -29,22 +66,24 @@ const COL_UNITS = [
     0.55,  // 2  View Vehicles
     0.665, // 3  Fuel
     0.665, // 4  Total Sales
-    0.665, // 5  7d Sales
-    0.665, // 6  Stock
-    0.665, // 7  Ideal Stock
-    0.665, // 8  Required
-    0.665, // 9  Daily Buyers Sheet
-    0.665, // 10 Cars Bought
-    0.665, // 11 Remaining
-    0.665, // 12 Avg Days in Stock
-    0.665, // 13 Avg Days to Sell
-    0.665, // 14 Avg Sell Price
-    0.665, // 15 Avg AT PTM
-    0.665, // 16 Avg AT PTM %
-    0.665, // 17 Avg AT Rating
-    0.665, // 18 Avg GPU-M
-    0.665, // 19 Avg GPU-S
-    0.665, // 20 Avg GPU-MS
+    0.665, // 5  30d Sales
+    0.665, // 6  15d Sales
+    0.665, // 7  7d Sales
+    0.665, // 8  Stock
+    0.665, // 9  Ideal Stock
+    0.665, // 10 Required
+    0.665, // 11 Daily Buyers Sheet
+    0.665, // 12 Cars Bought
+    0.665, // 13 Remaining
+    0.665, // 14 Avg Days in Stock
+    0.665, // 15 Avg Days to Sell
+    0.665, // 16 Avg Sell Price
+    0.665, // 17 Avg AT PTM
+    0.665, // 18 Avg AT PTM %
+    0.665, // 19 Avg AT Rating
+    0.665, // 20 Avg GPU-M
+    0.665, // 21 Avg GPU-S
+    0.665, // 22 Avg GPU-MS
 ];
 const TOTAL_UNITS = COL_UNITS.reduce((a, b) => a + b, 0);
 
@@ -52,8 +91,8 @@ const TOTAL_UNITS = COL_UNITS.reduce((a, b) => a + b, 0);
 const BASE_FONT_PX  = 12;
 const BASE_FIXED_PX = 65;
 const BASE_DESC_PX  = 530;
-const BASE_OVERRIDE = { 2: 60, 3: 46, 8: 78, 9: 65.5, 10: 65.5, 11: 79.5 }; // View, Fuel narrow, Required wider, DBS/CB wider, Remaining wider
-const FONT_STEP     = 0.5; // px per click
+const BASE_OVERRIDE = { 2: 66, 3: 46, 10: 78, 11: 65.5, 12: 65.5, 13: 79.5 }; // View, Fuel narrow, Required wider, DBS/CB wider, Remaining wider
+const FONT_STEP     = 1; // px per click — 0.5px was imperceptible in rendered text
 const FONT_MIN      = 8;
 const FONT_MAX      = 16;
 
@@ -63,11 +102,63 @@ function scaledFixed()    { return Math.round(BASE_FIXED_PX * currentFontPx / BA
 function scaledDesc()     { return Math.round(BASE_DESC_PX  * currentFontPx / BASE_FONT_PX); }
 function scaledOverride(i){ return Math.round((BASE_OVERRIDE[i] ?? BASE_FIXED_PX) * currentFontPx / BASE_FONT_PX); }
 
+let _fontApplyPending = false;
+
 function changeFontSize(delta) {
     currentFontPx = Math.min(FONT_MAX, Math.max(FONT_MIN, Math.round((currentFontPx + delta * FONT_STEP) * 10) / 10));
     document.getElementById('fontSizeLabel').textContent = currentFontPx + 'px';
     colWidths = new Array(COL_UNITS.length).fill(null); // reset manual resizes
+    // Re-laying out the whole table is expensive — let the label paint first so
+    // the click feels instant, and coalesce rapid clicks into one relayout at
+    // the final size instead of one per click.
+    if (!_fontApplyPending) {
+        _fontApplyPending = true;
+        requestAnimationFrame(() => setTimeout(() => {
+            _fontApplyPending = false;
+            applyColWidths();
+        }, 0));
+    }
+    saveFontSizePref();
+}
+
+/* ── User font size preference ────────────────────────────── */
+// Stored per user in Aurora (user_preferences table), same pattern as column
+// visibility (br_hidden_columns).
+const FONT_PREF_KEY = 'br_font_size';
+let _fontPrefSaveTimer = null;
+
+function saveFontSizePref() {
+    clearTimeout(_fontPrefSaveTimer);
+    _fontPrefSaveTimer = setTimeout(() => {
+        fetch(window.BASE_URL + '/api/user-prefs/' + FONT_PREF_KEY, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ px: currentFontPx }),
+        }).catch(() => {});
+    }, 500);
+}
+
+function loadFontSizePref() {
+    return fetch(window.BASE_URL + '/api/user-prefs/' + FONT_PREF_KEY)
+        .then(r => r.json())
+        .then(resp => {
+            if (resp.status !== 'ok' || !resp.value || typeof resp.value.px !== 'number') return;
+            currentFontPx = Math.min(FONT_MAX, Math.max(FONT_MIN, resp.value.px));
+            const lbl = document.getElementById('fontSizeLabel');
+            if (lbl) lbl.textContent = currentFontPx + 'px';
+            applyColWidths();
+        })
+        .catch(() => {});
+}
+
+function resetFontSizePref() {
+    currentFontPx = BASE_FONT_PX;
+    const lbl = document.getElementById('fontSizeLabel');
+    if (lbl) lbl.textContent = currentFontPx + 'px';
+    colWidths = new Array(COL_UNITS.length).fill(null);
     applyColWidths();
+    clearTimeout(_fontPrefSaveTimer);
+    fetch(window.BASE_URL + '/api/user-prefs/' + FONT_PREF_KEY, { method: 'DELETE' }).catch(() => {});
 }
 
 let colWidths = new Array(COL_UNITS.length).fill(null);
@@ -86,7 +177,8 @@ const CAP_ONLY_COL_INDICES = new Set([0, 2]); // CAP ID, View Vehicles
 function applyColWidths() {
     const table = document.getElementById('data-table');
     if (!table) return;
-    table.style.fontSize = currentFontPx + 'px';
+    // 'important' needed to beat the `.controls-area * { font-size: 13px !important }` rule
+    table.style.setProperty('font-size', currentFontPx + 'px', 'important');
     const lbl = document.getElementById('fontSizeLabel');
     if (lbl) lbl.textContent = currentFontPx + 'px';
     let cg = table.querySelector('colgroup');
@@ -95,6 +187,8 @@ function applyColWidths() {
     let totalW = 0;
     COL_UNITS.forEach((_, i) => {
         if (currentView === 'model' && CAP_ONLY_COL_INDICES.has(i)) return;
+        const tc = THEAD_COLS[i];
+        if (tc && colIsHidden(tc)) return;
         const w = colWidths[i] !== null ? colWidths[i] : (i === 1 ? scaledDesc() : scaledOverride(i));
         totalW += w;
         const col = document.createElement('col');
@@ -327,9 +421,15 @@ document.querySelectorAll('.filter-btn').forEach(btn => {
 
 /* ── Sortable table ──────────────────────────────────────── */
 let rawData = [], tableData = [], dbsPurchases = {}, cbPurchases = {}, sortCol = null, sortDir = 1;
+let _rowElems = new Map(); // tableData row array -> its <tr>, so sorting can reorder without a full rebuild
 let dbsVehicles = [], cbVehicles = [];
 
 function getMaxDIS()  { const v = parseFloat(document.getElementById('maxDIS')?.value);  return isNaN(v) ? null : v; }
+
+// Max Days Sales value in force when the table was last aggregated — the sales
+// column header and the column-select popup label both follow this, not the
+// (possibly not-yet-applied) input box value.
+let appliedSalesDays = 90;
 
 function updateSalesColumnLabel() {
     const days = getMaxDIS() ?? 90;
@@ -338,6 +438,8 @@ function updateSalesColumnLabel() {
     if (flbl && flbl.textContent) {
         flbl.textContent = flbl.textContent.replace(/Filtered \S+ Sales:/, `Filtered ${label}:`);
     }
+    const thLbl = document.querySelector('#th-total-sales .th-label');
+    if (thLbl) thLbl.textContent = `${appliedSalesDays}d Sales`;
 }
 document.getElementById('maxDIS')?.addEventListener('change', updateSalesColumnLabel);
 function getMaxDTS()  { const v = parseFloat(document.getElementById('maxDTS')?.value);  return isNaN(v) ? null : v; }
@@ -349,38 +451,162 @@ let pendingView = 'cap'; // selection not yet applied
 
 
 const THEAD_COLS = [
-    { capOnly: true,  html: '<span class="th-label">CAP ID</span><span class="sort-icon"><i class="fas fa-sort"></i></span><div class="resize-handle"></div>', attrs: 'data-col="0" data-type="num"' },
-    { capOnly: false, html: '<span class="th-label" id="th-label-span">Make / Model / Derivative / Price Band</span><span class="sort-icon"><i class="fas fa-sort"></i></span><div class="resize-handle"></div>', attrs: 'data-col="1" data-type="str" id="th-label" class="col-left"' },
-    { capOnly: true,  html: '<span class="th-label">View Vehicles</span>', attrs: 'class="col-view"' },
-    { capOnly: false, html: '<span class="th-label">Fuel</span><span class="sort-icon"><i class="fas fa-sort"></i></span><div class="resize-handle"></div>', attrs: 'data-col="2" data-type="str" class="col-center"' },
-    { capOnly: false, html: '<span class="th-label">90d Sales</span><span class="sort-icon"><i class="fas fa-sort"></i></span><div class="resize-handle"></div>', attrs: 'data-col="4" data-type="num" id="th-total-sales"' },
-    { capOnly: false, html: '<span class="th-label">7d Sales</span><span class="sort-icon"><i class="fas fa-sort"></i></span><div class="resize-handle"></div>', attrs: 'data-col="7" data-type="num"' },
-    { capOnly: false, html: '<span class="th-label">Stock</span><span class="sort-icon"><i class="fas fa-sort"></i></span><div class="resize-handle"></div>', attrs: 'data-col="3" data-type="num"' },
-    { capOnly: false, html: '<span class="th-label">Ideal Stock</span><span class="sort-icon"><i class="fas fa-sort"></i></span><div class="resize-handle"></div>', attrs: 'data-col="18" data-type="num"' },
-    { capOnly: false, html: '<span class="th-label">Required</span><span class="sort-icon"><i class="fas fa-sort"></i></span><div class="resize-handle"></div>', attrs: 'data-col="19" data-type="num"' },
-    { capOnly: false, html: '<span class="th-label">Daily Buyers Sheet</span><span class="sort-icon"><i class="fas fa-sort"></i></span><div class="resize-handle"></div>', attrs: 'data-col="6" data-type="num" style="background:#fef08a"' },
-    { capOnly: false, html: '<span class="th-label">Cars Bought</span><span class="sort-icon"><i class="fas fa-sort"></i></span><div class="resize-handle"></div>', attrs: 'data-col="20" data-type="num" style="background:#fef08a"' },
-    { capOnly: false, html: '<span class="th-label">Remaining</span><span class="sort-icon"><i class="fas fa-sort"></i></span><div class="resize-handle"></div>', attrs: 'data-col="21" data-type="num"' },
-    { capOnly: false, html: '<span class="th-label">Avg Days in Stock</span><span class="sort-icon"><i class="fas fa-sort"></i></span><div class="resize-handle"></div>', attrs: 'data-col="8" data-type="num"' },
-    { capOnly: false, html: '<span class="th-label">Avg Days to Sell</span><span class="sort-icon"><i class="fas fa-sort"></i></span><div class="resize-handle"></div>', attrs: 'data-col="9" data-type="num"' },
-    { capOnly: false, html: '<span class="th-label">Avg Sell Price</span><span class="sort-icon"><i class="fas fa-sort"></i></span><div class="resize-handle"></div>', attrs: 'data-col="14" data-type="num"' },
-    { capOnly: false, html: '<span class="th-label">Avg AT PTM</span><span class="sort-icon"><i class="fas fa-sort"></i></span><div class="resize-handle"></div>', attrs: 'data-col="15" data-type="num"' },
-    { capOnly: false, html: '<span class="th-label">Avg AT PTM %</span><span class="sort-icon"><i class="fas fa-sort"></i></span><div class="resize-handle"></div>', attrs: 'data-col="16" data-type="num"' },
-    { capOnly: false, html: '<span class="th-label">Avg AT Rating</span><span class="sort-icon"><i class="fas fa-sort"></i></span><div class="resize-handle"></div>', attrs: 'data-col="17" data-type="num"' },
-    { capOnly: false, html: '<span class="th-label">Avg GPU-M</span><span class="sort-icon"><i class="fas fa-sort"></i></span><div class="resize-handle"></div>', attrs: 'data-col="10" data-type="num"' },
-    { capOnly: false, html: '<span class="th-label">Avg GPU-S</span><span class="sort-icon"><i class="fas fa-sort"></i></span><div class="resize-handle"></div>', attrs: 'data-col="11" data-type="num"' },
-    { capOnly: false, html: '<span class="th-label">Avg GPU-MS</span><span class="sort-icon"><i class="fas fa-sort"></i></span><div class="resize-handle"></div>', attrs: 'data-col="12" data-type="num"' },
+    { id: 'cap_id',         label: 'CAP ID',            hideable: false, capOnly: true,  html: '<span class="th-label">CAP ID</span><span class="sort-icon"><i class="fas fa-sort"></i></span><div class="resize-handle"></div>', attrs: 'data-col="0" data-type="num"' },
+    { id: 'label',          label: 'Make / Model',      hideable: false, capOnly: false, html: '<span class="th-label" id="th-label-span">Make / Model / Derivative / Price Band</span><span class="sort-icon"><i class="fas fa-sort"></i></span><div class="resize-handle"></div>', attrs: 'data-col="1" data-type="str" id="th-label" class="col-left"' },
+    { id: 'view',           label: 'View Vehicles',     hideable: false, capOnly: true,  html: '<span class="th-label">View Vehicles</span>', attrs: 'class="col-view"' },
+    { id: 'fuel',           label: 'Fuel',              hideable: false, capOnly: false, html: '<span class="th-label">Fuel</span><span class="sort-icon"><i class="fas fa-sort"></i></span><div class="resize-handle"></div>', attrs: 'data-col="2" data-type="str" class="col-center"' },
+    { id: 'sales90',        label: '90d Sales',         hideable: true,  capOnly: false, html: '<span class="th-label">90d Sales</span><span class="sort-icon"><i class="fas fa-sort"></i></span><div class="resize-handle"></div>', attrs: 'data-col="4" data-type="num" id="th-total-sales"' },
+    { id: 'sales30',        label: '30d Sales',         hideable: true,  capOnly: false, html: '<span class="th-label">30d Sales</span><span class="sort-icon"><i class="fas fa-sort"></i></span><div class="resize-handle"></div>', attrs: 'data-col="23" data-type="num"' },
+    { id: 'sales15',        label: '15d Sales',         hideable: true,  capOnly: false, html: '<span class="th-label">15d Sales</span><span class="sort-icon"><i class="fas fa-sort"></i></span><div class="resize-handle"></div>', attrs: 'data-col="24" data-type="num"' },
+    { id: 'sales7',         label: '7d Sales',          hideable: true,  capOnly: false, html: '<span class="th-label">7d Sales</span><span class="sort-icon"><i class="fas fa-sort"></i></span><div class="resize-handle"></div>', attrs: 'data-col="7" data-type="num"' },
+    { id: 'stock',          label: 'Stock',             hideable: true,  capOnly: false, html: '<span class="th-label">Stock</span><span class="sort-icon"><i class="fas fa-sort"></i></span><div class="resize-handle"></div>', attrs: 'data-col="3" data-type="num"' },
+    { id: 'ideal',          label: 'Ideal Stock',       hideable: true,  capOnly: false, html: '<span class="th-label">Ideal Stock</span><span class="sort-icon"><i class="fas fa-sort"></i></span><div class="resize-handle"></div>', attrs: 'data-col="18" data-type="num"' },
+    { id: 'required',       label: 'Required',          hideable: true,  capOnly: false, html: '<span class="th-label">Required</span><span class="sort-icon"><i class="fas fa-sort"></i></span><div class="resize-handle"></div>', attrs: 'data-col="19" data-type="num"' },
+    { id: 'dbs',            label: 'Daily Buyers Sheet',hideable: true,  capOnly: false, html: '<span class="th-label">Daily Buyers Sheet</span><span class="sort-icon"><i class="fas fa-sort"></i></span><div class="resize-handle"></div>', attrs: 'data-col="6" data-type="num" style="background:#fef08a"' },
+    { id: 'cb',             label: 'Cars Bought',       hideable: true,  capOnly: false, html: '<span class="th-label">Cars Bought</span><span class="sort-icon"><i class="fas fa-sort"></i></span><div class="resize-handle"></div>', attrs: 'data-col="20" data-type="num" style="background:#fef08a"' },
+    { id: 'remaining',      label: 'Remaining',         hideable: true,  capOnly: false, html: '<span class="th-label">Remaining</span><span class="sort-icon"><i class="fas fa-sort"></i></span><div class="resize-handle"></div>', attrs: 'data-col="21" data-type="num"' },
+    { id: 'avg_dis',        label: 'Avg Days in Stock', hideable: true,  capOnly: false, html: '<span class="th-label">Avg Days in Stock</span><span class="sort-icon"><i class="fas fa-sort"></i></span><div class="resize-handle"></div>', attrs: 'data-col="8" data-type="num"' },
+    { id: 'avg_dts',        label: 'Avg Days to Sell',  hideable: true,  capOnly: false, html: '<span class="th-label">Avg Days to Sell</span><span class="sort-icon"><i class="fas fa-sort"></i></span><div class="resize-handle"></div>', attrs: 'data-col="9" data-type="num"' },
+    { id: 'avg_sell',       label: 'Avg Sell Price',    hideable: true,  capOnly: false, html: '<span class="th-label">Avg Sell Price</span><span class="sort-icon"><i class="fas fa-sort"></i></span><div class="resize-handle"></div>', attrs: 'data-col="14" data-type="num"' },
+    { id: 'avg_at_ptm',     label: 'Avg AT PTM',        hideable: true,  capOnly: false, html: '<span class="th-label">Avg AT PTM</span><span class="sort-icon"><i class="fas fa-sort"></i></span><div class="resize-handle"></div>', attrs: 'data-col="15" data-type="num"' },
+    { id: 'avg_at_ptm_pct', label: 'Avg AT PTM %',      hideable: true,  capOnly: false, html: '<span class="th-label">Avg AT PTM %</span><span class="sort-icon"><i class="fas fa-sort"></i></span><div class="resize-handle"></div>', attrs: 'data-col="16" data-type="num"' },
+    { id: 'avg_at_rating',  label: 'Avg AT Rating',     hideable: true,  capOnly: false, html: '<span class="th-label">Avg AT Rating</span><span class="sort-icon"><i class="fas fa-sort"></i></span><div class="resize-handle"></div>', attrs: 'data-col="17" data-type="num"' },
+    { id: 'avg_gpu_m',      label: 'Avg GPU-M',         hideable: true,  capOnly: false, html: '<span class="th-label">Avg GPU-M</span><span class="sort-icon"><i class="fas fa-sort"></i></span><div class="resize-handle"></div>', attrs: 'data-col="10" data-type="num"' },
+    { id: 'avg_gpu_s',      label: 'Avg GPU-S',         hideable: true,  capOnly: false, html: '<span class="th-label">Avg GPU-S</span><span class="sort-icon"><i class="fas fa-sort"></i></span><div class="resize-handle"></div>', attrs: 'data-col="11" data-type="num"' },
+    { id: 'avg_gpu_ms',     label: 'Avg GPU-MS',        hideable: true,  capOnly: false, html: '<span class="th-label">Avg GPU-MS</span><span class="sort-icon"><i class="fas fa-sort"></i></span><div class="resize-handle"></div>', attrs: 'data-col="12" data-type="num"' },
 ];
+
+/* ── User column preferences (hidden columns) ─────────────── */
+// Hidden columns are stored per user in Aurora (user_preferences table) under
+// this key, as {"hidden": ["avg_gpu_s", ...]}. Cells are hidden with
+// display:none rather than removed, so all index-based cell maps stay valid.
+const COL_PREF_KEY = 'br_hidden_columns';
+// 30d/15d Sales start hidden until a user opts in
+const DEFAULT_HIDDEN_COLS = ['sales30', 'sales15'];
+let hiddenCols = new Set(DEFAULT_HIDDEN_COLS);
+
+// THEAD_COLS entries visible in the current view, each with cu = its
+// THEAD_COLS/COL_UNITS index. Array position = DOM column position.
+function theadColsForView() {
+    const isCap = currentView === 'cap';
+    return THEAD_COLS.map((c, i) => ({ ...c, cu: i })).filter(c => isCap || !c.capOnly);
+}
+
+function colIsHidden(c) { return c.hideable && hiddenCols.has(c.id); }
+
+function applyHiddenCols() {
+    const cols = theadColsForView();
+    const theadTr = document.querySelector('#data-table thead tr');
+    if (theadTr) {
+        Array.from(theadTr.children).forEach((th, vi) => {
+            th.style.display = cols[vi] && colIsHidden(cols[vi]) ? 'none' : '';
+        });
+    }
+    document.querySelectorAll('#data-table tbody tr').forEach(tr => {
+        Array.from(tr.cells).forEach((td, vi) => {
+            td.style.display = cols[vi] && colIsHidden(cols[vi]) ? 'none' : '';
+        });
+    });
+    document.querySelectorAll('#data-table tfoot td[data-cu]').forEach(td => {
+        const c = THEAD_COLS[+td.dataset.cu];
+        td.style.display = c && colIsHidden(c) ? 'none' : '';
+    });
+    applyColWidths();
+}
+
+let _colPrefSaveTimer = null;
+
+function saveColumnPrefs() {
+    clearTimeout(_colPrefSaveTimer);
+    _colPrefSaveTimer = setTimeout(() => {
+        fetch(window.BASE_URL + '/api/user-prefs/' + COL_PREF_KEY, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ hidden: [...hiddenCols].sort() }),
+        }).catch(() => {});
+    }, 500);
+}
+
+function loadColumnPrefs() {
+    return fetch(window.BASE_URL + '/api/user-prefs/' + COL_PREF_KEY)
+        .then(r => r.json())
+        .then(resp => {
+            if (resp.status !== 'ok' || !resp.value || !Array.isArray(resp.value.hidden)) return;
+            const validIds = new Set(THEAD_COLS.filter(c => c.hideable).map(c => c.id));
+            hiddenCols = new Set(resp.value.hidden.filter(id => validIds.has(id)));
+            applyHiddenCols();
+        })
+        .catch(() => {});
+}
+
+// Popup selection is staged in _pendingHiddenCols — nothing changes until Apply.
+let _pendingHiddenCols = new Set();
+
+function buildColumnsList() {
+    const list = document.getElementById('columns-panel-list');
+    if (!list) return;
+    list.innerHTML = '';
+    THEAD_COLS.filter(c => c.hideable).forEach(c => {
+        const lbl = document.createElement('label');
+        lbl.className = 'columns-panel-item';
+        const cb = document.createElement('input');
+        cb.type = 'checkbox';
+        cb.className = 'form-check-input mt-0';
+        cb.checked = !_pendingHiddenCols.has(c.id);
+        cb.addEventListener('change', () => {
+            if (cb.checked) _pendingHiddenCols.delete(c.id); else _pendingHiddenCols.add(c.id);
+        });
+        lbl.appendChild(cb);
+        // The sales column header follows the applied Max Days Sales value
+        const labelText = c.id === 'sales90' ? `${appliedSalesDays}d Sales` : c.label;
+        lbl.appendChild(document.createTextNode(' ' + labelText));
+        if (c.id === 'sales90') {
+            const note = document.createElement('span');
+            note.className = 'columns-panel-note';
+            note.textContent = 'follows Max Days Sales';
+            lbl.appendChild(note);
+        }
+        list.appendChild(lbl);
+    });
+}
+
+function openColumnsModal() {
+    _pendingHiddenCols = new Set(hiddenCols);
+    buildColumnsList();
+    document.getElementById('columns-modal-backdrop').style.display = '';
+    document.getElementById('columns-modal').style.display = '';
+}
+
+function closeColumnsModal() {
+    document.getElementById('columns-modal-backdrop').style.display = 'none';
+    document.getElementById('columns-modal').style.display = 'none';
+}
+
+function applyColumnsSelection() {
+    hiddenCols = new Set(_pendingHiddenCols);
+    applyHiddenCols();
+    saveColumnPrefs();
+    closeColumnsModal();
+}
+
+function resetColumnPrefs() {
+    hiddenCols = new Set(DEFAULT_HIDDEN_COLS);
+    _pendingHiddenCols = new Set(DEFAULT_HIDDEN_COLS);
+    applyHiddenCols();
+    clearTimeout(_colPrefSaveTimer);
+    fetch(window.BASE_URL + '/api/user-prefs/' + COL_PREF_KEY, { method: 'DELETE' }).catch(() => {});
+    closeColumnsModal();
+}
 
 function rebuildTheadTfoot() {
     const isCap = currentView === 'cap';
-    const cols = THEAD_COLS.filter(c => isCap || !c.capOnly);
+    const cols = theadColsForView();
     const nCols = cols.length;
 
-    // thead
+    // thead — data-cu = THEAD_COLS/COL_UNITS index, used by resize and column hiding
     const thead = document.querySelector('#data-table thead tr');
     if (thead) {
-        thead.innerHTML = cols.map(c => `<th ${c.attrs}>${c.html}</th>`).join('');
+        thead.innerHTML = cols.map(c => `<th data-cu="${c.cu}" ${c.attrs}>${c.html}</th>`).join('');
         // re-attach sort listeners
         thead.querySelectorAll('th').forEach(th => {
             th.addEventListener('click', e => {
@@ -404,7 +630,8 @@ function rebuildTheadTfoot() {
         const blankColspan = isCap ? 3 : 1;
         let html = `<td class="tfoot-blank" colspan="${blankColspan}"></td><td></td>`;
         const dataCells = nCols - blankColspan - 1;
-        for (let i = 0; i < dataCells; i++) html += '<td></td>';
+        // data cell i sits under visible column blankColspan+1+i — stamp data-cu for column hiding
+        for (let i = 0; i < dataCells; i++) html += `<td data-cu="${cols[blankColspan + 1 + i].cu}"></td>`;
         tr.innerHTML = html;
     });
 }
@@ -421,6 +648,7 @@ function applyView() {
     if (!rawData.length) return;
     const btn = document.getElementById('applyViewBtn');
     if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spinner-border spinner-border-sm me-2"></span>Loading...'; }
+    showTableOverlay();
     requestAnimationFrame(() => setTimeout(() => {
     currentView = pendingView;
     rebuildTheadTfoot();
@@ -438,6 +666,7 @@ function applyView() {
         sortTable(21, 'num');
     }
     if (btn) { btn.disabled = false; btn.innerHTML = 'Apply'; }
+    hideTableOverlay();
     }, 0));
 }
 
@@ -453,7 +682,8 @@ function applyView() {
  * Output tableData row layout (same indices used throughout the rest of the JS):
  *   [0:cap_id, 1:label, 2:fuel, 3:stock, 4:sales90, 5:pct(set later),
  *    6:today(0), 7:sales7, 8:avg_dis, 9:avg_dts, 10:avg_gpu_m,
- *    14:avg_sell_price, 15:avg_at_val, 16:avg_at_pct, 17:avg_at_rating]
+ *    14:avg_sell_price, 15:avg_at_val, 16:avg_at_pct, 17:avg_at_rating,
+ *    22:price_band, 23:sales30, 24:sales15]
  *
  * Max DTS / Min GPU-M filters are applied per vehicle BEFORE aggregation.
  * A vehicle is included in the sales-weighted metrics only when it meets both filters.
@@ -464,6 +694,7 @@ function aggregateRawData() {
     const maxDTS  = getMaxDTS();
     const minGPUM = getMinGPUM();
     const todayMs = Date.now();
+    appliedSalesDays = maxDIS ?? 90;
 
     const groups = new Map();
     for (const r of rawData) {
@@ -472,7 +703,7 @@ function aggregateRawData() {
         if (!groups.has(key)) {
             groups.set(key, {
                 cap_id: r[0], label: labelNoBand, fuel: r[2], price_band: r[3],
-                stock: 0, sales90: 0, sales7: 0,
+                stock: 0, sales90: 0, sales30: 0, sales15: 0, sales7: 0,
                 dis_sum: 0, dis_n: 0,
                 dts_sum: 0, dts_n: 0,
                 gpu_m_sum: 0, gpu_m_n: 0,
@@ -507,6 +738,11 @@ function aggregateRawData() {
 
         g.sales90 += sales90;
         g.sales7  += sales7;
+        // 30d/15d windows need a known acknowledged date (sales7 comes pre-computed from Snowflake)
+        if (sales90 === 1 && daysSinceAck != null) {
+            if (daysSinceAck <= 30) g.sales30 += 1;
+            if (daysSinceAck <= 15) g.sales15 += 1;
+        }
 
         const sold     = sales90 === 1;
         const soldRate = sold && r[3] !== 'interest_free';
@@ -551,6 +787,8 @@ function aggregateRawData() {
             null,                                       // 20 CB purchases — set by applyCbPurchases
             null,                                       // 21 remaining — set in renderTable
             g.price_band,                               // 22 price_band
+            g.sales30,                                  // 23 30d sales
+            g.sales15,                                  // 24 15d sales
         ]);
     }
 }
@@ -560,6 +798,7 @@ function aggregateModelData() {
     const maxDTS  = getMaxDTS();
     const minGPUM = getMinGPUM();
     const todayMs = Date.now();
+    appliedSalesDays = maxDIS ?? 90;
 
     const groups = new Map();
     for (const r of rawData) {
@@ -571,7 +810,7 @@ function aggregateModelData() {
             const label = makeModel + ' / ' + normFuel(r[2]) + ' / ' + price_band;
             groups.set(key, {
                 cap_id: null, label, fuel: r[2], price_band,
-                stock: 0, sales90: 0, sales7: 0,
+                stock: 0, sales90: 0, sales30: 0, sales15: 0, sales7: 0,
                 dis_sum: 0, dis_n: 0,
                 dts_sum: 0, dts_n: 0,
                 gpu_m_sum: 0, gpu_m_n: 0,
@@ -606,6 +845,10 @@ function aggregateModelData() {
 
         g.sales90 += sales90;
         g.sales7  += sales7;
+        if (sales90 === 1 && daysSinceAck != null) {
+            if (daysSinceAck <= 30) g.sales30 += 1;
+            if (daysSinceAck <= 15) g.sales15 += 1;
+        }
 
         if (dis    != null && sales90 === 1) { g.dis_sum     += dis;    g.dis_n++;     }
         if (dts    != null && sales90 === 1) { g.dts_sum     += dts;    g.dts_n++;     }
@@ -647,6 +890,8 @@ function aggregateModelData() {
             null,          // 20 CB purchases — set by applyCbPurchases
             null,          // 21 remaining — set in renderTable
             g.price_band,  // 22
+            g.sales30,     // 23 30d sales
+            g.sales15,     // 24 15d sales
         ]);
     }
 }
@@ -732,11 +977,13 @@ function renderTotalsRow(visibleRows) {
         return;
     }
     if (tfoot) tfoot.style.display = '';
-    // cap view:   blank(3) | fuel(label) | sales | 7d | stock | ideal | req | today | remaining | avgDIS | avgDTS | sell | ATPTM | ATPTM% | ATRating | GPUM | GPUS | GPUMS
-    // model view: blank(1) | fuel(label) | sales | 7d | stock | ideal | req |                    avgDIS | avgDTS | sell | ATPTM | ATPTM% | ATRating | GPUM | GPUS | GPUMS
+    // cap view:   blank(3) | fuel(label) | sales | 30d | 15d | 7d | stock | ideal | req | today | remaining | avgDIS | avgDTS | sell | ATPTM | ATPTM% | ATRating | GPUM | GPUS | GPUMS
+    // model view: blank(1) | fuel(label) | sales | 30d | 15d | 7d | stock | ideal | req |                    avgDIS | avgDTS | sell | ATPTM | ATPTM% | ATRating | GPUM | GPUS | GPUMS
     const isCap = currentView === 'cap';
     const CAP_DATA_COLS = [
         [4,  'sum', fmtInt],
+        [23, 'sum', fmtInt],   // 30d Sales
+        [24, 'sum', fmtInt],   // 15d Sales
         [7,  'sum', fmtInt],
         [3,  'sum', fmtInt],
         [18, 'sum', v => fmt(v, 1)],
@@ -756,6 +1003,8 @@ function renderTotalsRow(visibleRows) {
     ];
     const MODEL_DATA_COLS = [
         [4,  'sum', fmtInt],
+        [23, 'sum', fmtInt],   // 30d Sales
+        [24, 'sum', fmtInt],   // 15d Sales
         [7,  'sum', fmtInt],
         [3,  'sum', fmtInt],
         [18, 'sum', v => fmt(v, 1)],
@@ -774,9 +1023,9 @@ function renderTotalsRow(visibleRows) {
         [12, 'avg', fmtGBP],
     ];
     const DATA_COLS = isCap ? CAP_DATA_COLS : MODEL_DATA_COLS;
-    const DBS_CELL_IDX       = isCap ? 5 : 5;
-    const CB_CELL_IDX        = isCap ? 6 : 6;
-    const REMAINING_CELL_IDX = isCap ? 7 : 7;
+    const DBS_CELL_IDX       = isCap ? 7 : 7;
+    const CB_CELL_IDX        = isCap ? 8 : 8;
+    const REMAINING_CELL_IDX = isCap ? 9 : 9;
 
     function fillRow(trEl, rows, label) {
         if (!trEl) return;
@@ -785,9 +1034,9 @@ function renderTotalsRow(visibleRows) {
         if (cells[1]) { cells[1].style.background = ''; cells[1].textContent = label; }
         const reqSum   = rows.reduce((s, r) => s + (Number(r[19]) || 0), 0);
         const spReady  = rows.some(r => r[6] != null && r[6] !== 0);
-        // REMAINING_CELL_IDX = 7 for both cap and model DATA_COLS
-        // Required slot = 4 in MODEL_DATA_COLS (null → computed)
-        const MODEL_REQ_IDX = 4;
+        // REMAINING_CELL_IDX = 9 for both cap and model DATA_COLS
+        // Required slot = 6 in MODEL_DATA_COLS (null → computed)
+        const MODEL_REQ_IDX = 6;
         DATA_COLS.forEach((def, i) => {
             const td = cells[i + 2];
             if (!td) return;
@@ -832,6 +1081,7 @@ function renderTotalsRow(visibleRows) {
 function renderTable() {
     const body = document.getElementById('table-body');
     body.innerHTML = '';
+    _rowElems = new Map();
 
     const numberToBuy = getNumberToBuy();
     const totalCurrentStock = tableData.reduce((s, r) => s + (Number(r[3]) || 0), 0);
@@ -915,6 +1165,8 @@ function renderTable() {
                 td.style.background = `rgb(${r},${g},${b})`;
             }
         }
+        { const td = add(row[23] != null ? fmtInt(row[23]) : ''); if ((row[23] || 0) === 0) td.style.background = '#d8d8d8'; }
+        { const td = add(row[24] != null ? fmtInt(row[24]) : ''); if ((row[24] || 0) === 0) td.style.background = '#d8d8d8'; }
         { const td = add(row[7] != null ? fmtInt(row[7]) : ''); if ((row[7] || 0) === 0) td.style.background = '#d8d8d8'; }
         { const td = add(fmtInt(row[3])); if ((row[3] || 0) === 0) td.style.background = '#d8d8d8'; }
         add(row[18] != null ? fmt(row[18], 1) : '');
@@ -931,22 +1183,23 @@ function renderTable() {
         { const td = add(row[10] != null ? fmtGBP(row[10]) : ''); if (row[10] != null && row[10] < 0) td.style.color = '#dc2626'; }
         add(row[11] != null ? fmtGBP(row[11]) : '');
         { const td = add(row[12] != null ? fmtGBP(row[12]) : ''); if (row[12] != null && row[12] < 0) td.style.color = '#dc2626'; }
+        _rowElems.set(row, tr);
         fragment.appendChild(tr);
     });
 
     // DOM cell indices depend on view
-    // cap:   CAP_ID(0) label(1) View(2) fuel(3) sales(4) 7d(5) stock(6) ideal(7) req(8) DBS(9) CB(10) rem(11) DIS(12) DTS(13) sell(14) ATPTM(15) ATPTM%(16) ATR(17) GPUM(18) GPUS(19) GPUMS(20)
-    // model: label(0) fuel(1) sales(2) 7d(3) stock(4) ideal(5) req(6) DBS(7) CB(8) rem(9) DIS(10) DTS(11) sell(12) ATPTM(13) ATPTM%(14) ATR(15) GPUM(16) GPUS(17) GPUMS(18)
+    // cap:   CAP_ID(0) label(1) View(2) fuel(3) sales(4) 30d(5) 15d(6) 7d(7) stock(8) ideal(9) req(10) DBS(11) CB(12) rem(13) DIS(14) DTS(15) sell(16) ATPTM(17) ATPTM%(18) ATR(19) GPUM(20) GPUS(21) GPUMS(22)
+    // model: label(0) fuel(1) sales(2) 30d(3) 15d(4) 7d(5) stock(6) ideal(7) req(8) DBS(9) CB(10) rem(11) DIS(12) DTS(13) sell(14) ATPTM(15) ATPTM%(16) ATR(17) GPUM(18) GPUS(19) GPUMS(20)
     const isCap = currentView === 'cap';
     const CI = {
-        sales7:    isCap ? 5  : 3,
-        required:  isCap ? 8  : 6,
-        remaining: isCap ? 11 : 9,
-        dts:       isCap ? 13 : 11,
-        gpuM:      isCap ? 18 : 16,
-        gpuMS:     isCap ? 20 : 18,
-        atRating:  isCap ? 17 : 15,
-        ifSkip:    isCap ? new Set([4,5,9,10,11,13,17,18,20]) : new Set([2,3,7,8,9,11,15,16,18]),
+        sales7:    isCap ? 7  : 5,
+        required:  isCap ? 10 : 8,
+        remaining: isCap ? 13 : 11,
+        dts:       isCap ? 15 : 13,
+        gpuM:      isCap ? 20 : 18,
+        gpuMS:     isCap ? 22 : 20,
+        atRating:  isCap ? 19 : 17,
+        ifSkip:    isCap ? new Set([4,5,6,7,11,12,13,15,19,20,22]) : new Set([2,3,4,5,9,10,11,13,17,18,20]),
     };
     Array.from(fragment.children).forEach((tr, i) => {
         const r = tableData[i];
@@ -969,6 +1222,7 @@ function renderTable() {
 
     updateSalesColumnLabel();
     applyFilter();
+    applyHiddenCols();
 }
 
 /* ── Sort ────────────────────────────────────────────────── */
@@ -1014,7 +1268,18 @@ function sortTable(col, type) {
         const icon = th.querySelector('.sort-icon i');
         if (icon) icon.className = sortDir === 1 ? 'fas fa-sort-up' : 'fas fa-sort-down';
     }
-    renderTable();
+    // Fast path: rows already rendered — just move the existing <tr>s into the
+    // new order. Filters, colours, hidden columns and widths all travel with
+    // each row, and DOM order stays in step with tableData (which applyFilter
+    // and the View-button handler rely on). Full rebuild only if the rows on
+    // screen don't match tableData (e.g. data was re-aggregated).
+    if (_rowElems.size === tableData.length && tableData.every(r => _rowElems.has(r))) {
+        const frag = document.createDocumentFragment();
+        tableData.forEach(r => frag.appendChild(_rowElems.get(r)));
+        document.getElementById('table-body').appendChild(frag);
+    } else {
+        renderTable();
+    }
 }
 
 document.querySelectorAll('#data-table thead tr:last-child th').forEach(th => {
@@ -1032,6 +1297,9 @@ document.querySelectorAll('#data-table thead tr:last-child th').forEach(th => {
 const ghost = document.getElementById('resize-ghost');
 
 function getThColIndex(th) {
+    // data-cu is the COL_UNITS index (stamped in rebuildTheadTfoot) — correct even
+    // when columns are hidden or the model view drops the cap-only columns
+    if (th.dataset.cu != null) return +th.dataset.cu;
     return Array.from(th.parentElement.children).indexOf(th);
 }
 
@@ -1147,14 +1415,6 @@ function applyCbPurchases(p, vehicles) {
 
 const _SP_MAX_AGE_SECS = 30 * 60;
 
-function _setSfCachedAt(cachedAt) {
-    const el = document.getElementById('sf-status');
-    if (!el || !cachedAt) return;
-    const d = new Date(cachedAt * 1000);
-    const hhmm = d.getHours().toString().padStart(2, '0') + ':' + d.getMinutes().toString().padStart(2, '0');
-    el.innerHTML = `${SF_LABEL} <span class="text-muted" style="font-size:0.85em">updated ${hhmm}</span>`;
-}
-
 function _setDbsUpdatedAt(fetchedAt) {
     const el = document.getElementById('dbs-status');
     if (!el) return;
@@ -1171,6 +1431,9 @@ function _maybeShowExportBtn() {
     if (_dbsDone && _cbDone) {
         const btn = document.getElementById('export-cap-ids-btn');
         if (btn) { btn.classList.remove('disabled'); btn.removeAttribute('aria-disabled'); }
+        // Table only settles once DBS + Cars Bought have both patched in — hold the
+        // overlay through those so the user doesn't see the table load then shift.
+        hideTableOverlay();
     }
 }
 
@@ -1180,7 +1443,12 @@ function patchDailyBuyersSheet() {
     fetch(window.BASE_URL + '/buying-requirements/dbs-purchases')
         .then(r => r.json())
         .then(resp => {
-            if (resp.status !== 'ok') return;
+            if (resp.status !== 'ok') {
+                setStatus('dbs-status', DBS_LABEL, 'error');
+                showSpWarning('Daily Buyers Sheet failed to load — table shown without it');
+                _dbsDone = true; _maybeShowExportBtn();
+                return;
+            }
             applyDbsPurchases(resp.purchases, resp.vehicles || [], resp.total, resp.no_rrp);
             applyCbPurchases(cbPurchases);
             renderTable();
@@ -1190,7 +1458,11 @@ function patchDailyBuyersSheet() {
             _setDbsUpdatedAt(resp.fetched_at);
             _dbsDone = true; _maybeShowExportBtn();
         })
-        .catch(() => setStatus('dbs-status', DBS_LABEL, 'error'));
+        .catch(() => {
+            setStatus('dbs-status', DBS_LABEL, 'error');
+            showSpWarning('Daily Buyers Sheet failed to load — table shown without it');
+            _dbsDone = true; _maybeShowExportBtn();
+        });
 }
 
 /* ── Cars Bought patch ───────────────────────────────────── */
@@ -1213,7 +1485,12 @@ function patchCarsBought() {
     fetch(window.BASE_URL + '/buying-requirements/cb-purchases')
         .then(r => r.json())
         .then(resp => {
-            if (resp.status !== 'ok') { setStatus('cb-status', CB_LABEL, 'error'); return; }
+            if (resp.status !== 'ok') {
+                setStatus('cb-status', CB_LABEL, 'error');
+                showSpWarning('Cars Bought failed to load — table shown without it');
+                _cbDone = true; _maybeShowExportBtn();
+                return;
+            }
             applyCbPurchases(resp.purchases, resp.vehicles || []);
             renderTable();
             sortCol = 21; sortDir = 1;
@@ -1222,14 +1499,18 @@ function patchCarsBought() {
             _setCbUpdatedAt(resp.fetched_at, resp.total, resp.no_rrp);
             _cbDone = true; _maybeShowExportBtn();
         })
-        .catch(() => setStatus('cb-status', CB_LABEL, 'error'));
+        .catch(() => {
+            setStatus('cb-status', CB_LABEL, 'error');
+            showSpWarning('Cars Bought failed to load — table shown without it');
+            _cbDone = true; _maybeShowExportBtn();
+        });
 }
 
 function loadCBFromCache() {
     fetch(window.BASE_URL + '/buying-requirements/cb-purchases-cached')
         .then(r => r.json())
         .then(resp => {
-            if (resp.status !== 'ok') return;
+            if (resp.status !== 'ok') { patchCarsBought(); return; }
             const ageSeconds = resp.fetched_at ? (Date.now() / 1000 - resp.fetched_at) : Infinity;
             if (ageSeconds > _SP_MAX_AGE_SECS || !resp.fetched_at) {
                 patchCarsBought();
@@ -1242,7 +1523,7 @@ function loadCBFromCache() {
             _setCbUpdatedAt(resp.fetched_at, resp.total, resp.no_rrp);
             _cbDone = true; _maybeShowExportBtn();
         })
-        .catch(() => {});
+        .catch(() => patchCarsBought());
 }
 
 /* ── Fetch data ──────────────────────────────────────────── */
@@ -1275,6 +1556,11 @@ function fetchData() {
 }
 
 function applyRawDataToTable(fetchSP) {
+    // Table isn't "settled" until DBS + Cars Bought (below) have also patched in,
+    // so keep the overlay up across all of it — _maybeShowExportBtn hides it once
+    // both are done.
+    _dbsDone = false; _cbDone = false;
+    showTableOverlay();
     if (currentView === 'model') aggregateModelData(); else aggregateRawData();
     document.getElementById('sf-total-stock').textContent =
         rawData.reduce((s, r) => s + (Number(r[4]) || 0), 0).toLocaleString();
@@ -1287,7 +1573,6 @@ function applyRawDataToTable(fetchSP) {
     renderTable();
     sortCol = null; sortDir = 1;
     sortTable(21, 'num');
-    document.getElementById('table-wrap').classList.remove('d-none');
     if (fetchSP) {
         patchDailyBuyersSheet();
         if (window.ENABLE_CARS_BOUGHT) patchCarsBought();
@@ -1311,6 +1596,7 @@ function refreshTable() {
     if (!rawData.length) return;
     const btn = document.getElementById('refreshTableBtn');
     if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spinner-border spinner-border-sm me-2"></span>Loading...'; }
+    showTableOverlay();
     // Reset all table filters before re-aggregating
     filterBand.clear(); filterBand.add('All');
     document.querySelectorAll('.filter-btn[data-group="band"]').forEach(b => {
@@ -1345,41 +1631,45 @@ function refreshTable() {
         sortCol = 21; sortDir = 1;
         sortTable(21, 'num');
         if (btn) { btn.disabled = false; btn.innerHTML = '<i class="fas fa-sync-alt me-1"></i>Refresh Table'; }
+        hideTableOverlay();
     }, 0));
 }
 
 function loadFromServer(fetchSP = false, fromFetchData = false) {
     const btn = document.getElementById('refreshTableBtn');
-    if (!fromFetchData) {
-        if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spinner-border spinner-border-sm me-2"></span>Loading...'; }
-        document.getElementById('fetch-loading').style.display = 'block';
+    if (!fromFetchData && btn) {
+        btn.disabled = true; btn.innerHTML = '<span class="spinner-border spinner-border-sm me-2"></span>Loading...';
     }
+    // Held for the SF fetch itself; applyRawDataToTable takes over (and re-shows)
+    // its own hold for the DBS/CB patch that follows on success.
+    showTableOverlay();
 
-    document.getElementById('table-wrap').classList.add('d-none');
     document.getElementById('table-error').classList.add('d-none');
+    _spWarnings.clear();
+    document.getElementById('sp-warning')?.classList.add('d-none');
 
     const sfUrl = window.BASE_URL + '/buying-requirements/sf-data' + (fromFetchData ? '?force=true' : '');
     fetch(sfUrl)
         .then(r => r.json())
         .then(resp => {
-            document.getElementById('fetch-loading').style.display = 'none';
             if (resp.status !== 'ok') {
                 document.getElementById('data-section').style.display = 'block';
                 document.getElementById('table-error').textContent = resp.message;
                 document.getElementById('table-error').classList.remove('d-none');
+                hideTableOverlay();
                 return;
             }
             rawData = resp.rows;
             rawData.forEach(r => { if (r[3] === '0%') r[3] = 'interest_free'; });
             setStatus('sf-status', SF_LABEL, 'done');
-            _setSfCachedAt(resp.cached_at);
             _setApexUpdatedAt(rawData);
+            hideTableOverlay(); // release the pre-fetch hold; applyRawDataToTable re-shows for DBS/CB
             applyRawDataToTable(fetchSP);
         })
         .catch(err => {
-            document.getElementById('fetch-loading').style.display = 'none';
             document.getElementById('table-error').textContent = 'Failed to load data: ' + err;
             document.getElementById('table-error').classList.remove('d-none');
+            hideTableOverlay();
         })
         .finally(() => {
             if (btn) { btn.disabled = false; btn.innerHTML = '<i class="fas fa-sync-alt me-1"></i>Refresh Table'; }
@@ -1390,7 +1680,7 @@ function loadDbsFromCache() {
     fetch(window.BASE_URL + '/buying-requirements/dbs-purchases-cached')
         .then(r => r.json())
         .then(resp => {
-            if (resp.status !== 'ok') return;
+            if (resp.status !== 'ok') { patchDailyBuyersSheet(); return; }
             const ageSeconds = resp.fetched_at ? (Date.now() / 1000 - resp.fetched_at) : Infinity;
             if (ageSeconds > _SP_MAX_AGE_SECS || !resp.fetched_at) {
                 patchDailyBuyersSheet();
@@ -1404,7 +1694,7 @@ function loadDbsFromCache() {
             _setDbsUpdatedAt(resp.fetched_at);
             _dbsDone = true; _maybeShowExportBtn();
         })
-        .catch(() => {});
+        .catch(() => patchDailyBuyersSheet());
 }
 
 function exportXLSX() {
@@ -1425,7 +1715,7 @@ function exportXLSX() {
             groups.set(cap_id, {
                 label: r[1].split(' / ').slice(0, -1).join(' / '),
                 fuel: normFuel(r[2]),
-                stock: 0, sales90: 0, sales7: 0,
+                stock: 0, sales90: 0, sales30: 0, sales15: 0, sales7: 0,
                 ideal: 0, required: 0, remaining: 0,
                 dis_sum: 0, dis_n: 0,
                 dts_sum: 0, dts_n: 0,
@@ -1527,6 +1817,7 @@ function exportXLSX() {
 /* ── Vehicle popup ───────────────────────────────────────── */
 let _modalVehicles = [];
 let _modalSpVehicles = [];  // DBS + CB vehicles for current modal cap_id
+let _modalCapLabel = '';    // Snowflake make/model/derivative for current modal cap_id
 let _modalSortCol = 'default';
 let _modalSortAsc = true;
 
@@ -1705,7 +1996,9 @@ function _renderModalRows() {
             const tr = document.createElement('tr');
             tr.style.background = '#ddd6fe';
             const TOTAL_COLS = 22;
-            const derivText = [v.make, v.model, v.deriv].filter(Boolean).join(' ') || '—';
+            // Use the Snowflake make/model/derivative for the modal's CAP ID so DBS/CB
+            // rows match the stock rows; fall back to the spreadsheet's own text.
+            const derivText = _modalCapLabel || [v.make, v.model, v.deriv].filter(Boolean).join(' ') || '—';
             const bandText = v.band === 'interest_free' ? '0%' : (v.band || '—');
             const sourceText = v.source === 'dbs' ? 'DBS' : 'CB';
             for (let i = 0; i < TOTAL_COLS; i++) {
@@ -1884,6 +2177,7 @@ function openVehicleModal(capId, label) {
         return passDIS && passDTS && passGPUM;
     });
     _modalSpVehicles = [...dbsVehicles, ...cbVehicles].filter(v => v.cap_id === capId);
+    _modalCapLabel = label.split(' / ').slice(0, -1).join(' / ');
     const bands = new Set([
         ..._modalVehicles.map(r => r[3]),
         ..._modalSpVehicles.map(v => v.band),
@@ -1908,7 +2202,7 @@ function closeVehicleModal() {
 }
 
 document.addEventListener('keydown', e => {
-    if (e.key === 'Escape') closeVehicleModal();
+    if (e.key === 'Escape') { closeVehicleModal(); closeColumnsModal(); }
 });
 
 document.getElementById('vehicle-modal-table').addEventListener('click', e => {
@@ -1989,4 +2283,10 @@ function clearVrmSearch() {
     clearCapIdFilter();
 }
 
-document.addEventListener('DOMContentLoaded', () => loadFromServer(false));
+document.addEventListener('DOMContentLoaded', () => {
+    // Wait for both user prefs (hidden columns, font size) before rendering the
+    // table — applying them after the first render makes the table visibly
+    // shrink a moment after it appears.
+    Promise.allSettled([loadColumnPrefs(), loadFontSizePref()])
+        .then(() => loadFromServer(false));
+});
