@@ -19,8 +19,8 @@
 #
 #   from utils.snowflake_client import SnowflakeClient
 #
-#   with SnowflakeClient() as sf:
-#       rows, cols = sf.execute("SELECT * FROM my_table WHERE CAP_ID = %s", [12345])
+#   with SnowflakeClient() as snowflake_client:
+#       rows, cols = snowflake_client.execute("SELECT * FROM my_table WHERE CAP_ID = %s", [12345])
 #
 #   The `with` block handles connecting and disconnecting automatically.
 #   Even if an error occurs inside the block, the connection will be closed cleanly.
@@ -60,8 +60,8 @@ class SnowflakeClient:
 
     Intended to be used as a context manager:
 
-        with SnowflakeClient() as sf:
-            rows, cols = sf.execute("SELECT 1")
+        with SnowflakeClient() as snowflake_client:
+            rows, cols = snowflake_client.execute("SELECT 1")
 
     This guarantees the connection is always closed, even if an exception
     is raised inside the with-block.
@@ -94,7 +94,7 @@ class SnowflakeClient:
         }
 
     # ------------------------------------------------------------------
-    # Context manager — enables `with SnowflakeClient() as sf:`
+    # Context manager — enables `with SnowflakeClient() as snowflake_client:`
     # ------------------------------------------------------------------
 
     def __enter__(self) -> "SnowflakeClient":
@@ -146,15 +146,15 @@ class SnowflakeClient:
             cols: list of column name strings matching the tuple positions.
 
         Example:
-            rows, cols = sf.execute(
+            rows, cols = snowflake_client.execute(
                 "SELECT * FROM buying_requirements WHERE CAP_ID = %s",
                 [12345]
             )
         """
         if not self._conn:
             raise RuntimeError(
-                "Not connected. Use `with SnowflakeClient() as sf:` "
-                "or call sf.connect() first."
+                "Not connected. Use `with SnowflakeClient() as snowflake_client:` "
+                "or call snowflake_client.connect() first."
             )
         cur = self._conn.cursor()
         try:
