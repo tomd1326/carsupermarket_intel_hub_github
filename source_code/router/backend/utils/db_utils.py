@@ -250,6 +250,65 @@ def get_database_connection():
         pool.putconn(connection)
 
 
+# ── Per-user UI preferences ──────────────────────────────────────────────────
+# Generic key/value store, JSONB values. Created on first save (same pattern as
+# the settings table) so no migration script is needed in dev or prod.
+
+def _ensure_user_preferences_table(conn) -> None:
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS user_preferences (
+                username    VARCHAR(100) NOT NULL,
+                pref_key    VARCHAR(100) NOT NULL,
+                pref_value  JSONB        NOT NULL,
+                updated_at  TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+                PRIMARY KEY (username, pref_key)
+            )
+            """
+        )
+    conn.commit()
+
+
+def get_user_preference(conn, username: str, pref_key: str):
+    """Returns the stored JSON value, or None if not set (or table doesn't exist yet)."""
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT pref_value FROM user_preferences WHERE username = %s AND pref_key = %s",
+                (username, pref_key),
+            )
+            row = cur.fetchone()
+        return row[0] if row else None
+    except Exception:
+        conn.rollback()
+        return None
+
+
+def save_user_preference(conn, username: str, pref_key: str, pref_value) -> None:
+    _ensure_user_preferences_table(conn)
+    with conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO user_preferences (username, pref_key, pref_value, updated_at) "
+            "VALUES (%s, %s, %s, NOW()) "
+            "ON CONFLICT (username, pref_key) DO UPDATE SET pref_value = EXCLUDED.pref_value, updated_at = NOW()",
+            (username, pref_key, json.dumps(pref_value)),
+        )
+    conn.commit()
+
+
+def delete_user_preference(conn, username: str, pref_key: str) -> None:
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "DELETE FROM user_preferences WHERE username = %s AND pref_key = %s",
+                (username, pref_key),
+            )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+
+
 # ── User activity analytics ───────────────────────────────────────────────────
 
 def record_login(conn, session_id: str, username: str, environment: str, login_at) -> None:

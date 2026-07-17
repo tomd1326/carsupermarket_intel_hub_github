@@ -75,12 +75,6 @@ button.settings-cog:hover { color: #343a40 !important; background: #e9ecef !impo
     100% { color: inherit; background: transparent; }
 }
 
-.data-table-wrap {
-    overflow-x: auto;
-    max-height: 72vh;
-    overflow-y: auto;
-    width: 100%;
-}
 #data-table {
     border-collapse: separate;
     border-spacing: 0;
@@ -252,6 +246,14 @@ button.settings-cog:hover { color: #343a40 !important; background: #e9ecef !impo
     font-size: 20px !important;
     font-weight: 700;
 }
+/* The data table has its own font-size control (+/- buttons, set inline by
+   applyColWidths) — exempt its contents from the fixed 13px above */
+.controls-area #data-table * {
+    font-size: inherit !important;
+}
+.controls-area #data-table thead th .sort-icon {
+    font-size: 0.65em !important;
+}
 /* Tighten button padding to match the smaller font */
 .controls-area .btn {
     padding: 2px 8px !important;
@@ -390,7 +392,7 @@ button.settings-cog:hover { color: #343a40 !important; background: #e9ecef !impo
 }
 
 #vehicle-modal-table td {
-    padding: 4px 8px;
+    padding: 2px 8px;
     white-space: nowrap;
     /* Manually draw bottom and right borders */
     border-bottom: 1px solid #b0b0b0;
@@ -468,4 +470,92 @@ button.settings-cog:hover { color: #343a40 !important; background: #e9ecef !impo
 #vehicle-modal-avg-tfoot td:nth-child(10) {
     text-align: left;
     padding-left: 0.5em;
+}
+/* ── Column selection popup ───────────────────────────────── */
+#columns-modal {
+    position: fixed;
+    top: 10vh;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 1001;
+    background: #fff;
+    border-radius: 6px;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.22);
+    width: 260px;
+    max-height: 80vh;
+    display: flex;
+    flex-direction: column;
+}
+.columns-modal-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 8px 14px;
+    border-bottom: 1px solid #e5e7eb;
+    flex-shrink: 0;
+}
+.columns-modal-title {
+    font-weight: 600;
+    font-size: 0.9rem;
+}
+#columns-panel-list {
+    padding: 8px 10px;
+    overflow-y: auto;
+}
+.columns-panel-item {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0 8px;
+    font-size: 0.85rem;
+    padding: 4px 6px;
+    cursor: pointer;
+    white-space: nowrap;
+    margin-bottom: 0;
+    border-radius: 4px;
+}
+.columns-panel-item input {
+    flex-shrink: 0;
+}
+/* secondary note wraps to its own line under the label, aligned past the checkbox */
+.columns-panel-note {
+    flex-basis: 100%;
+    padding-left: 24px;
+    color: #6b7280;
+    font-size: 0.72rem;
+    line-height: 1.2;
+}
+.columns-panel-item:hover {
+    background: #f3f4f6;
+}
+.columns-panel-footer {
+    display: flex;
+    justify-content: space-between;
+    gap: 8px;
+    border-top: 1px solid #e5e7eb;
+    padding: 10px 14px;
+    flex-shrink: 0;
+}
+
+.data-table-wrap {
+    overflow-x: auto;
+    max-height: 72vh;
+    overflow-y: auto;
+    width: 100%;
+}
+
+/* ── Loading indicator (top-left) ─────────────────────────── */
+#fetch-loading,
+.controls-area #fetch-loading {
+    display: flex;
+    align-items: center;
+    font-size: 1.1rem !important;
+    font-weight: 600;
+    color: #4338ca;
+}
+#fetch-loading .spinner-border,
+.controls-area #fetch-loading .spinner-border {
+    width: 1.1rem;
+    height: 1.1rem;
+    border-width: 0.16rem;
 }
