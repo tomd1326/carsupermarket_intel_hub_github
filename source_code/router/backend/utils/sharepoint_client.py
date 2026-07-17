@@ -2,12 +2,19 @@ from __future__ import annotations
 
 import base64
 import logging
+import time
 import requests
 from urllib.parse import urlparse
 
 from utils.secrets_manager_client import get_secret
 
 logger = logging.getLogger(__name__)
+
+# AAD client-credentials tokens are valid ~60-90 min; cache per tenant+client so
+# concurrent/repeated SharePointClient() instances in the same process don't each
+# pay for a fresh token round-trip (the file/drive resolution below still runs
+# per-file, but the auth handshake is the one part safe to share globally).
+_TOKEN_CACHE: dict = {}
 
 
 class SharePointClient:
@@ -50,6 +57,11 @@ class SharePointClient:
         self._headers = self._build_headers()
 
     def _build_headers(self) -> dict:
+        cache_key = (self._tenant_id, self._client_id)
+        cached = _TOKEN_CACHE.get(cache_key)
+        if cached and time.monotonic() < cached["expires"]:
+            return {"Authorization": f"Bearer {cached['token']}", "Accept": "application/json"}
+
         url = f"https://login.microsoftonline.com/{self._tenant_id}/oauth2/v2.0/token"
         resp = requests.post(url, data={
             "client_id": self._client_id,
@@ -58,7 +70,11 @@ class SharePointClient:
             "grant_type": "client_credentials",
         })
         resp.raise_for_status()
-        token = resp.json()["access_token"]
+        body = resp.json()
+        token = body["access_token"]
+        # expires_in is seconds from AAD (typically 3600); refresh a little early
+        expires_in = int(body.get("expires_in", 3600))
+        _TOKEN_CACHE[cache_key] = {"token": token, "expires": time.monotonic() + max(60, expires_in - 120)}
         return {"Authorization": f"Bearer {token}", "Accept": "application/json"}
 
     def _get_site_id(self) -> str:
@@ -148,9 +164,16 @@ class SharePointClient:
         logger.info("SharePoint table '%s': fetched %d rows", table_name, len(all_rows))
         return all_rows
 
-    def get_worksheet_values(self, subfolder: str, filename: str, sheet_name: str) -> list[list]:
+    def get_worksheet_values(self, subfolder: str, filename: str, sheet_name: str,
+                              max_col: str = "Z", max_row: int = 2000) -> list[list]:
         """
-        Fetch all cell values from a named worksheet.
+        Fetch cell values from a named worksheet, bounded to A1:{max_col}{max_row}.
+
+        usedRange forces Graph to scan the sheet's entire used extent (all
+        formatting included), which is disproportionately slow for large workbooks
+        — tens of seconds for sheets with only ~1000 data rows. Requesting a fixed
+        bounded range is much faster for Graph to compute and is generous enough
+        for any sheet with a couple dozen columns and up to max_row data rows.
 
         Returns:
             list[list]: Row-major 2D array. Row 0 is the header row.
@@ -162,10 +185,15 @@ class SharePointClient:
         drive_id = self._get_drive_id(site_id)
         item_id = self._get_item_id(drive_id, subfolder, filename)
         encoded_sheet = requests.utils.quote(sheet_name)
+        address = requests.utils.quote(f"A1:{max_col}{max_row}")
         url = (
             f"https://graph.microsoft.com/v1.0/drives/{drive_id}/items/{item_id}"
-            f"/workbook/worksheets/{encoded_sheet}/usedRange?$select=values"
+            f"/workbook/worksheets/{encoded_sheet}/range(address='{address}')?$select=values"
         )
         resp = requests.get(url, headers=self._headers)
         resp.raise_for_status()
-        return resp.json().get("values", [])
+        values = resp.json().get("values", [])
+        # Trim fully-blank trailing rows Graph pads the bounded range with
+        while values and all(c in (None, "") for c in values[-1]):
+            values.pop()
+        return values

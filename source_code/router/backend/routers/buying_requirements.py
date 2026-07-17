@@ -284,6 +284,28 @@ _dbs_cache: dict = {"purchases": None, "vehicles": None, "expires": 0.0, "fetche
 _cb_cache: dict  = {"purchases": None, "vehicles": None, "expires": 0.0, "fetched_at": None, "no_rrp": None}
 _cache_lock = threading.Lock()
 
+# Raw Daily Buyers Sheet worksheet values — short-lived, process-local cache so
+# Cars Bought's VRM dedup (_fetch_dbs_vrms) can reuse whatever _get_dbs_purchases
+# just fetched instead of re-running the whole 5-round-trip SharePoint fetch for
+# the same file/sheet. Short TTL because this is purely to collapse fetches that
+# land within the same page-load burst, not a substitute for _dbs_cache's own TTL.
+_dbs_raw_values_cache: dict = {"values": None, "expires": 0.0}
+_DBS_RAW_TTL_SECONDS = 60
+
+
+def _fetch_dbs_raw_values() -> list:
+    """Fetch the raw Daily Buyers Sheet worksheet, reusing a very recent fetch if one exists."""
+    now = time.monotonic()
+    with _cache_lock:
+        cached = _dbs_raw_values_cache["values"]
+        if cached is not None and now < _dbs_raw_values_cache["expires"]:
+            return cached
+    values = SharePointClient().get_worksheet_values(_DBS_SUBFOLDER, _DBS_FILENAME, _DBS_SHEET)
+    with _cache_lock:
+        _dbs_raw_values_cache["values"] = values
+        _dbs_raw_values_cache["expires"] = now + _DBS_RAW_TTL_SECONDS
+    return values
+
 # dbt run hours (UK local time) — data available 15 min after each
 _SF_SCHEDULE_HOURS_UK = [3, 7, 10, 13, 16]
 _SF_READY_OFFSET_MIN  = 15
@@ -628,7 +650,7 @@ def _get_dbs_purchases(force: bool = False) -> dict:
 
     for _attempt in range(1, 4):
         try:
-            values = SharePointClient().get_worksheet_values(_DBS_SUBFOLDER, _DBS_FILENAME, _DBS_SHEET)
+            values = _fetch_dbs_raw_values()
             break
         except Exception as _exc:
             logger.warning(f"Daily Buyers Sheet fetch attempt {_attempt}/3 failed: {_exc}")
@@ -837,7 +859,7 @@ def _get_cb_purchases(force: bool = False) -> dict:
 
     def _fetch_dbs_vrms():
         try:
-            values = SharePointClient().get_worksheet_values(_DBS_SUBFOLDER, _DBS_FILENAME, _DBS_SHEET)
+            values = _fetch_dbs_raw_values()
             for row in values[:5]:
                 strs = [str(c).strip() for c in row]
                 if "REG" in strs:

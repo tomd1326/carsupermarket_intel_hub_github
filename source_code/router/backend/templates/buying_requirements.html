@@ -30,12 +30,17 @@
             </a>
         </div>
 
+        <div id="fetch-loading" class="text-muted mb-2" style="display:flex">
+            <span class="spinner-border me-2"></span>Loading&hellip;
+        </div>
+
+        <div id="page-content" style="display:none">
         <div class="d-flex align-items-center gap-3 mb-1 flex-wrap">
             <button id="fetchBtn" class="btn btn-primary btn-sm" onclick="fetchData()">
                 <i class="fas fa-sync-alt me-1"></i>Refresh Data
             </button>
             <span id="sf-status" class="text-muted small"><i class="fas fa-snowflake me-1 text-info"></i>Snowflake</span>
-            <span id="apex-updated-at" class="text-muted small" style="display:none">Apex data updated at: <strong id="apex-updated-at-val"></strong></span>
+            <span id="apex-updated-at" class="text-muted small" style="display:none">Apex data as of <strong id="apex-updated-at-val"></strong></span>
         </div>
         <div class="d-flex align-items-center gap-3 mb-2 flex-wrap">
             <span id="dbs-status" class="text-muted small"><i class="fas fa-file-excel me-1 text-success"></i>SharePoint</span>
@@ -53,9 +58,7 @@
             </a>
             <span id="cb-total-badge" class="text-muted small"></span>
         </div>
-        <div id="fetch-loading" class="text-muted small mb-2" style="display:block">
-            <span class="spinner-border spinner-border-sm me-2"></span>Loading&hellip;
-        </div>
+        <div id="sp-warning" class="alert alert-danger py-1 px-2 small d-none mb-2"></div>
 
         <div id="data-section" style="display:none">
             <div class="d-flex align-items-center gap-2 mb-2 flex-wrap">
@@ -135,13 +138,17 @@
             </div>
             <button id="applyViewBtn" class="btn btn-primary btn-sm" onclick="applyView()">Apply</button>
             <button class="btn btn-outline-secondary btn-sm" onclick="resetColWidths()">
-                <i class="fas fa-columns me-1"></i>Reset Columns
+                <i class="fas fa-columns me-1"></i>Reset Widths
+            </button>
+            <button id="columnsBtn" class="btn btn-outline-secondary btn-sm" onclick="openColumnsModal()">
+                <i class="fas fa-eye me-1"></i>Select Columns
             </button>
             <div class="d-flex align-items-center gap-1">
                 <span class="small text-muted">Font</span>
                 <button class="btn btn-outline-secondary btn-sm px-2 py-0" onclick="changeFontSize(-1)">−</button>
                 <span id="fontSizeLabel" class="small text-muted" style="min-width:28px;text-align:center"></span>
                 <button class="btn btn-outline-secondary btn-sm px-2 py-0" onclick="changeFontSize(1)">+</button>
+                <button class="btn btn-outline-secondary btn-sm px-2 py-0" title="Reset font size" onclick="resetFontSizePref()"><i class="fas fa-rotate-left"></i></button>
             </div>
             <div class="filter-divider"></div>
             <span id="filtered-cap-count" class="small text-muted"></span>
@@ -155,9 +162,8 @@
             </div>
         </div>
         </div><!-- /#data-section -->
-        </div><!-- /.controls-area -->
         <div id="table-error" class="alert alert-danger d-none"></div>
-        <div class="data-table-wrap d-none mt-3" id="table-wrap">
+        <div class="data-table-wrap mt-3" id="table-wrap">
             <table id="data-table">
                 <colgroup></colgroup>
                 <thead><tr></tr></thead>
@@ -168,6 +174,22 @@
                     <tr id="totals-row-total"></tr>
                 </tfoot>
             </table>
+        </div>
+        </div><!-- /#page-content -->
+        </div><!-- /.controls-area -->
+    </div>
+
+    <!-- Column selection popup -->
+    <div id="columns-modal-backdrop" class="vehicle-modal-backdrop" style="display:none" onclick="closeColumnsModal()"></div>
+    <div id="columns-modal" style="display:none" role="dialog" aria-modal="true">
+        <div class="columns-modal-header">
+            <span class="columns-modal-title">Select Columns</span>
+            <button class="vehicle-modal-close" onclick="closeColumnsModal()" aria-label="Close">&times;</button>
+        </div>
+        <div id="columns-panel-list"></div>
+        <div class="columns-panel-footer">
+            <button class="btn btn-outline-secondary btn-sm" onclick="resetColumnPrefs()">Reset to Default</button>
+            <button class="btn btn-primary btn-sm" onclick="applyColumnsSelection()">Apply</button>
         </div>
     </div>
 
