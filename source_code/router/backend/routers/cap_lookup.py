@@ -114,6 +114,7 @@ def cap_lookup_process(request: Request, payload: dict, user: str = Depends(get_
 
     import openpyxl
     from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+    from utils.file_handler import DEFAULT_FONT_NAME, set_default_font
 
     env = 'prod' if os.getenv('AWS_REGION') == 'eu-west-1' else 'dev'
     ts_str = _uk_now().strftime("%Y%m%d_%H%M%S")
@@ -121,11 +122,12 @@ def cap_lookup_process(request: Request, payload: dict, user: str = Depends(get_
     s3_key = _CAP_LOOKUP_S3_PREFIX.format(env=env) + filename
 
     wb = openpyxl.Workbook()
+    set_default_font(wb)
     ws = wb.active
     ws.title = "CAP Lookup"
 
     header_fill = PatternFill("solid", fgColor="BDD7EE")
-    header_font = Font(bold=True)
+    header_font = Font(name=DEFAULT_FONT_NAME, bold=True)
     error_fill  = PatternFill("solid", fgColor="FFC7CE")
     thin = Side(style="thin", color="CCCCCC")
     border = Border(left=thin, right=thin, top=thin, bottom=thin)

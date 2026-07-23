@@ -33,6 +33,7 @@ import logging
 from openpyxl import Workbook
 
 from reports.nexus_source import fetch_updates_since, max_updated_at, parse_datetime
+from utils.file_handler import set_default_font
 from utils.snowflake_client import SnowflakeClient
 
 # Fixed row height (points) for every data row, so long free-text columns
@@ -367,6 +368,7 @@ def run_report(progress_cb=None):
 
     progress(88, 'Writing report')
     wb = Workbook()
+    set_default_font(wb)
     ws = wb.active
     ws.title = 'Vehicles - AutoEdit'
     ws.append(OUTPUT_COLUMNS)

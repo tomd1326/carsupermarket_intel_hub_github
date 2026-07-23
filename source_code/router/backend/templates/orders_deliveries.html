@@ -1,0 +1,1189 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Orders &amp; Deliveries</title>
+    <link rel="icon" type="image/png" href="{{ BASE_URL }}/static/icon.png">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css" rel="stylesheet">
+    <style>
+        @font-face { font-family: 'DM Sans'; src: url('{{ BASE_URL }}/static/fonts/DMSans-Regular.ttf');  font-weight: 400; }
+        @font-face { font-family: 'DM Sans'; src: url('{{ BASE_URL }}/static/fonts/DMSans-Medium.ttf');   font-weight: 500; }
+        @font-face { font-family: 'DM Sans'; src: url('{{ BASE_URL }}/static/fonts/DMSans-SemiBold.ttf'); font-weight: 600; }
+        @font-face { font-family: 'DM Sans'; src: url('{{ BASE_URL }}/static/fonts/DMSans-Bold.ttf');     font-weight: 700; }
+        body, button, input, select, textarea { font-family: 'DM Sans', system-ui, sans-serif; }
+        body { background-color: #003c57; }
+        .page-header { color: #ffffff; font-weight: 600; letter-spacing: -0.3px; }
+        .back-link { color: rgba(255,255,255,0.6) !important; text-decoration: none; }
+        .back-link:hover { color: #ffffff !important; }
+
+        .panel { background: #ffffff; border-radius: 12px; padding: 13px 18px; }
+        .control-row { display: flex; align-items: center; gap: 18px; flex-wrap: wrap; }
+        .control-group { display: flex; align-items: center; gap: 8px; }
+        .control-label { font-size: 0.85rem; font-weight: 600; color: #6a7a88; }
+
+        /* Orders / Deliveries toggle */
+        .lens-toggle { display: inline-flex; background: #eef2f6; border-radius: 8px; padding: 3px; }
+        .lens-toggle button {
+            border: none; background: transparent; color: #4a5a66;
+            font-weight: 600; font-size: 0.9rem; padding: 7px 18px; border-radius: 6px; cursor: pointer;
+        }
+        .lens-toggle button.active { background: #0d3d5f; color: #ffffff; }
+
+        /* Always green (matching CSV) except while data is actually loading —
+           the colour signals "ready", not "you have unsaved changes". It
+           greys out during the initial load and any Refresh, then turns back
+           green the moment loading finishes, so its colour doubles as a
+           loading indicator. */
+        .btn-apply {
+            background-color: #7ed321; border: 1px solid #7ed321; color: #0d3d5f; font-weight: 600;
+            font-size: 0.9rem; padding: 7px 18px; border-radius: 6px; cursor: pointer;
+        }
+        .btn-apply:hover { background-color: #6cba18; border-color: #6cba18; }
+        .btn-apply.loading {
+            background-color: #eef2f6; border-color: #d6dee5; color: #9aa7b2; cursor: default;
+        }
+        .btn-apply.loading:hover { background-color: #eef2f6; border-color: #d6dee5; }
+        .filter-input { border: 1px solid #d6dee5; border-radius: 6px; padding: 4px 8px; font-size: 0.75rem; color: #33424f; width: 180px; }
+        .btn-csv { background-color: #7ed321; border: none; color: #0d3d5f; font-weight: 600; font-size: 0.9rem; padding: 7px 18px; }
+        .btn-csv:hover { background-color: #6cba18; color: #0d3d5f; }
+        .btn-refresh { background-color: #ffffff; border: 1px solid #0d3d5f; color: #0d3d5f; font-weight: 600; font-size: 0.9rem; padding: 7px 15px; }
+        .btn-refresh:hover { background-color: #0d3d5f; color: #ffffff; }
+        .btn-refresh:disabled { opacity: 0.6; cursor: default; }
+        .row-count { color: #6a7a88; font-size: 0.82rem; }
+        .cache-note { color: #9aa7b2; font-size: 0.75rem; }
+
+        /* Slicer bar — fixed-width panels; scroll horizontally rather than
+           squashing them narrower to fit. */
+        .slicer-bar { display: flex; gap: 10px; overflow-x: auto; padding-bottom: 6px; }
+        .slicer {
+            background: #ffffff; border-radius: 10px; padding: 8px 10px;
+            display: flex; flex-direction: column; min-height: 0;
+            flex: 0 0 163px; width: 163px;
+        }
+        .slicer-head {
+            display: flex; align-items: center; justify-content: space-between;
+            font-weight: 600; font-size: 0.8rem; color: #0d3d5f;
+            padding-bottom: 6px; margin-bottom: 6px; border-bottom: 1px solid #e6edf2;
+        }
+        .slicer-clear {
+            border: none; background: transparent; color: #8a96a3; cursor: pointer;
+            font-size: 0.72rem; padding: 2px 4px;
+        }
+        .slicer-clear:hover { color: #c53030; }
+        .slicer-clear.hidden { visibility: hidden; }
+        /* Tall enough to fit Price Band's 8 full-height pills with no scroll.
+           Only longer lists (Supplier) scroll. */
+        .slicer-list { overflow-y: auto; height: 296px; display: flex; flex-direction: column; gap: 4px; }
+        .slicer-item {
+            font-size: 0.78rem; color: #33424f; padding: 5px 10px; border-radius: 5px;
+            cursor: pointer; border: 1px solid #cfe0f0; background: #eaf3fb;
+            white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+            user-select: none;
+            flex: 0 0 auto;   /* never shrink — full-height pills always */
+        }
+        .slicer-item:hover { border-color: #7ea9cf; }
+        .slicer-item.selected { background: #0d3d5f; color: #ffffff; border-color: #0d3d5f; }
+
+        /* --vehicle-font and --summary-font are independent — the font
+           resizer changes whichever view is active, and each is persisted
+           per user in Aurora separately. Padding scales with them (em). */
+        :root { --vehicle-font: 11px; --summary-font: 11px; }
+        .grid-wrap { max-height: 74vh; overflow: auto; border: 1px solid #b8c4cf; border-radius: 6px; }
+        table.grid { border-collapse: collapse; font-size: var(--vehicle-font); table-layout: fixed; width: 100%; }
+        table.grid thead th {
+            position: sticky; top: 0; z-index: 2; background: #0d3d5f; color: #ffffff;
+            text-align: left; font-size: 0.95em; font-weight: 600; padding: 0.4em 0.6em;
+            cursor: pointer; user-select: none; border-right: 1px solid #1c5378;
+            white-space: normal; line-height: 1.2; vertical-align: bottom;
+            overflow-wrap: break-word;
+        }
+        table.grid thead th:hover { background: #12496f; }
+        table.grid thead th .sort-caret { opacity: 0.5; margin-left: 4px; font-size: 0.85em; white-space: nowrap; }
+        table.grid td {
+            padding: 0.35em 0.6em; color: #33424f; border-bottom: 1px solid #c4ced8; border-right: 1px solid #d9e0e7;
+            white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+        }
+        table.grid tbody tr:nth-child(even) { background: #eef2f6; }
+        table.grid tbody tr:hover { background: #e2ecf5; }
+        table.grid td.num { text-align: right; font-variant-numeric: tabular-nums; }
+        table.grid td.neg { color: #c53030; }
+
+        /* Font resizer */
+        .font-resizer { display: inline-flex; align-items: center; gap: 4px; }
+        .font-resizer button {
+            border: 1px solid #d6dee5; background: #ffffff; color: #0d3d5f;
+            width: 30px; height: 32px; border-radius: 6px; font-weight: 700; cursor: pointer;
+            display: inline-flex; align-items: center; justify-content: center; font-size: 0.9rem;
+        }
+        .font-resizer button:hover { background: #eef2f6; }
+        .font-resizer .font-size-label { font-size: 0.82rem; color: #6a7a88; min-width: 38px; text-align: center; font-variant-numeric: tabular-nums; }
+        table.grid a { color: #1a5fd6; text-decoration: none; }
+        table.grid a:hover { text-decoration: underline; }
+        .empty-state { color: #8a96a3; font-size: 0.9rem; text-align: center; padding: 40px 0; }
+        .spinner-wrap { text-align: center; padding: 60px 0; color: #0d3d5f; }
+
+        /* Summary tables — one per dimension, stacked vertically. Sized to
+           content (not full width) with a shared colgroup so every table's
+           columns line up exactly regardless of which dimension it shows. */
+        .summary-table-wrap { margin-bottom: 22px; overflow-x: auto; padding: 1px; }
+        .summary-table-wrap:last-child { margin-bottom: 0; }
+        table.summary {
+            border-collapse: separate; border-spacing: 0; font-size: var(--summary-font); white-space: nowrap;
+            table-layout: fixed; width: auto;
+            border: 2px solid #0d3d5f; border-radius: 6px; overflow: hidden;
+        }
+        table.summary th {
+            background: #0d3d5f; color: #ffffff; text-align: left;
+            font-size: 0.95em; font-weight: 600; padding: 0.5em 0.7em;
+            border-right: 1px solid #1c5378;
+            overflow: hidden; text-overflow: ellipsis;
+        }
+        table.summary th.num, table.summary td.num { text-align: right; font-variant-numeric: tabular-nums; }
+        table.summary td {
+            padding: 0.35em 0.7em; color: #33424f;
+            border-bottom: 1px solid #c4ced8; border-right: 1px solid #d9e0e7;
+            overflow: hidden; text-overflow: ellipsis;
+        }
+        table.summary td.neg { color: #c53030; }
+        table.summary td.dim-label { font-weight: 600; color: #0d3d5f; }
+        /* Grand Total separator: one solid dark-blue line, same colour as the
+           border, with no lighter line adjacent (that's what read as a "gap"). */
+        table.summary tbody tr.total-row td { font-weight: 700; background: #eef2f6; border-top: 2px solid #0d3d5f; border-bottom: none; }
+        table.summary tbody tr:has(+ tr.total-row) td { border-bottom: none; }
+        table.summary tbody tr.spacer-row td { padding: 4px 0; border: none; background: transparent; }
+    </style>
+</head>
+<body>
+    <div class="container-fluid py-4" style="max-width: 100%; padding-left: 24px; padding-right: 24px;">
+        <div class="d-flex align-items-center justify-content-between mb-3">
+            <h3 class="page-header mb-0">Orders &amp; Deliveries</h3>
+            <a href="{{ BASE_URL }}/reports" class="back-link"><i class="fas fa-arrow-left"></i> Reports</a>
+        </div>
+
+        <div class="panel shadow-sm mb-3">
+            <div class="control-row">
+                <div class="control-group">
+                    <span class="control-label">Lens</span>
+                    <div class="lens-toggle" id="lens-toggle">
+                        <button data-lens="orders" class="active">Orders</button>
+                        <button data-lens="deliveries">Deliveries</button>
+                    </div>
+                </div>
+                <div class="control-group">
+                    <span class="control-label">View</span>
+                    <div class="lens-toggle" id="view-toggle">
+                        <button data-view="summary" class="active">Summary</button>
+                        <button data-view="vehicle">Vehicle</button>
+                    </div>
+                </div>
+                <div class="control-group">
+                    <span class="control-label">Group by</span>
+                    <div class="lens-toggle" id="granularity-toggle">
+                        <button data-granularity="week" class="active">By Week</button>
+                        <button data-granularity="month">By Month</button>
+                    </div>
+                    <button class="btn btn-apply loading" id="apply-btn" onclick="applyFilters()" title="Apply the selected filters below">
+                        <span id="apply-label"><i class="fas fa-spinner fa-spin"></i> Loading</span>
+                    </button>
+                </div>
+                <div class="control-group ms-auto">
+                    <div class="font-resizer" title="Table font size">
+                        <button type="button" onclick="changeFont(-1)" aria-label="Smaller font">A&minus;</button>
+                        <span class="font-size-label" id="font-size-label">11px</span>
+                        <button type="button" onclick="changeFont(1)" aria-label="Larger font">A+</button>
+                    </div>
+                    <span class="cache-note" id="cache-note"></span>
+                    <span class="row-count" id="row-count"></span>
+                    <button class="btn btn-refresh" id="refresh-btn" onclick="refreshData()" title="Reload the latest data from Snowflake">
+                        <i class="fas fa-rotate-right"></i> Refresh
+                    </button>
+                    <button class="btn btn-csv" onclick="downloadCsv()"><i class="fas fa-download"></i> CSV</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Slicer bar: full-width, one panel per dimension, multi-select,
+             cross-filtering. Built by JS from the loaded rows. -->
+        <div id="slicer-bar" class="slicer-bar mb-3"></div>
+
+        <!-- Summary View body: one table per dimension, stacked -->
+        <div class="panel shadow-sm" id="summary-area" style="width: fit-content; max-width: 100%;">
+            <div class="spinner-wrap"><i class="fas fa-spinner fa-spin fa-2x"></i><div style="margin-top:12px;font-size:0.9rem;">Loading vehicles...</div></div>
+        </div>
+
+        <!-- Vehicle View body (the grid) -->
+        <div class="panel shadow-sm" id="vehicle-area" style="display:none;">
+            <div id="grid-area">
+                <div class="spinner-wrap"><i class="fas fa-spinner fa-spin fa-2x"></i><div style="margin-top:12px;font-size:0.9rem;">Loading vehicles...</div></div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const BASE_URL = "{{ BASE_URL }}";
+
+        // Column definitions: key -> {label, type}
+        // type: 'text' | 'num' | 'money' | 'pct' | 'date' | 'link' (link uses linkKey)
+        const COLS = [
+            { key: 'vrm', label: 'VRM' },
+            { key: 'order_date', label: 'Order Date', type: 'date' },
+            { key: 'delivered', label: 'Delivered', type: 'date' },
+            { key: 'make_model', label: 'Make Model' },
+            { key: 'derivative', label: 'Derivative' },
+            { key: 'supplier', label: 'Supplier' },
+            { key: 'ack_dis', label: 'Ack DIS', type: 'num' },
+            { key: 'dis_band', label: 'DIS Band' },
+            { key: 'dts', label: 'DTS', type: 'num' },
+            { key: 'purch_price', label: 'Purch Price', type: 'money' },
+            { key: 'sell_price_after_disc', label: 'Sell Price After Disc', type: 'money' },
+            { key: 'price_band', label: 'Price Band' },
+            { key: 'finance_subsidy', label: 'Finance Subsidy', type: 'money' },
+            { key: 'chassis_mgn_aft_subs', label: 'Chassis Mgn Aft Subs', type: 'money' },
+            { key: 'vehicle_costs', label: 'Vehicle Costs', type: 'money' },
+            { key: 'write_down', label: 'Write Down', type: 'money' },
+            { key: 'metal_mgn', label: 'Metal Mgn', type: 'money' },
+            { key: 'gpu_m_costs', label: 'GPU-M Costs', type: 'money' },
+            { key: 'gpu_m', label: 'GPU-M', type: 'money' },
+            { key: 'finance_comm', label: 'Finance Comm', type: 'money' },
+            { key: 'product_mgn', label: 'Product Mgn', type: 'money' },
+            { key: 'gpu_s_costs', label: 'GPU-S Costs', type: 'money' },
+            { key: 'gpu_s', label: 'GPU-S', type: 'money' },
+            { key: 'gpu_ms', label: 'GPU-MS', type: 'money' },
+            { key: 'roi_pct', label: 'ROI %', type: 'pct' },
+            { key: 'purchase_cap_pct', label: 'Purchase CAP %', type: 'pct' },
+            { key: 'sell_pct_at', label: 'Sell % of AT', type: 'pct' },
+            { key: 'fuel', label: 'Fuel' },
+            { key: 'colour', label: 'Colour' },
+            { key: 'mileage', label: 'Mileage', type: 'num' },
+            { key: 'mileage_band', label: 'Mileage Band' },
+            { key: 'dfr', label: 'DFR', type: 'date' },
+            { key: 'age_band', label: 'Age Band' },
+            { key: 'supplier_channel', label: 'Supplier Channel' },
+            { key: 'deal_status', label: 'Invoice Status' },
+            { key: 'site', label: 'Site' },
+            { key: 'sales_type', label: 'Sales Type' },
+            { key: 'cap_live_purchase', label: 'CAP Live at Purchase', type: 'num' },
+            { key: 'cap_live_order', label: 'CAP Live at Order', type: 'num' },
+            { key: 'at_val_order', label: 'AT Valuation at Order', type: 'num' },
+            { key: 'discount', label: 'Discount', type: 'money' },
+            { key: 'px_status', label: 'PX?' },
+            { key: 'order_url', label: 'Order', type: 'link' },
+            { key: 'invoice_url', label: 'Invoice', type: 'link' },
+        ];
+
+        // Lens config: which date field drives filtering/labels, and which
+        // deal statuses are kept. Mirrors the two Power Query variants.
+        const LENS = {
+            orders:     { dateKey: 'order_date', label: 'Order date',    statuses: ['Acknowledged', 'Delivered'] },
+            deliveries: { dateKey: 'delivered',  label: 'Delivery date', statuses: ['Delivered'] },
+        };
+
+        let allRows = [];
+        // Every control on the page — Lens, View, Group By, and all slicer
+        // selections — is staged: clicking updates only the *Pending copy and
+        // the button's own visual active state. Nothing about what's actually
+        // displayed (rerender(), which reads the *Applied values) changes
+        // until Apply is clicked, which copies every Pending value across.
+        let lensApplied = 'orders', lensPending = 'orders';
+        let viewApplied = 'summary', viewPending = 'summary';
+        let granularityApplied = 'week', granularityPending = 'week';
+        let sortKey = null, sortDir = 1;
+
+        // ── Slicers ─────────────────────────────────────────────────────────
+        // One panel per dimension, in display order. `key` is the row field;
+        // 'period' is a synthetic key (Delivery/Order month) that follows the
+        // lens. Selections are multi-select and cross-filter each other.
+        const SLICERS = [
+            { key: 'period',           label: 'Period' },
+            { key: 'supplier_channel', label: 'Supplier Channel' },
+            { key: 'supplier',         label: 'Supplier' },
+            { key: 'sales_type',       label: 'Sales Type' },
+            { key: 'fuel',             label: 'Fuel' },
+            { key: 'price_band',       label: 'Price Band' },
+            { key: 'mileage_band',     label: 'Mileage Band' },
+            { key: 'age_band',         label: 'Age Band' },
+        ];
+        // Slicer selections are LIVE — clicking a value filters the tables and
+        // grid immediately. Only the three top toggles (Lens, View, Group By)
+        // are staged behind the Apply button.
+        const slicerSel = {};
+        SLICERS.forEach(s => { slicerSel[s.key] = new Set(); });
+
+        // Local yyyy-mm-dd for a Date. NEVER use toISOString().slice(0,10)
+        // for this — that converts to UTC, so a local midnight in a positive
+        // timezone (e.g. UK summer, UTC+1) rolls back to the previous day,
+        // shifting an ISO week's Monday onto the prior Sunday and computing
+        // the WRONG (previous) week. This was why the current week wasn't
+        // being selected by default.
+        function ymdLocal(d) {
+            return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+        }
+
+        // ISO week key (yyyy-Www) for a yyyy-mm-dd date string, computed
+        // client-side so it works identically for both the order date and the
+        // invoice-posted date (the backend only supplies ORDER_ACKNOWLEDGED_WEEK).
+        function isoWeekKey(dateStr) {
+            const d = new Date(dateStr + 'T00:00:00');
+            const target = new Date(d.getTime());
+            const dayNum = (d.getDay() + 6) % 7;               // Mon=0..Sun=6
+            target.setDate(target.getDate() - dayNum + 3);      // nearest Thursday
+            const firstThursday = new Date(target.getFullYear(), 0, 4);
+            const firstDayNum = (firstThursday.getDay() + 6) % 7;
+            firstThursday.setDate(firstThursday.getDate() - firstDayNum + 3);
+            const week = 1 + Math.round((target - firstThursday) / (7 * 86400000));
+            return `${target.getFullYear()}-W${String(week).padStart(2, '0')}`;
+        }
+        // Monday date (yyyy-mm-dd) for an ISO week key — used to sort weeks
+        // chronologically and to compute the default selection.
+        function isoWeekMonday(weekKey) {
+            const [y, w] = weekKey.split('-W').map(Number);
+            // Jan 4 is always in ISO week 1 — move it to that week's Thursday
+            // first (same nearest-Thursday adjustment isoWeekKey uses), THEN
+            // step back 3 days to Monday. Using Jan 4's own weekday directly
+            // (without this adjustment) is off by however many days Jan 4
+            // sits from the nearest Thursday — e.g. in 2026 (Jan 4 = Sunday)
+            // it produced Monday = 30 Dec 2025 instead of the correct 29 Dec.
+            const jan4 = new Date(y, 0, 4);
+            const jan4DayNum = (jan4.getDay() + 6) % 7;       // Mon=0..Sun=6
+            const week1Thursday = new Date(jan4);
+            week1Thursday.setDate(jan4.getDate() - jan4DayNum + 3);
+            const week1Monday = new Date(week1Thursday);
+            week1Monday.setDate(week1Thursday.getDate() - 3);
+            const monday = new Date(week1Monday);
+            monday.setDate(week1Monday.getDate() + (w - 1) * 7);
+            return monday;
+        }
+
+        const MONTH_ABBR = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+
+        // Human display label for a period key, e.g. "W30 20-Jul" for a week
+        // key or "Jul 2026" for a month key. The raw key (yyyy-Www / yyyy-MM)
+        // stays the actual filtering value everywhere — this is display only.
+        function periodDisplayLabel(key) {
+            if (/^\d{4}-W\d{2}$/.test(key)) {
+                const monday = isoWeekMonday(key);
+                const weekNum = key.split('-W')[1];
+                return `W${weekNum} ${monday.getDate()}-${MONTH_ABBR[monday.getMonth()]}`;
+            }
+            if (/^\d{4}-\d{2}$/.test(key)) {
+                const [y, m] = key.split('-').map(Number);
+                return `${MONTH_ABBR[m - 1]} ${y}`;
+            }
+            return key;   // '(blank)' or anything unrecognised
+        }
+
+        // The period follows both the lens (which date drives it) and the
+        // granularity toggle (week vs month). Takes lens/granularity explicitly
+        // — callers pass the Applied pair for real data, the Pending pair for
+        // the slicer panels' live preview of what's being staged.
+        function periodOf(r, lensVal, granularityVal) {
+            const d = r[LENS[lensVal].dateKey];
+            if (!d) return null;
+            return granularityVal === 'week' ? isoWeekKey(d) : d.slice(0, 7);
+        }
+        // Sales type is bucketed for slicing: any rate/cash finance is one
+        // "Rate/Cash" option; interest-free is "0%".
+        function mapSalesType(v) {
+            const s = String(v == null ? '' : v).trim();
+            if (!s) return '';
+            const low = s.toLowerCase();
+            if (low === '0%' || low.includes('interest')) return '0%';
+            return 'Rate/Cash';
+        }
+        function slicerValue(r, key, lensVal, granularityVal) {
+            if (key === 'period') return periodOf(r, lensVal, granularityVal);
+            if (key === 'sales_type') return mapSalesType(r[key]);
+            return r[key];
+        }
+        // Normalise a slicer value to a trimmed string, or '' if empty/blank —
+        // so blank supplier/band values don't become empty pills.
+        function normVal(v) {
+            if (v == null) return '';
+            return String(v).trim();
+        }
+
+        // Explicit display order for slicers where alphabetical is wrong.
+        const SLICER_ORDER = {
+            sales_type: ['Rate/Cash', '0%'],
+            fuel: ['Petrol', 'Diesel', 'Electric', 'Hybrid', 'Plug-In Hybrid'],
+        };
+        // Heading reflects APPLIED lens/granularity — frozen until Apply,
+        // same as everything else in the slicer bar.
+        function slicerHeadingApplied(key) {
+            if (key === 'period') {
+                const noun = granularityApplied === 'week' ? 'Week' : 'Month';
+                return (lensApplied === 'deliveries' ? 'Delivery ' : 'Order ') + noun;
+            }
+            return SLICERS.find(s => s.key === key).label;
+        }
+
+        // ── Font resizer (persisted per user in Aurora via /api/user-prefs) ──
+        // Summary and Vehicle views remember their own font size separately —
+        // the resizer always acts on whichever view is currently active.
+        const FONT_MIN = 8, FONT_MAX = 20, FONT_DEFAULT = 11;
+        const FONT_CONFIG = {
+            summary: { prefKey: 'orders_deliveries_font_summary', cssVar: '--summary-font' },
+            vehicle: { prefKey: 'orders_deliveries_font_vehicle', cssVar: '--vehicle-font' },
+        };
+        const fontSizes = { summary: FONT_DEFAULT, vehicle: FONT_DEFAULT };
+        let fontSaveTimer = null;
+
+        function applyFont(which) {
+            document.documentElement.style.setProperty(FONT_CONFIG[which].cssVar, fontSizes[which] + 'px');
+            if (which === viewApplied) {
+                document.getElementById('font-size-label').textContent = fontSizes[which] + 'px';
+            }
+        }
+
+        function changeFont(delta) {
+            const which = viewApplied;   // resize whichever view is actually on screen
+            fontSizes[which] = Math.min(FONT_MAX, Math.max(FONT_MIN, fontSizes[which] + delta));
+            applyFont(which);
+            // Debounced save so rapid clicks don't spam Aurora
+            clearTimeout(fontSaveTimer);
+            fontSaveTimer = setTimeout(() => saveFont(which), 500);
+        }
+
+        async function saveFont(which) {
+            try {
+                await fetch(BASE_URL + '/api/user-prefs/' + FONT_CONFIG[which].prefKey, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(fontSizes[which]),
+                });
+            } catch (e) { /* non-fatal — font just won't persist this time */ }
+        }
+
+        async function loadFont() {
+            await Promise.all(Object.keys(FONT_CONFIG).map(async which => {
+                try {
+                    const resp = await fetch(BASE_URL + '/api/user-prefs/' + FONT_CONFIG[which].prefKey);
+                    if (resp.ok) {
+                        const data = await resp.json();
+                        const v = Number(data.value);
+                        if (Number.isFinite(v) && v >= FONT_MIN && v <= FONT_MAX) fontSizes[which] = v;
+                    }
+                } catch (e) { /* fall back to default */ }
+                applyFont(which);
+            }));
+        }
+
+        function fmtMoney(v) {
+            if (v === null || v === undefined || v === '') return '';
+            const n = Math.round(Number(v));
+            return '£' + n.toLocaleString('en-GB');
+        }
+        function fmtNum(v) {
+            if (v === null || v === undefined || v === '') return '';
+            return Number(v).toLocaleString('en-GB');
+        }
+        function fmtPct(v) {
+            if (v === null || v === undefined || v === '') return '';
+            return (Number(v) * 100).toFixed(1) + '%';
+        }
+        function fmtCell(col, v) {
+            switch (col.type) {
+                case 'money': return fmtMoney(v);
+                case 'num':   return fmtNum(v);
+                case 'pct':   return fmtPct(v);
+                default:      return (v === null || v === undefined) ? '' : String(v);
+            }
+        }
+        function isNeg(col, v) {
+            return (col.type === 'money' || col.type === 'pct') && v !== null && v !== undefined && Number(v) < 0;
+        }
+
+        function escapeHtml(s) {
+            const d = document.createElement('div'); d.textContent = s; return d.innerHTML;
+        }
+
+        // Layer 1 — lens only (no slicers, no period). Everything downstream
+        // (slicers, summary, grid) starts from this set. The date window
+        // itself is just the Period slicer's selection, applied later via
+        // passesSlicers like any other slicer.
+        function baseRows(lensVal) {
+            const cfg = LENS[lensVal];
+            return allRows.filter(r => cfg.statuses.includes(r.deal_status) && !!r[cfg.dateKey]);
+        }
+
+        // Does a row pass all slicer selections in the given selection map,
+        // optionally ignoring one panel (used so a panel's own values aren't
+        // excluded by its own selection — that's what makes the cross-
+        // filtering feel right).
+        //
+        // Always called with the APPLIED selection map + lensApplied/
+        // granularityApplied — nothing on screen reflects a Pending value
+        // until Apply is clicked.
+        function passesSlicers(r, sel_map, lensVal, granularityVal, exceptKey) {
+            for (const s of SLICERS) {
+                if (s.key === exceptKey) continue;
+                const sel = sel_map[s.key];
+                if (sel.size === 0) continue;
+                const v = normVal(slicerValue(r, s.key, lensVal, granularityVal));
+                if (!v || !sel.has(v)) return false;
+            }
+            return true;
+        }
+
+        // Layer 2 — base rows that pass every (live) slicer. This is the
+        // working set used by the summary tables, the grid, and the row count.
+        function filteredRows() {
+            return baseRows(lensApplied).filter(r => passesSlicers(r, slicerSel, lensApplied, granularityApplied));
+        }
+
+        // The vehicle grid: filtered rows, sorted.
+        function visibleRows() {
+            const rows = filteredRows();
+            if (sortKey) {
+                const col = COLS.find(c => c.key === sortKey);
+                const numeric = col && (col.type === 'num' || col.type === 'money' || col.type === 'pct');
+                rows.sort((a, b) => {
+                    let av = a[sortKey], bv = b[sortKey];
+                    if (av == null) return 1; if (bv == null) return -1;
+                    if (numeric) { av = Number(av); bv = Number(bv); return (av - bv) * sortDir; }
+                    return String(av).localeCompare(String(bv)) * sortDir;
+                });
+            }
+            return rows;
+        }
+
+        // ── Summary tables ───────────────────────────────────────────────────
+        // One table per dimension, stacked. Each row = mean/sum over the rows
+        // in that group; Grand Total = the same aggregation over every row in
+        // the table (i.e. the filtered set the table is built from).
+        const SUMMARY_COLS = [
+            { key: 'units',        label: 'Units',              agg: 'count' },
+            { key: 'units_pct',    label: 'Units %',            agg: 'pct_of_total' },
+            { key: 'ack_dis',      label: 'DIS',                 agg: 'mean' },
+            { key: 'purch_price',  label: 'Purch',               agg: 'mean', money: true },
+            { key: 'sell_price_after_disc', label: 'Sell',       agg: 'mean', money: true },
+            { key: 'chassis_mgn_aft_subs',  label: 'Chassis',    agg: 'mean', money: true },
+            { key: 'vehicle_costs', label: 'Costs',              agg: 'mean', money: true },
+            { key: 'metal_mgn',    label: 'Metal',               agg: 'mean', money: true },
+            { key: 'gpu_m',        label: 'GPU-M',               agg: 'mean', money: true },
+            { key: 'fin_pen_pct',  label: 'Fin Pen %',           agg: 'fin_pen_pct' },
+            { key: 'fin_comm_all', label: 'Fin Comm',            agg: 'fin_comm_all', money: true },
+            { key: 'fin_comm_fin', label: 'Fin Comm / unit',     agg: 'fin_comm_financed', money: true },
+            { key: 'product_mgn',  label: 'Prod mgn',            agg: 'mean', money: true },
+            { key: 'gpu_s',        label: 'GPU-S',               agg: 'mean', money: true },
+            { key: 'gpu_ms',       label: 'GPU-MS',              agg: 'mean', money: true },
+            { key: 'roi_pct',      label: 'ROI %',               agg: 'mean' },
+        ];
+        // Columns shaded per-column (relative min->max within the table).
+        // Money/margin columns and the two percentage columns read "higher is
+        // better" green; nothing is shaded red-for-high.
+        const SHADE_COLS = new Set([
+            'chassis_mgn_aft_subs', 'metal_mgn', 'gpu_m', 'fin_pen_pct',
+            'fin_comm_all', 'fin_comm_fin', 'product_mgn', 'gpu_s', 'gpu_ms', 'roi_pct',
+        ]);
+
+        function mean(vals) {
+            const known = vals.filter(v => v !== null && v !== undefined && v !== '' && !Number.isNaN(Number(v))).map(Number);
+            if (!known.length) return null;
+            return known.reduce((a, b) => a + b, 0) / known.length;
+        }
+
+        // Build one summary row (a group's rows -> the 16 column values).
+        function summariseGroup(rows, totalUnits) {
+            const out = { units: rows.length };
+            out.units_pct = totalUnits ? rows.length / totalUnits : null;
+            out.ack_dis = mean(rows.map(r => r.ack_dis));
+            out.purch_price = mean(rows.map(r => r.purch_price));
+            out.sell_price_after_disc = mean(rows.map(r => r.sell_price_after_disc));
+            out.chassis_mgn_aft_subs = mean(rows.map(r => r.chassis_mgn_aft_subs));
+            out.vehicle_costs = mean(rows.map(r => r.vehicle_costs));
+            out.metal_mgn = mean(rows.map(r => r.metal_mgn));
+            out.gpu_m = mean(rows.map(r => r.gpu_m));
+            out.product_mgn = mean(rows.map(r => r.product_mgn));
+            out.gpu_s = mean(rows.map(r => r.gpu_s));
+            out.gpu_ms = mean(rows.map(r => r.gpu_ms));
+            out.roi_pct = mean(rows.map(r => r.roi_pct));
+
+            // Fin Pen % = units on Rate finance / all units in the row
+            // (0% and Cash both excluded from the numerator)
+            const rateUnits = rows.filter(r => String(r.sales_type || '').trim().toLowerCase() === 'rate').length;
+            out.fin_pen_pct = rows.length ? rateUnits / rows.length : null;
+
+            // Avg Fin Comm = total commission / ALL units; Avg Fin Comm/unit =
+            // total commission / units that actually earned commission.
+            const commVals = rows.map(r => Number(r.finance_comm)).filter(v => !Number.isNaN(v));
+            const commTotal = commVals.reduce((a, b) => a + b, 0);
+            const financedCount = rows.filter(r => Number(r.finance_comm) > 0).length;
+            out.fin_comm_all = rows.length ? commTotal / rows.length : null;
+            out.fin_comm_fin = financedCount ? commTotal / financedCount : null;
+
+            return out;
+        }
+
+        // Build a full summary table for one dimension: { key, heading, rows: [{label, ...cols}], total }
+        function buildSummaryTable(rows, groupKey, heading, order) {
+            const groups = new Map();
+            rows.forEach(r => {
+                const v = normVal(r[groupKey]) || '(blank)';
+                if (!groups.has(v)) groups.set(v, []);
+                groups.get(v).push(r);
+            });
+            let labels = [...groups.keys()];
+            labels = order
+                ? labels.sort((a, b) => {
+                    const ia = order.indexOf(a), ib = order.indexOf(b);
+                    if (ia === -1 && ib === -1) return String(a).localeCompare(String(b));
+                    if (ia === -1) return 1; if (ib === -1) return -1;
+                    return ia - ib;
+                })
+                : labels.sort((a, b) => String(a).localeCompare(String(b), 'en', { numeric: true }));
+
+            const total = rows.length;
+            const dataRows = labels.map(label => ({ label, ...summariseGroup(groups.get(label), total) }));
+            const totalRow = { label: 'Grand Total', ...summariseGroup(rows, total) };
+            return { heading, rows: dataRows, totalRow, groupKey };
+        }
+
+        // Per-column relative shading (min->max within this table's data rows,
+        // excluding the Grand Total row). Returns a 0..1 intensity or null.
+        function shadeScale(dataRows, key) {
+            const vals = dataRows.map(r => r[key]).filter(v => v !== null && v !== undefined && !Number.isNaN(Number(v))).map(Number);
+            if (vals.length < 2) return () => null;
+            const min = Math.min(...vals), max = Math.max(...vals);
+            if (max === min) return () => null;
+            return v => (v === null || v === undefined || Number.isNaN(Number(v))) ? null : (Number(v) - min) / (max - min);
+        }
+
+        function shadeStyle(t) {
+            if (t === null) return '';
+            // White (#ffffff) -> brand green (#7ed321), light to avoid drowning text
+            const start = [255, 255, 255], end = [200, 232, 165];
+            const rgb = start.map((s, i) => Math.round(s + (end[i] - s) * t));
+            return ` style="background: rgb(${rgb.join(',')})"`;
+        }
+
+        function fmtSummaryCell(col, v) {
+            if (v === null || v === undefined) return '';
+            if (col.key === 'units') return Math.round(v).toLocaleString('en-GB');
+            if (col.key === 'ack_dis') return Number(v).toFixed(1);
+            if (col.money) return fmtMoney(v);
+            return fmtPct(v);   // units_pct, fin_pen_pct, roi_pct
+        }
+
+        // Fixed column widths shared by every summary table, so they all line
+        // up vertically regardless of which dimension is shown. The label
+        // column width is measured (not guessed) from the actual longest
+        // heading/label text that will appear across all seven tables —
+        // see measureSummaryLabelWidth().
+        const SUMMARY_DATA_COL_WIDTH = 66;
+        const SUMMARY_LABEL_PADDING = 20;   // matches the cell's left+right padding
+        let summaryLabelColWidth = 95;      // recomputed before each render
+
+        // Measure the pixel width of the longest label-column text (every
+        // table heading + every row/Grand Total label) using the real font,
+        // so the column is exactly as wide as it needs to be — no guessing.
+        function measureSummaryLabelWidth(tables) {
+            const canvas = measureSummaryLabelWidth._canvas || (measureSummaryLabelWidth._canvas = document.createElement('canvas'));
+            const ctx = canvas.getContext('2d');
+            const size = getComputedStyle(document.documentElement).getPropertyValue('--summary-font').trim() || '11px';
+            ctx.font = `600 ${size} 'DM Sans', system-ui, sans-serif`;   // bold, matches .dim-label/.total-row weight
+            let max = 0;
+            tables.forEach(t => {
+                const displayLabel = l => t.groupKey === '__period' ? periodDisplayLabel(l) : l;
+                max = Math.max(max, ctx.measureText(t.heading).width);
+                t.rows.forEach(r => { max = Math.max(max, ctx.measureText(displayLabel(r.label)).width); });
+                max = Math.max(max, ctx.measureText(t.totalRow.label).width);
+            });
+            return Math.ceil(max) + SUMMARY_LABEL_PADDING;
+        }
+
+        function summaryColgroupHtml() {
+            const cols = [`<col style="width:${summaryLabelColWidth}px">`];
+            SUMMARY_COLS.forEach(() => cols.push(`<col style="width:${SUMMARY_DATA_COL_WIDTH}px">`));
+            return `<colgroup>${cols.join('')}</colgroup>`;
+        }
+
+        function renderSummaryTableHtml(table) {
+            const shaders = {};
+            SHADE_COLS.forEach(k => { shaders[k] = shadeScale(table.rows, k); });
+
+            const head = `<tr><th>${escapeHtml(table.heading)}</th>` +
+                SUMMARY_COLS.map(c => `<th class="num">${escapeHtml(c.label)}</th>`).join('') + '</tr>';
+
+            // Period rows show a friendly label (e.g. "W30 20-Jul"); the raw
+            // key (r.label) is only used internally for grouping/sorting.
+            const displayLabel = l => table.groupKey === '__period' ? periodDisplayLabel(l) : l;
+
+            const rowHtml = r => {
+                const cells = SUMMARY_COLS.map(c => {
+                    const v = r[c.key];
+                    const shade = shaders[c.key] ? shaders[c.key](v) : null;
+                    const negCls = (typeof v === 'number' && v < 0) ? ' neg' : '';
+                    return `<td class="num${negCls}"${shadeStyle(shade)}>${escapeHtml(fmtSummaryCell(c, v))}</td>`;
+                }).join('');
+                return `<tr><td class="dim-label">${escapeHtml(displayLabel(r.label))}</td>${cells}</tr>`;
+            };
+
+            const totalCells = SUMMARY_COLS.map(c => {
+                const v = table.totalRow[c.key];
+                const negCls = (typeof v === 'number' && v < 0) ? ' neg' : '';
+                return `<td class="num${negCls}">${escapeHtml(fmtSummaryCell(c, v))}</td>`;
+            }).join('');
+            const totalHtml = `<tr class="total-row"><td class="dim-label">${escapeHtml(table.totalRow.label)}</td>${totalCells}</tr>`;
+
+            return `<div class="summary-table-wrap"><table class="summary">
+                ${summaryColgroupHtml()}
+                <thead>${head}</thead>
+                <tbody>${table.rows.map(rowHtml).join('')}${totalHtml}</tbody>
+            </table></div>`;
+        }
+
+        // Dimensions and their column key + explicit ordering (undefined = alphabetical)
+        const SUMMARY_DIMENSIONS = [
+            { key: '__sales_type_bucket', heading: 'Sales Type', order: ['Rate/Cash', '0%'], skipOwnFilter: true },
+            { key: '__period', heading: null /* set per-lens */ },
+            { key: 'supplier_channel', heading: 'Channel' },
+            { key: 'fuel', heading: 'Fuel Type', order: SLICER_ORDER.fuel },
+            { key: 'price_band', heading: 'Price Band', order: ['<10k','10-12.5k','12.5-15k','15-20k','20-25k','25-30k','30k+','Interest Free'] },
+            { key: 'mileage_band', heading: 'Mileage Band' },
+            { key: 'age_band', heading: 'Age Band' },
+        ];
+
+        function renderSummary() {
+            const area = document.getElementById('summary-area');
+            const base = baseRows(lensApplied);                                                            // lens only, no slicers
+            const filtered = base.filter(r => passesSlicers(r, slicerSel, lensApplied, granularityApplied)); // + all live slicers
+            const filteredExceptSalesType = base.filter(r => passesSlicers(r, slicerSel, lensApplied, granularityApplied, 'sales_type'));
+
+            // Pass 1: build every table's data (no HTML yet).
+            const tables = SUMMARY_DIMENSIONS.map(dim => {
+                let rows, groupKey, heading, order;
+                if (dim.skipOwnFilter) {
+                    rows = filteredExceptSalesType.map(r => ({ ...r, __sales_type_bucket: mapSalesType(r.sales_type) || '(blank)' }));
+                    groupKey = '__sales_type_bucket'; heading = dim.heading; order = dim.order;
+                } else if (dim.key === '__period') {
+                    rows = filtered.map(r => ({ ...r, __period: periodOf(r, lensApplied, granularityApplied) || '(blank)' }));
+                    groupKey = '__period';
+                    // Follows lens + granularity: "Order Week" / "Delivery Week"
+                    // / "Order Month" / "Delivery Month" (same as the slicer).
+                    heading = slicerHeadingApplied('period');
+                    order = null; // yyyy-MM / yyyy-Www both sort chronologically as strings
+                } else {
+                    rows = filtered; groupKey = dim.key; heading = dim.heading; order = dim.order;
+                }
+                return buildSummaryTable(rows, groupKey, heading, order);
+            });
+
+            // Measure the true longest label across every table's heading and
+            // row labels (including Grand Total), so all seven tables share
+            // one exact-fit label column width — no guessing, no truncation.
+            summaryLabelColWidth = tables.length ? measureSummaryLabelWidth(tables) : summaryLabelColWidth;
+
+            const html = tables.map(renderSummaryTableHtml).join('');
+            area.innerHTML = html || '<div class="empty-state">No rows match the current view.</div>';
+        }
+
+        // ── Slicer rendering & interaction ──────────────────────────────────
+        function sortSlicerValues(key, values) {
+            const arr = [...values];
+            if (key === 'period') return arr.sort().reverse();        // newest first
+            const order = SLICER_ORDER[key];
+            if (order) {
+                // Explicit order; anything unexpected goes to the end, alphabetical
+                return arr.sort((a, b) => {
+                    const ia = order.indexOf(a), ib = order.indexOf(b);
+                    if (ia === -1 && ib === -1) return String(a).localeCompare(String(b));
+                    if (ia === -1) return 1;
+                    if (ib === -1) return -1;
+                    return ia - ib;
+                });
+            }
+            return arr.sort((a, b) => String(a).localeCompare(String(b), 'en', { numeric: true }));
+        }
+
+        // Slicer panels reflect APPLIED state — the whole bar (headings,
+        // which values exist) is frozen exactly as it was at the last Apply.
+        // The ONLY thing that changes on a click, before Apply, is which
+        // pills are highlighted "selected" — that's the point of the
+        // pending/applied split, and it must not leak into anything else
+        // (heading text, which values are shown, counts).
+        //
+        // Cross-filtered-out values are DROPPED, not shown greyed out — a
+        // disabled pill still took up a row and forced scrolling for no
+        // benefit, since it can't be clicked anyway.
+        // Slicers are live: clicking re-renders slicer panels + tables/grid
+        // immediately (rerender()). Cross-filtering, the panel headings, and
+        // which values show all reflect the currently-applied lens/granularity
+        // (those three only change on Apply).
+        function renderSlicers() {
+            const base = baseRows(lensApplied);
+            const bar = document.getElementById('slicer-bar');
+            bar.innerHTML = SLICERS.map(s => {
+                // Values available in this panel = distinct values across rows
+                // passing every OTHER panel's live selection (cross-filter).
+                const eligible = base.filter(r => passesSlicers(r, slicerSel, lensApplied, granularityApplied, s.key));
+                const avail = new Set();
+                eligible.forEach(r => { const v = normVal(slicerValue(r, s.key, lensApplied, granularityApplied)); if (v) avail.add(v); });
+                // The Period panel always offers the full contiguous span of
+                // weeks/months from the earliest data period up to the current
+                // one — even a period with zero rows (e.g. the in-progress
+                // current week before any sale lands) stays selectable, since
+                // "nothing this period" is real information, not a reason to
+                // hide it.
+                if (s.key === 'period') periodRange(granularityApplied).forEach(k => avail.add(k));
+                // A currently-selected value must stay visible even if it's not
+                // in avail, so the user can still see and deselect it —
+                // everything else not in avail is left out entirely.
+                const shown = new Set(avail);
+                slicerSel[s.key].forEach(v => shown.add(v));
+
+                const sel = slicerSel[s.key];
+                const items = sortSlicerValues(s.key, shown).map(v => {
+                    const isSel = sel.has(v);
+                    const cls = 'slicer-item' + (isSel ? ' selected' : '');
+                    // The pill shows a friendly label for period keys (e.g. "W30
+                    // 20-Jul"); data-val stays the raw key so filtering is unaffected.
+                    const label = s.key === 'period' ? periodDisplayLabel(v) : v;
+                    return `<div class="${cls}" data-key="${s.key}" data-val="${escapeHtml(v)}" role="button">${escapeHtml(label)}</div>`;
+                }).join('');
+
+                const clearCls = 'slicer-clear' + (sel.size ? '' : ' hidden');
+                return `<div class="slicer">
+                    <div class="slicer-head"><span>${escapeHtml(slicerHeadingApplied(s.key))}</span>
+                        <button class="${clearCls}" data-clear="${s.key}" title="Clear">clear</button></div>
+                    <div class="slicer-list">${items}</div>
+                </div>`;
+            }).join('');
+
+            bar.querySelectorAll('.slicer-item').forEach(el => {
+                el.addEventListener('click', () => {
+                    const key = el.dataset.key, val = el.dataset.val;
+                    const sel = slicerSel[key];
+                    sel.has(val) ? sel.delete(val) : sel.add(val);
+                    rerender();   // live — filters the tables/grid immediately
+                });
+            });
+            bar.querySelectorAll('.slicer-clear').forEach(el => {
+                el.addEventListener('click', () => {
+                    slicerSel[el.dataset.clear].clear();
+                    rerender();
+                });
+            });
+        }
+
+        // Full refresh of everything actually on screen — slicer panels, row
+        // count, and whichever view is APPLIED. This is the only function
+        // that changes what's visibly displayed; it only runs on load and on
+        // Apply (see applyFilters()), never from a bare control click.
+        function rerender() {
+            renderSlicers();
+            document.getElementById('summary-area').style.display = viewApplied === 'summary' ? '' : 'none';
+            document.getElementById('vehicle-area').style.display = viewApplied === 'vehicle' ? '' : 'none';
+            document.getElementById('font-size-label').textContent = fontSizes[viewApplied] + 'px';
+            const n = filteredRows().length;
+            document.getElementById('row-count').textContent =
+                n.toLocaleString('en-GB') + ' vehicle' + (n === 1 ? '' : 's');
+            if (viewApplied === 'vehicle') renderGrid(); else renderSummary();
+        }
+
+        // Apply is green by default and greys out (with a spinning icon)
+        // only while data is loading (initial load / Refresh), turning back
+        // green when done — its colour + spinner is a loading indicator, not
+        // an "unsaved changes" cue.
+        function setApplyLoading(isLoading) {
+            const btn = document.getElementById('apply-btn');
+            btn.classList.toggle('loading', isLoading);
+            btn.disabled = isLoading;
+            document.getElementById('apply-label').innerHTML =
+                isLoading ? '<i class="fas fa-spinner fa-spin"></i> Loading' : 'Apply';
+        }
+
+        // Commits the three staged toggles (Lens, View, Group By). Slicers
+        // are already live and untouched here.
+        function applyFilters() {
+            // Week keys (yyyy-Www) and month keys (yyyy-MM) aren't
+            // interchangeable — if granularity is changing on this Apply, the
+            // live period selection (from the old shape) would match nothing,
+            // so reset it to the new granularity's default window.
+            const granularityChanged = granularityPending !== granularityApplied;
+
+            lensApplied = lensPending;
+            viewApplied = viewPending;
+            granularityApplied = granularityPending;
+
+            if (granularityChanged && todayIso) {
+                slicerSel['period'] = new Set(defaultPeriodSelection(todayIso, granularityApplied));
+            }
+            rerender();
+        }
+
+        // Per-column widths estimated from actual content, not guessed. Since
+        // headers wrap onto up to 2 lines, a column only needs to be as wide
+        // as its LONGEST SINGLE WORD in the header (the phrase itself can
+        // wrap) — so most columns end up sized to their (usually shorter)
+        // data content, exactly as intended: many values are shorter than
+        // their header, and wrapping the header is what makes that possible.
+        const VEHICLE_COL_MIN_WIDTH = 46;
+        const VEHICLE_COL_MAX_WIDTH = 220;
+        const VEHICLE_COL_PADDING = 22;      // matches td/th left+right padding
+        const VEHICLE_SAMPLE_ROWS = 400;     // measuring every row is unnecessary and slower
+
+        function measureVehicleColumnWidths(rows) {
+            const canvas = measureVehicleColumnWidths._canvas || (measureVehicleColumnWidths._canvas = document.createElement('canvas'));
+            const ctx = canvas.getContext('2d');
+            const size = getComputedStyle(document.documentElement).getPropertyValue('--vehicle-font').trim() || '11px';
+            const sample = rows.length > VEHICLE_SAMPLE_ROWS
+                ? rows.filter((_, i) => i % Math.ceil(rows.length / VEHICLE_SAMPLE_ROWS) === 0)
+                : rows;
+
+            return COLS.map(c => {
+                if (c.type === 'link') return 54;   // icon-only column, fixed
+
+                // Header: only the longest WORD matters, since the phrase wraps.
+                ctx.font = `600 ${size} 'DM Sans', system-ui, sans-serif`;
+                const headerWordMax = Math.max(...c.label.split(' ').map(w => ctx.measureText(w).width));
+
+                // Data: measure the sample's formatted values at regular weight.
+                ctx.font = `400 ${size} 'DM Sans', system-ui, sans-serif`;
+                let dataMax = 0;
+                sample.forEach(r => {
+                    const w = ctx.measureText(fmtCell(c, r[c.key])).width;
+                    if (w > dataMax) dataMax = w;
+                });
+
+                const px = Math.ceil(Math.max(headerWordMax, dataMax)) + VEHICLE_COL_PADDING;
+                return Math.min(VEHICLE_COL_MAX_WIDTH, Math.max(VEHICLE_COL_MIN_WIDTH, px));
+            });
+        }
+
+        function vehicleColgroupHtml(widths) {
+            return `<colgroup>${widths.map(w => `<col style="width:${w}px">`).join('')}</colgroup>`;
+        }
+
+        function renderGrid() {
+            const rows = visibleRows();
+            const area = document.getElementById('grid-area');
+            if (!rows.length) {
+                area.innerHTML = '<div class="empty-state">No rows match the current view.</div>';
+                return;
+            }
+
+            const widths = measureVehicleColumnWidths(rows);
+
+            const head = COLS.map((c, i) => {
+                const caret = sortKey === c.key ? (sortDir === 1 ? '▲' : '▼') : '⇅';
+                return `<th data-key="${c.key}" title="${escapeHtml(c.label)}">${escapeHtml(c.label)}<span class="sort-caret">${caret}</span></th>`;
+            }).join('');
+
+            const body = rows.map(r => '<tr>' + COLS.map(c => {
+                const v = r[c.key];
+                if (c.type === 'link') {
+                    return v ? `<td><a href="${escapeHtml(v)}" target="_blank" rel="noopener"><i class="fas fa-external-link-alt"></i></a></td>` : '<td></td>';
+                }
+                const numCls = (c.type === 'num' || c.type === 'money' || c.type === 'pct') ? ' num' : '';
+                const negCls = isNeg(c, v) ? ' neg' : '';
+                const text = escapeHtml(fmtCell(c, v));
+                return `<td class="${(numCls + negCls).trim()}" title="${text}">${text}</td>`;
+            }).join('') + '</tr>').join('');
+
+            area.innerHTML = `<div class="grid-wrap"><table class="grid">${vehicleColgroupHtml(widths)}<thead><tr>${head}</tr></thead><tbody>${body}</tbody></table></div>`;
+
+            area.querySelectorAll('th[data-key]').forEach(th => {
+                th.addEventListener('click', () => {
+                    const key = th.getAttribute('data-key');
+                    if (sortKey === key) sortDir = -sortDir; else { sortKey = key; sortDir = 1; }
+                    renderGrid();
+                });
+            });
+        }
+
+        // Every one of these three is now staged, same as the slicers: only
+        // the button's own active-class and the panel preview update; nothing
+        // actually displayed changes until Apply (applyFilters -> rerender()).
+
+        // These three only record the staged choice and toggle the clicked
+        // button's own active state. NOTHING else happens — no re-render, no
+        // change to the slicer panels, the tables, the grid, or any selection
+        // — until Apply is clicked.
+        function setLens(newLens) {
+            lensPending = newLens;
+            document.querySelectorAll('#lens-toggle button').forEach(b =>
+                b.classList.toggle('active', b.dataset.lens === newLens));
+        }
+
+        function setGranularity(newGranularity) {
+            granularityPending = newGranularity;
+            document.querySelectorAll('#granularity-toggle button').forEach(b =>
+                b.classList.toggle('active', b.dataset.granularity === newGranularity));
+        }
+
+        function setView(newView) {
+            viewPending = newView;
+            document.querySelectorAll('#view-toggle button').forEach(b =>
+                b.classList.toggle('active', b.dataset.view === newView));
+        }
+
+        function csvEscape(v) {
+            if (v === null || v === undefined) return '';
+            const s = String(v);
+            return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+        }
+
+        function downloadCsv() {
+            const rows = visibleRows();
+            const header = COLS.map(c => csvEscape(c.label)).join(',');
+            const lines = rows.map(r => COLS.map(c => {
+                const v = r[c.key];
+                // Raw values in the CSV (not the formatted display) so numbers stay numeric
+                return csvEscape(v);
+            }).join(','));
+            const csv = [header, ...lines].join('\r\n');
+            const blob = new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8;' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `orders_deliveries_${lensApplied}_${new Date().toISOString().slice(0,10)}.csv`;
+            a.click();
+            URL.revokeObjectURL(url);
+        }
+
+        // Default period selection: current week + 5 complete weeks before it
+        // (6 total), or current month + 1 complete month before it (2 total),
+        // depending on the granularity toggle. "Complete" = fully elapsed,
+        // ending before the current (in-progress) period. Recomputed whenever
+        // granularity changes, since week keys and month keys aren't the same
+        // shape — a stale selection from the other granularity would just
+        // silently match nothing.
+        function defaultPeriodSelection(today, granularityVal) {
+            const keys = [];
+            if (granularityVal === 'week') {
+                const currentWeek = isoWeekKey(today);
+                let monday = isoWeekMonday(currentWeek);
+                for (let i = 0; i < 6; i++) {
+                    const wk = isoWeekKey(ymdLocal(monday));
+                    keys.push(wk);
+                    monday.setDate(monday.getDate() - 7);
+                }
+            } else {
+                const d = new Date(today + 'T00:00:00');
+                for (let i = 0; i < 2; i++) {
+                    const y = d.getFullYear(), m = d.getMonth() - i;
+                    const dt = new Date(y, m, 1);
+                    keys.push(`${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}`);
+                }
+            }
+            return keys;
+        }
+
+        // Full contiguous list of period keys (newest first) from the earliest
+        // period present in the data up to the current one — so the Period
+        // panel always shows every week/month in range, including empty ones.
+        function periodRange(granularityVal) {
+            if (!todayIso || !allRows.length) return [];
+            const dateKey = LENS[lensApplied].dateKey;
+            let earliest = null;
+            for (const r of allRows) {
+                const d = r[dateKey];
+                if (d && (earliest === null || d < earliest)) earliest = d;
+            }
+            if (!earliest) return [];
+
+            const keys = [];
+            if (granularityVal === 'week') {
+                let monday = isoWeekMonday(isoWeekKey(todayIso));
+                const earliestMonday = isoWeekMonday(isoWeekKey(earliest));
+                while (monday >= earliestMonday) {
+                    keys.push(isoWeekKey(ymdLocal(monday)));
+                    monday.setDate(monday.getDate() - 7);
+                }
+            } else {
+                const now = new Date(todayIso + 'T00:00:00');
+                const start = new Date(earliest + 'T00:00:00');
+                let y = now.getFullYear(), m = now.getMonth();
+                const startY = start.getFullYear(), startM = start.getMonth();
+                while (y > startY || (y === startY && m >= startM)) {
+                    keys.push(`${y}-${String(m + 1).padStart(2, '0')}`);
+                    m--; if (m < 0) { m = 11; y--; }
+                }
+            }
+            return keys;
+        }
+
+        let todayIso = null;          // remembered so a granularity toggle can recompute the default
+        let periodDefaulted = false;
+        function defaultPeriodFilter(today) {
+            todayIso = today;
+            // Only set once per page load — a manual refresh must not stomp a
+            // user's own period selection. Switching granularity resets it
+            // deliberately (see setGranularity), since old week/month keys
+            // don't carry over to the other granularity.
+            if (periodDefaulted) return;
+            slicerSel['period'] = new Set(defaultPeriodSelection(today, granularityApplied));
+            periodDefaulted = true;
+        }
+
+        let salesTypeDefaulted = false;
+        function defaultSalesTypeFilter() {
+            // Default the Sales Type slicer to Rate/Cash (excludes 0% interest-free,
+            // whose inflated price would otherwise skew price-related averages).
+            // Only set once — a manual refresh must not stomp a user's own choice.
+            if (salesTypeDefaulted) return;
+            slicerSel['sales_type'] = new Set(['Rate/Cash']);
+            salesTypeDefaulted = true;
+        }
+
+        function showLoading(msg) {
+            const html = `<div class="spinner-wrap"><i class="fas fa-spinner fa-spin fa-2x"></i><div style="margin-top:12px;font-size:0.9rem;">${escapeHtml(msg || 'Loading...')}</div></div>`;
+            document.getElementById('grid-area').innerHTML = html;
+            document.getElementById('summary-area').innerHTML = html;
+        }
+
+        function showCacheNote(data) {
+            const note = document.getElementById('cache-note');
+            if (data.stale) {
+                note.textContent = 'Showing last cached data (refresh failed)';
+                return;
+            }
+            if (!data.cached_at) { note.textContent = ''; return; }
+            const when = new Date(data.cached_at * 1000);
+            note.textContent = 'Data as of ' + when.toLocaleString('en-GB',
+                { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' });
+        }
+
+        async function load(force) {
+            const btn = document.getElementById('refresh-btn');
+            btn.disabled = true;
+            setApplyLoading(true);   // Apply greys out while loading, back to green when done
+            showLoading(force ? 'Refreshing from Snowflake...' : 'Loading vehicles...');
+            document.getElementById('row-count').textContent = '';
+            try {
+                const url = BASE_URL + '/reports/orders-deliveries/data' + (force ? '?refresh=1' : '');
+                const resp = await fetch(url);
+                const data = await resp.json();
+                if (data.status !== 'ok') throw new Error(data.message || 'Failed to load data');
+                allRows = data.rows || [];
+                defaultPeriodFilter(data.today);
+                defaultSalesTypeFilter();
+                showCacheNote(data);
+                rerender();
+            } catch (e) {
+                const html = `<div class="empty-state">Could not load data: ${escapeHtml(e.message)}</div>`;
+                document.getElementById('grid-area').innerHTML = html;
+                document.getElementById('summary-area').innerHTML = html;
+            } finally {
+                btn.disabled = false;
+                setApplyLoading(false);
+            }
+        }
+
+        function refreshData() { load(true); }
+
+        document.querySelectorAll('#lens-toggle button').forEach(b =>
+            b.addEventListener('click', () => setLens(b.dataset.lens)));
+        document.querySelectorAll('#view-toggle button').forEach(b =>
+            b.addEventListener('click', () => setView(b.dataset.view)));
+        document.querySelectorAll('#granularity-toggle button').forEach(b =>
+            b.addEventListener('click', () => setGranularity(b.dataset.granularity)));
+
+        loadFont();
+        load();
+    </script>
+</body>
+</html>

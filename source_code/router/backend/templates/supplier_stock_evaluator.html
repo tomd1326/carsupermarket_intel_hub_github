@@ -80,6 +80,10 @@
         .row-flash {
             animation: row-flash 1.4s ease-out forwards;
         }
+        /* The page-level nowrap/ellipsis rules would clip the error detail text */
+        #errorLogModal .table tbody td,
+        #errorLogModal .table thead th { overflow: visible; text-overflow: clip; white-space: nowrap; }
+        #errorLogModal .table tbody td { font-size: 0.8rem; }
     </style>
 </head>
 <body>
@@ -218,7 +222,7 @@
                             <a href="#" class="btn btn-secondary btn-sm disabled" aria-disabled="true"><i class="fa fa-download"></i></a>
                         {% endif %}
                         {% if user == 'tdrayson' and task.get('error_log_s3') %}
-                            <a href="{{ BASE_URL }}/download-error-log/{{ task.task_id }}" class="btn btn-outline-warning btn-sm" title="Download API error log"><i class="fa fa-exclamation-triangle"></i></a>
+                            <a href="#" class="btn btn-outline-warning btn-sm" title="View API error log" onclick="showErrorLog({{ task.task_id }}); return false;"><i class="fa fa-exclamation-triangle"></i></a>
                         {% endif %}
                         {% if task.status in ('pending', 'created') %}
                             <a href="#" class="btn btn-outline-danger btn-sm" title="Delete task" onclick="deleteTask({{ task.task_id }}); return false;"><i class="fa fa-trash"></i></a>
@@ -237,6 +241,21 @@
           </ul>
         </nav>
     </div>
+
+    <div class="modal fade" id="errorLogModal" tabindex="-1" aria-hidden="true">
+        <div class="modal-dialog modal-xl modal-dialog-scrollable">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">API error log <span class="text-muted fw-normal" id="errorLogSubtitle"></span></h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body">
+                    <div id="errorLogBody"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
     <script>
         var BUYING_REQ_PARAMS = {
@@ -267,13 +286,90 @@
             }
             {% if user == 'tdrayson' %}
             if (task.error_log_s3) {
-                html += ` <a href="{{ BASE_URL }}/download-error-log/${task.task_id}" class="btn btn-outline-warning btn-sm" title="Download API error log"><i class="fa fa-exclamation-triangle"></i></a>`;
+                html += ` <a href="#" class="btn btn-outline-warning btn-sm" title="View API error log" onclick="showErrorLog(${task.task_id}); return false;"><i class="fa fa-exclamation-triangle"></i></a>`;
             }
             {% endif %}
             if (task.status === 'pending' || task.status === 'created') {
                 html += ` <a href="#" class="btn btn-outline-danger btn-sm" title="Delete task" onclick="deleteTask(${task.task_id}); return false;"><i class="fa fa-trash"></i></a>`;
             }
             return html;
+        }
+
+        let _errorLogModal = null;
+
+        async function showErrorLog(taskId) {
+            const body = document.getElementById('errorLogBody');
+            const subtitle = document.getElementById('errorLogSubtitle');
+            subtitle.textContent = `— task ${taskId}`;
+            body.innerHTML = '<div class="text-muted"><i class="fa fa-spinner fa-spin me-2"></i>Loading…</div>';
+
+            if (!_errorLogModal) {
+                _errorLogModal = new bootstrap.Modal(document.getElementById('errorLogModal'));
+            }
+            _errorLogModal.show();
+
+            try {
+                const resp = await fetch(`{{ BASE_URL }}/error-log/${taskId}`);
+                if (!resp.ok) {
+                    const detail = await resp.json().catch(() => ({}));
+                    body.innerHTML = '';
+                    const p = document.createElement('div');
+                    p.className = 'text-danger';
+                    p.textContent = detail.detail || `Failed to load error log (${resp.status})`;
+                    body.appendChild(p);
+                    return;
+                }
+                const data = await resp.json();
+                if (!data.rows.length) {
+                    body.innerHTML = '<div class="text-muted">No errors recorded for this task.</div>';
+                    return;
+                }
+
+                const wrapper = document.createElement('div');
+                wrapper.style.overflowX = 'auto';
+                const table = document.createElement('table');
+                table.className = 'table table-sm table-striped mb-0';
+
+                const thead = document.createElement('thead');
+                const headRow = document.createElement('tr');
+                for (const col of data.columns) {
+                    const th = document.createElement('th');
+                    th.textContent = col;
+                    headRow.appendChild(th);
+                }
+                thead.appendChild(headRow);
+                table.appendChild(thead);
+
+                const tbody = document.createElement('tbody');
+                for (const row of data.rows) {
+                    const tr = document.createElement('tr');
+                    for (const col of data.columns) {
+                        const td = document.createElement('td');
+                        td.textContent = row[col] == null ? '' : row[col];
+                        if (col === 'detail') {
+                            td.style.whiteSpace = 'normal';
+                            td.style.minWidth = '260px';
+                        }
+                        tr.appendChild(td);
+                    }
+                    tbody.appendChild(tr);
+                }
+                table.appendChild(tbody);
+                wrapper.appendChild(table);
+
+                body.innerHTML = '';
+                const count = document.createElement('div');
+                count.className = 'text-muted mb-2';
+                count.textContent = `${data.rows.length} error${data.rows.length === 1 ? '' : 's'}`;
+                body.appendChild(count);
+                body.appendChild(wrapper);
+            } catch (e) {
+                body.innerHTML = '';
+                const p = document.createElement('div');
+                p.className = 'text-danger';
+                p.textContent = 'Failed to load error log: ' + e;
+                body.appendChild(p);
+            }
         }
 
         function _bindDownloadBtns() {
