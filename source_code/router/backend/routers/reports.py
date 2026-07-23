@@ -172,10 +172,22 @@ def _mark_failed_if_stale(entry: dict) -> dict:
 
 
 @router.get("/reports", response_class=HTMLResponse)
-def reports_page(request: Request, user: str = Depends(get_current_user)):
+def reports_landing(request: Request, user: str = Depends(get_current_user)):
+    """Landing page: choose Apex Reports (the report runner) or the
+    Orders & Deliveries report."""
     if user != 'tdrayson':
         return RedirectResponse(url=BASE_URL + "/home", status_code=303)
     _track(request, 'page_view', '/reports')
+    return templates.TemplateResponse("reports_landing.html", {
+        "request": request, "user": user, "BASE_URL": BASE_URL,
+    })
+
+
+@router.get("/reports/apex", response_class=HTMLResponse)
+def reports_page(request: Request, user: str = Depends(get_current_user)):
+    if user != 'tdrayson':
+        return RedirectResponse(url=BASE_URL + "/home", status_code=303)
+    _track(request, 'page_view', '/reports/apex')
     report_options = [{'type': k, 'label': v['label']} for k, v in REPORTS.items()]
     return templates.TemplateResponse("reports.html", {
         "request": request, "user": user, "BASE_URL": BASE_URL, "report_options": report_options,

@@ -9,6 +9,17 @@ logger = logging.getLogger(__name__)
 VALUATION_TTL_HOURS = 36
 
 
+def round_mileage_to_nearest_thousand(mileage: int) -> int:
+    """CAP valuations are bucketed per 1000 miles, so the valuation cache is
+    keyed on this rounded figure rather than the exact odometer reading —
+    two files quoting the same VRM a few miles apart (e.g. Purchase Pro vs
+    1link exports of the same VWFS vehicle) reuse the same cached valuation.
+    """
+    if mileage < 1000:
+        return 1000
+    return round(mileage / 1000) * 1000
+
+
 def _to_int(value):
     if value is None:
         return None
@@ -35,11 +46,15 @@ def _to_float(value):
 def fetch_cached_valuations(conn, vrm_mileage_pairs: list[tuple[str, int]], ttl_hours: int = None) -> dict[tuple[str, int], dict]:
     """
     Batch fetch the most recent valuation for each (vrm, mileage) pair.
-    Returns a dict keyed by (vrm, mileage) for pairs with a valuation within ttl_hours old.
+    Mileage is rounded to the nearest 1000 before lookup (see
+    round_mileage_to_nearest_thousand), matching how it is stored.
+    Returns a dict keyed by (vrm, rounded_mileage) for pairs with a
+    valuation within ttl_hours old.
     """
     if not vrm_mileage_pairs:
         return {}
 
+    rounded_pairs = {(vrm, round_mileage_to_nearest_thousand(mileage)) for vrm, mileage in vrm_mileage_pairs}
     cutoff = datetime.datetime.utcnow() - datetime.timedelta(hours=ttl_hours if ttl_hours is not None else VALUATION_TTL_HOURS)
 
     with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
@@ -54,7 +69,7 @@ def fetch_cached_valuations(conn, vrm_mileage_pairs: list[tuple[str, int]], ttl_
               AND fetched_at >= %s
             ORDER BY vrm, mileage, fetched_at DESC
             """,
-            (tuple(vrm_mileage_pairs), cutoff)
+            (tuple(rounded_pairs), cutoff)
         )
         rows = cur.fetchall()
 
@@ -169,6 +184,7 @@ def upsert_vehicles(conn, vehicles: list[dict]) -> None:
 def insert_valuations(conn, valuations: list[dict]) -> None:
     """
     Bulk insert new valuation rows. Always appends — never updates existing rows.
+    Mileage is rounded to the nearest 1000 to match fetch_cached_valuations.
     """
     if not valuations:
         return
@@ -176,7 +192,7 @@ def insert_valuations(conn, valuations: list[dict]) -> None:
     rows = [
         (
             v['vrm'],
-            _to_int(v.get('mileage')),
+            round_mileage_to_nearest_thousand(_to_int(v.get('mileage'))),
             v.get('fetched_at', datetime.datetime.utcnow()),
             _to_int(v.get('at_retail_valuation')),
             _to_float(v.get('at_rating')),

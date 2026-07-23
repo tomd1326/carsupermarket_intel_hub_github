@@ -195,6 +195,7 @@ def _mot_process_background(sid: str, vrms: list, user: str, mot_workers: int):
 def _mot_build_and_upload(results: list, vrms: list, user: str):
     import openpyxl
     from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+    from utils.file_handler import DEFAULT_FONT_NAME, set_default_font
 
     columns = ["Registration", "Make", "Model", "Colour", "Fuel Type",
                "Date Registered", "Most Recent MOT Date", "MOT Expiry Date",
@@ -222,11 +223,12 @@ def _mot_build_and_upload(results: list, vrms: list, user: str):
     s3_key = _MOT_S3_PREFIX.format(env=env) + filename
 
     wb = openpyxl.Workbook()
+    set_default_font(wb)
     ws = wb.active
     ws.title = "MOT Check"
 
     header_fill = PatternFill("solid", fgColor="BDD7EE")
-    header_font = Font(bold=True)
+    header_font = Font(name=DEFAULT_FONT_NAME, bold=True)
     valid_fill   = PatternFill("solid", fgColor="C6EFCE")
     expired_fill = PatternFill("solid", fgColor="FFC7CE")
     thin = Side(style="thin", color="CCCCCC")

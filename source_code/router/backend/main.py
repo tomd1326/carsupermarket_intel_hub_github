@@ -38,6 +38,7 @@ logging.getLogger('urllib3').setLevel(logging.CRITICAL)
 logging.getLogger('asyncio').setLevel(logging.CRITICAL)
 logging.getLogger('multipart').setLevel(logging.CRITICAL)
 logging.getLogger('snowflake').setLevel(logging.WARNING)
+logging.getLogger('filelock').setLevel(logging.WARNING)
 logging.getLogger('list_processor.autotrader_client').setLevel(logging.WARNING)
 logging.getLogger('list_processor.cap_client').setLevel(logging.WARNING)
 

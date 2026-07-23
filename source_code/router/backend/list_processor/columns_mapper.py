@@ -238,6 +238,32 @@ class UniversalColumnsMapper(BaseColumnsMapper):
             return None
 
 
+# Mapper for Purchase Pro
+class PurchaseProColumnsMapper(BaseColumnsMapper):
+    def map_row(self, row: Dict) -> Optional[VehicleRow]:
+        try:
+            capid = row.get("CAP ID", float('nan'))
+            capid = int(capid)
+        except ValueError:
+            capid = None
+
+        registration_date = None
+        if not pd.isnull(row["Date of Registration"]):
+            for fmt in ["%d/%m/%Y", "%d-%m-%Y", "%d.%m.%Y", '%Y-%m-%d', '%Y/%m/%d']:
+                try:
+                    registration_date = datetime.datetime.strptime(row["Date of Registration"], fmt).date()
+                    break
+                except ValueError:
+                    pass
+
+        return VehicleRow(
+            vrm=row["VRM"],
+            mileage=int(row["Mileage"]),
+            capid=capid,
+            registration_date=registration_date,
+        )
+
+
 # Factory to get the appropriate mapper
 def get_columns_mapper(supplier_name: str) -> BaseColumnsMapper:
     if supplier_name == "Enterprise":
@@ -246,7 +272,9 @@ def get_columns_mapper(supplier_name: str) -> BaseColumnsMapper:
         return MotabilityColumnsMapper()
     elif supplier_name == "1link":
         return OneLinkColumnsMapper()
-    elif supplier_name in ("Universal", "Generic"):
+    elif supplier_name == "Purchase Pro":
+        return PurchaseProColumnsMapper()
+    elif supplier_name == "Universal":
         return UniversalColumnsMapper()
     else:
         raise ValueError(f"Unknown supplier name: {supplier_name}")
