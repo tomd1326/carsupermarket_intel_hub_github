@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Reports</title>
+    <link rel="icon" type="image/png" href="{{ BASE_URL }}/static/icon.png">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css" rel="stylesheet">
+    <style>
+        @font-face { font-family: 'DM Sans'; src: url('{{ BASE_URL }}/static/fonts/DMSans-Regular.ttf');  font-weight: 400; }
+        @font-face { font-family: 'DM Sans'; src: url('{{ BASE_URL }}/static/fonts/DMSans-Medium.ttf');   font-weight: 500; }
+        @font-face { font-family: 'DM Sans'; src: url('{{ BASE_URL }}/static/fonts/DMSans-SemiBold.ttf'); font-weight: 600; }
+        @font-face { font-family: 'DM Sans'; src: url('{{ BASE_URL }}/static/fonts/DMSans-Bold.ttf');     font-weight: 700; }
+        body, button, input, select, textarea { font-family: 'DM Sans', system-ui, sans-serif; }
+        body { background-color: #003c57; }
+        .page-header { color: #ffffff; font-weight: 600; letter-spacing: -0.3px; }
+        .back-link { color: rgba(255,255,255,0.6) !important; text-decoration: none; }
+        .back-link:hover { color: #ffffff !important; }
+
+        .report-cards { display: flex; flex-wrap: wrap; gap: 16px; max-width: 720px; }
+        .report-card {
+            display: flex; flex-direction: column; gap: 8px;
+            background: #ffffff; border-radius: 12px; padding: 22px 24px;
+            text-decoration: none; flex: 1 1 300px; min-width: 260px;
+            transition: transform 0.12s ease, box-shadow 0.12s ease;
+        }
+        .report-card:hover { transform: translateY(-2px); box-shadow: 0 8px 20px rgba(0,0,0,0.18); }
+        .report-card .card-icon { font-size: 1.6rem; color: #7ed321; }
+        .report-card .card-title { font-weight: 600; font-size: 1.05rem; color: #0d3d5f; }
+        .report-card .card-desc { font-size: 0.85rem; color: #6a7a88; }
+    </style>
+</head>
+<body>
+    <div class="container py-4" style="max-width: 1300px;">
+        <div class="d-flex align-items-center justify-content-between mb-4">
+            <h3 class="page-header mb-0">Reports</h3>
+            <a href="{{ BASE_URL }}/home" class="back-link"><i class="fas fa-arrow-left"></i> Home</a>
+        </div>
+
+        <div class="report-cards">
+            <a href="{{ BASE_URL }}/reports/apex" class="report-card shadow-sm">
+                <span class="card-icon"><i class="fas fa-file-export"></i></span>
+                <span class="card-title">Apex Reports</span>
+                <span class="card-desc">Run and download generated reports (Vehicles AutoEdit and others).</span>
+            </a>
+            <a href="{{ BASE_URL }}/reports/orders-deliveries" class="report-card shadow-sm">
+                <span class="card-icon"><i class="fas fa-truck"></i></span>
+                <span class="card-title">Orders &amp; Deliveries Report</span>
+                <span class="card-desc">Per-vehicle orders and deliveries with a date range and Orders/Deliveries toggle.</span>
+            </a>
+        </div>
+    </div>
+</body>
+</html>

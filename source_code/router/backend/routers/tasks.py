@@ -72,7 +72,7 @@ def read_tasks(request: Request, page: Optional[int] = 1, page_size: Optional[in
     with get_database_connection() as conn:
         # Get the list of suppliers
         with conn.cursor() as cursor:
-            cursor.execute("SELECT supplier_id, supplier_name FROM suppliers ORDER BY CASE WHEN supplier_name = 'Generic' THEN 1 ELSE 0 END, supplier_name")
+            cursor.execute("SELECT supplier_id, supplier_name FROM suppliers ORDER BY CASE WHEN supplier_name = 'Universal' THEN 1 ELSE 0 END, supplier_name")
             cols = [desc[0] for desc in cursor.description]
             suppliers = [dict(zip(cols, row)) for row in cursor.fetchall()]
 
@@ -259,6 +259,29 @@ def download_error_log(task_id: str, user: str = Depends(get_current_user)):
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/error-log/{task_id}")
+def view_error_log(task_id: str, user: str = Depends(get_current_user)):
+    """Returns the task's API error log as JSON rows for the popup table."""
+    if user != 'tdrayson':
+        raise HTTPException(status_code=403)
+    with get_database_connection() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute("SELECT error_log_s3 FROM tasks WHERE task_id = %s", (task_id,))
+            row = cursor.fetchone()
+    if not row or not row[0]:
+        raise HTTPException(status_code=404, detail="No error log for this task")
+
+    import boto3, csv, io as _io
+    s3 = boto3.client('s3', region_name='eu-west-1')
+    try:
+        body = s3.get_object(Bucket=s3_bucketname, Key=row[0])['Body'].read().decode('utf-8', errors='replace')
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+    reader = csv.DictReader(_io.StringIO(body))
+    return {"columns": reader.fieldnames or [], "rows": list(reader)}
 
 
 @router.get("/delete-task/{task_id}")
@@ -467,15 +490,7 @@ async def _fetch_supplier_stock_internal(data: dict):
                         password=secrets['1LINK_PASSWORD'],
                     )
                     input_df = client.fetch_dataframe()
-                    # LCV rows carry incorrect CAP IDs so lookups fail — drop them entirely
-                    make_col = next((c for c in input_df.columns if str(c).strip().lower() == 'make'), None)
-                    if make_col is not None:
-                        lcv_mask = input_df[make_col].astype(str).str.startswith('LCV ')
-                        if lcv_mask.any():
-                            logger.info(f"1link: excluding {int(lcv_mask.sum())} rows with Make beginning 'LCV '")
-                            input_df = input_df[~lcv_mask]
-                    else:
-                        logger.warning(f"1link: no Make column found for LCV filter. Columns: {list(input_df.columns)[:20]}")
+                    input_df = _drop_1link_lcv_rows(input_df)
                 break
             except Exception as e:
                 last_exc = e
@@ -508,6 +523,25 @@ async def _fetch_supplier_stock_internal(data: dict):
 
     logger.info(f"fetch_supplier_stock: fetched task_id={task_id} for {supplier} ({len(input_df)} rows)")
     await elaborate_task({'task_id': task_id, 'cap_workers': data['cap_workers'], 'cap_rate_limit': data['cap_rate_limit'], 'at_workers': data['at_workers'], 'at_rate_limit': data['at_rate_limit'], 'valuation_cache_hours': data.get('valuation_cache_hours'), 'start_time': data.get('fetch_start_time')})
+
+
+def _drop_1link_lcv_rows(input_df):
+    """LCV rows carry incorrect CAP IDs so CAP/AT lookups fail — drop them entirely.
+
+    Applied on elaboration (not just on fetch) so it covers manually uploaded
+    1link files as well as those pulled via Get Stock.
+    """
+    make_col = next((c for c in input_df.columns if str(c).strip().lower() == 'make'), None)
+    if make_col is None:
+        logger.warning(f"1link: no Make column found for LCV filter. Columns: {list(input_df.columns)[:20]}")
+        return input_df
+    # Require a separator after LCV so a make merely starting with those
+    # letters is not dropped — 1link prefixes the real make, e.g. "LCV Ford".
+    lcv_mask = input_df[make_col].astype(str).str.strip().str.upper().str.match(r'LCV[\s\-_]')
+    if lcv_mask.any():
+        logger.info(f"1link: excluding {int(lcv_mask.sum())} rows with Make beginning 'LCV'")
+        return input_df[~lcv_mask]
+    return input_df
 
 
 @router.post("/elaborate-task")
@@ -544,6 +578,8 @@ async def elaborate_task(data: dict):
             download_file(tmp_in, s3_bucketname, s3_location)
 
             input_df = read_dataframe_file(tmp_in)
+            if task['supplier_name'] == '1link':
+                input_df = _drop_1link_lcv_rows(input_df)
             total_rows = len(input_df)
 
             cap_workers = int(data.get('cap_workers', 20))
@@ -557,7 +593,7 @@ async def elaborate_task(data: dict):
             cap_client = CAPClient()
             columns_mapper = get_columns_mapper(task['supplier_name'])
 
-            snapshot_suppliers = {'Enterprise', 'Motability', '1link'}
+            snapshot_suppliers = {'Enterprise', 'Motability', '1link', 'Purchase Pro'}
             is_snapshot = task['supplier_name'] in snapshot_suppliers
 
             logger.info('Starting elaboration for task %s: %s, %d rows', data['task_id'], task['supplier_name'], total_rows)

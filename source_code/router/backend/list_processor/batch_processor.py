@@ -23,7 +23,7 @@ from list_processor.autotrader_client import AutoTraderClient
 from list_processor.cap_client import CAPClient
 from list_processor.columns_mapper import BaseColumnsMapper
 from utils.db_utils import get_vehicle_database_connection
-from utils.vehicle_store import _to_float, _to_int
+from utils.vehicle_store import _to_float, _to_int, round_mileage_to_nearest_thousand
 from utils.vehicle_store import (
     fetch_cached_valuations,
     fetch_known_vehicles,
@@ -192,20 +192,23 @@ def process_file_with_cache(
     def _has_at(cached: dict) -> bool:
         return cached.get('at_retail_valuation') is not None
 
+    def _cache_key(v):
+        return (v.vrm, round_mileage_to_nearest_thousand(v.mileage))
+
     # Full cache hit = AT + CAP both present. Partial = one is missing and needs re-requesting.
-    full_cache_hits = {(v.vrm, v.mileage) for v in vehicle_rows
-                       if (v.vrm, v.mileage) in cached_valuations
-                       and _has_at(cached_valuations[(v.vrm, v.mileage)])
-                       and _has_cap(cached_valuations[(v.vrm, v.mileage)])}
+    full_cache_hits = {_cache_key(v) for v in vehicle_rows
+                       if _cache_key(v) in cached_valuations
+                       and _has_at(cached_valuations[_cache_key(v)])
+                       and _has_cap(cached_valuations[_cache_key(v)])}
     cap_only_misses = [v for v in vehicle_rows
-                       if (v.vrm, v.mileage) in cached_valuations
-                       and _has_at(cached_valuations[(v.vrm, v.mileage)])
-                       and not _has_cap(cached_valuations[(v.vrm, v.mileage)])]
+                       if _cache_key(v) in cached_valuations
+                       and _has_at(cached_valuations[_cache_key(v)])
+                       and not _has_cap(cached_valuations[_cache_key(v)])]
     at_only_misses = [v for v in vehicle_rows
-                      if (v.vrm, v.mileage) in cached_valuations
-                      and not _has_at(cached_valuations[(v.vrm, v.mileage)])
-                      and _has_cap(cached_valuations[(v.vrm, v.mileage)])]
-    full_misses = [v for v in vehicle_rows if (v.vrm, v.mileage) not in cached_valuations]
+                      if _cache_key(v) in cached_valuations
+                      and not _has_at(cached_valuations[_cache_key(v)])
+                      and _has_cap(cached_valuations[_cache_key(v)])]
+    full_misses = [v for v in vehicle_rows if _cache_key(v) not in cached_valuations]
 
     # Vehicles that need at least one API call
     cap_needed = {v.vrm for v in cap_only_misses + full_misses}
@@ -286,7 +289,7 @@ def process_file_with_cache(
             if vrow.vrm in api_results:
                 continue
             try:
-                cached = cached_valuations.get((vrow.vrm, vrow.mileage), {})
+                cached = cached_valuations.get(_cache_key(vrow), {})
                 known = known_vehicles.get(vrow.vrm, {})
                 at_row = at_by_vrm.get(vrow.vrm, pd.Series(dtype=object))
                 cap_row = cap_by_vrm.get(vrow.vrm, pd.Series(dtype=object))
@@ -367,7 +370,7 @@ def process_file_with_cache(
 
     # Step 3: fill full cache hits from DB (no API calls needed)
     for vrow in vehicle_rows:
-        key = (vrow.vrm, vrow.mileage)
+        key = _cache_key(vrow)
         if key in full_cache_hits and vrow.vrm not in api_results:
             cached = cached_valuations[key]
             known = known_vehicles.get(vrow.vrm, {})

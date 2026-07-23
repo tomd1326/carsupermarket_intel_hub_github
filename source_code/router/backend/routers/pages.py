@@ -14,6 +14,7 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 from . import kpi
+from . import orders_deliveries
 from .buying_requirements import _get_sf_rows, _get_dbs_purchases, _get_cb_purchases
 
 
@@ -43,8 +44,13 @@ def home(request: Request, user: str = Depends(get_current_user)):
                 kpi.warm_sharepoint_cache()
             except Exception as e:
                 logger.warning(f"Home cache warm (SharePoint KPI) failed: {e}")
-        with ThreadPoolExecutor(max_workers=4) as ex:
-            ex.submit(_sf); ex.submit(_dbs); ex.submit(_cb); ex.submit(_sp)
+        def _od():
+            try:
+                orders_deliveries.warm_cache()
+            except Exception as e:
+                logger.warning(f"Home cache warm (Orders & Deliveries) failed: {e}")
+        with ThreadPoolExecutor(max_workers=5) as ex:
+            ex.submit(_sf); ex.submit(_dbs); ex.submit(_cb); ex.submit(_sp); ex.submit(_od)
     threading.Thread(target=_warm_caches, daemon=True).start()
     _track(request, 'page_view', '/home')
     return templates.TemplateResponse("home.html", {"request": request, "user": user, "BASE_URL": BASE_URL})
