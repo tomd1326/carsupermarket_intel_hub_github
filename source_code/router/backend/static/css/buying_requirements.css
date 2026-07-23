@@ -383,6 +383,12 @@ button.settings-cog:hover { color: #343a40 !important; background: #e9ecef !impo
     min-width: 70px;
 }
 
+/* Wide enough to hold "Sell Price" on one line so the header wraps to two
+   rows ("Sell Price" / "+ Adm Fee") rather than stacking each word. */
+#vehicle-modal-table th[data-sort="sell_price_fee"] {
+    min-width: 78px;
+}
+
 #vehicle-modal-table th[data-sort="at_ptm_pct"] {
     min-width: 58px;
 }
