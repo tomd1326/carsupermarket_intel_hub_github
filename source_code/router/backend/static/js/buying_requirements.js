@@ -1,3 +1,12 @@
+/* ── Admin fee ───────────────────────────────────────────────
+ * Internal selling prices end in 98 and exclude the £199 admin fee. The
+ * advertised price (website and Autotrader) must include the fee, so AT PTM %
+ * is always the fee-inclusive price divided by the Autotrader valuation.
+ * During the transition both prices are shown side by side.
+ */
+const ADMIN_FEE = 199;
+function sellInclFee(v) { return (v == null || v === 0) ? null : Number(v) + ADMIN_FEE; }
+
 /* ── Status helpers ──────────────────────────────────────── */
 const SF_LABEL = '<i class="fas fa-snowflake me-1 text-info"></i>Snowflake';
 const DBS_LABEL = '<i class="fas fa-file-excel me-1 text-success"></i>Daily Buyers Sheet';
@@ -78,12 +87,13 @@ const COL_UNITS = [
     0.665, // 14 Avg Days in Stock
     0.665, // 15 Avg Days to Sell
     0.665, // 16 Avg Sell Price
-    0.665, // 17 Avg AT PTM
-    0.665, // 18 Avg AT PTM %
-    0.665, // 19 Avg AT Rating
-    0.665, // 20 Avg GPU-M
-    0.665, // 21 Avg GPU-S
-    0.665, // 22 Avg GPU-MS
+    0.665, // 17 Avg Sell Price + Adm Fee
+    0.665, // 18 Avg AT PTM
+    0.665, // 19 Avg AT PTM %
+    0.665, // 20 Avg AT Rating
+    0.665, // 21 Avg GPU-M
+    0.665, // 22 Avg GPU-S
+    0.665, // 23 Avg GPU-MS
 ];
 const TOTAL_UNITS = COL_UNITS.reduce((a, b) => a + b, 0);
 
@@ -468,6 +478,7 @@ const THEAD_COLS = [
     { id: 'avg_dis',        label: 'Avg Days in Stock', hideable: true,  capOnly: false, html: '<span class="th-label">Avg Days in Stock</span><span class="sort-icon"><i class="fas fa-sort"></i></span><div class="resize-handle"></div>', attrs: 'data-col="8" data-type="num"' },
     { id: 'avg_dts',        label: 'Avg Days to Sell',  hideable: true,  capOnly: false, html: '<span class="th-label">Avg Days to Sell</span><span class="sort-icon"><i class="fas fa-sort"></i></span><div class="resize-handle"></div>', attrs: 'data-col="9" data-type="num"' },
     { id: 'avg_sell',       label: 'Avg Sell Price',    hideable: true,  capOnly: false, html: '<span class="th-label">Avg Sell Price</span><span class="sort-icon"><i class="fas fa-sort"></i></span><div class="resize-handle"></div>', attrs: 'data-col="14" data-type="num"' },
+    { id: 'avg_sell_fee',   label: 'Avg Sell Price + Adm Fee', hideable: true, capOnly: false, html: '<span class="th-label">Avg Sell Price + Adm Fee</span><span class="sort-icon"><i class="fas fa-sort"></i></span><div class="resize-handle"></div>', attrs: 'data-col="25" data-type="num"' },
     { id: 'avg_at_ptm',     label: 'Avg AT PTM',        hideable: true,  capOnly: false, html: '<span class="th-label">Avg AT PTM</span><span class="sort-icon"><i class="fas fa-sort"></i></span><div class="resize-handle"></div>', attrs: 'data-col="15" data-type="num"' },
     { id: 'avg_at_ptm_pct', label: 'Avg AT PTM %',      hideable: true,  capOnly: false, html: '<span class="th-label">Avg AT PTM %</span><span class="sort-icon"><i class="fas fa-sort"></i></span><div class="resize-handle"></div>', attrs: 'data-col="16" data-type="num"' },
     { id: 'avg_at_rating',  label: 'Avg AT Rating',     hideable: true,  capOnly: false, html: '<span class="th-label">Avg AT Rating</span><span class="sort-icon"><i class="fas fa-sort"></i></span><div class="resize-handle"></div>', attrs: 'data-col="17" data-type="num"' },
@@ -683,7 +694,10 @@ function applyView() {
  *   [0:cap_id, 1:label, 2:fuel, 3:stock, 4:sales90, 5:pct(set later),
  *    6:today(0), 7:sales7, 8:avg_dis, 9:avg_dts, 10:avg_gpu_m,
  *    14:avg_sell_price, 15:avg_at_val, 16:avg_at_pct, 17:avg_at_rating,
- *    22:price_band, 23:sales30, 24:sales15]
+ *    22:price_band, 23:sales30, 24:sales15, 25:avg_sell_price_incl_fee]
+ *
+ * 14 is the base selling price (ends in 98, no admin fee); 25 is the same
+ * average plus the £199 admin fee. 16 (AT PTM %) is always based on 25.
  *
  * Max DTS / Min GPU-M filters are applied per vehicle BEFORE aggregation.
  * A vehicle is included in the sales-weighted metrics only when it meets both filters.
@@ -761,8 +775,9 @@ function aggregateRawData() {
     tableData = [];
     for (const g of groups.values()) {
         if (g.stock === 0 && g.sales90 === 0) continue;
-        const avgSell  = avg(g.sell_sum,   g.sell_n);
-        const avgAtVal = avg(g.at_val_sum, g.at_val_n);
+        const avgSell     = avg(g.sell_sum,   g.sell_n);
+        const avgSellIncl = sellInclFee(avgSell);
+        const avgAtVal    = avg(g.at_val_sum, g.at_val_n);
         tableData.push([
             g.cap_id,                                   // 0
             g.label + ' / ' + g.price_band,            // 1 (table: includes price band)
@@ -778,9 +793,9 @@ function aggregateRawData() {
             avg(g.gpu_s_sum,  g.gpu_s_n),               // 11 avg GPU-S
             avg(g.gpu_ms_sum, g.gpu_ms_n),              // 12 avg GPU-MS
             null,                                       // 13 purchase_price (not displayed)
-            avgSell,                                    // 14 avg sell price
+            avgSell,                                    // 14 avg sell price (base, ex admin fee)
             avgAtVal,                                   // 15 avg AT val
-            (avgSell != null && avgAtVal != null && avgAtVal !== 0) ? ((avgSell) / avgAtVal) * 100 : null, // 16 AT pct %
+            (avgSellIncl != null && avgAtVal != null && avgAtVal !== 0) ? (avgSellIncl / avgAtVal) * 100 : null, // 16 AT pct % (incl admin fee)
             avg(g.at_rating_sum, g.at_rating_n),        // 17 avg AT rating
             null,                                       // 18 ideal — set in renderTable
             null,                                       // 19 required — set in renderTable
@@ -789,6 +804,7 @@ function aggregateRawData() {
             g.price_band,                               // 22 price_band
             g.sales30,                                  // 23 30d sales
             g.sales15,                                  // 24 15d sales
+            avgSellIncl,                                // 25 avg sell price incl admin fee
         ]);
     }
 }
@@ -864,8 +880,9 @@ function aggregateModelData() {
     tableData = [];
     for (const g of groups.values()) {
         if (g.stock === 0 && g.sales90 === 0) continue;
-        const avgSell  = avg(g.sell_sum,   g.sell_n);
-        const avgAtVal = avg(g.at_val_sum, g.at_val_n);
+        const avgSell     = avg(g.sell_sum,   g.sell_n);
+        const avgSellIncl = sellInclFee(avgSell);
+        const avgAtVal    = avg(g.at_val_sum, g.at_val_n);
         tableData.push([
             g.cap_id,
             g.label,
@@ -881,9 +898,9 @@ function aggregateModelData() {
             avg(g.gpu_s_sum,     g.gpu_s_n),
             avg(g.gpu_ms_sum,    g.gpu_ms_n),
             null,
-            avgSell,
+            avgSell,       // 14 base sell price (ex admin fee)
             avgAtVal,
-            (avgSell != null && avgAtVal != null && avgAtVal !== 0) ? ((avgSell) / avgAtVal) * 100 : null,
+            (avgSellIncl != null && avgAtVal != null && avgAtVal !== 0) ? (avgSellIncl / avgAtVal) * 100 : null,
             avg(g.at_rating_sum, g.at_rating_n),
             null,          // 18 ideal — set in renderTable
             null,          // 19 required — set in renderTable
@@ -892,6 +909,7 @@ function aggregateModelData() {
             g.price_band,  // 22
             g.sales30,     // 23 30d sales
             g.sales15,     // 24 15d sales
+            avgSellIncl,   // 25 avg sell price incl admin fee
         ]);
     }
 }
@@ -977,8 +995,8 @@ function renderTotalsRow(visibleRows) {
         return;
     }
     if (tfoot) tfoot.style.display = '';
-    // cap view:   blank(3) | fuel(label) | sales | 30d | 15d | 7d | stock | ideal | req | today | remaining | avgDIS | avgDTS | sell | ATPTM | ATPTM% | ATRating | GPUM | GPUS | GPUMS
-    // model view: blank(1) | fuel(label) | sales | 30d | 15d | 7d | stock | ideal | req |                    avgDIS | avgDTS | sell | ATPTM | ATPTM% | ATRating | GPUM | GPUS | GPUMS
+    // cap view:   blank(3) | fuel(label) | sales | 30d | 15d | 7d | stock | ideal | req | today | remaining | avgDIS | avgDTS | sell | sellInclFee | ATPTM | ATPTM% | ATRating | GPUM | GPUS | GPUMS
+    // model view: blank(1) | fuel(label) | sales | 30d | 15d | 7d | stock | ideal | req |                    avgDIS | avgDTS | sell | sellInclFee | ATPTM | ATPTM% | ATRating | GPUM | GPUS | GPUMS
     const isCap = currentView === 'cap';
     const CAP_DATA_COLS = [
         [4,  'sum', fmtInt],
@@ -994,6 +1012,7 @@ function renderTotalsRow(visibleRows) {
         [8,  'avg', v => fmt(v, 1)],
         [9,  'avg', v => fmt(v, 1)],
         [14, 'avg', fmtGBP],
+        [25, 'avg', fmtGBP],   // Avg Sell Price + Adm Fee
         [15, 'avg', fmtGBP],
         [16, 'avg', fmtPct],
         [17, 'avg', fmtInt],
@@ -1015,6 +1034,7 @@ function renderTotalsRow(visibleRows) {
         [8,  'avg', v => fmt(v, 1)],
         [9,  'avg', v => fmt(v, 1)],
         [14, 'avg', fmtGBP],
+        [25, 'avg', fmtGBP],   // Avg Sell Price + Adm Fee
         [15, 'avg', fmtGBP],
         [16, 'avg', fmtPct],
         [17, 'avg', fmtInt],
@@ -1177,6 +1197,7 @@ function renderTable() {
         add(row[8]  != null ? fmt(row[8],  1) : '');
         add(row[9]  != null ? fmt(row[9],  1) : '');
         add(row[14] != null ? fmtGBP(row[14]) : '');
+        add(row[25] != null ? fmtGBP(row[25]) : '');
         add(row[15] != null ? fmtGBP(row[15]) : '');
         add(row[16] != null ? fmtPct(row[16]) : '');
         add(row[17] != null ? fmtInt(row[17]) : '');
@@ -1188,18 +1209,18 @@ function renderTable() {
     });
 
     // DOM cell indices depend on view
-    // cap:   CAP_ID(0) label(1) View(2) fuel(3) sales(4) 30d(5) 15d(6) 7d(7) stock(8) ideal(9) req(10) DBS(11) CB(12) rem(13) DIS(14) DTS(15) sell(16) ATPTM(17) ATPTM%(18) ATR(19) GPUM(20) GPUS(21) GPUMS(22)
-    // model: label(0) fuel(1) sales(2) 30d(3) 15d(4) 7d(5) stock(6) ideal(7) req(8) DBS(9) CB(10) rem(11) DIS(12) DTS(13) sell(14) ATPTM(15) ATPTM%(16) ATR(17) GPUM(18) GPUS(19) GPUMS(20)
+    // cap:   CAP_ID(0) label(1) View(2) fuel(3) sales(4) 30d(5) 15d(6) 7d(7) stock(8) ideal(9) req(10) DBS(11) CB(12) rem(13) DIS(14) DTS(15) sell(16) sellFee(17) ATPTM(18) ATPTM%(19) ATR(20) GPUM(21) GPUS(22) GPUMS(23)
+    // model: label(0) fuel(1) sales(2) 30d(3) 15d(4) 7d(5) stock(6) ideal(7) req(8) DBS(9) CB(10) rem(11) DIS(12) DTS(13) sell(14) sellFee(15) ATPTM(16) ATPTM%(17) ATR(18) GPUM(19) GPUS(20) GPUMS(21)
     const isCap = currentView === 'cap';
     const CI = {
         sales7:    isCap ? 7  : 5,
         required:  isCap ? 10 : 8,
         remaining: isCap ? 13 : 11,
         dts:       isCap ? 15 : 13,
-        gpuM:      isCap ? 20 : 18,
-        gpuMS:     isCap ? 22 : 20,
-        atRating:  isCap ? 19 : 17,
-        ifSkip:    isCap ? new Set([4,5,6,7,11,12,13,15,19,20,22]) : new Set([2,3,4,5,9,10,11,13,17,18,20]),
+        gpuM:      isCap ? 21 : 19,
+        gpuMS:     isCap ? 23 : 21,
+        atRating:  isCap ? 20 : 18,
+        ifSkip:    isCap ? new Set([4,5,6,7,11,12,13,15,20,21,23]) : new Set([2,3,4,5,9,10,11,13,18,19,21]),
     };
     Array.from(fragment.children).forEach((tr, i) => {
         const r = tableData[i];
@@ -1723,6 +1744,7 @@ function exportXLSX() {
                 gpu_s_sum: 0, gpu_s_n: 0,
                 gpu_ms_sum: 0, gpu_ms_n: 0,
                 sell_sum: 0, sell_n: 0,
+                sell_fee_sum: 0, sell_fee_n: 0,
                 at_val_sum: 0, at_val_n: 0,
                 at_pct_sum: 0, at_pct_n: 0,
                 at_rating_sum: 0, at_rating_n: 0,
@@ -1743,6 +1765,7 @@ function exportXLSX() {
         if (r[17] != null) { g.at_rating_sum+= Number(r[17]); g.at_rating_n++;}
         if (!isIF) {
             if (r[14] != null) { g.sell_sum  += Number(r[14]); g.sell_n++;  }
+            if (r[25] != null) { g.sell_fee_sum += Number(r[25]); g.sell_fee_n++; }
             if (r[15] != null) { g.at_val_sum+= Number(r[15]); g.at_val_n++;}
             if (r[16] != null) { g.at_pct_sum+= Number(r[16]); g.at_pct_n++;}
         }
@@ -1751,7 +1774,7 @@ function exportXLSX() {
     const headers = ['CAP ID', 'Remaining', 'Make Model Derivative', 'Fuel',
         '90d Sales', '7d Sales', 'Stock', 'Ideal Stock', 'Required', 'Remaining',
         'Avg DIS', 'Avg DTS',
-        'Avg Sell Price (Rate)', 'Avg AT Val (Rate)', 'Avg AT PTM % (Rate)', 'Avg AT Rating',
+        'Avg Sell Price (Rate)', 'Avg Sell Price + Adm Fee (Rate)', 'Avg AT Val (Rate)', 'Avg AT PTM % (Rate)', 'Avg AT Rating',
         'Avg GPU-M', 'Avg GPU-S', 'Avg GPU-MS'];
 
     const rows = [...groups.entries()].sort((a, b) => a[1].label.localeCompare(b[1].label)).map(([cap_id, g]) => {
@@ -1774,6 +1797,7 @@ function exportXLSX() {
             fmt1(avg(g.dis_sum,       g.dis_n)),
             fmt1(avg(g.dts_sum,       g.dts_n)),
             fmtN(avgSell),
+            fmtN(avg(g.sell_fee_sum, g.sell_fee_n)),
             fmtN(avgAtVal),
             atPct,
             fmt1(avg(g.at_rating_sum, g.at_rating_n)),
@@ -1852,6 +1876,7 @@ function _getModalSortValue(r, col) {
     if (col === 'cap_clean')  return Number(r[30]) || 0;
     if (col === 'cap_pct')    return (r[12] && r[30]) ? r[12] / r[30] : 0;
     if (col === 'sell_price') return Number(r[13]) || 0;
+    if (col === 'sell_price_fee') return sellInclFee(r[13]) || 0;
     if (col === 'at_ptm')      return Number(r[14]) || 0;
     if (col === 'at_ptm_pct')  return Number(r[15]) || 0;
     if (col === 'at_rating')   return Number(r[16]) || 0;
@@ -1964,9 +1989,11 @@ function _renderModalRows() {
         addTd(r[30] != null && r[30] !== 0 ? fmtGBP(r[30]) : '—', 'right');
         const capPct = (r[12] && r[30]) ? ((r[12] / r[30]) * 100).toFixed(1) + '%' : '—';
         addTd(capPct, 'right');
+        const sellFee = sellInclFee(r[13]);
         addTd(r[13] != null && r[13] !== 0 ? fmtGBP(r[13]) : '—', 'right');
+        addTd(sellFee != null ? fmtGBP(sellFee) : '—', 'right');
         addTd(r[14] != null ? fmtGBP(r[14]) : '—', 'right');
-        addTd(r[13] != null && r[13] !== 0 && r[14] != null && r[14] !== 0 ? fmtPct((r[13] / r[14]) * 100) : '—', 'right');
+        addTd(sellFee != null && r[14] != null && r[14] !== 0 ? fmtPct((sellFee / r[14]) * 100) : '—', 'right');
         addTd(r[16] != null ? fmtInt(r[16]) : '—', 'right');
         { const td = addTd(r[22] != null ? fmtGBP(r[22]) : '—', 'right'); if (r[22] != null && r[22] < 0) td.style.color = '#dc2626'; }
         if (status === 'Delivered') tr.classList.add('vehicle-row-sold');
@@ -1995,7 +2022,7 @@ function _renderModalRows() {
     visibleSpVehicles.forEach(v => {
             const tr = document.createElement('tr');
             tr.style.background = '#ddd6fe';
-            const TOTAL_COLS = 22;
+            const TOTAL_COLS = 23;
             // Use the Snowflake make/model/derivative for the modal's CAP ID so DBS/CB
             // rows match the stock rows; fall back to the spreadsheet's own text.
             const derivText = _modalCapLabel || [v.make, v.model, v.deriv].filter(Boolean).join(' ') || '—';
@@ -2051,17 +2078,24 @@ function _renderModalRows() {
                     td.style.textAlign = 'right';
                     if (sellVal == null) td.style.color = '#9ca3af';
                 } else if (i === 18) {
+                    const sellVal = (v.rrp0 != null && v.rrp0 > 0) ? v.rrp0 : v.rrp;
+                    const sellFee = sellInclFee(sellVal);
+                    td.textContent = sellFee != null ? fmtGBP(sellFee) : '—';
+                    td.style.textAlign = 'right';
+                    if (sellFee == null) td.style.color = '#9ca3af';
+                } else if (i === 19) {
                     td.textContent = v.at_ptm != null ? fmtGBP(v.at_ptm) : '—';
                     td.style.textAlign = 'right';
                     if (v.at_ptm == null) td.style.color = '#9ca3af';
-                } else if (i === 19) {
-                    // AT PTM% = RRP (or RRP 0%) / AT PTM
+                } else if (i === 20) {
+                    // AT PTM% = sell price incl admin fee / AT PTM
                     const sellVal = (v.rrp0 != null && v.rrp0 > 0) ? v.rrp0 : v.rrp;
-                    const atPct = (sellVal != null && v.at_ptm != null && v.at_ptm !== 0) ? fmtPct((sellVal / v.at_ptm) * 100) : '—';
+                    const sellFee = sellInclFee(sellVal);
+                    const atPct = (sellFee != null && v.at_ptm != null && v.at_ptm !== 0) ? fmtPct((sellFee / v.at_ptm) * 100) : '—';
                     td.textContent = atPct;
                     td.style.textAlign = 'right';
                     if (atPct === '—') td.style.color = '#9ca3af';
-                } else if (i === 20) {
+                } else if (i === 21) {
                     td.textContent = v.at_rating != null ? fmtInt(v.at_rating) : '—';
                     td.style.textAlign = 'right';
                     if (v.at_rating == null) td.style.color = '#9ca3af';
@@ -2095,8 +2129,9 @@ function _renderModalRows() {
         const avgPTM    = acc.ptmN    ? acc.ptmSum    / acc.ptmN                 : null;
         const avgRating = acc.ratingN ? acc.ratingSum / acc.ratingN              : null;
         const avgGPUM   = acc.gpumN   ? acc.gpumSum   / acc.gpumN               : null;
+        const avgSellFee = sellInclFee(avgSell);
         const avgCapPct = (avgPP  && avgCap) ? (avgPP  / avgCap)  * 100 : null;
-        const avgPTMPct = (avgSell && avgPTM) ? (avgSell / avgPTM) * 100 : null;
+        const avgPTMPct = (avgSellFee && avgPTM) ? (avgSellFee / avgPTM) * 100 : null;
 
         addTd('', null, true); addTd('', null, true); addTd('', null, true);
         addTd('', null, true); addTd('', null, true); addTd('', null, true);
@@ -2109,7 +2144,8 @@ function _renderModalRows() {
         addTd(avgPP     != null ? fmtGBP(avgPP)              : '—', 'right');
         addTd(avgCap    != null ? fmtGBP(avgCap)             : '—', 'right');
         addTd(avgCapPct != null ? avgCapPct.toFixed(1) + '%' : '—', 'right');
-        addTd(avgSell   != null ? fmtGBP(avgSell)            : '—', 'right');
+        addTd(avgSell    != null ? fmtGBP(avgSell)           : '—', 'right');
+        addTd(avgSellFee != null ? fmtGBP(avgSellFee)        : '—', 'right');
         addTd(avgPTM    != null ? fmtGBP(avgPTM)             : '—', 'right');
         addTd(avgPTMPct != null ? fmtPct(avgPTMPct)          : '—', 'right');
         addTd(avgRating != null ? fmtInt(avgRating)           : '—', 'right');
