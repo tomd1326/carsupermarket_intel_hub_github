@@ -20,12 +20,52 @@ from utils.snowflake_client import SnowflakeClient
 from utils.sharepoint_client import SharePointClient
 from list_processor.cap_client import CAPClient
 from utils.file_handler import read_dataframe_file, write_dataframe_file
+from utils.sharepoint_log import get_entries as get_sharepoint_log_entries
 
 from .core import (BASE_URL, _S3_ENV, templates, s3_bucketname, _track, get_current_user)
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+
+def _prewarm_sharepoint(enable_cars_bought: bool) -> None:
+    """
+    Start the SharePoint worksheet fetches as soon as the page is requested, so
+    they are already in flight (or finished) by the time the browser's DBS and
+    Cars Bought requests arrive a moment later.
+
+    Both files are fetched concurrently, so the wait is the slower file rather
+    than the sum of the two. The single-flight locks in _get_dbs_purchases /
+    _get_cb_purchases mean the browser's request reuses this work instead of
+    starting its own.
+
+    Fire-and-forget: never blocks or fails the page render. If the caches are
+    already fresh these calls return immediately and cost nothing.
+    """
+    def _warm(label, fn):
+        try:
+            fn()
+        except Exception as e:
+            logger.warning(f"SharePoint prewarm ({label}) failed: {e}")
+
+    try:
+        # Only worth starting a fetch when there is nothing usable cached. On a
+        # normal load the page reads the -cached endpoints, which are already
+        # served from memory or S3, so prewarming would just repeat that work.
+        targets = []
+        if _get_dbs_purchases_cached(quiet=True) is None:
+            targets.append(("Daily Buyers Sheet", _get_dbs_purchases))
+        if enable_cars_bought and _get_cb_purchases_cached(quiet=True) is None:
+            targets.append(("Cars Bought", _get_cb_purchases))
+        if not targets:
+            return
+        for label, fn in targets:
+            threading.Thread(
+                target=_warm, args=(label, fn), name=f"sp-prewarm-{label}", daemon=True
+            ).start()
+    except Exception as e:
+        logger.warning(f"SharePoint prewarm could not start: {e}")
 
 
 @router.get("/buying-requirements", response_class=HTMLResponse)
@@ -36,7 +76,23 @@ def buying_requirements(request: Request, user: str = Depends(get_current_user))
         settings = get_settings(conn, user=user)
     _track(request, 'page_view', '/buying-requirements')
     enable_cars_bought = user == 'tdrayson' or settings.get('enable_cars_bought', False)
-    return templates.TemplateResponse("buying_requirements.html", {"request": request, "user": user, "BASE_URL": BASE_URL, "settings": settings, "enable_cars_bought": enable_cars_bought})
+    show_sharepoint_log = user == 'tdrayson'
+    _prewarm_sharepoint(enable_cars_bought)
+    return templates.TemplateResponse("buying_requirements.html", {"request": request, "user": user, "BASE_URL": BASE_URL, "settings": settings, "enable_cars_bought": enable_cars_bought, "show_sharepoint_log": show_sharepoint_log})
+
+
+@router.get("/buying-requirements/sharepoint-log")
+def buying_requirements_sharepoint_log(request: Request, user: str = Depends(get_current_user)):
+    """Recent SharePoint-file log lines, newest first. tdrayson only."""
+    if not user:
+        return RedirectResponse(url=BASE_URL + "/login", status_code=303)
+    if user != 'tdrayson':
+        raise HTTPException(status_code=403, detail="Forbidden")
+    try:
+        return {"status": "ok", "entries": get_sharepoint_log_entries()}
+    except Exception as e:
+        logger.error(f"Buying requirements SharePoint log failed: {e}")
+        return {"status": "error", "message": str(e)}
 
 
 # NEW
@@ -194,14 +250,28 @@ def buying_requirements_data(request: Request, user: str = Depends(get_current_u
         return {"status": "error", "message": str(e)}
 
 
+# Worksheet read bounds. Graph's cost scales with the requested range, not with
+# how much data is in it, so these are kept as tight as the sheets allow —
+# reading A1:Z2000 for the Buyers Sheet took ~13s for 21 rows of data.
+#
+# WARNING: these column bounds are POSITIONAL. Column S is the last column we
+# need from both sheets. If anyone inserts a column to the LEFT of S in either
+# workbook, the data we need shifts to T and will be silently cut off — the
+# parser looks columns up by header name, so it will not crash, it will just log
+# "missing required column(s)" and return no purchases. Widen the bound here if
+# the sheet layout changes. Same applies to the row bounds if the sheets grow.
 _DBS_SUBFOLDER = "Department/Buying/B2B"
 _DBS_FILENAME  = "NEW DAILY BUYERS SHEET.xlsx"
 _DBS_SHEET     = "Today"
 _DBS_COLUMNS   = ["CAP ID", "RRP", "RRP 0%"]
+_DBS_MAX_COL   = "S"
+_DBS_MAX_ROW   = 500
 
 _CB_SUBFOLDER  = "Cars Bought"
 _CB_FILENAME   = "CARS BOUGHT 2026.xlsx"
 _CB_SHEET      = "TO GO ON"
+_CB_MAX_COL    = "S"
+_CB_MAX_ROW    = 2000
 
 _SF_DB     = "PROD_CARSUPERMARKET_DB"
 _SF_SCHEMA = "product_vehicle_journey"
@@ -292,28 +362,103 @@ _cache_lock = threading.Lock()
 _dbs_raw_values_cache: dict = {"values": None, "expires": 0.0}
 _DBS_RAW_TTL_SECONDS = 60
 
+# Serialises the actual SharePoint download. Without it, concurrent callers all
+# miss the cache together (the TTL check above releases _cache_lock before the
+# slow fetch) and each starts its own download — the Daily Buyers Sheet endpoint
+# and Cars Bought's VRM dedup run in parallel on every refresh, so this happened
+# every time. Holding this lock across the fetch makes the second caller wait
+# for and reuse the first caller's result instead.
+_dbs_raw_fetch_lock = threading.Lock()
+
+# Single-flight locks for the full purchase rebuilds (see _get_dbs_purchases /
+# _get_cb_purchases). Separate from _cache_lock, which is only ever held for
+# quick dict reads/writes and must never be held across a network call.
+_dbs_build_lock = threading.Lock()
+_cb_build_lock = threading.Lock()
+_sf_build_lock = threading.Lock()
+
 
 def _fetch_dbs_raw_values() -> list:
     """Fetch the raw Daily Buyers Sheet worksheet, reusing a very recent fetch if one exists."""
-    now = time.monotonic()
-    with _cache_lock:
-        cached = _dbs_raw_values_cache["values"]
-        if cached is not None and now < _dbs_raw_values_cache["expires"]:
-            return cached
-    values = SharePointClient().get_worksheet_values(_DBS_SUBFOLDER, _DBS_FILENAME, _DBS_SHEET)
-    with _cache_lock:
-        _dbs_raw_values_cache["values"] = values
-        _dbs_raw_values_cache["expires"] = now + _DBS_RAW_TTL_SECONDS
-    return values
+
+    def _cached_if_fresh():
+        with _cache_lock:
+            cached = _dbs_raw_values_cache["values"]
+            if cached is not None and time.monotonic() < _dbs_raw_values_cache["expires"]:
+                return cached
+        return None
+
+    fresh = _cached_if_fresh()
+    if fresh is not None:
+        return fresh
+
+    with _dbs_raw_fetch_lock:
+        # Re-check: another caller may have completed the fetch while we waited.
+        fresh = _cached_if_fresh()
+        if fresh is not None:
+            return fresh
+        values = SharePointClient().get_worksheet_values(
+            _DBS_SUBFOLDER, _DBS_FILENAME, _DBS_SHEET,
+            max_col=_DBS_MAX_COL, max_row=_DBS_MAX_ROW,
+        )
+        with _cache_lock:
+            _dbs_raw_values_cache["values"] = values
+            _dbs_raw_values_cache["expires"] = time.monotonic() + _DBS_RAW_TTL_SECONDS
+        return values
 
 # dbt run hours (UK local time) — data available 15 min after each
 _SF_SCHEDULE_HOURS_UK = [3, 7, 10, 13, 16]
 _SF_READY_OFFSET_MIN  = 15
 
+# Fallbacks used only if the settings lookup fails; the live values come from
+# the Buying Requirements settings page (see _sp_cache_seconds below).
 _DBS_TTL_SECONDS    = 30 * 60
 _DBS_S3_TTL_SECONDS = 30 * 60
 _CB_TTL_SECONDS     = 30 * 60
 _CB_S3_TTL_SECONDS  = 30 * 60
+
+# Cache-duration settings are read per request but change rarely, so keep a
+# short in-process memo rather than hitting Aurora on every cache check.
+#
+# This MUST have its own lock, not _cache_lock. These durations are read from
+# inside code that already holds _cache_lock (e.g. _adopt_dbs_s3_cache setting
+# an expiry), and _cache_lock is a plain Lock — reacquiring it on the same
+# thread deadlocks the request permanently.
+_cache_settings = {"values": None, "expires": 0.0}
+_CACHE_SETTINGS_TTL = 60
+_cache_settings_lock = threading.Lock()
+
+
+def _cache_durations() -> tuple[int, int]:
+    """
+    (sharepoint_seconds, snowflake_seconds) from settings.
+
+    snowflake_seconds of 0 means "no time limit — follow the dbt schedule",
+    which is the default and the normal case.
+
+    Safe to call while holding _cache_lock — see the note above.
+    """
+    now = time.monotonic()
+    with _cache_settings_lock:
+        cached = _cache_settings["values"]
+        if cached is not None and now < _cache_settings["expires"]:
+            return cached
+    try:
+        with get_database_connection() as conn:
+            s = get_settings(conn, user='buyer')
+        values = (int(s.get('sharepoint_cache_minutes', 30)) * 60,
+                  int(s.get('snowflake_cache_minutes', 0)) * 60)
+    except Exception as e:
+        logger.warning(f"Could not read cache duration settings, using defaults: {e}")
+        values = (_DBS_TTL_SECONDS, 0)
+    with _cache_settings_lock:
+        _cache_settings["values"] = values
+        _cache_settings["expires"] = now + _CACHE_SETTINGS_TTL
+    return values
+
+
+def _sp_cache_seconds() -> int:
+    return _cache_durations()[0]
 _S3_BUCKET         = "aa-raw-sources-uk"
 # _S3_ENV imported from core
 _SF_S3_KEY         = f"applications/pricing/uk-vehicle-list-evaluator/{_S3_ENV}/cache/buying_requirements_v22.json"
@@ -340,8 +485,20 @@ def _sf_last_valid_window_utc() -> float:
 
 
 def _sf_cache_is_fresh(cached_at: float) -> bool:
-    """True if cached_at is after the most recent valid schedule window."""
-    return cached_at >= _sf_last_valid_window_utc()
+    """
+    True if the cached Snowflake rows are still usable.
+
+    The data only changes when dbt runs, so the primary test is whether the
+    cache predates the most recent schedule window. The optional
+    'snowflake_cache_minutes' setting adds a maximum age on top of that, for
+    when you want a refetch sooner than the next dbt run (0 = schedule only).
+    """
+    if cached_at < _sf_last_valid_window_utc():
+        return False
+    max_age = _cache_durations()[1]
+    if max_age > 0 and (time.time() - cached_at) > max_age:
+        return False
+    return True
 
 
 def _s3_load(key: str) -> dict | None:
@@ -408,6 +565,33 @@ def _save_sf_cache_to_s3(rows: list, cached_at: float) -> None:
         logger.warning(f"Failed to write Snowflake S3 cache: {e}")
 
 
+def _fmt_age(seconds: float) -> str:
+    """Human-readable data age for cache log lines."""
+    seconds = max(0.0, float(seconds or 0.0))
+    if seconds < 90:
+        return f"{int(seconds)}s"
+    minutes = seconds / 60.0
+    if minutes < 90:
+        return f"{minutes:.0f}m"
+    return f"{minutes / 60.0:.1f}h"
+
+
+def _purchases_keys_to_tuples(purchases: dict) -> dict:
+    """S3 stores purchase keys as "cap|band" strings; callers index by (cap_id, band)."""
+    out = {}
+    for k, v in (purchases or {}).items():
+        if isinstance(k, tuple):
+            out[k] = v
+            continue
+        cap_str, _, band = str(k).partition('|')
+        try:
+            cap_id = int(cap_str)
+        except (TypeError, ValueError):
+            cap_id = cap_str
+        out[(cap_id, band)] = v
+    return out
+
+
 def _load_dbs_cache_from_s3() -> tuple[dict, list] | None:
     payload = _s3_load(_DBS_S3_KEY)
     if not payload:
@@ -418,6 +602,34 @@ def _load_dbs_cache_from_s3() -> tuple[dict, list] | None:
         _dbs_cache["total_vrms"] = payload.get("total_vrms", len(vehicles))
         _dbs_cache["no_rrp"]     = payload.get("no_rrp")
     return purchases, vehicles
+
+
+def _adopt_dbs_s3_cache() -> dict | None:
+    """
+    Populate the in-process DBS cache from a fresh S3 payload, if one exists.
+
+    Without this a cold Lambda — or one whose 30-minute in-process TTL has just
+    expired — pays the full ~8-15s SharePoint fetch even though a perfectly good
+    S3 payload is sitting there. Mirrors what _get_sf_rows already does for
+    Snowflake. Returns the purchases dict (tuple keys) or None on a miss.
+    """
+    payload = _s3_load(_DBS_S3_KEY)
+    if not payload:
+        return None
+    purchases = _purchases_keys_to_tuples(payload.get("purchases", {}))
+    vehicles  = payload.get("vehicles", [])
+    fetched_at = payload.get("fetched_at")
+    with _cache_lock:
+        _dbs_cache["purchases"]  = purchases
+        _dbs_cache["vehicles"]   = vehicles
+        _dbs_cache["total_vrms"] = payload.get("total_vrms", len(vehicles))
+        _dbs_cache["no_rrp"]     = payload.get("no_rrp")
+        _dbs_cache["fetched_at"] = fetched_at
+        # Hold it in memory for whatever is left of the S3 payload's own life.
+        remaining = max(0.0, payload.get("expires_at", 0.0) - time.time())
+        _dbs_cache["expires"]    = time.monotonic() + min(_sp_cache_seconds(), remaining)
+    logger.info("Daily Buyers Sheet: served from S3 cache (no SharePoint fetch needed)")
+    return purchases
 
 
 def _save_dbs_cache_to_s3(purchases: dict, vehicles: list, ttl: int = _DBS_TTL_SECONDS, total_vrms: int = None, no_rrp: int = None) -> None:
@@ -442,6 +654,23 @@ def _get_sf_rows(force: bool = False) -> list:
         if not force and _sf_cache["rows"] is not None and _sf_cache_is_fresh(_sf_cache["cached_at"]):
             return _sf_cache["rows"]
 
+    # Serialise the rebuild. The page opens /stream-snowflake and calls
+    # /sf-data at the same moment, so without this both miss the cache together
+    # and each runs the full buying_requirements query.
+    entered_at = time.time()
+    with _sf_build_lock:
+        with _cache_lock:
+            cached_at = _sf_cache.get("cached_at", 0.0)
+            rows = _sf_cache["rows"]
+            # Reuse whatever the holder of the lock just fetched. On a forced
+            # refresh that means any result produced after we started waiting —
+            # two racing Refresh Data clicks share one query rather than two.
+            if rows is not None and (cached_at >= entered_at or (not force and _sf_cache_is_fresh(cached_at))):
+                return rows
+        return _build_sf_rows(force)
+
+
+def _build_sf_rows(force: bool = False) -> list:
     # Try S3 cache before hitting Snowflake (skip on force)
     s3_result = None if force else _load_sf_cache_from_s3()
     if s3_result is not None:
@@ -590,9 +819,12 @@ def _enrich_cap_ids(rows: list[dict], workers: int = 25) -> list[dict]:
             else:
                 need_api.append(r)
 
-    logger.info(f"VRM CAP cache: {len(need_api)} VRMs need CAP API lookup")
+    # Only worth logging when there is actually work to do — this runs on both
+    # the DBS and Cars Bought paths, so logging unconditionally produced several
+    # identical "0 VRMs need lookup" lines per refresh.
     if not need_api:
         return rows
+    logger.info(f"VRM CAP cache: {len(need_api)} VRMs need CAP API lookup")
     cap = CAPClient()
 
     def _lookup_one(r):
@@ -648,6 +880,21 @@ def _get_dbs_purchases(force: bool = False) -> dict:
         if not force and _dbs_cache["purchases"] is not None and now < _dbs_cache["expires"]:
             return _dbs_cache["purchases"]
 
+    # Serialise the rebuild so concurrent callers that missed the TTL check
+    # together don't each run the full parse.
+    with _dbs_build_lock:
+        with _cache_lock:
+            if not force and _dbs_cache["purchases"] is not None and time.monotonic() < _dbs_cache["expires"]:
+                return _dbs_cache["purchases"]
+        # Fall back to S3 before paying for a live SharePoint fetch.
+        if not force:
+            adopted = _adopt_dbs_s3_cache()
+            if adopted is not None:
+                return adopted
+        return _build_dbs_purchases()
+
+
+def _build_dbs_purchases() -> dict:
     for _attempt in range(1, 4):
         try:
             values = _fetch_dbs_raw_values()
@@ -693,7 +940,13 @@ def _get_dbs_purchases(force: bool = False) -> dict:
         rrp0_idx = _col(headers_norm, 'RRP 0%')
 
         if None in (reg_idx, cap_idx, rrp_idx, rrp0_idx):
-            logger.warning(f"Daily Buyers Sheet: missing required column(s) — REG={reg_idx} CAP ID={cap_idx} RRP={rrp_idx} RRP 0%={rrp0_idx}. Headers: {headers_norm}")
+            logger.warning(
+                f"Daily Buyers Sheet: missing required column(s) — REG={reg_idx} CAP ID={cap_idx} "
+                f"RRP={rrp_idx} RRP 0%={rrp0_idx}. Headers: {headers_norm}. "
+                f"NOTE: the sheet is only read to column {_DBS_MAX_COL} — if a column has been "
+                f"inserted to the left, the ones we need have shifted past that bound. "
+                f"Widen _DBS_MAX_COL if so."
+            )
         else:
             make_idx     = _col(headers_norm, 'MAKE')
             model_idx    = _col(headers_norm, 'MODEL')
@@ -786,18 +1039,34 @@ def _get_dbs_purchases(force: bool = False) -> dict:
         _dbs_cache["vehicles"]   = vehicles
         _dbs_cache["total_vrms"] = total_dbs_vrms
         _dbs_cache["no_rrp"]     = skipped_no_rrp
-        _dbs_cache["expires"]    = time.monotonic() + _DBS_TTL_SECONDS
+        _dbs_cache["expires"]    = time.monotonic() + _sp_cache_seconds()
         _dbs_cache["fetched_at"] = fetched_at
-    _save_dbs_cache_to_s3(purchases, vehicles, _DBS_S3_TTL_SECONDS, total_dbs_vrms, skipped_no_rrp)
+    _save_dbs_cache_to_s3(purchases, vehicles, _sp_cache_seconds(), total_dbs_vrms, skipped_no_rrp)
     return purchases
 
 
-def _get_dbs_purchases_cached() -> tuple[dict, list] | None:
-    """Return (purchases, vehicles) from in-process or S3 cache only — never fetches live."""
+def _get_dbs_purchases_cached(quiet: bool = False) -> tuple[dict, list] | None:
+    """
+    Return (purchases, vehicles) from in-process or S3 cache only — never fetches live.
+
+    quiet=True suppresses the cache-layer log line, for internal probes (the
+    prewarm) that only want to know whether anything is cached.
+    """
     with _cache_lock:
         if _dbs_cache["purchases"] is not None and time.monotonic() < _dbs_cache["expires"]:
+            if not quiet:
+                age = time.time() - (_dbs_cache.get("fetched_at") or time.time())
+                logger.info(f"Daily Buyers Sheet: served from memory cache (data {_fmt_age(age)} old)")
             return _dbs_cache["purchases"], _dbs_cache.get("vehicles") or []
-    return _load_dbs_cache_from_s3()
+    result = _load_dbs_cache_from_s3()
+    if quiet:
+        return result
+    if result is None:
+        logger.info("Daily Buyers Sheet: no cached data available (memory and S3 both empty/expired)")
+    else:
+        age = time.time() - (_load_dbs_fetched_at_from_s3() or time.time())
+        logger.info(f"Daily Buyers Sheet: served from S3 cache (data {_fmt_age(age)} old)")
+    return result
 
 
 # ── Cars Bought cache helpers ─────────────────────────────────────────────────
@@ -809,7 +1078,32 @@ def _load_cb_cache_from_s3() -> tuple[dict, list] | None:
     with _cache_lock:
         _cb_cache["total_vrms"] = payload.get("total_vrms")
         _cb_cache["no_rrp"]     = payload.get("no_rrp")
+        # Carry the original fetch time through so callers can report data age.
+        _cb_cache["fetched_at"] = payload.get("fetched_at")
     return payload.get("purchases", {}), payload.get("vehicles", [])
+
+
+def _adopt_cb_s3_cache() -> dict | None:
+    """
+    Populate the in-process Cars Bought cache from a fresh S3 payload, if one
+    exists — avoids a ~8s SharePoint fetch plus a Snowflake dedup query on a
+    cold Lambda. See _adopt_dbs_s3_cache.
+    """
+    payload = _s3_load(_CB_S3_KEY)
+    if not payload:
+        return None
+    purchases = _purchases_keys_to_tuples(payload.get("purchases", {}))
+    vehicles  = payload.get("vehicles", [])
+    with _cache_lock:
+        _cb_cache["purchases"]  = purchases
+        _cb_cache["vehicles"]   = vehicles
+        _cb_cache["total_vrms"] = payload.get("total_vrms")
+        _cb_cache["no_rrp"]     = payload.get("no_rrp")
+        _cb_cache["fetched_at"] = payload.get("fetched_at")
+        remaining = max(0.0, payload.get("expires_at", 0.0) - time.time())
+        _cb_cache["expires"]    = time.monotonic() + min(_sp_cache_seconds(), remaining)
+    logger.info("Cars Bought: served from S3 cache (no SharePoint fetch needed)")
+    return purchases
 
 
 def _save_cb_cache_to_s3(purchases: dict, vehicles: list, fetched_at: float, ttl: int = _CB_S3_TTL_SECONDS, total_vrms: int = None, no_rrp: int = None) -> None:
@@ -827,10 +1121,28 @@ def _get_cb_purchases(force: bool = False) -> dict:
         if not force and _cb_cache["purchases"] is not None and now < _cb_cache["expires"]:
             return _cb_cache["purchases"]
 
+    # Serialise the rebuild so concurrent callers that missed the TTL check
+    # together don't each run the full SharePoint + Snowflake fetch.
+    with _cb_build_lock:
+        with _cache_lock:
+            if not force and _cb_cache["purchases"] is not None and time.monotonic() < _cb_cache["expires"]:
+                return _cb_cache["purchases"]
+        # Fall back to S3 before paying for a live SharePoint + Snowflake fetch.
+        if not force:
+            adopted = _adopt_cb_s3_cache()
+            if adopted is not None:
+                return adopted
+        return _build_cb_purchases()
+
+
+def _build_cb_purchases() -> dict:
     def _fetch_cb_values():
         for _attempt in range(1, 4):
             try:
-                return _CarsBoughtSharePointClient().get_worksheet_values(_CB_SUBFOLDER, _CB_FILENAME, _CB_SHEET)
+                return _CarsBoughtSharePointClient().get_worksheet_values(
+                    _CB_SUBFOLDER, _CB_FILENAME, _CB_SHEET,
+                    max_col=_CB_MAX_COL, max_row=_CB_MAX_ROW,
+                )
             except Exception as _exc:
                 logger.warning(f"Cars Bought fetch attempt {_attempt}/3 failed: {_exc}")
                 if _attempt == 3:
@@ -905,8 +1217,13 @@ def _get_cb_purchases(force: bool = False) -> dict:
             cap_idx  = headers.index("CAP ID")
             rrp_idx  = headers.index("RRP")
             rrp0_idx = headers.index("0%RRP")
-        except ValueError:
-            pass
+        except ValueError as e:
+            logger.warning(
+                f"Cars Bought: missing required column(s) ({e}). Headers: {headers}. "
+                f"NOTE: the sheet is only read to column {_CB_MAX_COL} — if a column has been "
+                f"inserted to the left, the ones we need have shifted past that bound. "
+                f"Widen _CB_MAX_COL if so."
+            )
         else:
             make_idx     = headers.index("MAKE")           if "MAKE"           in headers else None
             model_idx    = headers.index("MODEL")          if "MODEL"          in headers else None
@@ -1009,20 +1326,33 @@ def _get_cb_purchases(force: bool = False) -> dict:
         _cb_cache["vehicles"]    = vehicles
         _cb_cache["total_vrms"]  = total_vrms
         _cb_cache["no_rrp"]      = skipped_no_rrp
-        _cb_cache["expires"]     = time.monotonic() + _CB_TTL_SECONDS
+        _cb_cache["expires"]     = time.monotonic() + _sp_cache_seconds()
         _cb_cache["fetched_at"]  = fetched_at
-    _save_cb_cache_to_s3(purchases, vehicles, fetched_at, _CB_S3_TTL_SECONDS, total_vrms, skipped_no_rrp)
+    _save_cb_cache_to_s3(purchases, vehicles, fetched_at, _sp_cache_seconds(), total_vrms, skipped_no_rrp)
     logger.info(f"Cars Bought: {total_vrms} unique VRMs, {sum(purchases.values())} in table ({len(purchases)} cap/band keys), skipped: {skipped_no_cap} no CAP ID, {skipped_no_rrp} no RRP, {skipped_no_sf} not in Snowflake")
     return purchases
 
 
 
-def _get_cb_purchases_cached() -> tuple[dict, list] | None:
-    """Return (purchases, vehicles) from in-process or S3 cache only."""
+def _get_cb_purchases_cached(quiet: bool = False) -> tuple[dict, list] | None:
+    """Return (purchases, vehicles) from in-process or S3 cache only. See _get_dbs_purchases_cached."""
     with _cache_lock:
         if _cb_cache["purchases"] is not None and time.monotonic() < _cb_cache["expires"]:
+            if not quiet:
+                age = time.time() - (_cb_cache.get("fetched_at") or time.time())
+                logger.info(f"Cars Bought: served from memory cache (data {_fmt_age(age)} old)")
             return _cb_cache["purchases"], _cb_cache.get("vehicles") or []
-    return _load_cb_cache_from_s3()
+    result = _load_cb_cache_from_s3()
+    if quiet:
+        return result
+    if result is None:
+        logger.info("Cars Bought: no cached data available (memory and S3 both empty/expired)")
+    else:
+        with _cache_lock:
+            fetched_at = _cb_cache.get("fetched_at")
+        age = time.time() - (fetched_at or time.time())
+        logger.info(f"Cars Bought: served from S3 cache (data {_fmt_age(age)} old)")
+    return result
 
 
 def _sse(message: str, kind: str = "log") -> str:

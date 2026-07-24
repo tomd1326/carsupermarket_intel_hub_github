@@ -42,6 +42,20 @@ function setStatus(elId, label, state) {
  */
 let _tableOverlayDepth = 0;
 
+/* ── Loading progress ────────────────────────────────────────
+ * The page can sit on the spinner for several seconds (user prefs, then the
+ * Snowflake payload, then the two SharePoint files, then the table build), so
+ * show which stage is actually running rather than a bare "Loading…".
+ */
+function setLoadingStage(text) {
+    const el = document.getElementById('fetch-loading-text');
+    if (el) el.textContent = text;
+}
+
+function resetLoadingProgress() {
+    setLoadingStage('Loading…');
+}
+
 function showTableOverlay() {
     _tableOverlayDepth++;
     const loading = document.getElementById('fetch-loading');
@@ -1434,7 +1448,9 @@ function applyCbPurchases(p, vehicles) {
     _applyNotOnApex();
 }
 
-const _SP_MAX_AGE_SECS = 30 * 60;
+// How old cached SharePoint data may be before the page fetches live instead.
+// Set on the Buying Requirements settings page; falls back to 30 minutes.
+const _SP_MAX_AGE_SECS = (window.SP_CACHE_MINUTES ?? 30) * 60;
 
 function _setDbsUpdatedAt(fetchedAt) {
     const el = document.getElementById('dbs-status');
@@ -1450,6 +1466,7 @@ function _setDbsUpdatedAt(fetchedAt) {
 let _dbsDone = false, _cbDone = false;
 function _maybeShowExportBtn() {
     if (_dbsDone && _cbDone) {
+        setLoadingStage('Finishing…');
         const btn = document.getElementById('export-cap-ids-btn');
         if (btn) { btn.classList.remove('disabled'); btn.removeAttribute('aria-disabled'); }
         // Table only settles once DBS + Cars Bought have both patched in — hold the
@@ -1552,6 +1569,7 @@ function fetchData() {
     const btn = document.getElementById('fetchBtn');
     btn.disabled = true;
     btn.innerHTML = '<span class="spinner-border spinner-border-sm me-2"></span>Fetching...';
+    resetLoadingProgress();
     setStatus('sf-status', SF_LABEL, 'running');
     setStatus('dbs-status', DBS_LABEL, 'idle');
     setStatus('cb-status', CB_LABEL, 'idle');
@@ -1582,6 +1600,7 @@ function applyRawDataToTable(fetchSP) {
     // both are done.
     _dbsDone = false; _cbDone = false;
     showTableOverlay();
+    setLoadingStage('Building table…');
     if (currentView === 'model') aggregateModelData(); else aggregateRawData();
     document.getElementById('sf-total-stock').textContent =
         rawData.reduce((s, r) => s + (Number(r[4]) || 0), 0).toLocaleString();
@@ -1594,6 +1613,9 @@ function applyRawDataToTable(fetchSP) {
     renderTable();
     sortCol = null; sortDir = 1;
     sortTable(21, 'num');
+    setLoadingStage(window.ENABLE_CARS_BOUGHT
+        ? 'Loading Daily Buyers Sheet and Cars Bought…'
+        : 'Loading Daily Buyers Sheet…');
     if (fetchSP) {
         patchDailyBuyersSheet();
         if (window.ENABLE_CARS_BOUGHT) patchCarsBought();
@@ -1669,6 +1691,7 @@ function loadFromServer(fetchSP = false, fromFetchData = false) {
     _spWarnings.clear();
     document.getElementById('sp-warning')?.classList.add('d-none');
 
+    setLoadingStage(fromFetchData ? 'Loading vehicle data (live)…' : 'Loading vehicle data…');
     const sfUrl = window.BASE_URL + '/buying-requirements/sf-data' + (fromFetchData ? '?force=true' : '');
     fetch(sfUrl)
         .then(r => r.json())
@@ -2237,8 +2260,78 @@ function closeVehicleModal() {
     document.getElementById('vehicle-modal').style.display = 'none';
 }
 
+/* ── SharePoint file log popup (tdrayson only) ───────────────
+ * Shows the recent Daily Buyers Sheet / Cars Bought log lines held in memory
+ * by the server, newest first. The buffer is per-process and does not survive
+ * a cold start, so an empty list after a quiet spell is expected.
+ */
+function openSharePointLog() {
+    const modal = document.getElementById('splog-modal');
+    if (!modal) return;
+    document.getElementById('splog-backdrop').style.display = 'block';
+    modal.style.display = 'flex';
+    loadSharePointLog();
+}
+
+function closeSharePointLog() {
+    const modal = document.getElementById('splog-modal');
+    if (!modal) return;
+    document.getElementById('splog-backdrop').style.display = 'none';
+    modal.style.display = 'none';
+}
+
+function loadSharePointLog() {
+    const body = document.getElementById('splog-body');
+    if (!body) return;
+    body.innerHTML = '<div class="text-muted small p-2">Loading&hellip;</div>';
+    fetch(window.BASE_URL + '/buying-requirements/sharepoint-log')
+        .then(r => r.json())
+        .then(resp => {
+            if (resp.status !== 'ok') {
+                body.innerHTML = '<div class="text-danger small p-2">' + (resp.message || 'Failed to load log') + '</div>';
+                return;
+            }
+            const entries = resp.entries || [];
+            if (!entries.length) {
+                body.innerHTML = '<div class="text-muted small p-2">No SharePoint log entries in memory yet. Run Refresh Data, then reopen this.</div>';
+                return;
+            }
+            body.innerHTML = '';
+            entries.forEach(e => {
+                const row = document.createElement('div');
+                row.className = 'splog-row splog-' + (e.level || '').toLowerCase();
+                const ts = document.createElement('span');
+                ts.className = 'splog-ts';
+                ts.textContent = _fmtLogTs(e.ts);
+                const lvl = document.createElement('span');
+                lvl.className = 'splog-level';
+                lvl.textContent = e.level || '';
+                const msg = document.createElement('span');
+                msg.className = 'splog-msg';
+                msg.textContent = e.message || '';
+                row.appendChild(ts);
+                row.appendChild(lvl);
+                row.appendChild(msg);
+                body.appendChild(row);
+            });
+        })
+        .catch(err => {
+            body.innerHTML = '<div class="text-danger small p-2">Failed to load log: ' + err + '</div>';
+        });
+}
+
+// ISO (UTC) → local "DD/MM/YYYY HH:MM:SS"
+function _fmtLogTs(iso) {
+    if (!iso) return '';
+    const d = new Date(iso);
+    if (isNaN(d.getTime())) return iso;
+    const p = n => String(n).padStart(2, '0');
+    return p(d.getDate()) + '/' + p(d.getMonth() + 1) + '/' + d.getFullYear() +
+           ' ' + p(d.getHours()) + ':' + p(d.getMinutes()) + ':' + p(d.getSeconds());
+}
+
 document.addEventListener('keydown', e => {
-    if (e.key === 'Escape') { closeVehicleModal(); closeColumnsModal(); }
+    if (e.key === 'Escape') { closeVehicleModal(); closeColumnsModal(); closeSharePointLog(); }
 });
 
 document.getElementById('vehicle-modal-table').addEventListener('click', e => {
@@ -2323,6 +2416,8 @@ document.addEventListener('DOMContentLoaded', () => {
     // Wait for both user prefs (hidden columns, font size) before rendering the
     // table — applying them after the first render makes the table visibly
     // shrink a moment after it appears.
+    resetLoadingProgress();
+    setLoadingStage('Loading your settings…');
     Promise.allSettled([loadColumnPrefs(), loadFontSizePref()])
         .then(() => loadFromServer(false));
 });

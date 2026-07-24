@@ -89,13 +89,15 @@
         }
         .btn-download-icon:hover { color: #0d3d5f; }
         .empty-state { color: #8a96a3; font-size: 0.85rem; text-align: center; padding: 30px 0; }
+        /* Shared Back / Home / nav button size across all pages */
+        .nav-btn { font-size: 1rem; padding: 0.35rem 0.7rem; }
     </style>
 </head>
 <body>
     <div class="container py-4" style="max-width: 1300px;">
         <div class="d-flex align-items-center justify-content-between mb-4">
             <h3 class="page-header mb-0">Apex Reports</h3>
-            <a href="{{ BASE_URL }}/reports" class="back-link"><i class="fas fa-arrow-left"></i> Reports</a>
+            <a href="{{ BASE_URL }}/reports" class="btn btn-outline-secondary nav-btn"><i class="fas fa-arrow-left me-1"></i>Reports</a>
         </div>
 
         <div class="panel shadow-sm mb-3 run-panel">

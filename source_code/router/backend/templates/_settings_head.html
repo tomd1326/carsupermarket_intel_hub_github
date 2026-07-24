@@ -1,0 +1,26 @@
+{# Shared styles for the settings area (settings.html + users.html). #}
+<style>
+    @font-face { font-family: 'DM Sans'; src: url('{{ BASE_URL }}/static/fonts/DMSans-Regular.ttf');  font-weight: 400; }
+    @font-face { font-family: 'DM Sans'; src: url('{{ BASE_URL }}/static/fonts/DMSans-Medium.ttf');   font-weight: 500; }
+    @font-face { font-family: 'DM Sans'; src: url('{{ BASE_URL }}/static/fonts/DMSans-SemiBold.ttf'); font-weight: 600; }
+    @font-face { font-family: 'DM Sans'; src: url('{{ BASE_URL }}/static/fonts/DMSans-Bold.ttf');     font-weight: 700; }
+    body, button, input, select, textarea { font-family: 'DM Sans', system-ui, sans-serif; }
+    .settings-card { max-width: 1180px; margin: 40px auto; padding: 0 16px; }
+    .card-header { background-color: #ced4da; }
+    .card { border-color: #adb5bd; }
+    /* Nav column on the left, section content to its right */
+    .settings-layout { display: flex; gap: 24px; align-items: flex-start; }
+    .settings-nav { display: flex; flex-direction: column; gap: 6px; flex: 0 0 210px; }
+    .settings-nav .btn {
+        text-align: left;
+        font-size: 1rem;
+        padding: 0.35rem 0.7rem;
+    }
+    /* Shared Back / Home / nav button size across all pages */
+    .nav-btn { font-size: 1rem; padding: 0.35rem 0.7rem; }
+    .settings-content { flex: 1 1 auto; min-width: 0; }
+    @media (max-width: 992px) {
+        .settings-layout { flex-direction: column; }
+        .settings-nav { flex: 1 1 auto; width: 100%; }
+    }
+</style>

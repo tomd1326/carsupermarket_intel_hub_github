@@ -12,6 +12,7 @@ import time
 import logging
 
 from botocore.config import Config
+import pandas as pd
 
 from utils.lambda_http import LambdaRequestsManager
 from utils.s3_tools import upload_file, download_file
@@ -44,8 +45,9 @@ def tasks_json(page: int = 1, page_size: int = 25, user: str = Depends(get_curre
             cursor.execute("SELECT COUNT(*) FROM tasks")
             total_tasks = cursor.fetchone()[0]
         with conn.cursor() as cursor:
+            cursor.execute("ALTER TABLE tasks ADD COLUMN IF NOT EXISTS progress_message TEXT")
             cursor.execute(
-                "SELECT t.task_id, t.created, t.status, t.filename, t.total_rows, t.reductions, t.execution_time, t.message, s.supplier_name, t.uploaded_by, t.source, t.error_log_s3, t.aurora_cache_hits "
+                "SELECT t.task_id, t.created, t.status, t.filename, t.total_rows, t.reductions, t.execution_time, t.message, s.supplier_name, t.uploaded_by, t.source, t.error_log_s3, t.aurora_cache_hits, t.progress_message "
                 "FROM tasks t LEFT JOIN suppliers s ON t.supplier_id = s.supplier_id "
                 "ORDER BY t.task_id DESC LIMIT %s OFFSET %s",
                 (page_size, offset)
@@ -292,6 +294,93 @@ def delete_task(task_id: str, user: str = Depends(get_current_user)):
         conn.commit()
     return {"ok": True}
 
+
+@router.get("/tasks/{task_id}/vehicles-json")
+def task_vehicles_json(task_id: str, user: str = Depends(get_current_user)):
+    """Return the uploaded CSV's per-vehicle rows (VRM, CAP ID, Make, Model,
+    Variant, Mileage) for the View popup. Currently used by Motability tasks so
+    each vehicle can link out to the mfldirect search filtered by CAP ID."""
+    if not user:
+        raise HTTPException(status_code=401)
+
+    with get_database_connection() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                "SELECT t.filename, s.supplier_name FROM tasks t "
+                "LEFT JOIN suppliers s ON s.supplier_id = t.supplier_id WHERE t.task_id = %s",
+                (task_id,)
+            )
+            row = cursor.fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Task not found")
+    filename, supplier_name = row
+
+    orig_ext = filename.rsplit('.', 1)[-1].lower()
+    # Motability Get Stock always writes the raw file as .csv regardless of the
+    # stored filename; try that first, then the filename's own extension, across
+    # both env folders so historical tasks (dev or prod) still resolve.
+    exts_to_try = list(dict.fromkeys(['csv', orig_ext]))
+    candidate_keys = [
+        f'applications/pricing/uk-vehicle-list-evaluator/{env}/raw/{task_id}.{ext}'
+        for env in ('prod', 'dev')
+        for ext in exts_to_try
+    ]
+
+    input_df = None
+    last_exc = None
+    for s3_key in candidate_keys:
+        ext = s3_key.rsplit('.', 1)[-1]
+        fd, tmp_path = tempfile.mkstemp(suffix='.' + ext)
+        os.close(fd)
+        try:
+            download_file(tmp_path, s3_bucketname, s3_key)
+            input_df = read_dataframe_file(tmp_path)
+            break
+        except Exception as e:
+            last_exc = e
+        finally:
+            try:
+                os.remove(tmp_path)
+            except OSError:
+                pass
+    if input_df is None:
+        raise HTTPException(status_code=404, detail=f"Raw file not found on S3: {last_exc}")
+
+    # Match the columns we want case-insensitively so header variations still work.
+    wanted = {
+        'vrm': ['reg no.', 'reg no', 'vrm', 'reg'],
+        'cap_id': ['cap id', 'capid', 'cap_id'],
+        'make': ['make'],
+        'model': ['model'],
+        'variant': ['variant', 'derivative'],
+        'mileage': ['mileage', 'miles', 'odometer', 'odo'],
+    }
+    lower_cols = {str(c).strip().lower(): c for c in input_df.columns}
+    resolved = {}
+    for key, candidates in wanted.items():
+        for cand in candidates:
+            if cand in lower_cols:
+                resolved[key] = lower_cols[cand]
+                break
+
+    rows = []
+    for _, r in input_df.iterrows():
+        item = {}
+        for key, src_col in resolved.items():
+            val = r.get(src_col)
+            if pd.isnull(val):
+                item[key] = None
+            elif key in ('cap_id', 'mileage'):
+                try:
+                    item[key] = int(float(val))
+                except (ValueError, TypeError):
+                    item[key] = str(val).strip()
+            else:
+                item[key] = str(val).strip()
+        rows.append(item)
+
+    return {"supplier_name": supplier_name, "count": len(rows), "rows": rows}
+
 @router.get("/trigger-elaborate-task")
 async def trigger_elaborate_task(request: Request, user: str = Depends(get_current_user)):
 
@@ -372,6 +461,22 @@ async def enterprise_email_start_task(
 _supplier_fetch_lock = asyncio.Lock()
 
 
+def _set_progress(task_id, message):
+    """Write a live progress line to the task so the UI can show each step of a
+    Get Stock run as it happens. Best-effort — never let logging break the fetch."""
+    try:
+        with get_database_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute("ALTER TABLE tasks ADD COLUMN IF NOT EXISTS progress_message TEXT")
+                cursor.execute(
+                    "UPDATE tasks SET progress_message = %s WHERE task_id = %s",
+                    (str(message)[:500], task_id)
+                )
+            conn.commit()
+    except Exception as e:
+        logger.warning(f"_set_progress failed for task {task_id}: {e}")
+
+
 @router.post("/api/fetch-supplier-stock")
 async def fetch_supplier_stock(
     request: Request,
@@ -415,6 +520,7 @@ async def fetch_supplier_stock(
                 )
                 task_id = cursor.fetchone()[0]
                 conn.commit()
+        _set_progress(task_id, 'Queued — waiting to start')
     except HTTPException:
         raise
     except Exception as e:
@@ -469,11 +575,15 @@ async def _fetch_supplier_stock_internal(data: dict):
     _FETCH_MAX_ATTEMPTS = 3
     _FETCH_RETRY_DELAY = 5
 
+    supplier_label = 'Motability' if supplier == 'motability' else '1link'
+
     async with _supplier_fetch_lock:
         last_exc = None
         input_df = None
         for attempt in range(1, _FETCH_MAX_ATTEMPTS + 1):
             try:
+                attempt_note = '' if attempt == 1 else f' (attempt {attempt}/{_FETCH_MAX_ATTEMPTS})'
+                _set_progress(task_id, f'Logging in to {supplier_label} and fetching stock list…{attempt_note}')
                 if supplier == 'motability':
                     client = MotabilityFetchClient(
                         username=secrets['MOTABILITY_ID'],
@@ -491,14 +601,17 @@ async def _fetch_supplier_stock_internal(data: dict):
                     )
                     input_df = client.fetch_dataframe()
                     input_df = _drop_1link_lcv_rows(input_df)
+                _set_progress(task_id, f'Fetched {len(input_df)} vehicles from {supplier_label}')
                 break
             except Exception as e:
                 last_exc = e
                 logger.warning(f"fetch_supplier_stock attempt {attempt}/{_FETCH_MAX_ATTEMPTS} failed for {supplier}: {e}")
+                _set_progress(task_id, f'Fetch attempt {attempt}/{_FETCH_MAX_ATTEMPTS} failed: {e}')
                 if attempt < _FETCH_MAX_ATTEMPTS:
                     await asyncio.sleep(_FETCH_RETRY_DELAY)
 
         if input_df is None:
+            _set_progress(task_id, f'Failed to fetch stock after {_FETCH_MAX_ATTEMPTS} attempts: {last_exc}')
             with get_database_connection() as conn:
                 with conn.cursor() as cursor:
                     cursor.execute(
@@ -509,6 +622,7 @@ async def _fetch_supplier_stock_internal(data: dict):
             logger.error(f"fetch_supplier_stock failed for {supplier} after {_FETCH_MAX_ATTEMPTS} attempts: {last_exc}", exc_info=True)
             return
 
+    _set_progress(task_id, 'Uploading stock list to storage…')
     fd, tmp_path = tempfile.mkstemp(suffix='.csv')
     os.close(fd)
     try:
@@ -521,6 +635,7 @@ async def _fetch_supplier_stock_internal(data: dict):
         except OSError:
             pass
 
+    _set_progress(task_id, 'Enriching with CAP & Autotrader data…')
     logger.info(f"fetch_supplier_stock: fetched task_id={task_id} for {supplier} ({len(input_df)} rows)")
     await elaborate_task({'task_id': task_id, 'cap_workers': data['cap_workers'], 'cap_rate_limit': data['cap_rate_limit'], 'at_workers': data['at_workers'], 'at_rate_limit': data['at_rate_limit'], 'valuation_cache_hours': data.get('valuation_cache_hours'), 'start_time': data.get('fetch_start_time')})
 
@@ -680,13 +795,15 @@ async def elaborate_task(data: dict):
             except Exception as _e:
                 logger.warning(f"Failed to write error log to S3: {_e}")
 
+        progress_final = None if status == 'success' else f'Error: {message}'
         with get_database_connection() as conn:
             with conn.cursor() as cursor:
                 cursor.execute("ALTER TABLE tasks ADD COLUMN IF NOT EXISTS error_log_s3 TEXT")
                 cursor.execute("ALTER TABLE tasks ADD COLUMN IF NOT EXISTS aurora_cache_hits INTEGER")
+                cursor.execute("ALTER TABLE tasks ADD COLUMN IF NOT EXISTS progress_message TEXT")
                 cursor.execute(
-                    "UPDATE tasks SET status = %s, message = %s, total_rows = %s, execution_time = %s, s3_location = %s, reductions = %s, error_log_s3 = %s, aurora_cache_hits = %s WHERE task_id = %s",
-                    (status, message, total_rows, execution_time, s3_location if status == 'success' else None, reductions if status == 'success' else None, error_log_s3, aurora_cache_hits if status == 'success' else None, data['task_id']),
+                    "UPDATE tasks SET status = %s, message = %s, total_rows = %s, execution_time = %s, s3_location = %s, reductions = %s, error_log_s3 = %s, aurora_cache_hits = %s, progress_message = %s WHERE task_id = %s",
+                    (status, message, total_rows, execution_time, s3_location if status == 'success' else None, reductions if status == 'success' else None, error_log_s3, aurora_cache_hits if status == 'success' else None, progress_final, data['task_id']),
                 )
                 conn.commit()
 

@@ -1,0 +1,15 @@
+{# Shared settings section nav. Included by settings.html and users.html so the
+   list of pages stays identical across both. Expects `sections` and
+   `active_section` in the context. #}
+<div class="settings-nav">
+    {% for slug, label, title in sections %}
+    <a href="{{ BASE_URL }}/settings/section/{{ slug }}"
+       class="btn {% if slug == active_section %}btn-dark{% else %}btn-outline-secondary{% endif %}">
+        {{ label }}
+    </a>
+    {% endfor %}
+    <a href="{{ BASE_URL }}/settings/users"
+       class="btn {% if active_section == 'users' %}btn-dark{% else %}btn-outline-secondary{% endif %}">
+        User Accounts
+    </a>
+</div>

@@ -342,6 +342,44 @@ button.settings-cog:hover { color: #343a40 !important; background: #e9ecef !impo
     overflow: auto;
 }
 
+/* ── SharePoint file log popup ────────────────────────────── */
+#splog-modal { width: 1000px; }
+.splog-body {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow: auto;
+    font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
+    font-size: 12px;
+    border: 1px solid #d0d0d0;
+    border-radius: 4px;
+    background: #fbfbfb;
+}
+.splog-row {
+    display: flex;
+    gap: 10px;
+    align-items: baseline;
+    padding: 3px 8px;
+    border-bottom: 1px solid #ececec;
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+.splog-row:last-child { border-bottom: none; }
+.splog-ts {
+    flex: 0 0 auto;
+    color: #6b7280;
+    font-variant-numeric: tabular-nums;
+}
+.splog-level {
+    flex: 0 0 62px;
+    font-weight: 700;
+    color: #374151;
+}
+.splog-msg { flex: 1 1 auto; }
+.splog-warning .splog-level { color: #b45309; }
+.splog-warning          { background: #fffbeb; }
+.splog-error .splog-level { color: #b91c1c; }
+.splog-error            { background: #fef2f2; }
+
 #vehicle-modal-table {
     width: 100%;
     border-collapse: separate; /* Fix: 'collapse' breaks z-index with position sticky in Chrome/Safari */
@@ -551,17 +589,22 @@ button.settings-cog:hover { color: #343a40 !important; background: #e9ecef !impo
 }
 
 /* ── Loading indicator (top-left) ─────────────────────────── */
+/* Shared Back / Home / nav button size across all pages */
+.nav-btn { font-size: 1rem; padding: 0.35rem 0.7rem; }
+
 #fetch-loading,
 .controls-area #fetch-loading {
     display: flex;
     align-items: center;
-    font-size: 1.1rem !important;
+    font-size: 1.5rem !important;
     font-weight: 600;
     color: #4338ca;
+    padding: 0.5rem 0;
 }
 #fetch-loading .spinner-border,
 .controls-area #fetch-loading .spinner-border {
-    width: 1.1rem;
-    height: 1.1rem;
-    border-width: 0.16rem;
+    width: 1.5rem;
+    height: 1.5rem;
+    border-width: 0.2rem;
+    margin-right: 0.6rem !important;
 }

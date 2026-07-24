@@ -121,6 +121,10 @@ SETTINGS_DEFAULTS = {
     'kpi_ai_summary':                   '0',
     'mot_workers':                      10,
     'valuation_cache_hours':            36,
+    # How long Buying Requirements reuses data before refetching. Minutes.
+    # 0 on the Snowflake setting means "follow the dbt schedule only".
+    'sharepoint_cache_minutes':         30,
+    'snowflake_cache_minutes':          0,
     'cap_override_enabled':             '0',
     'cap_override_subscriber_id':       '',
     'cap_override_password':            '',
@@ -204,6 +208,33 @@ def save_settings(conn, number_to_buy: int, max_days_sales: int, max_dts: int, m
     values['kpi_ai_summary'] = '1' if kpi_ai_summary else '0'
     values['cap_override_enabled'] = '1' if cap_override_enabled else '0'
 
+    with conn.cursor() as cur:
+        cur.execute(
+            "CREATE TABLE IF NOT EXISTS settings (key VARCHAR(100) PRIMARY KEY, value VARCHAR(250))"
+        )
+        for key, value in values.items():
+            cur.execute(
+                "INSERT INTO settings (key, value) VALUES (%s, %s) "
+                "ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value",
+                (key, str(value))
+            )
+    conn.commit()
+
+
+def save_settings_partial(conn, values: dict):
+    """
+    Write only the given settings keys, leaving every other key untouched.
+
+    save_settings() takes the whole settings set positionally, so calling it
+    from a page that only renders one section would write defaults over the
+    sections that page never showed. The per-section settings pages use this
+    instead so each Save only touches its own fields.
+
+    Bool values should already be normalised to '1'/'0' by the caller, and
+    per-user keys should already carry their '__<user>' suffix.
+    """
+    if not values:
+        return
     with conn.cursor() as cur:
         cur.execute(
             "CREATE TABLE IF NOT EXISTS settings (key VARCHAR(100) PRIMARY KEY, value VARCHAR(250))"
