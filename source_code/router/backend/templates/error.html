@@ -17,6 +17,8 @@
         .error-icon { font-size: 2.5rem; }
         details summary { cursor: pointer; user-select: none; }
         pre { font-size: 0.78rem; white-space: pre-wrap; word-break: break-word; }
+        /* Shared Back / Home / nav button size across all pages */
+        .nav-btn { font-size: 1rem; padding: 0.35rem 0.7rem; }
     </style>
 </head>
 <body class="bg-light">
@@ -44,10 +46,10 @@
         {% endif %}
 
         <div class="d-flex gap-2 mb-3">
-            <a href="javascript:history.back()" class="btn btn-outline-secondary btn-sm">
+            <a href="javascript:history.back()" class="btn btn-outline-secondary nav-btn">
                 <i class="fas fa-arrow-left me-1"></i>Go Back
             </a>
-            <a href="{{ BASE_URL }}/home" class="btn btn-outline-secondary btn-sm">
+            <a href="{{ BASE_URL }}/home" class="btn btn-outline-secondary nav-btn">
                 <i class="fas fa-home me-1"></i>Home
             </a>
         </div>

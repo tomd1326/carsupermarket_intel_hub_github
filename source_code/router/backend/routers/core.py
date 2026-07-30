@@ -30,6 +30,36 @@ _S3_ENV = 'prod' if os.getenv('AWS_REGION') == 'eu-west-1' else 'dev'
 templates_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "templates")
 templates = Jinja2Templates(directory=templates_dir)
 
+_static_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "static")
+_static_version_cache: dict = {}
+
+
+def static_url(path: str) -> str:
+    """
+    Build a URL for a static asset with a cache-busting version stamp.
+
+    Without this, browsers keep serving a cached buying_requirements.js/.css
+    after a deploy — a change looks like it "did nothing" until the user knows
+    to hard-reload. The stamp is the file's modification time, so any edit
+    produces a new URL and the browser refetches automatically.
+
+    Usage in a template:  {{ static_url('css/buying_requirements.css') }}
+    """
+    rel = path.lstrip('/')
+    version = _static_version_cache.get(rel)
+    if version is None:
+        try:
+            version = str(int(os.path.getmtime(os.path.join(_static_dir, *rel.split('/')))))
+        except OSError:
+            version = '0'
+        # In Lambda the bundle is immutable, so caching the lookup is safe. Locally
+        # the reloader restarts the process on each edit, which clears this.
+        _static_version_cache[rel] = version
+    return f"{BASE_URL}/static/{rel}?v={version}"
+
+
+templates.env.globals['static_url'] = static_url
+
 # Generic initialization
 s3_bucketname = 'aa-raw-sources-uk'
 s3_bucket_region = 'eu-west-1'  # bucket is always in eu-west-1 regardless of Lambda region

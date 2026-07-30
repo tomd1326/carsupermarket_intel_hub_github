@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import logging
+import threading
 import time
 import requests
 from urllib.parse import urlparse
@@ -15,6 +16,38 @@ logger = logging.getLogger(__name__)
 # pay for a fresh token round-trip (the file/drive resolution below still runs
 # per-file, but the auth handshake is the one part safe to share globally).
 _TOKEN_CACHE: dict = {}
+
+# Graph site/drive/item IDs are stable identifiers — a site keeps its ID for
+# life, and a file keeps its item ID until it is deleted and recreated (editing
+# or saving over it does not change the ID). Resolving them cost three
+# sequential Graph round-trips on EVERY worksheet read, before a single cell of
+# data was returned, which dominated the fetch time.
+#
+# These are cached process-wide with a long TTL. If a cached ID goes stale
+# (file deleted and recreated, library restructured) Graph returns 404/410 and
+# get_worksheet_values clears the entry and retries once from scratch, so a
+# stale ID self-heals on the next call rather than needing a redeploy.
+_ID_CACHE: dict = {}
+_ID_CACHE_TTL_SECONDS = 12 * 60 * 60
+_id_cache_lock = threading.Lock()
+
+
+def _id_cache_get(key):
+    with _id_cache_lock:
+        entry = _ID_CACHE.get(key)
+        if entry and time.monotonic() < entry["expires"]:
+            return entry["value"]
+    return None
+
+
+def _id_cache_put(key, value):
+    with _id_cache_lock:
+        _ID_CACHE[key] = {"value": value, "expires": time.monotonic() + _ID_CACHE_TTL_SECONDS}
+
+
+def _id_cache_drop(key):
+    with _id_cache_lock:
+        _ID_CACHE.pop(key, None)
 
 
 class SharePointClient:
@@ -77,31 +110,66 @@ class SharePointClient:
         _TOKEN_CACHE[cache_key] = {"token": token, "expires": time.monotonic() + max(60, expires_in - 120)}
         return {"Authorization": f"Bearer {token}", "Accept": "application/json"}
 
+    def _site_cache_key(self):
+        return ("site", urlparse(self.SITE_URL).netloc, self.TEAM_SITE.lstrip("/"))
+
     def _get_site_id(self) -> str:
+        key = self._site_cache_key()
+        cached = _id_cache_get(key)
+        if cached is not None:
+            return cached
         hostname = urlparse(self.SITE_URL).netloc
         team_site = self.TEAM_SITE.lstrip("/")
         url = f"https://graph.microsoft.com/v1.0/sites/{hostname}:/{team_site}"
         resp = requests.get(url, headers=self._headers)
         resp.raise_for_status()
-        return resp.json()["id"]
+        site_id = resp.json()["id"]
+        _id_cache_put(key, site_id)
+        return site_id
 
     def _get_drive_id(self, site_id: str) -> str:
+        key = ("drive", site_id)
+        cached = _id_cache_get(key)
+        if cached is not None:
+            return cached
         url = f"https://graph.microsoft.com/v1.0/sites/{site_id}/drives"
         resp = requests.get(url, headers=self._headers)
         resp.raise_for_status()
         drives = resp.json().get("value", [])
+        drive_id = None
         for d in drives:
             if d.get("name") == "Documents":
-                return d["id"]
-        return drives[0]["id"]
+                drive_id = d["id"]
+                break
+        if drive_id is None:
+            drive_id = drives[0]["id"]
+        _id_cache_put(key, drive_id)
+        return drive_id
 
     def _get_item_id(self, drive_id: str, subfolder: str, filename: str) -> str:
+        key = ("item", drive_id, subfolder, filename)
+        cached = _id_cache_get(key)
+        if cached is not None:
+            return cached
         full_path = f"{subfolder.strip('/')}/{filename}".strip("/")
         encoded = requests.utils.quote(full_path)
         url = f"https://graph.microsoft.com/v1.0/drives/{drive_id}/root:/{encoded}"
         resp = requests.get(url, headers=self._headers)
         resp.raise_for_status()
-        return resp.json()["id"]
+        item_id = resp.json()["id"]
+        _id_cache_put(key, item_id)
+        return item_id
+
+    def _drop_cached_ids(self, subfolder: str, filename: str) -> None:
+        """Forget cached IDs for this file so the next call re-resolves from scratch."""
+        site_key = self._site_cache_key()
+        site_id = _id_cache_get(site_key)
+        if site_id is not None:
+            drive_id = _id_cache_get(("drive", site_id))
+            if drive_id is not None:
+                _id_cache_drop(("item", drive_id, subfolder, filename))
+            _id_cache_drop(("drive", site_id))
+        _id_cache_drop(site_key)
 
     def _get_item_id_by_url(self, sharepoint_url: str) -> tuple[str, str]:
         """
@@ -181,19 +249,40 @@ class SharePointClient:
         Raises:
             requests.HTTPError: If any Graph API call fails.
         """
-        site_id = self._get_site_id()
-        drive_id = self._get_drive_id(site_id)
-        item_id = self._get_item_id(drive_id, subfolder, filename)
-        encoded_sheet = requests.utils.quote(sheet_name)
-        address = requests.utils.quote(f"A1:{max_col}{max_row}")
-        url = (
-            f"https://graph.microsoft.com/v1.0/drives/{drive_id}/items/{item_id}"
-            f"/workbook/worksheets/{encoded_sheet}/range(address='{address}')?$select=values"
-        )
-        resp = requests.get(url, headers=self._headers)
-        resp.raise_for_status()
-        values = resp.json().get("values", [])
-        # Trim fully-blank trailing rows Graph pads the bounded range with
-        while values and all(c in (None, "") for c in values[-1]):
-            values.pop()
-        return values
+        # Site/drive/item IDs come from the process-wide cache when warm, so the
+        # common path is a single Graph call (the range read) rather than four.
+        # On a 404/410 the cached IDs may be stale (file recreated), so drop them
+        # and retry once with a full re-resolve.
+        for attempt in (1, 2):
+            started = time.monotonic()
+            site_id = self._get_site_id()
+            drive_id = self._get_drive_id(site_id)
+            item_id = self._get_item_id(drive_id, subfolder, filename)
+            resolve_secs = time.monotonic() - started
+
+            encoded_sheet = requests.utils.quote(sheet_name)
+            address = requests.utils.quote(f"A1:{max_col}{max_row}")
+            url = (
+                f"https://graph.microsoft.com/v1.0/drives/{drive_id}/items/{item_id}"
+                f"/workbook/worksheets/{encoded_sheet}/range(address='{address}')?$select=values"
+            )
+            read_started = time.monotonic()
+            resp = requests.get(url, headers=self._headers)
+            if resp.status_code in (404, 410) and attempt == 1:
+                logger.warning(
+                    "SharePoint '%s': %s on range read — dropping cached IDs and retrying",
+                    filename, resp.status_code,
+                )
+                self._drop_cached_ids(subfolder, filename)
+                continue
+            resp.raise_for_status()
+            read_secs = time.monotonic() - read_started
+            values = resp.json().get("values", [])
+            # Trim fully-blank trailing rows Graph pads the bounded range with
+            while values and all(c in (None, "") for c in values[-1]):
+                values.pop()
+            logger.info(
+                "SharePoint '%s' sheet '%s': %d rows in %.2fs (id resolve %.2fs, range read %.2fs)",
+                filename, sheet_name, len(values), resolve_secs + read_secs, resolve_secs, read_secs,
+            )
+            return values
