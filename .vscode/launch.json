@@ -12,6 +12,9 @@
                 "--port", "8000"
             ],
             "cwd": "${workspaceFolder}/source_code",
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}/source_code;${workspaceFolder}/source_code/router/backend"
+            },
             "console": "integratedTerminal",
             "justMyCode": true
         }

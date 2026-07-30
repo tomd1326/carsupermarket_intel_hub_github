@@ -486,3 +486,128 @@ def get_vehicle_database_connection():
         yield connection
     finally:
         pool.putconn(connection)
+
+
+# ── 0% finance subsidy rates ──────────────────────────────────────────────────
+
+def _ensure_subsidy_rate_tables(conn) -> None:
+    """Create the subsidy rate tables if they are not there yet.
+
+    Mirrors _ensure_user_preferences_table: db/06_subsidy_rates.sql is the
+    canonical schema, but creating on demand means a fresh environment works
+    without a manual migration step.
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS subsidy_rate_schedules (
+                id              SERIAL       PRIMARY KEY,
+                finance_company VARCHAR(100) NOT NULL,
+                finance_type    VARCHAR(10)  NOT NULL,
+                effective_from  DATE         NOT NULL,
+                created_by      VARCHAR(100),
+                created_at      TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+                updated_at      TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+                CONSTRAINT subsidy_rate_schedules_type_chk CHECK (finance_type IN ('HP', 'PCP')),
+                CONSTRAINT subsidy_rate_schedules_uniq UNIQUE (finance_company, finance_type, effective_from)
+            )
+            """
+        )
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS subsidy_rate_benchmarks (
+                schedule_id INTEGER      NOT NULL REFERENCES subsidy_rate_schedules(id) ON DELETE CASCADE,
+                term_months SMALLINT     NOT NULL,
+                rate_pct    NUMERIC(7,3) NOT NULL,
+                PRIMARY KEY (schedule_id, term_months),
+                CONSTRAINT subsidy_rate_benchmarks_term_chk CHECK (term_months BETWEEN 1 AND 120),
+                CONSTRAINT subsidy_rate_benchmarks_rate_chk CHECK (rate_pct >= 0)
+            )
+            """
+        )
+    conn.commit()
+
+
+def get_subsidy_schedules(conn) -> list:
+    """All schedules, newest effective date first, each with its benchmark terms.
+
+    Returns [{id, finance_company, finance_type, effective_from (date),
+              benchmarks: [(term_months, Decimal rate_pct), ...]}]
+    """
+    _ensure_subsidy_rate_tables(conn)
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT s.id, s.finance_company, s.finance_type, s.effective_from,
+                   b.term_months, b.rate_pct
+            FROM subsidy_rate_schedules s
+            LEFT JOIN subsidy_rate_benchmarks b ON b.schedule_id = s.id
+            ORDER BY s.effective_from DESC, s.finance_company, s.finance_type, b.term_months
+            """
+        )
+        rows = cur.fetchall()
+
+    by_id: dict = {}
+    order: list = []
+    for sched_id, company, ftype, eff_from, term, rate in rows:
+        if sched_id not in by_id:
+            by_id[sched_id] = {
+                "id": sched_id,
+                "finance_company": company,
+                "finance_type": ftype,
+                "effective_from": eff_from,
+                "benchmarks": [],
+            }
+            order.append(sched_id)
+        if term is not None:
+            by_id[sched_id]["benchmarks"].append((int(term), rate))
+    return [by_id[i] for i in order]
+
+
+def save_subsidy_schedule(conn, schedule_id, finance_company: str, finance_type: str,
+                          effective_from, benchmarks: list, user: str = None) -> int:
+    """Insert or update one schedule and replace its benchmark terms wholesale.
+
+    benchmarks is [(term_months, rate_pct), ...]. Returns the schedule id.
+    """
+    _ensure_subsidy_rate_tables(conn)
+    try:
+        with conn.cursor() as cur:
+            if schedule_id:
+                cur.execute(
+                    "UPDATE subsidy_rate_schedules "
+                    "SET finance_company = %s, finance_type = %s, effective_from = %s, updated_at = NOW() "
+                    "WHERE id = %s",
+                    (finance_company, finance_type, effective_from, schedule_id),
+                )
+                if cur.rowcount == 0:
+                    raise ValueError(f"schedule {schedule_id} no longer exists")
+                cur.execute("DELETE FROM subsidy_rate_benchmarks WHERE schedule_id = %s", (schedule_id,))
+            else:
+                cur.execute(
+                    "INSERT INTO subsidy_rate_schedules (finance_company, finance_type, effective_from, created_by) "
+                    "VALUES (%s, %s, %s, %s) RETURNING id",
+                    (finance_company, finance_type, effective_from, user),
+                )
+                schedule_id = cur.fetchone()[0]
+
+            psycopg2.extras.execute_values(
+                cur,
+                "INSERT INTO subsidy_rate_benchmarks (schedule_id, term_months, rate_pct) VALUES %s",
+                [(schedule_id, t, r) for t, r in benchmarks],
+            )
+        conn.commit()
+        return schedule_id
+    except Exception:
+        conn.rollback()
+        raise
+
+
+def delete_subsidy_schedule(conn, schedule_id: int) -> None:
+    try:
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM subsidy_rate_schedules WHERE id = %s", (schedule_id,))
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise

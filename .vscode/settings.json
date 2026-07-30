@@ -1,0 +1,6 @@
+{
+    // Templates are Jinja: {{ ... }} inside <script> blocks is substituted
+    // server-side, but VSCode's JS parser reads it as malformed JavaScript and
+    // reports phantom syntax errors. The rendered output is valid JS.
+    "html.validate.scripts": false
+}

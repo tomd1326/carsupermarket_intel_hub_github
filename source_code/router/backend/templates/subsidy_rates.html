@@ -1,0 +1,832 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Subsidy Rate Calculator</title>
+    <link rel="icon" type="image/png" href="{{ BASE_URL }}/static/icon.png">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css" rel="stylesheet">
+    <style>
+        @font-face { font-family: 'DM Sans'; src: url('{{ BASE_URL }}/static/fonts/DMSans-Regular.ttf');  font-weight: 400; }
+        @font-face { font-family: 'DM Sans'; src: url('{{ BASE_URL }}/static/fonts/DMSans-Medium.ttf');   font-weight: 500; }
+        @font-face { font-family: 'DM Sans'; src: url('{{ BASE_URL }}/static/fonts/DMSans-SemiBold.ttf'); font-weight: 600; }
+        @font-face { font-family: 'DM Sans'; src: url('{{ BASE_URL }}/static/fonts/DMSans-Bold.ttf');     font-weight: 700; }
+        body, button, input, select, textarea { font-family: 'DM Sans', system-ui, sans-serif; }
+        body { background-color: #003c57; min-height: 100vh; }
+
+        .page-wrap { min-height: 100vh; padding: 16px 28px 28px; }
+        .brand-logo { width: 36px; height: 36px; border-radius: 8px; }
+        .page-title { color: #ffffff; font-weight: 600; font-size: 1.2rem; letter-spacing: -0.2px; }
+        .page-sub { color: rgba(255,255,255,0.55); font-size: 0.78rem; margin-top: 0; }
+        .card { border: none; border-radius: 12px; box-shadow: 0 4px 24px rgba(0,0,0,0.18); }
+        .card-body { padding: 14px 18px; }
+        .logout-link { position: fixed; top: 16px; right: 20px; font-size: 0.82rem; color: rgba(255,255,255,0.55); display: flex; align-items: center; gap: 6px; text-decoration: none; }
+        .logout-link:hover { color: #ffffff; }
+        .back-link { color: rgba(255,255,255,0.6); font-size: 0.82rem; text-decoration: none; }
+        .back-link:hover { color: #ffffff; }
+
+        /* Every control on the filter row is the same height, so the row reads as one unit. */
+        .control-row { display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-end; }
+        .control-row .form-select,
+        .control-row .form-control,
+        .control-row .btn { height: 36px; font-size: 0.86rem; padding: 0 14px; border-radius: 7px; display: inline-flex; align-items: center; }
+        .control-row .form-select, .control-row .form-control { padding: 0 10px; }
+
+        .btn-process { background-color: #7ed321; border: none; color: #0d3d5f; font-weight: 700; border-radius: 7px; transition: background 0.15s; }
+        .btn-process:hover { background-color: #6cba18; color: #0d3d5f; }
+
+        .control-label { font-size: 0.7rem; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: #7a8a95; margin-bottom: 3px; display: block; }
+
+        .toggle-group .btn { border-color: #d3dae0; color: #55636e; font-weight: 500; }
+        .toggle-group .btn.active { background-color: #eaf4d8; border-color: #9dc44a; color: #47690f; font-weight: 600; }
+        .toggle-group .btn:first-child { border-radius: 7px 0 0 7px; }
+        .toggle-group .btn:last-child { border-radius: 0 7px 7px 0; }
+
+        /* Edit buttons match each other and sit clear of the heading. */
+        .edit-btn { height: 30px; padding: 0 12px; font-size: 0.78rem; border-radius: 6px; display: inline-flex; align-items: center; white-space: nowrap; border: 1px solid #d3dae0; background: #ffffff; color: #55636e; }
+        .edit-btn:hover { background-color: #f0f4f8; color: #0d3d5f; }
+
+        /* Title, coverage note and edit buttons share one line to keep the table above the fold. */
+        .sched-head { display: flex; gap: 16px; align-items: center; justify-content: space-between; flex-wrap: nowrap; margin-bottom: 8px; }
+        .sched-head > div:first-child { min-width: 0; }
+        .sched-title { font-weight: 600; font-size: 1rem; color: #0d3d5f; margin: 0; }
+        .sched-meta { display: flex; flex-wrap: wrap; gap: 1px 14px; font-size: 0.75rem; color: #6c7a85; margin-top: 1px; }
+        .sched-meta b { color: #0d3d5f; font-weight: 600; }
+
+        @media (max-width: 800px) { .sched-head { flex-wrap: wrap; } }
+
+        .coverage-note { padding: 4px 10px; border-radius: 6px; background-color: #fff6e5; color: #8a5a00; font-size: 0.74rem; }
+
+        /* One continuous list of terms — HP left, PCP right, the page scrolls.
+           Width is capped so the figures stay beside their term rather than
+           stretching across the card. */
+        .rate-split { margin-top: 10px; display: flex; justify-content: center; }
+        /* No overflow clipping here, or the sticky header cannot escape the box. */
+        .rate-block { width: 100%; max-width: 520px; border: 1px solid #e6ebef; border-radius: 8px; }
+        .rate-table { width: 100%; border-collapse: separate; border-spacing: 0; font-size: 0.78rem; }
+        .rate-table thead th { position: sticky; top: 0; z-index: 3; background-color: #eef3f7; color: #55636e; font-weight: 600; font-size: 0.68rem; letter-spacing: 0.05em; text-transform: uppercase; padding: 5px 8px; border-bottom: 1px solid #dde4ea; box-shadow: 0 1px 0 #dde4ea; }
+        .rate-table thead th.type-col { text-align: center; color: #0d3d5f; font-size: 0.76rem; letter-spacing: 0.03em; width: 42%; }
+        .rate-table thead th.type-col small { display: block; font-weight: 400; font-size: 0.64rem; color: #8b98a2; letter-spacing: 0; text-transform: none; margin-top: 1px; }
+        .rate-table td { padding: 0 8px; line-height: 1.5; border-bottom: 1px solid #f4f7f9; vertical-align: middle; }
+        .rate-table tbody tr:last-child td { border-bottom: none; }
+        .rate-table tbody tr:nth-child(even) td { background-color: #fafcfd; }
+        .rate-table tbody tr:hover td { background-color: #eef7ff; }
+        /* Anchor rows — the lender's own quoted terms — get a tint so the eye finds them. */
+        .rate-table tbody tr.has-bench td { background-color: #f4f9e9; }
+        .rate-table tbody tr.has-bench:hover td { background-color: #edf5dc; }
+        .rate-table .col-term { width: 54px; color: #8b98a2; font-variant-numeric: tabular-nums; text-align: right; white-space: nowrap; }
+        .rate-table .col-div { width: 1px; padding: 0; background-color: #eef2f5; }
+
+        .rate-cell { display: flex; align-items: center; justify-content: center; gap: 5px; }
+        .rate-val { font-variant-numeric: tabular-nums; color: #0d3d5f; font-size: 0.84rem; min-width: 56px; text-align: right; }
+        .rate-cell.is-bench .rate-val { color: #47690f; font-weight: 700; }
+        .rate-none { color: #cdd4da; font-variant-numeric: tabular-nums; text-align: center; display: block; }
+
+        /* Fixed box so every copy button is identical whatever the value beside it. */
+        .copy-btn { width: 20px; height: 17px; flex: 0 0 20px; display: inline-flex; align-items: center; justify-content: center;
+                    border: 1px solid transparent; background: transparent; color: #c8d0d6; border-radius: 4px;
+                    font-size: 0.68rem; line-height: 1; padding: 0; cursor: pointer; transition: all 0.12s; }
+        .copy-btn:hover { background-color: #eaf4d8; border-color: #9dc44a; color: #47690f; }
+        .copy-btn.copied { background-color: #7ed321; border-color: #7ed321; color: #0d3d5f; }
+        tr:hover .copy-btn { color: #7a8a95; }
+
+        .legend { margin: 8px 0 0; font-size: 0.72rem; color: #9aa5ad; }
+        .legend .dot { color: #7ed321; }
+
+        .history-table { font-size: 0.82rem; width: 100%; }
+        .history-table th { white-space: nowrap; background-color: #f0f4f8; font-weight: 600; padding: 6px 10px; font-size: 0.7rem; letter-spacing: 0.04em; text-transform: uppercase; color: #6c7a85; }
+        .history-table td { white-space: nowrap; padding: 7px 10px; border-top: 1px solid #f0f0f0; vertical-align: middle; }
+        .pill { display: inline-block; padding: 2px 9px; border-radius: 999px; font-size: 0.68rem; font-weight: 700; }
+        .pill-live { background-color: #eaf4d8; color: #47690f; }
+        .pill-past { background-color: #f0f2f4; color: #8b98a2; }
+        .pill-future { background-color: #fff6e5; color: #8a5a00; }
+
+        .empty-state { padding: 36px 20px; text-align: center; color: #8b98a2; }
+        .empty-state h6 { color: #0d3d5f; font-weight: 600; }
+
+        .bench-line { display: grid; grid-template-columns: 1fr 1fr 40px; gap: 8px; align-items: center; margin-bottom: 7px; }
+        .bench-line-head { display: grid; grid-template-columns: 1fr 1fr 40px; gap: 8px; font-size: 0.72rem; font-weight: 600; letter-spacing: 0.05em; text-transform: uppercase; color: #7a8a95; margin-bottom: 5px; }
+
+        .toast-copy { position: fixed; left: 50%; bottom: 26px; transform: translateX(-50%) translateY(10px); background-color: #0d3d5f; color: #ffffff; padding: 9px 18px; border-radius: 8px; font-size: 0.85rem; opacity: 0; pointer-events: none; transition: opacity 0.18s, transform 0.18s; z-index: 2000; box-shadow: 0 8px 28px rgba(0,0,0,0.3); }
+        .toast-copy.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+
+        @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+    </style>
+</head>
+<body>
+<a href="{{ BASE_URL }}/logout" class="logout-link"><i class="fas fa-sign-out-alt"></i> Logout</a>
+
+<div class="page-wrap">
+    <div class="container-fluid" style="max-width: 1040px;">
+
+        <div class="d-flex align-items-center gap-3 mb-1">
+            <img src="{{ BASE_URL }}/static/icon.png" alt="CarSupermarket" class="brand-logo">
+            <div>
+                <h1 class="page-title mb-0">Subsidy Rate Calculator</h1>
+                <div class="page-sub">Every whole month between the lender's benchmark terms, worked out on a straight line.</div>
+            </div>
+        </div>
+        <a href="{{ BASE_URL }}/home" class="back-link"><i class="fas fa-arrow-left"></i> Back to menu</a>
+
+        {% if load_error %}
+        <div class="alert alert-danger mt-3 mb-0">
+            <b>Could not load the stored rates.</b><br>{{ load_error }}
+        </div>
+        {% endif %}
+
+        <div class="card mt-3">
+            <div class="card-body">
+                <div class="control-row">
+                    <div>
+                        <label class="control-label" for="companyFilter">Finance company</label>
+                        <select id="companyFilter" class="form-select" style="width: 240px;"></select>
+                    </div>
+                    <div>
+                        <label class="control-label" for="asAt">Rates in force on</label>
+                        <input type="date" id="asAt" class="form-control" value="{{ today }}" style="width: 170px;">
+                    </div>
+                    <div>
+                        <button type="button" class="btn btn-process" id="applyBtn">Apply</button>
+                    </div>
+                    <div>
+                        <span class="control-label">Sign</span>
+                        <div class="btn-group toggle-group" role="group">
+                            <button type="button" class="btn btn-outline-secondary active" data-sign="neg">Negative</button>
+                            <button type="button" class="btn btn-outline-secondary" data-sign="pos">Positive</button>
+                        </div>
+                    </div>
+                    <div class="ms-auto">
+                        <button type="button" class="btn btn-process" id="addBtn">
+                            <i class="fas fa-plus"></i> Add New Rates
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div id="result"></div>
+
+        <div class="card mt-3">
+            <div class="card-body">
+                <h2 class="sched-title mb-1">Rate history</h2>
+                <p style="font-size: 0.8rem; color: #6c7a85;" class="mb-2">A schedule stays in force until the next one for the same company and type begins.</p>
+                <div class="table-responsive">
+                    <table class="history-table">
+                        <thead>
+                            <tr>
+                                <th>Company</th><th>Type</th><th>In force</th><th>Status</th>
+                                <th>Terms</th><th>Benchmarks</th><th></th>
+                            </tr>
+                        </thead>
+                        <tbody id="historyBody"></tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="modal fade" id="editModal" tabindex="-1" aria-labelledby="editModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content" style="border-radius: 12px;">
+            <div class="modal-header">
+                <h5 class="modal-title" id="editModalLabel">Add New Rates</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                <div class="row g-3 mb-3">
+                    <div class="col-md-6">
+                        <label class="control-label" for="fCompany">Finance company</label>
+                        <select id="fCompany" class="form-select"></select>
+                    </div>
+                    <div class="col-md-6" id="newCompanyWrap" style="display:none;">
+                        <label class="control-label" for="fCompanyNew">New company name</label>
+                        <input type="text" id="fCompanyNew" class="form-control" placeholder="e.g. Alphera 0%" maxlength="100" autocomplete="off">
+                    </div>
+                    <div class="col-md-6">
+                        <label class="control-label" for="fType">Finance type</label>
+                        <select id="fType" class="form-select">
+                            <option value="HP">HP</option>
+                            <option value="PCP">PCP</option>
+                        </select>
+                    </div>
+                    <div class="col-md-6">
+                        <label class="control-label" for="fFrom">Rates apply from</label>
+                        <input type="date" id="fFrom" class="form-control">
+                    </div>
+                </div>
+
+                <div class="bench-line-head">
+                    <span>Term (months)</span><span>Subsidy %</span><span></span>
+                </div>
+                <div id="benchLines"></div>
+                <button type="button" class="btn btn-outline-secondary btn-sm mt-1" id="addLineBtn">
+                    <i class="fas fa-plus"></i> Add a term
+                </button>
+                <p class="legend mt-2 mb-0">Enter the percentage positive, as the lender quotes it — for example 10.499.</p>
+
+                <div class="alert alert-danger mt-3 mb-0" id="formError" style="display:none;"></div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-outline-danger btn-sm me-auto" id="deleteBtn" style="display:none;">Delete this schedule</button>
+                <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button type="button" class="btn btn-process" id="saveBtn">Save rates</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="toast-copy" id="toast" role="status" aria-live="polite"></div>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
+<script>
+(function () {
+    "use strict";
+
+    var BASE_URL = "{{ BASE_URL }}";
+    var MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+    var TYPES = ["HP", "PCP"];
+
+    var schedules = {{ schedules | tojson }};
+    var sign = "neg";
+    var editingId = null;
+    var pendingDelete = false;
+
+    // Only changes when Apply is pressed, so the table never shifts under you.
+    var applied = { company: null, asAt: null };
+
+    var el = {
+        asAt: document.getElementById("asAt"),
+        companyFilter: document.getElementById("companyFilter"),
+        applyBtn: document.getElementById("applyBtn"),
+        result: document.getElementById("result"),
+        historyBody: document.getElementById("historyBody"),
+        toast: document.getElementById("toast"),
+        fCompany: document.getElementById("fCompany"),
+        fCompanyNew: document.getElementById("fCompanyNew"),
+        newCompanyWrap: document.getElementById("newCompanyWrap"),
+        fType: document.getElementById("fType"),
+        fFrom: document.getElementById("fFrom"),
+        benchLines: document.getElementById("benchLines"),
+        formError: document.getElementById("formError"),
+        deleteBtn: document.getElementById("deleteBtn"),
+        saveBtn: document.getElementById("saveBtn")
+    };
+
+    var modal = new bootstrap.Modal(document.getElementById("editModal"));
+
+    function esc(s) {
+        return String(s).replace(/[&<>"']/g, function (c) {
+            return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
+        });
+    }
+
+    function fmtDate(iso) {
+        var p = iso.split("-");
+        return Number(p[2]) + " " + MONTHS[Number(p[1]) - 1] + " " + p[0];
+    }
+
+    function rangeText(s) {
+        return s.effective_to
+            ? fmtDate(s.effective_from) + " to " + fmtDate(s.effective_to)
+            : fmtDate(s.effective_from) + " onwards";
+    }
+
+    function activeOn(s, iso) {
+        if (iso < s.effective_from) return false;
+        if (s.effective_to && iso > s.effective_to) return false;
+        return true;
+    }
+
+    // Rates are stored positive; Apex takes them as a negative adjustment.
+    function fmtRate(rate) {
+        var n = Number(rate);
+        return (sign === "neg" && n !== 0 ? "-" : "") + Math.abs(n).toFixed(3);
+    }
+
+    function companies() {
+        var seen = [];
+        schedules.forEach(function (s) { if (seen.indexOf(s.company) === -1) seen.push(s.company); });
+        return seen.sort();
+    }
+
+    function toast(msg) {
+        el.toast.textContent = msg;
+        el.toast.classList.add("show");
+        window.clearTimeout(el.toast._t);
+        el.toast._t = window.setTimeout(function () { el.toast.classList.remove("show"); }, 1600);
+    }
+
+    function copy(text, btn) {
+        function done(ok) {
+            if (!ok) { toast("Could not copy — select the value and copy manually"); return; }
+            toast("Copied " + text);
+            if (btn) {
+                btn.classList.add("copied");
+                window.setTimeout(function () { btn.classList.remove("copied"); }, 900);
+            }
+        }
+        function fallback() {
+            var ta = document.createElement("textarea");
+            ta.value = text;
+            ta.style.position = "fixed";
+            ta.style.opacity = "0";
+            document.body.appendChild(ta);
+            ta.select();
+            var ok = false;
+            try { ok = document.execCommand("copy"); } catch (e) { ok = false; }
+            document.body.removeChild(ta);
+            done(ok);
+        }
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+            navigator.clipboard.writeText(text).then(function () { done(true); }, fallback);
+        } else {
+            fallback();
+        }
+    }
+
+    function renderCompanyFilter() {
+        var list = companies();
+        var current = el.companyFilter.value;
+        el.companyFilter.innerHTML = "";
+        list.forEach(function (c) {
+            var o = document.createElement("option");
+            o.value = c; o.textContent = c;
+            el.companyFilter.appendChild(o);
+        });
+        if (list.indexOf(current) !== -1) el.companyFilter.value = current;
+        else if (applied.company && list.indexOf(applied.company) !== -1) el.companyFilter.value = applied.company;
+    }
+
+    /* ---------- the aligned HP / PCP table ---------- */
+
+    function schedulesFor(company, iso) {
+        var found = {};
+        schedules.forEach(function (s) {
+            if (s.company !== company) return;
+            if (iso && !activeOn(s, iso)) return;
+            found[s.type] = s;
+        });
+        return found;
+    }
+
+    function rateCell(row, type) {
+        var td = document.createElement("td");
+        if (!row) {
+            td.innerHTML = '<span class="rate-none">—</span>';
+            return td;
+        }
+        var value = fmtRate(row.rate);
+
+        var wrap = document.createElement("div");
+        wrap.className = "rate-cell" + (row.benchmark ? " is-bench" : "");
+
+        var val = document.createElement("span");
+        val.className = "rate-val";
+        val.textContent = value;
+
+        var btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = "copy-btn";
+        btn.innerHTML = '<i class="fas fa-copy"></i>';
+        btn.title = "Copy " + value + " (" + type + ", " + row.term + " months)";
+        btn.setAttribute("aria-label", btn.title);
+        btn.addEventListener("click", function () { copy(value, btn); });
+
+        wrap.appendChild(val);
+        wrap.appendChild(btn);
+        td.appendChild(wrap);
+        return td;
+    }
+
+    function renderResult() {
+        el.result.innerHTML = "";
+        var company = applied.company;
+        var iso = applied.asAt;
+
+        var card = document.createElement("div");
+        card.className = "card mt-3";
+        var body = document.createElement("div");
+        body.className = "card-body";
+        card.appendChild(body);
+        el.result.appendChild(card);
+
+        if (!company) {
+            body.innerHTML = '<div class="empty-state"><h6>Nothing stored yet</h6>' +
+                '<p class="mb-0">Use “Add New Rates” to enter a lender’s schedule.</p></div>';
+            return;
+        }
+
+        var found = schedulesFor(company, iso);
+        var hp = found.HP || null;
+        var pcp = found.PCP || null;
+
+        if (!hp && !pcp) {
+            body.innerHTML = '<div class="empty-state"><h6>No ' + esc(company) + ' rates in force on ' + esc(fmtDate(iso)) + '</h6>' +
+                '<p class="mb-0">Change the date, or add a schedule that starts on or before it.</p></div>';
+            return;
+        }
+
+        // Index each type by term, and take the union of terms so both columns line up.
+        var byTerm = { HP: {}, PCP: {} };
+        var min = null, max = null;
+        TYPES.forEach(function (t) {
+            var s = found[t];
+            if (!s) return;
+            s.rows.forEach(function (r) {
+                byTerm[t][r.term] = r;
+                if (min === null || r.term < min) min = r.term;
+                if (max === null || r.term > max) max = r.term;
+            });
+        });
+
+        var head = document.createElement("div");
+        head.className = "sched-head";
+        var meta = [];
+        TYPES.forEach(function (t) {
+            var s = found[t];
+            if (!s) { meta.push('<span><b>' + t + '</b> not held'); return; }
+            var rows = s.rows;
+            meta.push('<span><b>' + t + '</b> ' + rows[0].term + '–' + rows[rows.length - 1].term + ' months, ' +
+                      s.benchmarks.length + ' benchmarks, in force ' + esc(rangeText(s)) + '</span>');
+        });
+        head.innerHTML = '<div><h2 class="sched-title">' + esc(company) + '</h2>' +
+            '<div class="sched-meta">' + meta.join("") + '</div></div>';
+
+        var editWrap = document.createElement("div");
+        editWrap.className = "d-flex gap-2";
+        TYPES.forEach(function (t) {
+            if (!found[t]) return;
+            var b = document.createElement("button");
+            b.type = "button";
+            b.className = "edit-btn";
+            b.textContent = "Edit " + t;
+            b.addEventListener("click", function () { openModal(found[t].id); });
+            editWrap.appendChild(b);
+        });
+        head.appendChild(editWrap);
+        body.appendChild(head);
+
+        var gaps = [];
+        TYPES.forEach(function (t) {
+            var s = found[t];
+            if (!s) return;
+            var lo = s.rows[0].term, hi = s.rows[s.rows.length - 1].term;
+            if (lo > min) gaps.push(t + " starts at " + lo);
+            if (hi < max) gaps.push(t + " stops at " + hi);
+        });
+        if (!hp) gaps.push("no HP schedule held");
+        if (!pcp) gaps.push("no PCP schedule held");
+        if (gaps.length) {
+            var note = document.createElement("div");
+            note.className = "coverage-note";
+            note.innerHTML = '<b>Not every term is quoted.</b> ' + esc(company) + ': ' + esc(gaps.join("; ")) +
+                '. Blank cells are terms the lender does not quote, so no rate is worked out.';
+            body.appendChild(note);
+        }
+
+        function block(loTerm, hiTerm) {
+            var wrap = document.createElement("div");
+            wrap.className = "rate-block";
+
+            var table = document.createElement("table");
+            table.className = "rate-table";
+            table.innerHTML =
+                '<thead><tr>' +
+                '<th class="col-term">Term</th>' +
+                '<th class="col-div"></th>' +
+                '<th class="type-col">HP<small>' + (hp ? hp.benchmarks.length + " benchmarks" : "not held") + '</small></th>' +
+                '<th class="col-div"></th>' +
+                '<th class="type-col">PCP<small>' + (pcp ? pcp.benchmarks.length + " benchmarks" : "not held") + '</small></th>' +
+                '</tr></thead>';
+
+            var tbody = document.createElement("tbody");
+            for (var term = loTerm; term <= hiTerm; term++) {
+                var tr = document.createElement("tr");
+                var hpRow = byTerm.HP[term] || null;
+                var pcpRow = byTerm.PCP[term] || null;
+                if ((hpRow && hpRow.benchmark) || (pcpRow && pcpRow.benchmark)) tr.className = "has-bench";
+
+                var tdTerm = document.createElement("td");
+                tdTerm.className = "col-term";
+                tdTerm.textContent = term + "m";
+                tr.appendChild(tdTerm);
+
+                tr.appendChild(divider());
+                tr.appendChild(rateCell(hpRow, "HP"));
+                tr.appendChild(divider());
+                tr.appendChild(rateCell(pcpRow, "PCP"));
+
+                tbody.appendChild(tr);
+            }
+            table.appendChild(tbody);
+            wrap.appendChild(table);
+            return wrap;
+        }
+
+        var split = document.createElement("div");
+        split.className = "rate-split";
+        split.appendChild(block(min, max));
+        body.appendChild(split);
+
+        var legend = document.createElement("p");
+        legend.className = "legend";
+        legend.innerHTML = '<span class="dot">&#9679;</span> green figures are the lender\'s own benchmark terms &middot; ' +
+            'everything else is interpolated in a straight line between them &middot; click a rate\'s copy button to take it to Apex';
+        body.appendChild(legend);
+    }
+
+    function divider() {
+        var td = document.createElement("td");
+        td.className = "col-div";
+        return td;
+    }
+
+    function renderHistory() {
+        var iso = applied.asAt;
+        el.historyBody.innerHTML = "";
+
+        if (!schedules.length) {
+            el.historyBody.innerHTML = '<tr><td colspan="7" style="color:#8b98a2;">Nothing stored yet. Use “Add New Rates” to enter a lender’s schedule.</td></tr>';
+            return;
+        }
+
+        var ordered = schedules.slice().sort(function (a, b) {
+            if (a.effective_from !== b.effective_from) return a.effective_from > b.effective_from ? -1 : 1;
+            if (a.company !== b.company) return a.company < b.company ? -1 : 1;
+            return a.type < b.type ? -1 : 1;
+        });
+
+        ordered.forEach(function (s) {
+            var status, cls;
+            if (iso && iso < s.effective_from) { status = "Upcoming"; cls = "pill-future"; }
+            else if (s.effective_to && iso && iso > s.effective_to) { status = "Superseded"; cls = "pill-past"; }
+            else { status = "In force"; cls = "pill-live"; }
+
+            var terms = s.rows.length ? s.rows[0].term + "–" + s.rows[s.rows.length - 1].term : "—";
+
+            var tr = document.createElement("tr");
+            tr.innerHTML =
+                "<td>" + esc(s.company) + "</td>" +
+                "<td>" + esc(s.type) + "</td>" +
+                "<td>" + esc(rangeText(s)) + "</td>" +
+                '<td><span class="pill ' + cls + '">' + status + "</span></td>" +
+                "<td>" + terms + "</td>" +
+                "<td>" + s.benchmarks.length + "</td>" +
+                '<td class="text-end"></td>';
+
+            var btn = document.createElement("button");
+            btn.type = "button";
+            btn.className = "btn btn-outline-secondary btn-sm";
+            btn.textContent = "Edit";
+            btn.addEventListener("click", function () { openModal(s.id); });
+            tr.lastElementChild.appendChild(btn);
+
+            el.historyBody.appendChild(tr);
+        });
+    }
+
+    function render() {
+        renderCompanyFilter();
+        renderResult();
+        renderHistory();
+    }
+
+    function apply() {
+        applied.company = el.companyFilter.value || null;
+        applied.asAt = el.asAt.value;
+        render();
+    }
+
+    /* ---------- modal ---------- */
+
+    function benchLine(term, rate) {
+        var line = document.createElement("div");
+        line.className = "bench-line";
+
+        var t = document.createElement("input");
+        t.type = "number"; t.className = "form-control bench-term";
+        t.min = "1"; t.max = "120"; t.step = "1"; t.placeholder = "36";
+        if (term != null) t.value = term;
+
+        var r = document.createElement("input");
+        r.type = "number"; r.className = "form-control bench-rate";
+        r.step = "0.001"; r.min = "0"; r.placeholder = "10.499";
+        if (rate != null) r.value = rate;
+
+        var del = document.createElement("button");
+        del.type = "button";
+        del.className = "btn btn-outline-secondary btn-sm";
+        del.innerHTML = '<i class="fas fa-times"></i>';
+        del.setAttribute("aria-label", "Remove this term");
+        del.addEventListener("click", function () { line.remove(); });
+
+        line.appendChild(t); line.appendChild(r); line.appendChild(del);
+        return line;
+    }
+
+    function currentCompany() {
+        return el.fCompany.value === "__new__" ? el.fCompanyNew.value.trim() : el.fCompany.value;
+    }
+
+    function syncNewCompany() {
+        var isNew = el.fCompany.value === "__new__";
+        el.newCompanyWrap.style.display = isNew ? "" : "none";
+        if (isNew) el.fCompanyNew.focus();
+    }
+
+    function latestFor(company, type) {
+        var c = schedules.filter(function (s) { return s.company === company && s.type === type; })
+                         .sort(function (a, b) { return a.effective_from < b.effective_from ? 1 : -1; });
+        return c[0] || null;
+    }
+
+    // Prefill the terms this lender actually quotes, so the coverage gaps carry over.
+    function prefillTerms() {
+        if (editingId) return;
+        var prev = latestFor(currentCompany(), el.fType.value);
+        // We do not offer terms below 24 months, so that is where a new schedule starts.
+        var terms = prev ? prev.benchmarks.map(function (b) { return b.term; }) : [24, 36, 48, 60];
+        el.benchLines.innerHTML = "";
+        terms.forEach(function (t) { el.benchLines.appendChild(benchLine(t, null)); });
+    }
+
+    function fillCompanySelect(selected) {
+        var list = companies();
+        el.fCompany.innerHTML = "";
+        list.forEach(function (c) {
+            var o = document.createElement("option");
+            o.value = c; o.textContent = c;
+            el.fCompany.appendChild(o);
+        });
+        var n = document.createElement("option");
+        n.value = "__new__";
+        n.textContent = "+ Add a new company…";
+        el.fCompany.appendChild(n);
+
+        if (selected && list.indexOf(selected) !== -1) el.fCompany.value = selected;
+        else if (!list.length) el.fCompany.value = "__new__";
+        syncNewCompany();
+    }
+
+    function openModal(id) {
+        editingId = id || null;
+        pendingDelete = false;
+        el.deleteBtn.textContent = "Delete this schedule";
+        el.formError.style.display = "none";
+        el.formError.textContent = "";
+
+        if (editingId) {
+            var s = schedules.filter(function (x) { return x.id === editingId; })[0];
+            if (!s) return;
+            document.getElementById("editModalLabel").textContent = "Edit Rates";
+            fillCompanySelect(s.company);
+            el.fType.value = s.type;
+            el.fFrom.value = s.effective_from;
+            el.benchLines.innerHTML = "";
+            s.benchmarks.forEach(function (b) { el.benchLines.appendChild(benchLine(b.term, b.rate)); });
+            el.deleteBtn.style.display = "";
+        } else {
+            document.getElementById("editModalLabel").textContent = "Add New Rates";
+            fillCompanySelect(el.companyFilter.value || null);
+            el.fType.value = "HP";
+            el.fFrom.value = el.asAt.value;
+            el.deleteBtn.style.display = "none";
+            prefillTerms();
+        }
+        modal.show();
+    }
+
+    function showError(msg) {
+        el.formError.textContent = msg;
+        el.formError.style.display = "";
+    }
+
+    function collect() {
+        var company = currentCompany();
+        if (!company) return { error: "Give the finance company a name." };
+        if (!el.fFrom.value) return { error: "Set the date these rates apply from." };
+
+        var lines = el.benchLines.querySelectorAll(".bench-line");
+        var benchmarks = [];
+        var seen = {};
+
+        for (var i = 0; i < lines.length; i++) {
+            var tRaw = lines[i].querySelector(".bench-term").value.trim();
+            var rRaw = lines[i].querySelector(".bench-rate").value.trim();
+            if (tRaw === "" && rRaw === "") continue;
+            if (tRaw === "" || rRaw === "") return { error: "Row " + (i + 1) + " needs both a term and a rate." };
+            var t = Number(tRaw);
+            if (seen[t]) return { error: "Term " + t + " is entered twice." };
+            seen[t] = true;
+            benchmarks.push({ term: t, rate: rRaw });
+        }
+
+        if (benchmarks.length < 2) return { error: "Enter at least two benchmark terms so the months between can be worked out." };
+
+        return {
+            payload: {
+                id: editingId,
+                company: company,
+                type: el.fType.value,
+                effective_from: el.fFrom.value,
+                benchmarks: benchmarks
+            }
+        };
+    }
+
+    el.saveBtn.addEventListener("click", function () {
+        var res = collect();
+        if (res.error) { showError(res.error); return; }
+
+        var savedCompany = res.payload.company;
+        el.saveBtn.disabled = true;
+        el.saveBtn.textContent = "Saving…";
+
+        fetch(BASE_URL + "/api/subsidy-rates", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(res.payload)
+        }).then(function (r) {
+            return r.json().then(function (data) { return { ok: r.ok, data: data }; });
+        }).then(function (out) {
+            if (!out.ok || out.data.status !== "ok") {
+                showError(out.data.message || "Could not save these rates.");
+                return;
+            }
+            schedules = out.data.schedules;
+            modal.hide();
+            renderCompanyFilter();
+            el.companyFilter.value = savedCompany;
+            apply();
+            toast(editingId ? "Rates updated" : "Rates saved");
+            editingId = null;
+        }).catch(function (e) {
+            showError("Could not reach the server: " + e.message);
+        }).then(function () {
+            el.saveBtn.disabled = false;
+            el.saveBtn.textContent = "Save rates";
+        });
+    });
+
+    el.deleteBtn.addEventListener("click", function () {
+        if (!editingId) return;
+        if (!pendingDelete) {
+            pendingDelete = true;
+            el.deleteBtn.textContent = "Click again to delete";
+            window.setTimeout(function () {
+                pendingDelete = false;
+                el.deleteBtn.textContent = "Delete this schedule";
+            }, 3500);
+            return;
+        }
+        fetch(BASE_URL + "/api/subsidy-rates/" + editingId, { method: "DELETE" })
+            .then(function (r) { return r.json().then(function (d) { return { ok: r.ok, data: d }; }); })
+            .then(function (out) {
+                if (!out.ok || out.data.status !== "ok") {
+                    showError(out.data.message || "Could not delete this schedule.");
+                    return;
+                }
+                schedules = out.data.schedules;
+                modal.hide();
+                apply();
+                toast("Schedule deleted");
+                editingId = null;
+            }).catch(function (e) { showError("Could not reach the server: " + e.message); });
+    });
+
+    document.getElementById("addLineBtn").addEventListener("click", function () {
+        el.benchLines.appendChild(benchLine(null, null));
+    });
+
+    document.getElementById("addBtn").addEventListener("click", function () { openModal(null); });
+    el.fCompany.addEventListener("change", function () { syncNewCompany(); prefillTerms(); });
+    el.fType.addEventListener("change", prefillTerms);
+    el.applyBtn.addEventListener("click", apply);
+
+    // Enter in either filter applies, so it behaves like a small form.
+    [el.companyFilter, el.asAt].forEach(function (node) {
+        node.addEventListener("keydown", function (ev) {
+            if (ev.key === "Enter") { ev.preventDefault(); apply(); }
+        });
+    });
+
+    Array.prototype.forEach.call(document.querySelectorAll("[data-sign]"), function (b) {
+        b.addEventListener("click", function () {
+            sign = b.getAttribute("data-sign");
+            Array.prototype.forEach.call(document.querySelectorAll("[data-sign]"), function (o) {
+                o.classList.toggle("active", o === b);
+            });
+            renderResult();
+        });
+    });
+
+    renderCompanyFilter();
+    applied.company = el.companyFilter.value || null;
+    applied.asAt = el.asAt.value;
+    render();
+})();
+</script>
+</body>
+</html>

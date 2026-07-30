@@ -350,6 +350,12 @@ def _safe_float(v):
 #   recent scheduled window. Persisted to S3 so Lambda cold starts are instant.
 # SharePoint: live buyer activity — 30-min TTL, in-process + S3.
 _sf_cache: dict = {"rows": None, "cached_at": 0.0}   # cached_at = unix epoch (wall clock)
+# Schema version of a Snowflake row built below. Bump on ANY change to the row's
+# shape or field meaning — adding, removing, reordering, or repurposing a slot.
+# A payload written by a different version is discarded and refetched, so an
+# index-based reader never sees fields laid out to an older schema. Costs one
+# refetch on the first load after deploy, then caching resumes as normal.
+_SF_CACHE_VERSION = 2
 _dbs_cache: dict = {"purchases": None, "vehicles": None, "expires": 0.0, "fetched_at": None, "no_rrp": None}
 _cb_cache: dict  = {"purchases": None, "vehicles": None, "expires": 0.0, "fetched_at": None, "no_rrp": None}
 _cache_lock = threading.Lock()
@@ -535,6 +541,9 @@ def _load_sf_cache_from_s3() -> tuple[list, float] | None:
         obj = boto3.client("s3").get_object(Bucket=_S3_BUCKET, Key=_SF_S3_KEY)
         payload = json.loads(obj["Body"].read())
         cached_at = payload.get("cached_at", 0.0)
+        # Absent version = written before versioning, so its layout is unknown.
+        if payload.get("version") != _SF_CACHE_VERSION:
+            return None
         if _sf_cache_is_fresh(cached_at):
             rows = payload["rows"]
             for r in rows:
@@ -558,7 +567,7 @@ def _save_sf_cache_to_s3(rows: list, cached_at: float) -> None:
         import boto3
         boto3.client("s3").put_object(
             Bucket=_S3_BUCKET, Key=_SF_S3_KEY,
-            Body=json.dumps({"rows": rows, "cached_at": cached_at}, default=_json_default).encode(),
+            Body=json.dumps({"rows": rows, "cached_at": cached_at, "version": _SF_CACHE_VERSION}, default=_json_default).encode(),
             ContentType="application/json",
         )
     except Exception as e:
@@ -719,7 +728,8 @@ def _build_sf_rows(force: bool = False) -> list:
                 VEHICLE_COSTS,
                 GPU_M_COSTS,
                 COALESCE(MILEAGE_BAND, '') AS MILEAGE_BAND,
-                WEBSITE_URL
+                WEBSITE_URL,
+                IS_ADVERTISED
             FROM PROD_CARSUPERMARKET_DB.product_vehicle_journey.buying_requirements
             ORDER BY CAP_ID
         """)
@@ -731,7 +741,8 @@ def _build_sf_rows(force: bool = False) -> list:
     #  21:vehicle_status, 22:gpu_m_resolved, 23:vehicle_location,
     #  24:date_first_registered, 25:mileage, 26:autotrader_portal_link,
     #  27:invoice_posted_date, 28:vehicle_updated_at, 29:make_model, 30:cap_live_clean,
-    #  31:vehicle_costs, 32:gpu_m_costs, 33:mileage_band, 34:website_url]
+    #  31:vehicle_costs, 32:gpu_m_costs, 33:mileage_band, 34:website_url,
+    #  35:is_advertised]
     col_map = {name.upper(): i for i, name in enumerate(col_names)}
     def _g(r, name): return r[col_map[name]] if name in col_map else None
     def _s(r, name): v = _g(r, name); return str(v) if v is not None else None
@@ -753,6 +764,7 @@ def _build_sf_rows(force: bool = False) -> list:
         _g(r, 'MAKE_MODEL'), _g(r, 'CAP_LIVE_CLEAN_LATEST'),
         _gbp(r, 'VEHICLE_COSTS'), _gbp(r, 'GPU_M_COSTS'), _g(r, 'MILEAGE_BAND'),
         _g(r, 'WEBSITE_URL'),
+        (1 if _g(r, 'IS_ADVERTISED') else 0),
     ] for r in rows]
     _save_sf_cache_to_s3(result, cached_at)
 
