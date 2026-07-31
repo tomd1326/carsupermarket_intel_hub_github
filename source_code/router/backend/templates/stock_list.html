@@ -139,6 +139,8 @@
 
         .summary-bar { display: flex; align-items: center; gap: 24px; flex-wrap: wrap; margin-bottom: 10px; }
         .summary-item { font-size: 13px; }
+        /* Shared Back / Home / nav button size across all pages */
+        .nav-btn { font-size: 1rem; padding: 0.35rem 0.7rem; }
     </style>
 </head>
 <body>
@@ -152,10 +154,10 @@
     <div class="controls">
         <div class="d-flex align-items-center gap-3 mb-3">
             <h2 class="mb-0" style="font-size:20px;font-weight:700">Stock List</h2>
-            <a href="javascript:history.back()" class="btn btn-outline-secondary btn-sm">
+            <a href="javascript:history.back()" class="btn btn-outline-secondary nav-btn">
                 <i class="fas fa-arrow-left me-1"></i>Back
             </a>
-            <a href="{{ BASE_URL }}/home" class="btn btn-outline-secondary btn-sm">
+            <a href="{{ BASE_URL }}/home" class="btn btn-outline-secondary nav-btn">
                 <i class="fas fa-home me-1"></i>Home
             </a>
             <button id="fetchBtn" class="btn btn-primary btn-sm" onclick="fetchData(true)">

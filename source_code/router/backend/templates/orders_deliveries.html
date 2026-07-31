@@ -153,13 +153,15 @@
         table.summary tbody tr.total-row td { font-weight: 700; background: #eef2f6; border-top: 2px solid #0d3d5f; border-bottom: none; }
         table.summary tbody tr:has(+ tr.total-row) td { border-bottom: none; }
         table.summary tbody tr.spacer-row td { padding: 4px 0; border: none; background: transparent; }
+        /* Shared Back / Home / nav button size across all pages */
+        .nav-btn { font-size: 1rem; padding: 0.35rem 0.7rem; }
     </style>
 </head>
 <body>
     <div class="container-fluid py-4" style="max-width: 100%; padding-left: 24px; padding-right: 24px;">
         <div class="d-flex align-items-center justify-content-between mb-3">
             <h3 class="page-header mb-0">Orders &amp; Deliveries</h3>
-            <a href="{{ BASE_URL }}/reports" class="back-link"><i class="fas fa-arrow-left"></i> Reports</a>
+            <a href="{{ BASE_URL }}/reports" class="btn btn-outline-secondary nav-btn"><i class="fas fa-arrow-left me-1"></i>Reports</a>
         </div>
 
         <div class="panel shadow-sm mb-3">

@@ -127,6 +127,8 @@
             background-color: #dbeeff;
             animation: motRowFlash 0.8s ease-out 1;
         }
+        /* Shared Back / Home / nav button size across all pages */
+        .nav-btn { font-size: 1rem; padding: 0.35rem 0.7rem; }
     </style>
 </head>
 <body>
@@ -141,10 +143,10 @@
         <div class="d-flex align-items-center gap-3 mb-4">
             <img src="{{ BASE_URL }}/static/icon.png" alt="" class="brand-logo">
             <h1 class="page-title mb-0">MOT Check</h1>
-            <a href="javascript:history.back()" class="btn btn-outline-secondary btn-sm">
+            <a href="javascript:history.back()" class="btn btn-outline-secondary nav-btn">
                 <i class="fas fa-arrow-left me-1"></i>Back
             </a>
-            <a href="{{ BASE_URL }}/home" class="btn btn-outline-secondary btn-sm">
+            <a href="{{ BASE_URL }}/home" class="btn btn-outline-secondary nav-btn">
                 <i class="fas fa-home me-1"></i>Home
             </a>
         </div>

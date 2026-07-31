@@ -84,15 +84,17 @@
         #errorLogModal .table tbody td,
         #errorLogModal .table thead th { overflow: visible; text-overflow: clip; white-space: nowrap; }
         #errorLogModal .table tbody td { font-size: 0.8rem; }
+        /* Shared Back / Home / nav button size across all pages */
+        .nav-btn { font-size: 1rem; padding: 0.35rem 0.7rem; }
     </style>
 </head>
 <body>
     <div style="position:fixed;top:14px;right:24px;z-index:1040;display:flex;align-items:center;gap:8px">
         <a href="{{ BASE_URL }}/buying-requirements" class="btn btn-primary btn-sm">Go to Buying Requirements</a>
-        <a href="javascript:history.back()" class="btn btn-outline-secondary btn-sm">
+        <a href="javascript:history.back()" class="btn btn-outline-secondary nav-btn">
             <i class="fas fa-arrow-left me-1"></i>Back
         </a>
-        <a href="{{ BASE_URL }}/home" class="btn btn-outline-secondary btn-sm">
+        <a href="{{ BASE_URL }}/home" class="btn btn-outline-secondary nav-btn">
             <i class="fas fa-home me-1"></i>Home
         </a>
         <div class="logout-link" style="position:static">
@@ -218,6 +220,9 @@
                     <td>
                         {% if task.status == 'success' %}
                             <a href="#" class="btn btn-primary btn-sm download-btn" data-task-id="{{ task.task_id }}" title="Download"><i class="fa fa-download"></i></a>
+                            {% if task.supplier_name == 'Motability' %}
+                            <a href="#" class="btn btn-outline-primary btn-sm" title="View vehicles" onclick="showVehicles({{ task.task_id }}); return false;"><i class="fa fa-eye"></i></a>
+                            {% endif %}
                         {% else %}
                             <a href="#" class="btn btn-secondary btn-sm disabled" aria-disabled="true"><i class="fa fa-download"></i></a>
                         {% endif %}
@@ -240,6 +245,20 @@
             {% endfor %}
           </ul>
         </nav>
+    </div>
+
+    <div class="modal fade" id="vehiclesModal" tabindex="-1" aria-hidden="true">
+        <div class="modal-dialog modal-dialog-scrollable" style="max-width:96vw">
+            <div class="modal-content">
+                <div class="modal-header py-2">
+                    <h6 class="modal-title mb-0">Vehicles <span class="text-muted fw-normal" id="vehiclesSubtitle"></span></h6>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body p-2">
+                    <div id="vehiclesBody"></div>
+                </div>
+            </div>
+        </div>
     </div>
 
     <div class="modal fade" id="errorLogModal" tabindex="-1" aria-hidden="true">
@@ -267,20 +286,27 @@
 
         let _currentPage = {{ current_page }};
 
+        function _escapeHtml(s) {
+            return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+        }
+
         function _statusHtml(task) {
             if (task.status === 'success')
-                return `<span class="status-label status-success" title="${task.message || ''}">Success</span>`;
+                return `<span class="status-label status-success" title="${_escapeHtml(task.message || '')}">Success</span>`;
             if (task.status === 'created')
                 return `<span class="status-label status-created">Created</span>`;
             if (task.status === 'pending')
                 return `<span class="status-label status-pending">Pending</span>`;
-            return `<span class="status-label status-error" title="${task.message || ''}">Error</span>`;
+            return `<span class="status-label status-error" title="${_escapeHtml(task.message || '')}">Error</span>`;
         }
 
         function _actionsHtml(task) {
             let html = '';
             if (task.status === 'success') {
                 html += `<a href="#" class="btn btn-primary btn-sm download-btn" data-task-id="${task.task_id}" title="Download"><i class="fa fa-download"></i></a>`;
+                if (task.supplier_name === 'Motability') {
+                    html += ` <a href="#" class="btn btn-outline-primary btn-sm" title="View vehicles" onclick="showVehicles(${task.task_id}); return false;"><i class="fa fa-eye"></i></a>`;
+                }
             } else {
                 html += `<a href="#" class="btn btn-secondary btn-sm disabled" aria-disabled="true"><i class="fa fa-download"></i></a>`;
             }
@@ -293,6 +319,142 @@
                 html += ` <a href="#" class="btn btn-outline-danger btn-sm" title="Delete task" onclick="deleteTask(${task.task_id}); return false;"><i class="fa fa-trash"></i></a>`;
             }
             return html;
+        }
+
+        let _vehiclesModal = null;
+
+        function _mfldirectCapUrl(capId) {
+            return 'https://mfldirect.co.uk/search-results?page=1&searchType=advancedSearch'
+                + '&fixedPrice=true&auction=true&capid=' + encodeURIComponent(capId)
+                + '&view=table&sortCode=mfldirect_PRICE_REDUCED_DATE_descending';
+        }
+
+        async function showVehicles(taskId) {
+            const body = document.getElementById('vehiclesBody');
+            const subtitle = document.getElementById('vehiclesSubtitle');
+            subtitle.textContent = `— task ${taskId}`;
+            body.innerHTML = '<div class="text-muted"><i class="fa fa-spinner fa-spin me-2"></i>Loading…</div>';
+
+            if (!_vehiclesModal) {
+                _vehiclesModal = new bootstrap.Modal(document.getElementById('vehiclesModal'));
+            }
+            _vehiclesModal.show();
+
+            try {
+                const resp = await fetch(`{{ BASE_URL }}/tasks/${taskId}/vehicles-json`);
+                if (!resp.ok) {
+                    const detail = await resp.json().catch(() => ({}));
+                    body.innerHTML = '';
+                    const p = document.createElement('div');
+                    p.className = 'text-danger';
+                    p.textContent = detail.detail || `Failed to load vehicles (${resp.status})`;
+                    body.appendChild(p);
+                    return;
+                }
+                const data = await resp.json();
+                if (!data.rows.length) {
+                    body.innerHTML = '<div class="text-muted">No vehicles found for this task.</div>';
+                    return;
+                }
+
+                // [key, label, width%] — widths sum to 100 and Variant takes the
+                // slack so all columns fit the popup with no horizontal scroll.
+                const cols = [
+                    ['vrm', 'VRM', 10], ['cap_id', 'CAP ID', 8], ['make', 'Make', 12],
+                    ['model', 'Model', 13], ['variant', 'Variant', 37], ['mileage', 'Mileage', 10],
+                ];
+                const actionWidth = 10;
+
+                const wrapper = document.createElement('div');
+                wrapper.style.overflowY = 'auto';
+                wrapper.style.overflowX = 'hidden';
+                wrapper.style.maxHeight = '70vh';
+                const table = document.createElement('table');
+                table.className = 'table table-sm table-striped mb-0';
+                table.style.fontSize = '0.75rem';
+                table.style.width = '100%';
+                table.style.tableLayout = 'fixed';
+
+                const colgroup = document.createElement('colgroup');
+                for (const [, , width] of cols) {
+                    const col = document.createElement('col');
+                    col.style.width = width + '%';
+                    colgroup.appendChild(col);
+                }
+                const actionCol = document.createElement('col');
+                actionCol.style.width = actionWidth + '%';
+                colgroup.appendChild(actionCol);
+                table.appendChild(colgroup);
+
+                const thead = document.createElement('thead');
+                thead.style.position = 'sticky';
+                thead.style.top = '0';
+                thead.style.zIndex = '1';
+                thead.style.background = 'var(--bs-table-bg, #fff)';
+                const headRow = document.createElement('tr');
+                for (const [, label] of cols) {
+                    const th = document.createElement('th');
+                    th.textContent = label;
+                    th.style.padding = '0.2rem 0.4rem';
+                    headRow.appendChild(th);
+                }
+                const thAction = document.createElement('th');
+                thAction.textContent = 'Website';
+                thAction.style.padding = '0.2rem 0.4rem';
+                headRow.appendChild(thAction);
+                thead.appendChild(headRow);
+                table.appendChild(thead);
+
+                const tbody = document.createElement('tbody');
+                for (const row of data.rows) {
+                    const tr = document.createElement('tr');
+                    for (const [key] of cols) {
+                        const td = document.createElement('td');
+                        const val = row[key];
+                        const text = (val === null || val === undefined) ? '' :
+                            (key === 'mileage' && typeof val === 'number') ? val.toLocaleString() : String(val);
+                        td.textContent = text;
+                        td.title = text;
+                        td.style.padding = '0.15rem 0.4rem';
+                        td.style.overflow = 'hidden';
+                        td.style.textOverflow = 'ellipsis';
+                        td.style.whiteSpace = 'nowrap';
+                        tr.appendChild(td);
+                    }
+                    const tdAction = document.createElement('td');
+                    tdAction.style.padding = '0.1rem 0.3rem';
+                    if (row.cap_id !== null && row.cap_id !== undefined && row.cap_id !== '') {
+                        const a = document.createElement('a');
+                        a.href = _mfldirectCapUrl(row.cap_id);
+                        a.target = '_blank';
+                        a.rel = 'noopener noreferrer';
+                        a.className = 'btn btn-outline-primary btn-sm py-0 px-1';
+                        a.style.fontSize = '0.72rem';
+                        a.textContent = 'Website';
+                        tdAction.appendChild(a);
+                    } else {
+                        tdAction.innerHTML = '<span class="text-muted">–</span>';
+                    }
+                    tr.appendChild(tdAction);
+                    tbody.appendChild(tr);
+                }
+                table.appendChild(tbody);
+                wrapper.appendChild(table);
+
+                body.innerHTML = '';
+                const count = document.createElement('div');
+                count.className = 'text-muted mb-1';
+                count.style.fontSize = '0.8rem';
+                count.textContent = `${data.rows.length} vehicle${data.rows.length === 1 ? '' : 's'}`;
+                body.appendChild(count);
+                body.appendChild(wrapper);
+            } catch (e) {
+                body.innerHTML = '';
+                const p = document.createElement('div');
+                p.className = 'text-danger';
+                p.textContent = 'Failed to load vehicles: ' + e;
+                body.appendChild(p);
+            }
         }
 
         let _errorLogModal = null;
@@ -419,42 +581,46 @@
         const _isTdrayson = {{ 'true' if user == 'tdrayson' else 'false' }};
         let _knownTaskStates = {};
 
+        function _renderTaskRows(data) {
+            const tbody = document.querySelector('table tbody');
+            tbody.innerHTML = data.tasks.map(task => `
+                <tr data-task-id="${task.task_id}">
+                    <td>${task.task_id}</td>
+                    <td>${task.created || ''}</td>
+                    <td>${task.uploaded_by || '-'}</td>
+                    <td>${task.supplier_name || ''}</td>
+                    ${_isAdmin ? `<td>${task.source || '-'}</td>` : ''}
+                    <td>${task.filename || ''}</td>
+                    <td>${task.total_rows !== null ? task.total_rows : '-'}</td>
+                    ${_isAdmin ? `<td>${task.reductions !== null ? task.reductions : '-'}</td>` : ''}
+                    ${_isTdrayson ? `<td>${task.aurora_cache_hits !== null && task.aurora_cache_hits !== undefined ? task.aurora_cache_hits : '-'}</td>` : ''}
+                    <td>${task.execution_time !== null ? Math.round(task.execution_time) + 's' : '-'}</td>
+                    <td>${_statusHtml(task)}</td>
+                    <td>${_actionsHtml(task)}</td>
+                </tr>`).join('');
+
+            data.tasks.forEach(task => {
+                const prev = _knownTaskStates[task.task_id];
+                if (!prev || prev !== task.status) {
+                    const row = tbody.querySelector(`tr[data-task-id="${task.task_id}"]`);
+                    if (row) {
+                        row.classList.remove('row-flash');
+                        void row.offsetWidth; // force reflow to restart animation
+                        row.classList.add('row-flash');
+                    }
+                }
+                _knownTaskStates[task.task_id] = task.status;
+            });
+
+            _bindDownloadBtns();
+        }
+
         async function refreshTaskList() {
             try {
                 const resp = await fetch('{{ BASE_URL }}/api/tasks-json?page=' + _currentPage);
                 if (!resp.ok) return;
                 const data = await resp.json();
-                const tbody = document.querySelector('table tbody');
-                tbody.innerHTML = data.tasks.map(task => `
-                    <tr data-task-id="${task.task_id}">
-                        <td>${task.task_id}</td>
-                        <td>${task.created || ''}</td>
-                        <td>${task.uploaded_by || '-'}</td>
-                        <td>${task.supplier_name || ''}</td>
-                        ${_isAdmin ? `<td>${task.source || '-'}</td>` : ''}
-                        <td>${task.filename || ''}</td>
-                        <td>${task.total_rows !== null ? task.total_rows : '-'}</td>
-                        ${_isAdmin ? `<td>${task.reductions !== null ? task.reductions : '-'}</td>` : ''}
-                        ${_isTdrayson ? `<td>${task.aurora_cache_hits !== null && task.aurora_cache_hits !== undefined ? task.aurora_cache_hits : '-'}</td>` : ''}
-                        <td>${task.execution_time !== null ? Math.round(task.execution_time) + 's' : '-'}</td>
-                        <td>${_statusHtml(task)}</td>
-                        <td>${_actionsHtml(task)}</td>
-                    </tr>`).join('');
-
-                data.tasks.forEach(task => {
-                    const prev = _knownTaskStates[task.task_id];
-                    if (!prev || prev !== task.status) {
-                        const row = tbody.querySelector(`tr[data-task-id="${task.task_id}"]`);
-                        if (row) {
-                            row.classList.remove('row-flash');
-                            void row.offsetWidth; // force reflow to restart animation
-                            row.classList.add('row-flash');
-                        }
-                    }
-                    _knownTaskStates[task.task_id] = task.status;
-                });
-
-                _bindDownloadBtns();
+                _renderTaskRows(data);
                 if (!data.has_pending) {
                     stopCountdown();
                 } else {
@@ -540,6 +706,13 @@
         document.getElementById('fetchSupplierSelect').addEventListener('change', function() {
             document.getElementById('includePreviewWrapper').style.display =
                 this.value === 'motability' ? '' : 'none';
+            // Clear any leftover status (e.g. "Done — N vehicles") from a
+            // previous run so it isn't mistaken for the newly selected supplier.
+            if (!_anyFetchInFlight) {
+                const statusEl = document.getElementById('fetchStatusMsg');
+                statusEl.style.display = 'none';
+                statusEl.textContent = '';
+            }
         });
 
         async function fetchSupplierStock() {
@@ -575,12 +748,12 @@
                 });
 
                 if (resp.ok || resp.type === 'opaqueredirect') {
-                    statusEl.style.display = 'none';
-                    _anyFetchInFlight = false;
-                    btn.disabled = false;
-                    select.disabled = false;
+                    setStatus('Task created, starting…');
                     await refreshTaskList();
                     startCountdown();
+                    // Keep the button locked and mirror the task's live progress into
+                    // the status line next to Get Stock until it finishes.
+                    _pollGetStockProgress(supplier, btn, select, setStatus);
                     return;
                 }
 
@@ -593,6 +766,64 @@
             btn.disabled = false;
             select.disabled = false;
             _anyFetchInFlight = false;
+        }
+
+        // Poll the just-created "Get Stock" task and show its live progress next
+        // to the button, refreshing the visible table on every tick regardless of
+        // the auto-refresh checkbox. Stops on success/error, leaving any error
+        // text visible. Runs for at most ~10 minutes as a safety cap.
+        async function _pollGetStockProgress(supplier, btn, select, setStatus) {
+            const supplierLabel = supplier === 'motability' ? 'Motability' : '1link';
+            const started = Date.now();
+            const MAX_MS = 10 * 60 * 1000;
+
+            const finish = () => { btn.disabled = false; select.disabled = false; _anyFetchInFlight = false; };
+
+            // Identify the task we just created — it's the newest Get Stock task
+            // for this supplier at this moment, so this lookup is unambiguous.
+            let trackedTaskId = null;
+            try {
+                const resp = await fetch('{{ BASE_URL }}/api/tasks-json?page=1');
+                if (resp.ok) {
+                    const data = await resp.json();
+                    const task = (data.tasks || []).find(t =>
+                        t.source === 'Get Stock' && t.supplier_name === supplierLabel);
+                    if (task) trackedTaskId = task.task_id;
+                }
+            } catch (e) { /* fall through — will retry by supplier below */ }
+
+            while (Date.now() - started < MAX_MS) {
+                await new Promise(r => setTimeout(r, 2000));
+                let task = null;
+                try {
+                    const resp = await fetch('{{ BASE_URL }}/api/tasks-json?page=1');
+                    if (resp.ok) {
+                        const data = await resp.json();
+                        task = trackedTaskId
+                            ? (data.tasks || []).find(t => t.task_id === trackedTaskId)
+                            : (data.tasks || []).find(t => t.source === 'Get Stock' && t.supplier_name === supplierLabel);
+                        // Refresh the visible table on every tick so it stays live
+                        // even when the "Auto-refresh" checkbox is off.
+                        _renderTaskRows(data);
+                    }
+                } catch (e) { /* transient — keep polling */ }
+
+                if (!task) continue;
+
+                if (task.status === 'pending' || task.status === 'created') {
+                    setStatus(task.progress_message || 'Working…', false);
+                } else if (task.status === 'error') {
+                    setStatus(task.progress_message || task.message || 'Get Stock failed', true);
+                    finish();
+                    return;
+                } else if (task.status === 'success') {
+                    setStatus(`Done — ${task.total_rows != null ? task.total_rows + ' vehicles' : 'complete'}`, false);
+                    finish();
+                    return;
+                }
+            }
+            setStatus('Still running — check the task list below', false);
+            finish();
         }
     </script>
 </body>

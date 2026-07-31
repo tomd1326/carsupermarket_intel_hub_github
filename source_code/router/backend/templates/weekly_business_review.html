@@ -66,11 +66,13 @@
         .legend-item { display: flex; align-items: center; gap: 4px; }
         .legend-dot { width: 14px; height: 3px; border-radius: 2px; display: inline-block; }
         .legend-dot-dashed { width: 14px; height: 0; border-top: 2px dashed #9ca3af; display: inline-block; }
+        /* Shared Back / Home / nav button size across all pages */
+        .nav-btn { font-size: 1rem; padding: 0.35rem 0.7rem; }
     </style>
 </head>
 <body>
     <div class="top-bar">
-        <a href="{{ BASE_URL }}/home" class="back-link"><i class="fas fa-arrow-left"></i></a>
+        <a href="{{ BASE_URL }}/home" class="btn btn-outline-secondary nav-btn"><i class="fas fa-arrow-left me-1"></i>Home</a>
         <h1>Weekly Business Review</h1>
         <button class="btn btn-load" id="loadBtn" onclick="loadAll()">
             <i class="fas fa-sync-alt" id="loadIcon"></i> Load Data

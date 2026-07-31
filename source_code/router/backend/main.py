@@ -42,6 +42,11 @@ logging.getLogger('filelock').setLevel(logging.WARNING)
 logging.getLogger('list_processor.autotrader_client').setLevel(logging.WARNING)
 logging.getLogger('list_processor.cap_client').setLevel(logging.WARNING)
 
+# Keep recent SharePoint-file log lines in memory so the View Log button can
+# show them. Must come after basicConfig, which clears existing handlers.
+from utils.sharepoint_log import install as _install_sharepoint_log
+_install_sharepoint_log()
+
 
 class BasePathMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):

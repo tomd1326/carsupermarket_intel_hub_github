@@ -56,6 +56,8 @@
         .results-timestamp { font-size: 1rem; color: #212529; font-weight: 600; margin-left: 8px; }
         .history-loading { color: #adb5bd; font-size: 0.88rem; }
         .error-cell { background-color: #f8d7da !important; color: #721c24 !important; font-weight: 600; }
+        /* Shared Back / Home / nav button size across all pages */
+        .nav-btn { font-size: 1rem; padding: 0.35rem 0.7rem; }
     </style>
 </head>
 <body>
@@ -69,10 +71,10 @@
         <div class="d-flex align-items-center gap-3 mb-4">
             <img src="{{ BASE_URL }}/static/icon.png" alt="" class="brand-logo">
             <h1 class="page-title mb-0">CAP ID Lookup</h1>
-            <a href="javascript:history.back()" class="btn btn-outline-secondary btn-sm">
+            <a href="javascript:history.back()" class="btn btn-outline-secondary nav-btn">
                 <i class="fas fa-arrow-left me-1"></i>Back
             </a>
-            <a href="{{ BASE_URL }}/home" class="btn btn-outline-secondary btn-sm">
+            <a href="{{ BASE_URL }}/home" class="btn btn-outline-secondary nav-btn">
                 <i class="fas fa-home me-1"></i>Home
             </a>
         </div>

@@ -42,6 +42,20 @@ function setStatus(elId, label, state) {
  */
 let _tableOverlayDepth = 0;
 
+/* ── Loading progress ────────────────────────────────────────
+ * The page can sit on the spinner for several seconds (user prefs, then the
+ * Snowflake payload, then the two SharePoint files, then the table build), so
+ * show which stage is actually running rather than a bare "Loading…".
+ */
+function setLoadingStage(text) {
+    const el = document.getElementById('fetch-loading-text');
+    if (el) el.textContent = text;
+}
+
+function resetLoadingProgress() {
+    setLoadingStage('Loading…');
+}
+
 function showTableOverlay() {
     _tableOverlayDepth++;
     const loading = document.getElementById('fetch-loading');
@@ -79,21 +93,22 @@ const COL_UNITS = [
     0.665, // 6  15d Sales
     0.665, // 7  7d Sales
     0.665, // 8  Stock
-    0.665, // 9  Ideal Stock
-    0.665, // 10 Required
-    0.665, // 11 Daily Buyers Sheet
-    0.665, // 12 Cars Bought
-    0.665, // 13 Remaining
-    0.665, // 14 Avg Days in Stock
-    0.665, // 15 Avg Days to Sell
-    0.665, // 16 Avg Sell Price
-    0.665, // 17 Avg Sell Price + Adm Fee
-    0.665, // 18 Avg AT PTM
-    0.665, // 19 Avg AT PTM %
-    0.665, // 20 Avg AT Rating
-    0.665, // 21 Avg GPU-M
-    0.665, // 22 Avg GPU-S
-    0.665, // 23 Avg GPU-MS
+    0.665, // 9  Stock on Sale
+    0.665, // 10 Ideal Stock
+    0.665, // 11 Required
+    0.665, // 12 Daily Buyers Sheet
+    0.665, // 13 Cars Bought
+    0.665, // 14 Remaining
+    0.665, // 15 Avg Days in Stock
+    0.665, // 16 Avg Days to Sell
+    0.665, // 17 Avg Sell Price
+    0.665, // 18 Avg Sell Price + Adm Fee
+    0.665, // 19 Avg AT PTM
+    0.665, // 20 Avg AT PTM %
+    0.665, // 21 Avg AT Rating
+    0.665, // 22 Avg GPU-M
+    0.665, // 23 Avg GPU-S
+    0.665, // 24 Avg GPU-MS
 ];
 const TOTAL_UNITS = COL_UNITS.reduce((a, b) => a + b, 0);
 
@@ -101,7 +116,7 @@ const TOTAL_UNITS = COL_UNITS.reduce((a, b) => a + b, 0);
 const BASE_FONT_PX  = 12;
 const BASE_FIXED_PX = 65;
 const BASE_DESC_PX  = 530;
-const BASE_OVERRIDE = { 2: 66, 3: 46, 10: 78, 11: 65.5, 12: 65.5, 13: 79.5 }; // View, Fuel narrow, Required wider, DBS/CB wider, Remaining wider
+const BASE_OVERRIDE = { 2: 66, 3: 46, 11: 78, 12: 65.5, 13: 65.5, 14: 79.5 }; // View, Fuel narrow, Required wider, DBS/CB wider, Remaining wider
 const FONT_STEP     = 1; // px per click — 0.5px was imperceptible in rendered text
 const FONT_MIN      = 8;
 const FONT_MAX      = 16;
@@ -469,7 +484,8 @@ const THEAD_COLS = [
     { id: 'sales30',        label: '30d Sales',         hideable: true,  capOnly: false, html: '<span class="th-label">30d Sales</span><span class="sort-icon"><i class="fas fa-sort"></i></span><div class="resize-handle"></div>', attrs: 'data-col="23" data-type="num"' },
     { id: 'sales15',        label: '15d Sales',         hideable: true,  capOnly: false, html: '<span class="th-label">15d Sales</span><span class="sort-icon"><i class="fas fa-sort"></i></span><div class="resize-handle"></div>', attrs: 'data-col="24" data-type="num"' },
     { id: 'sales7',         label: '7d Sales',          hideable: true,  capOnly: false, html: '<span class="th-label">7d Sales</span><span class="sort-icon"><i class="fas fa-sort"></i></span><div class="resize-handle"></div>', attrs: 'data-col="7" data-type="num"' },
-    { id: 'stock',          label: 'Stock',             hideable: true,  capOnly: false, html: '<span class="th-label">Stock</span><span class="sort-icon"><i class="fas fa-sort"></i></span><div class="resize-handle"></div>', attrs: 'data-col="3" data-type="num"' },
+    { id: 'stock',          label: 'Total Stock',       hideable: true,  capOnly: false, html: '<span class="th-label">Total Stock</span><span class="sort-icon"><i class="fas fa-sort"></i></span><div class="resize-handle"></div>', attrs: 'data-col="3" data-type="num"' },
+    { id: 'stock_on_sale',  label: 'Stock on Sale',     hideable: true,  capOnly: false, html: '<span class="th-label">Stock on Sale</span><span class="sort-icon"><i class="fas fa-sort"></i></span><div class="resize-handle"></div>', attrs: 'data-col="26" data-type="num"' },
     { id: 'ideal',          label: 'Ideal Stock',       hideable: true,  capOnly: false, html: '<span class="th-label">Ideal Stock</span><span class="sort-icon"><i class="fas fa-sort"></i></span><div class="resize-handle"></div>', attrs: 'data-col="18" data-type="num"' },
     { id: 'required',       label: 'Required',          hideable: true,  capOnly: false, html: '<span class="th-label">Required</span><span class="sort-icon"><i class="fas fa-sort"></i></span><div class="resize-handle"></div>', attrs: 'data-col="19" data-type="num"' },
     { id: 'dbs',            label: 'Daily Buyers Sheet',hideable: true,  capOnly: false, html: '<span class="th-label">Daily Buyers Sheet</span><span class="sort-icon"><i class="fas fa-sort"></i></span><div class="resize-handle"></div>', attrs: 'data-col="6" data-type="num" style="background:#fef08a"' },
@@ -717,7 +733,7 @@ function aggregateRawData() {
         if (!groups.has(key)) {
             groups.set(key, {
                 cap_id: r[0], label: labelNoBand, fuel: r[2], price_band: r[3],
-                stock: 0, sales90: 0, sales30: 0, sales15: 0, sales7: 0,
+                stock: 0, stock_on_sale: 0, sales90: 0, sales30: 0, sales15: 0, sales7: 0,
                 dis_sum: 0, dis_n: 0,
                 dts_sum: 0, dts_n: 0,
                 gpu_m_sum: 0, gpu_m_n: 0,
@@ -744,8 +760,11 @@ function aggregateRawData() {
         const daysSinceAck = ackDate ? Math.floor((todayMs - ackDate.getTime()) / 86400000) : null;
 
         g.stock += stock;
+        // Advertised vehicles are FOR_SALE_RETAIL by definition, so this is a
+        // subset of stock — summed alongside it, before the sales filters.
+        if (Number(r[35]) === 1) g.stock_on_sale += 1;
 
-        const passDIS  = maxDIS  === null || daysSinceAck === null || daysSinceAck <= maxDIS;
+        const passDIS = maxDIS  === null || daysSinceAck === null || daysSinceAck <= maxDIS;
         const passDTS  = maxDTS  === null || dts  === null || dts  <= maxDTS;
         const passGPUM = minGPUM === null || gpu_m === null || gpu_m >= minGPUM;
         if (!passDIS || !passDTS || !passGPUM) continue;
@@ -805,6 +824,7 @@ function aggregateRawData() {
             g.sales30,                                  // 23 30d sales
             g.sales15,                                  // 24 15d sales
             avgSellIncl,                                // 25 avg sell price incl admin fee
+            g.stock_on_sale,                            // 26 stock on sale (advertised)
         ]);
     }
 }
@@ -826,7 +846,7 @@ function aggregateModelData() {
             const label = makeModel + ' / ' + normFuel(r[2]) + ' / ' + price_band;
             groups.set(key, {
                 cap_id: null, label, fuel: r[2], price_band,
-                stock: 0, sales90: 0, sales30: 0, sales15: 0, sales7: 0,
+                stock: 0, stock_on_sale: 0, sales90: 0, sales30: 0, sales15: 0, sales7: 0,
                 dis_sum: 0, dis_n: 0,
                 dts_sum: 0, dts_n: 0,
                 gpu_m_sum: 0, gpu_m_n: 0,
@@ -853,8 +873,11 @@ function aggregateModelData() {
         const daysSinceAck = ackDate ? Math.floor((todayMs - ackDate.getTime()) / 86400000) : null;
 
         g.stock += stock;
+        // Advertised vehicles are FOR_SALE_RETAIL by definition, so this is a
+        // subset of stock — summed alongside it, before the sales filters.
+        if (Number(r[35]) === 1) g.stock_on_sale += 1;
 
-        const passDIS  = maxDIS  === null || daysSinceAck === null || daysSinceAck <= maxDIS;
+        const passDIS = maxDIS  === null || daysSinceAck === null || daysSinceAck <= maxDIS;
         const passDTS  = maxDTS  === null || dts  === null || dts  <= maxDTS;
         const passGPUM = minGPUM === null || gpu_m === null || gpu_m >= minGPUM;
         if (!passDIS || !passDTS || !passGPUM) continue;
@@ -910,6 +933,7 @@ function aggregateModelData() {
             g.sales30,     // 23 30d sales
             g.sales15,     // 24 15d sales
             avgSellIncl,   // 25 avg sell price incl admin fee
+            g.stock_on_sale, // 26 stock on sale (advertised)
         ]);
     }
 }
@@ -995,8 +1019,8 @@ function renderTotalsRow(visibleRows) {
         return;
     }
     if (tfoot) tfoot.style.display = '';
-    // cap view:   blank(3) | fuel(label) | sales | 30d | 15d | 7d | stock | ideal | req | today | remaining | avgDIS | avgDTS | sell | sellInclFee | ATPTM | ATPTM% | ATRating | GPUM | GPUS | GPUMS
-    // model view: blank(1) | fuel(label) | sales | 30d | 15d | 7d | stock | ideal | req |                    avgDIS | avgDTS | sell | sellInclFee | ATPTM | ATPTM% | ATRating | GPUM | GPUS | GPUMS
+    // cap view:   blank(3) | fuel(label) | sales | 30d | 15d | 7d | stock | onSale | ideal | req | today | remaining | avgDIS | avgDTS | sell | sellInclFee | ATPTM | ATPTM% | ATRating | GPUM | GPUS | GPUMS
+    // model view: blank(1) | fuel(label) | sales | 30d | 15d | 7d | stock | onSale | ideal | req |                    avgDIS | avgDTS | sell | sellInclFee | ATPTM | ATPTM% | ATRating | GPUM | GPUS | GPUMS
     const isCap = currentView === 'cap';
     const CAP_DATA_COLS = [
         [4,  'sum', fmtInt],
@@ -1004,6 +1028,7 @@ function renderTotalsRow(visibleRows) {
         [24, 'sum', fmtInt],   // 15d Sales
         [7,  'sum', fmtInt],
         [3,  'sum', fmtInt],
+        [26, 'sum', fmtInt],   // Stock on Sale (advertised)
         [18, 'sum', v => fmt(v, 1)],
         [19, 'sum', v => fmt(v, 1)],
         [6,  'sum', fmtInt],   // Daily Buyers Sheet (cap only)
@@ -1026,6 +1051,7 @@ function renderTotalsRow(visibleRows) {
         [24, 'sum', fmtInt],   // 15d Sales
         [7,  'sum', fmtInt],
         [3,  'sum', fmtInt],
+        [26, 'sum', fmtInt],   // Stock on Sale (advertised)
         [18, 'sum', v => fmt(v, 1)],
         null,                  // Required (computed)
         [6,  'sum', fmtInt],   // Daily Buyers Sheet
@@ -1043,9 +1069,9 @@ function renderTotalsRow(visibleRows) {
         [12, 'avg', fmtGBP],
     ];
     const DATA_COLS = isCap ? CAP_DATA_COLS : MODEL_DATA_COLS;
-    const DBS_CELL_IDX       = isCap ? 7 : 7;
-    const CB_CELL_IDX        = isCap ? 8 : 8;
-    const REMAINING_CELL_IDX = isCap ? 9 : 9;
+    const DBS_CELL_IDX       = isCap ? 8 : 8;
+    const CB_CELL_IDX        = isCap ? 9 : 9;
+    const REMAINING_CELL_IDX = isCap ? 10 : 10;
 
     function fillRow(trEl, rows, label) {
         if (!trEl) return;
@@ -1054,9 +1080,9 @@ function renderTotalsRow(visibleRows) {
         if (cells[1]) { cells[1].style.background = ''; cells[1].textContent = label; }
         const reqSum   = rows.reduce((s, r) => s + (Number(r[19]) || 0), 0);
         const spReady  = rows.some(r => r[6] != null && r[6] !== 0);
-        // REMAINING_CELL_IDX = 9 for both cap and model DATA_COLS
-        // Required slot = 6 in MODEL_DATA_COLS (null → computed)
-        const MODEL_REQ_IDX = 6;
+        // REMAINING_CELL_IDX = 10 for both cap and model DATA_COLS
+        // Required slot = 7 in MODEL_DATA_COLS (null → computed)
+        const MODEL_REQ_IDX = 7;
         DATA_COLS.forEach((def, i) => {
             const td = cells[i + 2];
             if (!td) return;
@@ -1176,19 +1202,15 @@ function renderTable() {
         add(fuelAbbr(row[2]));
         {
             const td = add(fmtInt(row[4]));
-            const v = Number(row[4]) || 0;
-            if (maxSales > 0) {
-                const t = v / maxSales;
-                const r = Math.round(255 - t * (255 - 0));
-                const g = Math.round(255 - t * (255 - 188));
-                const b = Math.round(255 - t * (255 - 18));
-                td.style.background = `rgb(${r},${g},${b})`;
-            }
+            // Shares greenScale so the darkest green matches Required/7d Sales
+            const bg = greenScale(Number(row[4]) || 0, maxSales);
+            if (bg) td.style.background = bg;
         }
         { const td = add(row[23] != null ? fmtInt(row[23]) : ''); if ((row[23] || 0) === 0) td.style.background = '#d8d8d8'; }
         { const td = add(row[24] != null ? fmtInt(row[24]) : ''); if ((row[24] || 0) === 0) td.style.background = '#d8d8d8'; }
         { const td = add(row[7] != null ? fmtInt(row[7]) : ''); if ((row[7] || 0) === 0) td.style.background = '#d8d8d8'; }
         { const td = add(fmtInt(row[3])); if ((row[3] || 0) === 0) td.style.background = '#d8d8d8'; }
+        { const td = add(row[26] != null ? fmtInt(row[26]) : ''); if ((row[26] || 0) === 0) td.style.background = '#d8d8d8'; }
         add(row[18] != null ? fmt(row[18], 1) : '');
         add(row[19] != null ? fmt(row[19], 1) : '');
         { const td = add(row[6]  != null ? fmtInt(row[6])  : ''); if ((row[6]  || 0) > 0) td.style.background = '#fef08a'; }
@@ -1209,18 +1231,18 @@ function renderTable() {
     });
 
     // DOM cell indices depend on view
-    // cap:   CAP_ID(0) label(1) View(2) fuel(3) sales(4) 30d(5) 15d(6) 7d(7) stock(8) ideal(9) req(10) DBS(11) CB(12) rem(13) DIS(14) DTS(15) sell(16) sellFee(17) ATPTM(18) ATPTM%(19) ATR(20) GPUM(21) GPUS(22) GPUMS(23)
-    // model: label(0) fuel(1) sales(2) 30d(3) 15d(4) 7d(5) stock(6) ideal(7) req(8) DBS(9) CB(10) rem(11) DIS(12) DTS(13) sell(14) sellFee(15) ATPTM(16) ATPTM%(17) ATR(18) GPUM(19) GPUS(20) GPUMS(21)
+    // cap:   CAP_ID(0) label(1) View(2) fuel(3) sales(4) 30d(5) 15d(6) 7d(7) stock(8) onSale(9) ideal(10) req(11) DBS(12) CB(13) rem(14) DIS(15) DTS(16) sell(17) sellFee(18) ATPTM(19) ATPTM%(20) ATR(21) GPUM(22) GPUS(23) GPUMS(24)
+    // model: label(0) fuel(1) sales(2) 30d(3) 15d(4) 7d(5) stock(6) onSale(7) ideal(8) req(9) DBS(10) CB(11) rem(12) DIS(13) DTS(14) sell(15) sellFee(16) ATPTM(17) ATPTM%(18) ATR(19) GPUM(20) GPUS(21) GPUMS(22)
     const isCap = currentView === 'cap';
     const CI = {
         sales7:    isCap ? 7  : 5,
-        required:  isCap ? 10 : 8,
-        remaining: isCap ? 13 : 11,
-        dts:       isCap ? 15 : 13,
-        gpuM:      isCap ? 21 : 19,
-        gpuMS:     isCap ? 23 : 21,
-        atRating:  isCap ? 20 : 18,
-        ifSkip:    isCap ? new Set([4,5,6,7,11,12,13,15,20,21,23]) : new Set([2,3,4,5,9,10,11,13,18,19,21]),
+        required:  isCap ? 11 : 9,
+        remaining: isCap ? 14 : 12,
+        dts:       isCap ? 16 : 14,
+        gpuM:      isCap ? 22 : 20,
+        gpuMS:     isCap ? 24 : 22,
+        atRating:  isCap ? 21 : 19,
+        ifSkip:    isCap ? new Set([4,5,6,7,12,13,14,16,21,22,24]) : new Set([2,3,4,5,10,11,12,14,19,20,22]),
     };
     Array.from(fragment.children).forEach((tr, i) => {
         const r = tableData[i];
@@ -1434,7 +1456,9 @@ function applyCbPurchases(p, vehicles) {
     _applyNotOnApex();
 }
 
-const _SP_MAX_AGE_SECS = 30 * 60;
+// How old cached SharePoint data may be before the page fetches live instead.
+// Set on the Buying Requirements settings page; falls back to 30 minutes.
+const _SP_MAX_AGE_SECS = (window.SP_CACHE_MINUTES ?? 30) * 60;
 
 function _setDbsUpdatedAt(fetchedAt) {
     const el = document.getElementById('dbs-status');
@@ -1450,6 +1474,7 @@ function _setDbsUpdatedAt(fetchedAt) {
 let _dbsDone = false, _cbDone = false;
 function _maybeShowExportBtn() {
     if (_dbsDone && _cbDone) {
+        setLoadingStage('Finishing…');
         const btn = document.getElementById('export-cap-ids-btn');
         if (btn) { btn.classList.remove('disabled'); btn.removeAttribute('aria-disabled'); }
         // Table only settles once DBS + Cars Bought have both patched in — hold the
@@ -1471,7 +1496,6 @@ function patchDailyBuyersSheet() {
                 return;
             }
             applyDbsPurchases(resp.purchases, resp.vehicles || [], resp.total, resp.no_rrp);
-            applyCbPurchases(cbPurchases);
             renderTable();
             sortCol = 21; sortDir = 1;
             sortTable(21, 'num');
@@ -1527,13 +1551,22 @@ function patchCarsBought() {
         });
 }
 
+// Cached SharePoint data was stale/absent, so a live fetch is running. That
+// takes ~10s, so say so rather than leaving the generic message up.
+function _cbFetchingLive() {
+    setLoadingStage('Fetching latest Cars Bought from SharePoint…');
+}
+
 function loadCBFromCache() {
     fetch(window.BASE_URL + '/buying-requirements/cb-purchases-cached')
         .then(r => r.json())
         .then(resp => {
-            if (resp.status !== 'ok') { patchCarsBought(); return; }
+            if (resp.status !== 'ok') { _cbFetchingLive(); patchCarsBought(); return; }
             const ageSeconds = resp.fetched_at ? (Date.now() / 1000 - resp.fetched_at) : Infinity;
             if (ageSeconds > _SP_MAX_AGE_SECS || !resp.fetched_at) {
+                // Cached data is too old to trust — fetch live from SharePoint
+                // rather than showing the table with stale purchase numbers.
+                _cbFetchingLive();
                 patchCarsBought();
                 return;
             }
@@ -1552,6 +1585,7 @@ function fetchData() {
     const btn = document.getElementById('fetchBtn');
     btn.disabled = true;
     btn.innerHTML = '<span class="spinner-border spinner-border-sm me-2"></span>Fetching...';
+    resetLoadingProgress();
     setStatus('sf-status', SF_LABEL, 'running');
     setStatus('dbs-status', DBS_LABEL, 'idle');
     setStatus('cb-status', CB_LABEL, 'idle');
@@ -1582,6 +1616,7 @@ function applyRawDataToTable(fetchSP) {
     // both are done.
     _dbsDone = false; _cbDone = false;
     showTableOverlay();
+    setLoadingStage('Building table…');
     if (currentView === 'model') aggregateModelData(); else aggregateRawData();
     document.getElementById('sf-total-stock').textContent =
         rawData.reduce((s, r) => s + (Number(r[4]) || 0), 0).toLocaleString();
@@ -1594,6 +1629,9 @@ function applyRawDataToTable(fetchSP) {
     renderTable();
     sortCol = null; sortDir = 1;
     sortTable(21, 'num');
+    setLoadingStage(window.ENABLE_CARS_BOUGHT
+        ? 'Loading Daily Buyers Sheet and Cars Bought…'
+        : 'Loading Daily Buyers Sheet…');
     if (fetchSP) {
         patchDailyBuyersSheet();
         if (window.ENABLE_CARS_BOUGHT) patchCarsBought();
@@ -1669,6 +1707,7 @@ function loadFromServer(fetchSP = false, fromFetchData = false) {
     _spWarnings.clear();
     document.getElementById('sp-warning')?.classList.add('d-none');
 
+    setLoadingStage(fromFetchData ? 'Loading vehicle data (live)…' : 'Loading vehicle data…');
     const sfUrl = window.BASE_URL + '/buying-requirements/sf-data' + (fromFetchData ? '?force=true' : '');
     fetch(sfUrl)
         .then(r => r.json())
@@ -1684,8 +1723,11 @@ function loadFromServer(fetchSP = false, fromFetchData = false) {
             rawData.forEach(r => { if (r[3] === '0%') r[3] = 'interest_free'; });
             setStatus('sf-status', SF_LABEL, 'done');
             _setApexUpdatedAt(rawData);
-            hideTableOverlay(); // release the pre-fetch hold; applyRawDataToTable re-shows for DBS/CB
+            // Overlay stays up: applyRawDataToTable takes its own hold and only
+            // releases once DBS + Cars Bought have patched in, so the table is
+            // never shown with empty (misleading zero) purchase columns.
             applyRawDataToTable(fetchSP);
+            hideTableOverlay(); // release the pre-fetch hold taken above
         })
         .catch(err => {
             document.getElementById('table-error').textContent = 'Failed to load data: ' + err;
@@ -1697,18 +1739,23 @@ function loadFromServer(fetchSP = false, fromFetchData = false) {
         });
 }
 
+function _dbsFetchingLive() {
+    setLoadingStage('Fetching latest Daily Buyers Sheet from SharePoint…');
+}
+
 function loadDbsFromCache() {
     fetch(window.BASE_URL + '/buying-requirements/dbs-purchases-cached')
         .then(r => r.json())
         .then(resp => {
-            if (resp.status !== 'ok') { patchDailyBuyersSheet(); return; }
+            if (resp.status !== 'ok') { _dbsFetchingLive(); patchDailyBuyersSheet(); return; }
             const ageSeconds = resp.fetched_at ? (Date.now() / 1000 - resp.fetched_at) : Infinity;
             if (ageSeconds > _SP_MAX_AGE_SECS || !resp.fetched_at) {
+                // Too old to trust — fetch live rather than show stale numbers.
+                _dbsFetchingLive();
                 patchDailyBuyersSheet();
                 return;
             }
             applyDbsPurchases(resp.purchases, resp.vehicles || [], resp.total, resp.no_rrp);
-            applyCbPurchases(cbPurchases);
             renderTable();
             sortCol = 21; sortDir = 1;
             sortTable(21, 'num');
@@ -1736,7 +1783,7 @@ function exportXLSX() {
             groups.set(cap_id, {
                 label: r[1].split(' / ').slice(0, -1).join(' / '),
                 fuel: normFuel(r[2]),
-                stock: 0, sales90: 0, sales30: 0, sales15: 0, sales7: 0,
+                stock: 0, stock_on_sale: 0, sales90: 0, sales30: 0, sales15: 0, sales7: 0,
                 ideal: 0, required: 0, remaining: 0,
                 dis_sum: 0, dis_n: 0,
                 dts_sum: 0, dts_n: 0,
@@ -1752,6 +1799,7 @@ function exportXLSX() {
         }
         const g = groups.get(cap_id);
         g.stock    += Number(r[3])  || 0;
+        g.stock_on_sale += Number(r[26]) || 0;
         g.sales90  += Number(r[4])  || 0;
         g.sales7   += Number(r[7])  || 0;
         g.ideal     += Number(r[18]) || 0;
@@ -1772,7 +1820,7 @@ function exportXLSX() {
     }
 
     const headers = ['CAP ID', 'Remaining', 'Make Model Derivative', 'Fuel',
-        '90d Sales', '7d Sales', 'Stock', 'Ideal Stock', 'Required', 'Remaining',
+        '90d Sales', '7d Sales', 'Total Stock', 'Stock on Sale', 'Ideal Stock', 'Required', 'Remaining',
         'Avg DIS', 'Avg DTS',
         'Avg Sell Price (Rate)', 'Avg Sell Price + Adm Fee (Rate)', 'Avg AT Val (Rate)', 'Avg AT PTM % (Rate)', 'Avg AT Rating',
         'Avg GPU-M', 'Avg GPU-S', 'Avg GPU-MS'];
@@ -1791,6 +1839,7 @@ function exportXLSX() {
             g.sales90,
             g.sales7,
             g.stock,
+            g.stock_on_sale,
             fmt1(g.ideal),
             fmt1(g.required),
             fmt1(g.remaining),
@@ -2237,8 +2286,78 @@ function closeVehicleModal() {
     document.getElementById('vehicle-modal').style.display = 'none';
 }
 
+/* ── SharePoint file log popup (tdrayson only) ───────────────
+ * Shows the recent Daily Buyers Sheet / Cars Bought log lines held in memory
+ * by the server, newest first. The buffer is per-process and does not survive
+ * a cold start, so an empty list after a quiet spell is expected.
+ */
+function openSharePointLog() {
+    const modal = document.getElementById('splog-modal');
+    if (!modal) return;
+    document.getElementById('splog-backdrop').style.display = 'block';
+    modal.style.display = 'flex';
+    loadSharePointLog();
+}
+
+function closeSharePointLog() {
+    const modal = document.getElementById('splog-modal');
+    if (!modal) return;
+    document.getElementById('splog-backdrop').style.display = 'none';
+    modal.style.display = 'none';
+}
+
+function loadSharePointLog() {
+    const body = document.getElementById('splog-body');
+    if (!body) return;
+    body.innerHTML = '<div class="text-muted small p-2">Loading&hellip;</div>';
+    fetch(window.BASE_URL + '/buying-requirements/sharepoint-log')
+        .then(r => r.json())
+        .then(resp => {
+            if (resp.status !== 'ok') {
+                body.innerHTML = '<div class="text-danger small p-2">' + (resp.message || 'Failed to load log') + '</div>';
+                return;
+            }
+            const entries = resp.entries || [];
+            if (!entries.length) {
+                body.innerHTML = '<div class="text-muted small p-2">No SharePoint log entries in memory yet. Run Refresh Data, then reopen this.</div>';
+                return;
+            }
+            body.innerHTML = '';
+            entries.forEach(e => {
+                const row = document.createElement('div');
+                row.className = 'splog-row splog-' + (e.level || '').toLowerCase();
+                const ts = document.createElement('span');
+                ts.className = 'splog-ts';
+                ts.textContent = _fmtLogTs(e.ts);
+                const lvl = document.createElement('span');
+                lvl.className = 'splog-level';
+                lvl.textContent = e.level || '';
+                const msg = document.createElement('span');
+                msg.className = 'splog-msg';
+                msg.textContent = e.message || '';
+                row.appendChild(ts);
+                row.appendChild(lvl);
+                row.appendChild(msg);
+                body.appendChild(row);
+            });
+        })
+        .catch(err => {
+            body.innerHTML = '<div class="text-danger small p-2">Failed to load log: ' + err + '</div>';
+        });
+}
+
+// ISO (UTC) → local "DD/MM/YYYY HH:MM:SS"
+function _fmtLogTs(iso) {
+    if (!iso) return '';
+    const d = new Date(iso);
+    if (isNaN(d.getTime())) return iso;
+    const p = n => String(n).padStart(2, '0');
+    return p(d.getDate()) + '/' + p(d.getMonth() + 1) + '/' + d.getFullYear() +
+           ' ' + p(d.getHours()) + ':' + p(d.getMinutes()) + ':' + p(d.getSeconds());
+}
+
 document.addEventListener('keydown', e => {
-    if (e.key === 'Escape') { closeVehicleModal(); closeColumnsModal(); }
+    if (e.key === 'Escape') { closeVehicleModal(); closeColumnsModal(); closeSharePointLog(); }
 });
 
 document.getElementById('vehicle-modal-table').addEventListener('click', e => {
@@ -2323,6 +2442,8 @@ document.addEventListener('DOMContentLoaded', () => {
     // Wait for both user prefs (hidden columns, font size) before rendering the
     // table — applying them after the first render makes the table visibly
     // shrink a moment after it appears.
+    resetLoadingProgress();
+    setLoadingStage('Loading your settings…');
     Promise.allSettled([loadColumnPrefs(), loadFontSizePref()])
         .then(() => loadFromServer(false));
 });

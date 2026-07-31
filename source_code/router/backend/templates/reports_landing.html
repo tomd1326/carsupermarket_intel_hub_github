@@ -29,13 +29,15 @@
         .report-card .card-icon { font-size: 1.6rem; color: #7ed321; }
         .report-card .card-title { font-weight: 600; font-size: 1.05rem; color: #0d3d5f; }
         .report-card .card-desc { font-size: 0.85rem; color: #6a7a88; }
+        /* Shared Back / Home / nav button size across all pages */
+        .nav-btn { font-size: 1rem; padding: 0.35rem 0.7rem; }
     </style>
 </head>
 <body>
     <div class="container py-4" style="max-width: 1300px;">
         <div class="d-flex align-items-center justify-content-between mb-4">
             <h3 class="page-header mb-0">Reports</h3>
-            <a href="{{ BASE_URL }}/home" class="back-link"><i class="fas fa-arrow-left"></i> Home</a>
+            <a href="{{ BASE_URL }}/home" class="btn btn-outline-secondary nav-btn"><i class="fas fa-arrow-left me-1"></i>Home</a>
         </div>
 
         <div class="report-cards">
