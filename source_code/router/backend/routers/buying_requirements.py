@@ -368,10 +368,10 @@ _cb_cache: dict  = {"purchases": None, "vehicles": None, "expires": 0.0, "fetche
 _cache_lock = threading.Lock()
 
 # Raw Daily Buyers Sheet worksheet values — short-lived, process-local cache so
-# Cars Bought's VRM dedup (_fetch_dbs_vrms) can reuse whatever _get_dbs_purchases
-# just fetched instead of re-running the whole 5-round-trip SharePoint fetch for
-# the same file/sheet. Short TTL because this is purely to collapse fetches that
-# land within the same page-load burst, not a substitute for _dbs_cache's own TTL.
+# concurrent callers reuse one fetch instead of each re-running the whole
+# 5-round-trip SharePoint fetch for the same file/sheet. Short TTL because this
+# is purely to collapse fetches that land within the same page-load burst, not a
+# substitute for _dbs_cache's own TTL.
 _dbs_raw_values_cache: dict = {"values": None, "expires": 0.0}
 _DBS_RAW_TTL_SECONDS = 60
 
@@ -389,6 +389,11 @@ _dbs_raw_fetch_lock = threading.Lock()
 _dbs_build_lock = threading.Lock()
 _cb_build_lock = threading.Lock()
 _sf_build_lock = threading.Lock()
+
+# Apex VRMs used to dedup Cars Bought. Same for every build, so a short TTL
+# stops back-to-back rebuilds each running the query. Guarded by _cache_lock.
+_APEX_VRM_TTL_SECONDS = 5 * 60
+_apex_vrm_cache: dict = {"vrms": None, "cached_at": 0.0}
 
 
 def _fetch_dbs_raw_values() -> list:
@@ -874,9 +879,8 @@ def _enrich_cap_ids(rows: list[dict], workers: int = 25) -> list[dict]:
 
 
 def _get_sf_cap_price_bands() -> dict:
-    """Return {cap_id: price_band} from SF cache — the band with the most stock, then most sales."""
-    with _cache_lock:
-        rows = _sf_cache.get("rows") or []
+    """Return {cap_id: price_band} from SF data — the band with the most stock, then most sales."""
+    rows = _get_sf_rows() or []
     # rows: [0:cap_id, 3:price_band, 4:stock, 5:sales90, ...]
     best: dict = {}  # cap_id -> (price_band, stock, sales90)
     for r in rows:
@@ -901,9 +905,16 @@ def _get_dbs_purchases(force: bool = False) -> dict:
 
     # Serialise the rebuild so concurrent callers that missed the TTL check
     # together don't each run the full parse.
+    entered_at = time.time()
     with _dbs_build_lock:
         with _cache_lock:
-            if not force and _dbs_cache["purchases"] is not None and time.monotonic() < _dbs_cache["expires"]:
+            fetched_at = _dbs_cache.get("fetched_at") or 0.0
+            # See _get_cb_purchases: a forced caller reuses a build that
+            # finished while it was queued, rather than repeating it.
+            if _dbs_cache["purchases"] is not None and (
+                fetched_at >= entered_at
+                or (not force and time.monotonic() < _dbs_cache["expires"])
+            ):
                 return _dbs_cache["purchases"]
         # Fall back to S3 before paying for a live SharePoint fetch.
         if not force:
@@ -1014,9 +1025,15 @@ def _build_dbs_purchases() -> dict:
 
     vehicles = []
     sf_bands = _get_sf_cap_price_bands()
-    with _cache_lock:
-        _sf_rows_dbs = _sf_cache.get("rows") or []
+    # See _build_cb_purchases: must not read the raw cache, which is empty on a
+    # cold process and would silently drop every vehicle.
+    _sf_rows_dbs = _get_sf_rows() or []
     sf_cap_band_pairs_dbs = {(r[0], r[3]) for r in _sf_rows_dbs if r[0] is not None and r[3]}
+    if not sf_cap_band_pairs_dbs:
+        raise RuntimeError(
+            "Daily Buyers Sheet: no Snowflake rows available — refusing to build "
+            "purchases that would drop every vehicle as 'not in Snowflake'"
+        )
 
     def _to_float(v):
         if v is None or str(v).strip() in ('', 'None'): return None
@@ -1142,9 +1159,18 @@ def _get_cb_purchases(force: bool = False) -> dict:
 
     # Serialise the rebuild so concurrent callers that missed the TTL check
     # together don't each run the full SharePoint + Snowflake fetch.
+    entered_at = time.time()
     with _cb_build_lock:
         with _cache_lock:
-            if not force and _cb_cache["purchases"] is not None and time.monotonic() < _cb_cache["expires"]:
+            fetched_at = _cb_cache.get("fetched_at") or 0.0
+            # Reuse whatever the holder of the lock just built. A forced caller
+            # still accepts a build that completed after it started waiting —
+            # the page's prewarm and its own force=true request would otherwise
+            # fetch the same SharePoint sheet twice, back to back.
+            if _cb_cache["purchases"] is not None and (
+                fetched_at >= entered_at
+                or (not force and time.monotonic() < _cb_cache["expires"])
+            ):
                 return _cb_cache["purchases"]
         # Fall back to S3 before paying for a live SharePoint + Snowflake fetch.
         if not force:
@@ -1170,6 +1196,14 @@ def _build_cb_purchases() -> dict:
 
     def _fetch_apex_vrms():
         try:
+            # Reuse a recent result: the dedup set is the same for every build,
+            # so back-to-back rebuilds shouldn't each pay for the round trip.
+            with _cache_lock:
+                cached = _apex_vrm_cache.get("vrms")
+                cached_at = _apex_vrm_cache.get("cached_at", 0.0)
+            if cached is not None and (time.time() - cached_at) < _APEX_VRM_TTL_SECONDS:
+                logger.info(f"Cars Bought: reusing {len(cached)} Apex VRMs for dedup (cached)")
+                return cached
             with SnowflakeClient() as sf:
                 rows, _ = sf.execute("""
                     SELECT DISTINCT VRM
@@ -1177,6 +1211,9 @@ def _build_cb_purchases() -> dict:
                     WHERE VRM IS NOT NULL AND VRM != ''
                 """)
             result = {str(r[0]).strip().upper() for r in rows if r[0]}
+            with _cache_lock:
+                _apex_vrm_cache["vrms"] = result
+                _apex_vrm_cache["cached_at"] = time.time()
             logger.info(f"Cars Bought: fetched {len(result)} Apex VRMs from Snowflake for dedup")
             return result
         except Exception as e:
@@ -1188,30 +1225,14 @@ def _build_cb_purchases() -> dict:
             logger.info(f"Cars Bought: using Snowflake cache fallback — {len(result)} Apex VRMs for dedup")
             return result
 
-    def _fetch_dbs_vrms():
-        try:
-            values = _fetch_dbs_raw_values()
-            for row in values[:5]:
-                strs = [str(c).strip() for c in row]
-                if "REG" in strs:
-                    reg_idx = strs.index("REG")
-                    return {
-                        str(r[reg_idx]).strip().replace(' ', '').upper()
-                        for r in values[values.index(row) + 1:]
-                        if reg_idx < len(r) and r[reg_idx] not in (None, '')
-                        and str(r[reg_idx]).strip().upper() not in ('NONE', 'N/A', '')
-                    }
-        except Exception as e:
-            logger.warning(f"CB fetch: could not load DBS VRMs for dedup: {e}")
-        return set()
-
-    with ThreadPoolExecutor(max_workers=3) as ex:
+    # No DBS dedup: a vehicle is never on both the Daily Buyers Sheet and Cars
+    # Bought, so reading that (much slower) sheet here would cost tens of
+    # seconds to remove nothing.
+    with ThreadPoolExecutor(max_workers=2) as ex:
         f_cb   = ex.submit(_fetch_cb_values)
         f_apex = ex.submit(_fetch_apex_vrms)
-        f_dbs  = ex.submit(_fetch_dbs_vrms)
         cb_values = f_cb.result()
         apex_vrms = f_apex.result()
-        dbs_vrms  = f_dbs.result()
 
     header_row_idx = None
     headers = []
@@ -1265,7 +1286,7 @@ def _build_cb_purchases() -> dict:
                 vrm = str(row[reg_idx]).strip().replace(' ', '').upper() if reg_idx < len(row) and row[reg_idx] not in (None, '') else ''
                 if not vrm or vrm in ('NONE', 'N/A'):
                     continue
-                if vrm in apex_vrms or vrm in dbs_vrms or vrm in seen_vrms:
+                if vrm in apex_vrms or vrm in seen_vrms:
                     continue
                 seen_vrms.add(vrm)
                 raw_cap = str(row[cap_idx]).strip().replace(',', '') if cap_idx < len(row) and row[cap_idx] not in (None, '') else ''
@@ -1298,10 +1319,17 @@ def _build_cb_purchases() -> dict:
     raw_rows = _enrich_cap_ids(raw_rows)
 
     sf_bands = _get_sf_cap_price_bands()
-    # Build exact (cap_id, band) pairs that exist as rows in the SF table
-    with _cache_lock:
-        _sf_rows = _sf_cache.get("rows") or []
+    # Build exact (cap_id, band) pairs that exist as rows in the SF table.
+    # Must come from _get_sf_rows(), not the raw cache: on a cold process the
+    # cache is empty, which would reject every vehicle as "not in Snowflake"
+    # and cache an all-zero result for the full TTL.
+    _sf_rows = _get_sf_rows() or []
     sf_cap_band_pairs = {(r[0], r[3]) for r in _sf_rows if r[0] is not None and r[3]}
+    if not sf_cap_band_pairs:
+        raise RuntimeError(
+            "Cars Bought: no Snowflake rows available — refusing to build "
+            "purchases that would drop every vehicle as 'not in Snowflake'"
+        )
 
     def _to_float(v):
         if v is None or str(v).strip() in ('', 'None'): return None
