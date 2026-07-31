@@ -20,6 +20,23 @@ from utils.cache import cache
 logger = logging.getLogger(__name__)
 
 
+def _unwrap_vehicles_result(payload: dict) -> dict:
+    """
+    Return the object holding `vehicle`, `vehicleMetrics`, `features` etc.
+
+    Autotrader is moving the Vehicles API payload from the root into a
+    `results` array — `{"vehicle": {...}}` becomes
+    `{"results": [{"vehicle": {...}}], "totalResults": 1}`. Both shapes are
+    served until the root objects are removed on 28th October 2026, so prefer
+    results[0] and fall back to the root. Once the old shape is gone the
+    fallback simply stops being taken.
+    """
+    results = (payload or {}).get('results')
+    if isinstance(results, list) and results and isinstance(results[0], dict):
+        return results[0]
+    return payload or {}
+
+
 class AutoTraderClient(metaclass=Singleton):
     def __init__(self):
         # Basic urls
@@ -232,8 +249,9 @@ class AutoTraderClient(metaclass=Singleton):
 
             # Check if vehicles_data is None and handle it without logging an error
             if vehicles_data is not None:
-                vehicle_info = vehicles_data.get('vehicle', {})
-                vehicle_metrics = vehicles_data.get('vehicleMetrics', {}).get('retail', {})
+                vehicles_result = _unwrap_vehicles_result(vehicles_data)
+                vehicle_info = vehicles_result.get('vehicle', {})
+                vehicle_metrics = vehicles_result.get('vehicleMetrics', {}).get('retail', {})
                 make = vehicle_info.get('make', '')
                 model = vehicle_info.get('model', '')
                 derivative = vehicle_info.get('derivative', '')
@@ -244,7 +262,7 @@ class AutoTraderClient(metaclass=Singleton):
                 original_days_to_sell = vehicle_metrics.get('daysToSell', {}).get('value', 'N/A')
                 market_condition = vehicle_metrics.get('marketCondition', {}).get('value', 'N/A')
 
-                features_data = vehicles_data.get('features', [])
+                features_data = vehicles_result.get('features', [])
                 for feature in features_data:
                     if feature.get('factoryFitted') is True:
                         feature_name = feature.get('name')
@@ -264,7 +282,7 @@ class AutoTraderClient(metaclass=Singleton):
                                                                                                           '')
 
                 # # Extract competitor link
-                # competitor_link = vehicles_data.get('links', {}).get('competitors', {}).get('href', 'N/A')
+                # competitor_link = _unwrap_vehicles_result(vehicles_data).get('links', {}).get('competitors', {}).get('href', 'N/A')
                 #
                 # # Check if competitor link is available
                 # if competitor_link != 'N/A':
