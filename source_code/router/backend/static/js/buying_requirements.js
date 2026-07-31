@@ -1496,7 +1496,6 @@ function patchDailyBuyersSheet() {
                 return;
             }
             applyDbsPurchases(resp.purchases, resp.vehicles || [], resp.total, resp.no_rrp);
-            applyCbPurchases(cbPurchases);
             renderTable();
             sortCol = 21; sortDir = 1;
             sortTable(21, 'num');
@@ -1552,13 +1551,22 @@ function patchCarsBought() {
         });
 }
 
+// Cached SharePoint data was stale/absent, so a live fetch is running. That
+// takes ~10s, so say so rather than leaving the generic message up.
+function _cbFetchingLive() {
+    setLoadingStage('Fetching latest Cars Bought from SharePoint…');
+}
+
 function loadCBFromCache() {
     fetch(window.BASE_URL + '/buying-requirements/cb-purchases-cached')
         .then(r => r.json())
         .then(resp => {
-            if (resp.status !== 'ok') { patchCarsBought(); return; }
+            if (resp.status !== 'ok') { _cbFetchingLive(); patchCarsBought(); return; }
             const ageSeconds = resp.fetched_at ? (Date.now() / 1000 - resp.fetched_at) : Infinity;
             if (ageSeconds > _SP_MAX_AGE_SECS || !resp.fetched_at) {
+                // Cached data is too old to trust — fetch live from SharePoint
+                // rather than showing the table with stale purchase numbers.
+                _cbFetchingLive();
                 patchCarsBought();
                 return;
             }
@@ -1715,8 +1723,11 @@ function loadFromServer(fetchSP = false, fromFetchData = false) {
             rawData.forEach(r => { if (r[3] === '0%') r[3] = 'interest_free'; });
             setStatus('sf-status', SF_LABEL, 'done');
             _setApexUpdatedAt(rawData);
-            hideTableOverlay(); // release the pre-fetch hold; applyRawDataToTable re-shows for DBS/CB
+            // Overlay stays up: applyRawDataToTable takes its own hold and only
+            // releases once DBS + Cars Bought have patched in, so the table is
+            // never shown with empty (misleading zero) purchase columns.
             applyRawDataToTable(fetchSP);
+            hideTableOverlay(); // release the pre-fetch hold taken above
         })
         .catch(err => {
             document.getElementById('table-error').textContent = 'Failed to load data: ' + err;
@@ -1728,18 +1739,23 @@ function loadFromServer(fetchSP = false, fromFetchData = false) {
         });
 }
 
+function _dbsFetchingLive() {
+    setLoadingStage('Fetching latest Daily Buyers Sheet from SharePoint…');
+}
+
 function loadDbsFromCache() {
     fetch(window.BASE_URL + '/buying-requirements/dbs-purchases-cached')
         .then(r => r.json())
         .then(resp => {
-            if (resp.status !== 'ok') { patchDailyBuyersSheet(); return; }
+            if (resp.status !== 'ok') { _dbsFetchingLive(); patchDailyBuyersSheet(); return; }
             const ageSeconds = resp.fetched_at ? (Date.now() / 1000 - resp.fetched_at) : Infinity;
             if (ageSeconds > _SP_MAX_AGE_SECS || !resp.fetched_at) {
+                // Too old to trust — fetch live rather than show stale numbers.
+                _dbsFetchingLive();
                 patchDailyBuyersSheet();
                 return;
             }
             applyDbsPurchases(resp.purchases, resp.vehicles || [], resp.total, resp.no_rrp);
-            applyCbPurchases(cbPurchases);
             renderTable();
             sortCol = 21; sortDir = 1;
             sortTable(21, 'num');

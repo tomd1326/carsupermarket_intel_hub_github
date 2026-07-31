@@ -50,13 +50,20 @@ def _prewarm_sharepoint(enable_cars_bought: bool) -> None:
             logger.warning(f"SharePoint prewarm ({label}) failed: {e}")
 
     try:
-        # Only worth starting a fetch when there is nothing usable cached. On a
-        # normal load the page reads the -cached endpoints, which are already
-        # served from memory or S3, so prewarming would just repeat that work.
+        # Prewarm when there is nothing cached, and also when what is cached is
+        # older than the age the page will accept — the browser rejects stale
+        # data and fetches live, so starting that here saves the user the wait.
+        max_age = _sp_cache_seconds()
+
+        def _too_old(cache) -> bool:
+            with _cache_lock:
+                fetched_at = cache.get("fetched_at")
+            return fetched_at is None or (time.time() - fetched_at) > max_age
+
         targets = []
-        if _get_dbs_purchases_cached(quiet=True) is None:
+        if _get_dbs_purchases_cached(quiet=True) is None or _too_old(_dbs_cache):
             targets.append(("Daily Buyers Sheet", _get_dbs_purchases))
-        if enable_cars_bought and _get_cb_purchases_cached(quiet=True) is None:
+        if enable_cars_bought and (_get_cb_purchases_cached(quiet=True) is None or _too_old(_cb_cache)):
             targets.append(("Cars Bought", _get_cb_purchases))
         if not targets:
             return
