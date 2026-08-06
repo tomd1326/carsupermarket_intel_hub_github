@@ -197,13 +197,13 @@ def _mot_build_and_upload(results: list, vrms: list, user: str):
     from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
     from utils.file_handler import DEFAULT_FONT_NAME, set_default_font
 
-    columns = ["Registration", "Make", "Model", "Colour", "Fuel Type",
+    columns = ["VRM", "Make", "Model", "Colour", "Fuel Type",
                "Date Registered", "Most Recent MOT Date", "MOT Expiry Date",
                "Odometer", "Status"]
     max_pairs = max((r["pairs"] for r in results), default=0)
     for i in range(1, max_pairs + 1):
         sfx = ("st" if i == 1 else "nd" if i == 2 else "rd" if i == 3 else "th")
-        columns += [f"{i}{sfx} MOT Date", f"{i}{sfx} MOT Mileage"]
+        columns += [f"{i}{sfx} MOT Date", f"{i}{sfx} MOT Result", f"{i}{sfx} MOT Mileage"]
     columns.append("Comments")
 
     rows = []
@@ -211,9 +211,9 @@ def _mot_build_and_upload(results: list, vrms: list, user: str):
         row = [r["vrm"], r["make"], r["model"], r["colour"], r["fuel"],
                r["date_registered"], r["last_mot_date"], r["expiry_date"],
                r["odometer"], r["status"]]
-        for d, m in r["test_pairs"]:
-            row += [d, m]
-        row += ["", ""] * (max_pairs - len(r["test_pairs"]))
+        for d, m, passed in r["test_pairs"]:
+            row += [d, "PASS" if passed else "FAIL", m]
+        row += ["", "", ""] * (max_pairs - len(r["test_pairs"]))
         row.append(_build_mot_comments(r))
         rows.append(row)
 
@@ -294,15 +294,18 @@ def _mot_build_and_upload(results: list, vrms: list, user: str):
                     try: return _dt.datetime.strptime(s, fmt).date()
                     except ValueError: pass
                 return None
-            dates = [_parse(p[0]) for p in pairs]
+            dates = [(_parse(p[0]), p[2]) for p in pairs]
             for j in range(1, len(dates)):
-                if dates[j-1] and dates[j]:
-                    prev = dates[j-1]
+                prev, prev_passed = dates[j-1]
+                curr, _curr_passed = dates[j]
+                if prev and curr:
+                    if not prev_passed:
+                        continue  # retest after a failure — not an early test
                     try:
                         due = prev.replace(year=prev.year + 1)
                     except ValueError:
                         due = prev.replace(year=prev.year + 1, day=28)
-                    if (due - dates[j]).days >= 60:
+                    if (due - curr).days >= 60:
                         return True
             return False
 
@@ -507,7 +510,7 @@ def _build_mot_comments(r: dict) -> str:
     pairs = r.get("test_pairs") or []
     # Mileage discrepancy: each mileage should be >= the previous
     prev_mileage = None
-    for _date, mileage_str in pairs:
+    for _date, mileage_str, _passed in pairs:
         try:
             m = int(str(mileage_str).replace(",", "")) if mileage_str else None
         except ValueError:
@@ -532,20 +535,24 @@ def _build_mot_comments(r: dict) -> str:
             if "Mileage discrepancy" not in notes:
                 notes.append("Mileage discrepancy")
 
-    # Early MOT: any MOT done 60+ days before the previous was due to expire
+    # Early MOT: any MOT done 60+ days before the previous test was due to expire.
+    # A test straight after a failure is excluded — the car had to be retested, so it is
+    # not early in any suspicious sense. A failed test that is itself early still counts.
     dates = []
-    for date_str, _ in pairs:
+    for date_str, _mileage, passed in pairs:
         try:
             d = datetime.datetime.strptime(date_str, "%d/%m/%Y").date() if date_str else None
         except ValueError:
             d = None
-        dates.append(d)
+        dates.append((d, passed))
 
     for j in range(1, len(dates)):
-        prev_d = dates[j - 1]
-        curr_d = dates[j]
+        prev_d, prev_passed = dates[j - 1]
+        curr_d, _curr_passed = dates[j]
         if prev_d is None or curr_d is None:
             continue
+        if not prev_passed:
+            continue  # retest after a failure — not an early test
         try:
             due = datetime.date(prev_d.year + 1, prev_d.month, prev_d.day)
         except ValueError:
@@ -577,11 +584,11 @@ def _build_mot_row(vrm: str, vehicle_json, not_found: bool = False) -> dict:
     if not isinstance(v, dict):
         return empty
 
-    tests = [t for t in (v.get("motTests") or [])
-             if (t.get("testResult") or "").upper() == "PASSED"]
+    tests = list(v.get("motTests") or [])
     tests.sort(key=lambda t: (_parse_mot_datetime(t.get("completedDate") or "") or datetime.datetime.min))
 
-    most_recent = tests[-1] if tests else {}
+    passed_tests = [t for t in tests if (t.get("testResult") or "").upper() == "PASSED"]
+    most_recent = passed_tests[-1] if passed_tests else {}
     expiry = _to_ddmmyyyy(most_recent.get("expiryDate") or v.get("motTestExpiryDate") or "")
 
     status = "UNKNOWN"
@@ -594,7 +601,8 @@ def _build_mot_row(vrm: str, vehicle_json, not_found: bool = False) -> dict:
             pass
 
     pairs = [(_to_ddmmyyyy(t.get("completedDate") or ""),
-              str(t.get("odometerValue") or "").strip()) for t in tests]
+              str(t.get("odometerValue") or "").strip(),
+              (t.get("testResult") or "").upper() == "PASSED") for t in tests]
 
     return {
         "vrm": vrm,
