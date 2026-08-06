@@ -95,9 +95,14 @@
         .badge-unknown   { background-color: #e2e3e5; color: #383d41; }
         .badge-not-found { background-color: #e2e3e5; color: #383d41; }
 
-        .result-table { font-size: 0.8rem; }
+        /* Table grows as wide as its content needs (some vehicles have 9+ MOTs, so there can
+           be 40+ columns) and .result-scroll scrolls horizontally to reach them. */
+        .result-table { font-size: 0.8rem; width: max-content; }
         .result-table th {
-            white-space: nowrap;
+            white-space: normal;
+            overflow-wrap: break-word;
+            line-height: 1.2;
+            vertical-align: bottom;
             background-color: #f0f4f8;
             position: sticky;
             top: 0;
@@ -155,7 +160,7 @@
         <div class="row g-4 align-items-start">
 
             <!-- Left: input + progress -->
-            <div class="col-12 col-lg-5 col-xl-4">
+            <div class="col-12 col-lg-4 col-xl-3">
                 <div class="card mb-3">
                     <div class="card-body">
                         <label class="form-label fw-bold small text-muted mb-1">VRMs (one per line)</label>
@@ -191,7 +196,7 @@
             </div>
 
             <!-- Right: results + history -->
-            <div class="col-12 col-lg-7 col-xl-8">
+            <div class="col-12 col-lg-8 col-xl-9">
 
                 <!-- Results card -->
                 <div class="card mb-3" id="resultsCard">
@@ -208,6 +213,7 @@
                         <div id="resultsSummary" style="font-size:0.88rem;height:34px;overflow:hidden;"></div>
                         <div class="result-scroll">
                             <table class="table table-sm table-hover result-table mb-0">
+                                <colgroup id="resultsColgroup"></colgroup>
                                 <thead><tr id="resultsHeader"></tr></thead>
                                 <tbody id="resultsBody"></tbody>
                             </table>
@@ -342,7 +348,7 @@
                                 const ts = nowTimestamp();
                                 fetch(BASE_URL + '/mot-check/load/' + encodeURIComponent(p.filename))
                                     .then(r => r.json())
-                                    .then(data => renderResults(data.columns, data.rows, ts))
+                                    .then(data => renderResults(data.columns, data.rows, ts, data.test_results))
                                     .catch(() => {});
                                 if (p.counts) {
                                     const item = {
@@ -416,15 +422,22 @@
                 if (lastM !== null && !isNaN(odom) && odom < lastM) warned.add(odomIdx);
             }
 
-            // Early MOT: test done 60+ days before due date (1 year after previous test)
+            // Early MOT: test done 60+ days before due date (1 year after previous test).
+            // A test straight after a failure is skipped — the car had to be retested, so it
+            // is not early. A failed test that is itself early still counts.
             const histDates = [];
             for (let i = 0; i < columns.length; i++) {
-                if (/^\d+(st|nd|rd|th) MOT Date$/i.test(columns[i]))
-                    histDates.push({ idx: i, date: parseDMY(row[i]) });
+                const m = /^(\d+)(st|nd|rd|th) MOT Date$/i.exec(columns[i]);
+                if (m) {
+                    const resultIdx = columns.indexOf(`${m[1]}${m[2]} MOT Result`);
+                    const passed = resultIdx >= 0 ? row[resultIdx] !== 'FAIL' : true;
+                    histDates.push({ idx: i, date: parseDMY(row[i]), passed });
+                }
             }
             for (let j = 1; j < histDates.length; j++) {
                 const prev = histDates[j-1].date, curr = histDates[j].date;
                 if (!prev || !curr) continue;
+                if (!histDates[j-1].passed) continue;  // retest after a failure
                 const due = new Date(prev); due.setFullYear(due.getFullYear() + 1);
                 if ((due - curr) / 864e5 >= 60) warned.add(histDates[j].idx);
             }
@@ -432,7 +445,7 @@
             if (recentIdx >= 0 && histDates.length > 0) {
                 const lastHist = histDates[histDates.length - 1];
                 const recent = parseDMY(row[recentIdx]);
-                if (lastHist.date && recent && recent > lastHist.date) {
+                if (lastHist.passed && lastHist.date && recent && recent > lastHist.date) {
                     const due = new Date(lastHist.date); due.setFullYear(due.getFullYear() + 1);
                     if ((due - recent) / 864e5 >= 60) warned.add(recentIdx);
                 }
@@ -455,16 +468,37 @@
             });
         }
 
+        // Suggested widths (ch) for the narrow columns, applied via <colgroup>. Each fits its
+        // longest value on one line (a 10-char date, a 6-digit mileage) while letting the
+        // header text wrap onto two lines. Columns not listed here size to their content.
+        const _COL_WIDTHS = {
+            'VRM':                    9,
+            'Most Recent MOT Date':  10,
+            'MOT Expiry Date':       10,
+        };
+        function _colWidth(colName) {
+            if (colName in _COL_WIDTHS) return _COL_WIDTHS[colName];
+            if (/^\d+(st|nd|rd|th) MOT Date$/i.test(colName))    return 10;
+            if (/^\d+(st|nd|rd|th) MOT Mileage$/i.test(colName)) return 9;
+            if (/^\d+(st|nd|rd|th) MOT Result$/i.test(colName))  return 8;
+            return null;
+        }
+
         function renderResults(columns, rows, ts) {
             const header = document.getElementById('resultsHeader');
             const body   = document.getElementById('resultsBody');
+            const colgroup = document.getElementById('resultsColgroup');
             _activeFilter = null;
+            colgroup.innerHTML = columns.map(c => {
+                const w = _colWidth(c);
+                return `<col${w ? ` style="width:${w}ch;"` : ''}>`;
+            }).join('');
             header.innerHTML = columns.map(c => `<th>${c}</th>`).join('');
 
             const commentsIdx = columns.indexOf('Comments');
             const statusIdx   = columns.indexOf('Status');
 
-            body.innerHTML = rows.map(row => {
+            body.innerHTML = rows.map((row) => {
                 const warned     = warnedCells(columns, row);
                 const hasMileage = [...warned].some(i => /MOT Mileage/i.test(columns[i]) || columns[i] === 'Odometer');
                 const hasEarly   = [...warned].some(i => /MOT Date/i.test(columns[i]));
@@ -485,6 +519,10 @@
                         const label = cell === 'NOT_FOUND' ? 'NOT FOUND' : cell;
                         return `<td><span class="status-badge ${cls}">${label}</span></td>`;
                     }
+                    if (/MOT Result$/.test(columns[i]) && cell) {
+                        const cls = cell === 'FAIL' ? 'badge-expired' : 'badge-valid';
+                        return `<td><span class="status-badge ${cls}">${cell}</span></td>`;
+                    }
                     if (i === commentsIdx && cell) return `<td class="warn-cell">${cell}</td>`;
                     if (warned.has(i)) return `<td class="warn-cell">${cell ?? ''}</td>`;
                     return `<td>${cell ?? ''}</td>`;
@@ -496,7 +534,7 @@
             const unknown   = statusIdx >= 0 ? rows.filter(r => r[statusIdx] === 'UNKNOWN').length   : 0;
             const notFound  = statusIdx >= 0 ? rows.filter(r => r[statusIdx] === 'NOT_FOUND').length : 0;
             let mileageWarnCount = 0, earlyMotWarnCount = 0;
-            rows.forEach(row => {
+            rows.forEach((row) => {
                 const w = warnedCells(columns, row);
                 if ([...w].some(i => /MOT Mileage/i.test(columns[i]) || columns[i] === 'Odometer')) mileageWarnCount++;
                 if ([...w].some(i => /MOT Date/i.test(columns[i]))) earlyMotWarnCount++;
@@ -532,7 +570,7 @@
                     if (!r.ok) return r.json().then(e => { throw new Error(e.detail || 'Failed to load results'); });
                     return r.json();
                 })
-                .then(data => renderResults(data.columns, data.rows, ts))
+                .then(data => renderResults(data.columns, data.rows, ts, data.test_results))
                 .catch(err => alert('Could not load results: ' + err.message));
         }
 
