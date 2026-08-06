@@ -206,7 +206,7 @@
                                 Results
                                 <span class="results-timestamp" id="resultsTimestamp"></span>
                             </h6>
-                            <button class="btn btn-sm btn-outline-secondary" onclick="quickDownload()">
+                            <button class="btn btn-sm btn-success fw-bold" id="resultsDownloadBtn" disabled onclick="quickDownload()">
                                 <i class="fas fa-download me-1"></i>Download XLSX
                             </button>
                         </div>
@@ -316,6 +316,7 @@
 
             document.getElementById('processBtn').disabled = true;
             document.getElementById('quickDownloadBtn').style.display = 'none';
+            document.getElementById('resultsDownloadBtn').disabled = true;
             _currentFilename = null;
             vrmInput.value = '';
             document.getElementById('vrmCount').style.display = 'none';
@@ -345,6 +346,7 @@
                                 setProgress(100, p.total, p.total, null);
                                 _currentFilename = p.filename;
                                 document.getElementById('quickDownloadBtn').style.display = '';
+                                document.getElementById('resultsDownloadBtn').disabled = false;
                                 const ts = nowTimestamp();
                                 fetch(BASE_URL + '/mot-check/load/' + encodeURIComponent(p.filename))
                                     .then(r => r.json())
@@ -565,6 +567,7 @@
             document.querySelectorAll('#historyTable tr').forEach(r => r.classList.remove('active-history-row'));
             row.classList.add('active-history-row');
             _currentFilename = filename;
+            document.getElementById('resultsDownloadBtn').disabled = false;
             fetch(BASE_URL + '/mot-check/load/' + encodeURIComponent(filename))
                 .then(r => {
                     if (!r.ok) return r.json().then(e => { throw new Error(e.detail || 'Failed to load results'); });
