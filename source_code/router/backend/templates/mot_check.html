@@ -39,7 +39,7 @@
 
         textarea {
             resize: vertical;
-            font-size: 0.88rem;
+            font-size: 0.68rem;
             font-family: 'DM Sans', monospace;
         }
         .btn-process {
@@ -60,7 +60,7 @@
         .progress-bar { background-color: #7ed321; }
 
         .history-empty { color: #adb5bd; font-size: 0.88rem; }
-        .history-scroll { max-height: 260px; overflow-y: auto; overflow-x: auto; }
+        .history-scroll { height: 260px; overflow-y: auto; overflow-x: auto; }
         .history-table { font-size: 0.82rem; width: 100%; }
         .history-table th { white-space: nowrap; background-color: #f0f4f8; font-weight: 600; padding: 7px 10px; position: sticky; top: 0; z-index: 1; }
         .history-table td { white-space: nowrap; padding: 7px 10px; border-top: 1px solid #dee2e6; vertical-align: middle; }
@@ -113,6 +113,10 @@
             white-space: nowrap;
             border-right: 1px solid #c8d0da;
         }
+        .result-table td.wrap-cell {
+            white-space: normal;
+            overflow-wrap: break-word;
+        }
         .result-table td:last-child,
         .result-table th:last-child { border-right: none; }
         .result-scroll { height: 352px; min-height: 352px; overflow-y: auto; overflow-x: auto; }
@@ -157,14 +161,14 @@
         </div>
 
         <!-- Two-column layout -->
-        <div class="row g-4 align-items-start">
+        <div class="row g-4 align-items-stretch">
 
             <!-- Left: input + progress -->
-            <div class="col-12 col-lg-4 col-xl-3">
-                <div class="card mb-3">
-                    <div class="card-body">
+            <div class="col-12 col-lg-4 col-xl-2 d-flex flex-column">
+                <div class="card" id="vrmCard" style="flex:1;min-height:0;display:flex;">
+                    <div class="card-body d-flex flex-column" style="flex:1;min-height:0;">
                         <label class="form-label fw-bold small text-muted mb-1">VRMs (one per line)</label>
-                        <textarea id="vrmInput" class="form-control mb-2" rows="14"></textarea>
+                        <textarea id="vrmInput" class="form-control mb-2" style="flex:1;min-height:0;"></textarea>
                         <div class="text-muted small mb-3" id="vrmCount" style="display:none;">
                             <i class="fas fa-car me-1"></i><span id="countVal">0</span> vehicles
                         </div>
@@ -175,7 +179,7 @@
                 </div>
 
                 <!-- Progress -->
-                <div class="card" id="progressCard" style="display:none;">
+                <div class="card" id="progressCard" style="visibility:hidden;margin-top:16px;">
                     <div class="card-body">
                         <div class="d-flex justify-content-between mb-1">
                             <span class="small text-muted">Processing...</span>
@@ -188,7 +192,7 @@
                             <span id="progressRows">0 / 0</span>
                             <span id="progressEta">Calculating...</span>
                         </div>
-                        <button class="btn btn-success w-100 fw-bold" id="quickDownloadBtn" style="display:none;font-size:1rem;padding:10px 0;" onclick="quickDownload()">
+                        <button class="btn btn-success w-100 fw-bold" id="quickDownloadBtn" style="visibility:hidden;font-size:1rem;padding:10px 0;" onclick="quickDownload()">
                             <i class="fas fa-download me-2"></i>Download XLSX
                         </button>
                     </div>
@@ -196,7 +200,7 @@
             </div>
 
             <!-- Right: results + history -->
-            <div class="col-12 col-lg-8 col-xl-9">
+            <div class="col-12 col-lg-8 col-xl-10">
 
                 <!-- Results card -->
                 <div class="card mb-3" id="resultsCard">
@@ -222,7 +226,7 @@
                 </div>
 
                 <!-- History card -->
-                <div class="card">
+                <div class="card" id="historyCard">
                     <div class="card-body" style="padding-bottom:12px;">
                         <h6 class="fw-bold mb-3">Previous Tasks <span class="text-muted fw-normal" style="font-size:0.8rem;">(Click row to view results)</span></h6>
                         <div id="historyCollapse">
@@ -315,12 +319,12 @@
             if (!vrms.length) { alert('Enter at least one VRM.'); return; }
 
             document.getElementById('processBtn').disabled = true;
-            document.getElementById('quickDownloadBtn').style.display = 'none';
+            document.getElementById('quickDownloadBtn').style.visibility = 'hidden';
             document.getElementById('resultsDownloadBtn').disabled = true;
             _currentFilename = null;
             vrmInput.value = '';
             document.getElementById('vrmCount').style.display = 'none';
-            document.getElementById('progressCard').style.display = '';
+            document.getElementById('progressCard').style.visibility = 'visible';
             setProgress(0, 0, vrms.length, null);
 
             fetch(BASE_URL + '/mot-check/process', {
@@ -345,7 +349,7 @@
                                 if (p.error) { alert('Processing error: ' + p.error); return; }
                                 setProgress(100, p.total, p.total, null);
                                 _currentFilename = p.filename;
-                                document.getElementById('quickDownloadBtn').style.display = '';
+                                document.getElementById('quickDownloadBtn').style.visibility = 'visible';
                                 document.getElementById('resultsDownloadBtn').disabled = false;
                                 const ts = nowTimestamp();
                                 fetch(BASE_URL + '/mot-check/load/' + encodeURIComponent(p.filename))
@@ -423,10 +427,20 @@
                 const odom = row[odomIdx] ? parseInt(String(row[odomIdx]).replace(/,/g, ''), 10) : NaN;
                 if (lastM !== null && !isNaN(odom) && odom < lastM) warned.add(odomIdx);
             }
+            // Cars Bought mileage is recorded at purchase, so it must be >= the first
+            // MOT mileage — lower means the same kind of discrepancy as between two MOTs.
+            const cbmIdx = columns.indexOf('Cars Bought Mileage');
+            if (cbmIdx >= 0 && histMileage.length > 0) {
+                const firstM = histMileage[0].val;
+                const cbm = row[cbmIdx] ? parseInt(String(row[cbmIdx]).replace(/,/g, ''), 10) : NaN;
+                if (firstM !== null && !isNaN(cbm) && cbm < firstM) warned.add(cbmIdx);
+            }
 
-            // Early MOT: test done 60+ days before due date (1 year after previous test).
-            // A test straight after a failure is skipped — the car had to be retested, so it
-            // is not early. A failed test that is itself early still counts.
+            // Early MOT. For the FIRST test the due date is 3 years after registration and
+            // ANY test before it counts as early (even by 1 day). For later tests the due date
+            // is 1 year after the previous test and the threshold is 60+ days. A test straight
+            // after a failure is skipped — the car had to be retested, so it is not early.
+            // A failed test that is itself early still counts.
             const histDates = [];
             for (let i = 0; i < columns.length; i++) {
                 const m = /^(\d+)(st|nd|rd|th) MOT Date$/i.exec(columns[i]);
@@ -434,6 +448,15 @@
                     const resultIdx = columns.indexOf(`${m[1]}${m[2]} MOT Result`);
                     const passed = resultIdx >= 0 ? row[resultIdx] !== 'FAIL' : true;
                     histDates.push({ idx: i, date: parseDMY(row[i]), passed });
+                }
+            }
+            const regIdx = columns.indexOf('Date Registered');
+            if (regIdx >= 0 && histDates.length > 0) {
+                const reg = parseDMY(row[regIdx]);
+                const first = histDates[0];
+                if (reg && first.date) {
+                    const due = new Date(reg); due.setFullYear(due.getFullYear() + 3);
+                    if ((due - first.date) / 864e5 >= 1) warned.add(first.idx);
                 }
             }
             for (let j = 1; j < histDates.length; j++) {
@@ -468,6 +491,8 @@
                 el.style.boxShadow = (el.dataset.filter === _activeFilter) ? 'inset 0 0 0 2px #495057' : 'none';
                 el.style.cursor = 'pointer';
             });
+            const clearBtn = document.getElementById('clearFilterBtn');
+            if (clearBtn) clearBtn.style.display = _activeFilter ? '' : 'none';
         }
 
         // Suggested widths (ch) for the narrow columns, applied via <colgroup>. Each fits its
@@ -477,6 +502,9 @@
             'VRM':                    9,
             'Most Recent MOT Date':  10,
             'MOT Expiry Date':       10,
+            'Purchase Date':          9,
+            'Date Registered':        9,
+            'Cars Bought Mileage':    8,
         };
         function _colWidth(colName) {
             if (colName in _COL_WIDTHS) return _COL_WIDTHS[colName];
@@ -499,10 +527,16 @@
 
             const commentsIdx = columns.indexOf('Comments');
             const statusIdx   = columns.indexOf('Status');
+            const isMileageCol = (name) => name === 'Odometer' || name === 'Cars Bought Mileage' || /MOT Mileage$/i.test(name);
+            const isWrapCol = (name) => name === 'Purchase Date' || name === 'Date Registered' || name === 'Cars Bought Mileage';
+            const fmtMileage = (v) => {
+                const n = v == null || v === '' ? NaN : parseInt(String(v).replace(/,/g, ''), 10);
+                return isNaN(n) ? (v ?? '') : n.toLocaleString('en-GB');
+            };
 
             body.innerHTML = rows.map((row) => {
                 const warned     = warnedCells(columns, row);
-                const hasMileage = [...warned].some(i => /MOT Mileage/i.test(columns[i]) || columns[i] === 'Odometer');
+                const hasMileage = [...warned].some(i => /MOT Mileage/i.test(columns[i]) || columns[i] === 'Odometer' || columns[i] === 'Cars Bought Mileage');
                 const hasEarly   = [...warned].some(i => /MOT Date/i.test(columns[i]));
                 const isExpired  = statusIdx >= 0 && row[statusIdx] === 'EXPIRED';
                 const isUnknown  = statusIdx >= 0 && row[statusIdx] === 'UNKNOWN';
@@ -526,8 +560,13 @@
                         return `<td><span class="status-badge ${cls}">${cell}</span></td>`;
                     }
                     if (i === commentsIdx && cell) return `<td class="warn-cell">${cell}</td>`;
-                    if (warned.has(i)) return `<td class="warn-cell">${cell ?? ''}</td>`;
-                    return `<td>${cell ?? ''}</td>`;
+                    const wrapCls = isWrapCol(columns[i]) ? ' wrap-cell' : '';
+                    if (isMileageCol(columns[i])) {
+                        const cls = (warned.has(i) ? 'warn-cell' : '') + wrapCls;
+                        return `<td class="${cls}" style="text-align:right;">${fmtMileage(cell)}</td>`;
+                    }
+                    if (warned.has(i)) return `<td class="warn-cell${wrapCls}">${cell ?? ''}</td>`;
+                    return `<td class="${wrapCls.trim()}">${cell ?? ''}</td>`;
                 }).join('');
                 return `<tr data-cats="${cats.join(',')}">${cells}</tr>`;
             }).join('');
@@ -538,7 +577,7 @@
             let mileageWarnCount = 0, earlyMotWarnCount = 0;
             rows.forEach((row) => {
                 const w = warnedCells(columns, row);
-                if ([...w].some(i => /MOT Mileage/i.test(columns[i]) || columns[i] === 'Odometer')) mileageWarnCount++;
+                if ([...w].some(i => /MOT Mileage/i.test(columns[i]) || columns[i] === 'Odometer' || columns[i] === 'Cars Bought Mileage')) mileageWarnCount++;
                 if ([...w].some(i => /MOT Date/i.test(columns[i]))) earlyMotWarnCount++;
             });
 
@@ -555,6 +594,7 @@
             if (notFound > 0)       parts.push(badge('not_found', '#e2e3e5', '#41464b', 'question-circle', `${notFound} not found`));
             if (mileageWarnCount > 0) parts.push(badge('mileage', '#f8d7da', '#842029', 'tachometer-alt', `${mileageWarnCount} mileage discrepanc${mileageWarnCount !== 1 ? 'ies' : 'y'}`));
             if (earlyMotWarnCount > 0) parts.push(badge('early',  '#f8d7da', '#842029', 'calendar-alt',   `${earlyMotWarnCount} early MOT test${earlyMotWarnCount !== 1 ? 's' : ''}`));
+            parts.push(`<span id="clearFilterBtn" onclick="applyFilter(_activeFilter)" style="display:${_activeFilter ? '' : 'none'};background:#e9ecef;color:#495057;font-weight:600;padding:5px 12px;border-radius:6px;cursor:pointer;user-select:none;"><i class="fas fa-times me-1"></i>Clear</span>`);
             document.getElementById('resultsSummary').innerHTML = `<div class="d-flex gap-2 flex-wrap">${parts.join('')}</div>`;
 
             document.getElementById('resultsTimestamp').textContent = ts || '';
@@ -564,7 +604,7 @@
             const filename = row.dataset.filename;
             const ts = row.dataset.ts;
             if (!filename) return;
-            document.querySelectorAll('#historyTable tr').forEach(r => r.classList.remove('active-history-row'));
+            document.querySelectorAll('#historyTable tr').forEach(r => r.classList.remove('active-history-row', 'new-row'));
             row.classList.add('active-history-row');
             _currentFilename = filename;
             document.getElementById('resultsDownloadBtn').disabled = false;

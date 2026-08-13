@@ -15,6 +15,7 @@ from utils.s3_tools import download_file
 from utils.db_utils import (get_database_connection, get_settings)
 
 from .core import (BASE_URL, templates, s3_bucketname, _track, get_current_user, _uk_now)
+from .buying_requirements import _get_cb_extra, _get_cb_extra_cached
 
 logger = logging.getLogger(__name__)
 
@@ -25,11 +26,26 @@ router = APIRouter()
 _mot_progress: dict = {}   # keyed by session_id: {pct, done, total, eta_s}
 _mot_lock = threading.Lock()
 _MOT_S3_PREFIX = "applications/pricing/uk-vehicle-list-evaluator/{env}/mot-check/"
+
+
+def _prewarm_cb_extra() -> None:
+    """Fire-and-forget: get the Cars Bought extra-fields cache warm before the user
+    clicks Run, in case they landed on this page without visiting /home first."""
+    def _warm():
+        try:
+            _get_cb_extra()
+        except Exception as e:
+            logger.warning("MOT check: Cars Bought extra-fields prewarm failed: %s", e)
+    if _get_cb_extra_cached() is None:
+        threading.Thread(target=_warm, name="mot-cb-extra-prewarm", daemon=True).start()
+
+
 @router.get("/mot-check", response_class=HTMLResponse)
 def mot_check_page(request: Request, user: str = Depends(get_current_user)):
     if not user:
         return RedirectResponse(url=BASE_URL + "/login", status_code=303)
     _track(request, 'page_view', '/mot-check')
+    _prewarm_cb_extra()
     return templates.TemplateResponse("mot_check.html", {"request": request, "user": user, "BASE_URL": BASE_URL})
 
 
@@ -197,8 +213,10 @@ def _mot_build_and_upload(results: list, vrms: list, user: str):
     from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
     from utils.file_handler import DEFAULT_FONT_NAME, set_default_font
 
-    columns = ["VRM", "Make", "Model", "Colour", "Fuel Type",
-               "Date Registered", "Most Recent MOT Date", "MOT Expiry Date",
+    cb_extra = _get_cb_extra()
+
+    columns = ["VRM", "Make", "Model", "Purchase Date", "Buyer", "Supplier", "Fuel Type",
+               "Date Registered", "Cars Bought Mileage", "Most Recent MOT Date", "MOT Expiry Date",
                "Odometer", "Status"]
     max_pairs = max((r["pairs"] for r in results), default=0)
     for i in range(1, max_pairs + 1):
@@ -208,13 +226,14 @@ def _mot_build_and_upload(results: list, vrms: list, user: str):
 
     rows = []
     for r in results:
-        row = [r["vrm"], r["make"], r["model"], r["colour"], r["fuel"],
-               r["date_registered"], r["last_mot_date"], r["expiry_date"],
+        extra = cb_extra.get(r["vrm"], {})
+        row = [r["vrm"], r["make"], r["model"], extra.get("date", ""), extra.get("buyer", ""), extra.get("supplier", ""), r["fuel"],
+               r["date_registered"], extra.get("mileage", ""), r["last_mot_date"], r["expiry_date"],
                r["odometer"], r["status"]]
         for d, m, passed in r["test_pairs"]:
             row += [d, "PASS" if passed else "FAIL", m]
         row += ["", "", ""] * (max_pairs - len(r["test_pairs"]))
-        row.append(_build_mot_comments(r))
+        row.append(_build_mot_comments(r, extra.get("mileage", "")))
         rows.append(row)
 
     env = 'prod' if os.getenv('AWS_REGION') == 'eu-west-1' else 'dev'
@@ -273,44 +292,12 @@ def _mot_build_and_upload(results: list, vrms: list, user: str):
         unknown_count   = sum(1 for r in results if r.get("status") == "UNKNOWN")
         not_found_count = sum(1 for r in results if r.get("status") == "NOT_FOUND")
 
-        def _has_mileage_warn(r):
-            pairs = r.get("test_pairs", [])
-            for j in range(1, len(pairs)):
-                prev_m = pairs[j-1][1]
-                curr_m = pairs[j][1]
-                try:
-                    if curr_m is not None and prev_m is not None and int(str(curr_m).replace(',','')) < int(str(prev_m).replace(',','')):
-                        return True
-                except (ValueError, TypeError):
-                    pass
-            return False
-
-        def _has_early_mot(r):
-            import datetime as _dt
-            pairs = r.get("test_pairs", [])
-            def _parse(s):
-                if not s: return None
-                for fmt in ('%d/%m/%Y', '%Y-%m-%d'):
-                    try: return _dt.datetime.strptime(s, fmt).date()
-                    except ValueError: pass
-                return None
-            dates = [(_parse(p[0]), p[2]) for p in pairs]
-            for j in range(1, len(dates)):
-                prev, prev_passed = dates[j-1]
-                curr, _curr_passed = dates[j]
-                if prev and curr:
-                    if not prev_passed:
-                        continue  # retest after a failure — not an early test
-                    try:
-                        due = prev.replace(year=prev.year + 1)
-                    except ValueError:
-                        due = prev.replace(year=prev.year + 1, day=28)
-                    if (due - curr).days >= 60:
-                        return True
-            return False
-
-        mileage_warn_count = sum(1 for r in results if _has_mileage_warn(r))
-        early_mot_count    = sum(1 for r in results if _has_early_mot(r))
+        # Derived from the same comments builder the Comments column uses, so the
+        # counts here can never disagree with what is written into the sheet.
+        _comments = {r["vrm"]: _build_mot_comments(r, cb_extra.get(r["vrm"], {}).get("mileage", ""))
+                     for r in results}
+        mileage_warn_count = sum(1 for c in _comments.values() if "Mileage discrepancy" in c)
+        early_mot_count    = sum(1 for c in _comments.values() if "Early MOT test" in c)
         valid_count        = sum(1 for r in results if r.get("status") == "VALID")
 
         metadata = {
@@ -504,7 +491,7 @@ def _to_ddmmyyyy(s: str) -> str:
 
 
 
-def _build_mot_comments(r: dict) -> str:
+def _build_mot_comments(r: dict, cb_mileage: str = "") -> str:
     notes = []
 
     pairs = r.get("test_pairs") or []
@@ -535,9 +522,25 @@ def _build_mot_comments(r: dict) -> str:
             if "Mileage discrepancy" not in notes:
                 notes.append("Mileage discrepancy")
 
-    # Early MOT: any MOT done 60+ days before the previous test was due to expire.
-    # A test straight after a failure is excluded — the car had to be retested, so it is
-    # not early in any suspicious sense. A failed test that is itself early still counts.
+    # Cars Bought mileage is recorded at purchase, so it must be >= the first MOT mileage
+    if pairs and cb_mileage:
+        try:
+            first_m = int(str(pairs[0][1]).replace(",", "")) if pairs[0][1] else None
+        except ValueError:
+            first_m = None
+        try:
+            cbm = int(str(cb_mileage).replace(",", ""))
+        except ValueError:
+            cbm = None
+        if first_m is not None and cbm is not None and cbm < first_m:
+            if "Mileage discrepancy" not in notes:
+                notes.append("Mileage discrepancy")
+
+    # Early MOT. The FIRST test is due 3 years after registration and ANY test before that
+    # counts (even by 1 day). Later tests are due 1 year after the previous test, with a
+    # 60+ day threshold. A test straight after a failure is excluded — the car had to be
+    # retested, so it is not early in any suspicious sense. A failed test that is itself
+    # early still counts.
     dates = []
     for date_str, _mileage, passed in pairs:
         try:
@@ -545,6 +548,19 @@ def _build_mot_comments(r: dict) -> str:
         except ValueError:
             d = None
         dates.append((d, passed))
+
+    if dates and dates[0][0] is not None:
+        try:
+            reg_d = datetime.datetime.strptime(r.get("date_registered", ""), "%d/%m/%Y").date() if r.get("date_registered") else None
+        except ValueError:
+            reg_d = None
+        if reg_d is not None:
+            try:
+                first_due = datetime.date(reg_d.year + 3, reg_d.month, reg_d.day)
+            except ValueError:
+                first_due = datetime.date(reg_d.year + 3, 3, 1)
+            if (first_due - dates[0][0]).days >= 1:
+                notes.append("Early MOT test")
 
     for j in range(1, len(dates)):
         prev_d, prev_passed = dates[j - 1]
@@ -558,7 +574,8 @@ def _build_mot_comments(r: dict) -> str:
         except ValueError:
             due = datetime.date(prev_d.year + 1, 3, 1)
         if (due - curr_d).days >= 60:
-            notes.append("Early MOT test")
+            if "Early MOT test" not in notes:
+                notes.append("Early MOT test")
             break
 
     return "; ".join(notes)
@@ -609,8 +626,8 @@ def _build_mot_row(vrm: str, vehicle_json, not_found: bool = False) -> dict:
         "make": v.get("make") or "",
         "model": v.get("model") or "",
         "colour": v.get("primaryColour") or "",
-        "fuel": v.get("fuelType") or "",
-        "date_registered": _to_ddmmyyyy(v.get("firstUsedDate") or ""),
+        "fuel": (v.get("fuelType") or "").removesuffix(" (Clean)"),
+        "date_registered": _to_ddmmyyyy(v.get("firstUsedDate") or v.get("registrationDate") or ""),
         "last_mot_date": _to_ddmmyyyy(most_recent.get("completedDate") or ""),
         "expiry_date": expiry,
         "odometer": str(most_recent.get("odometerValue") or "").strip(),

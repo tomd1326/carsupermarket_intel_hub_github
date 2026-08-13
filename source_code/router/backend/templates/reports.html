@@ -26,15 +26,23 @@
         .panel-title { font-weight: 600; font-size: 0.95rem; color: #0d3d5f; margin-bottom: 14px; }
 
         /* Run report bar */
-        .run-panel { max-width: 720px; }
-        .run-row { display: flex; align-items: center; gap: 10px; }
+        .run-panel { max-width: 940px; }
+        .run-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
         .report-select {
             flex: 0 0 280px; border: 1px solid #d6dee5; border-radius: 6px;
             padding: 8px 10px; font-size: 0.9rem; color: #0d3d5f; font-weight: 500;
         }
         .report-notes {
-            flex: 1; border: 1px solid #d6dee5; border-radius: 6px;
+            flex: 1 1 200px; min-width: 160px; border: 1px solid #d6dee5; border-radius: 6px;
             padding: 8px 10px; font-size: 0.9rem; color: #33424f;
+        }
+        .task-daterange { font-size: 0.78rem; color: #8a96a3; margin-top: 2px; }
+        /* Only shown for reports that take a date range */
+        .date-range { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+        .date-range label { font-size: 0.85rem; color: #6a7a88; margin: 0; }
+        .date-input {
+            border: 1px solid #d6dee5; border-radius: 6px;
+            padding: 7px 8px; font-size: 0.85rem; color: #33424f;
         }
         .btn-run {
             background-color: #7ed321; border: none; color: #0d3d5f; font-weight: 600;
@@ -97,17 +105,23 @@
     <div class="container py-4" style="max-width: 1300px;">
         <div class="d-flex align-items-center justify-content-between mb-4">
             <h3 class="page-header mb-0">Apex Reports</h3>
-            <a href="{{ BASE_URL }}/reports" class="btn btn-outline-secondary nav-btn"><i class="fas fa-arrow-left me-1"></i>Reports</a>
+            <a href="{{ BASE_URL }}/home" class="btn btn-outline-secondary nav-btn"><i class="fas fa-arrow-left me-1"></i>Home</a>
         </div>
 
         <div class="panel shadow-sm mb-3 run-panel">
             <div class="panel-title">Run a Report</div>
             <div class="run-row">
-                <select id="report-select" class="report-select">
+                <select id="report-select" class="report-select" onchange="syncDateRange()">
                     {% for opt in report_options %}
-                    <option value="{{ opt.type }}">{{ opt.label }}</option>
+                    <option value="{{ opt.type }}" data-date-range="{{ 1 if opt.date_range else 0 }}">{{ opt.label }}</option>
                     {% endfor %}
                 </select>
+                <div id="date-range" class="date-range" style="display: none;">
+                    <label for="date-from">From</label>
+                    <input id="date-from" class="date-input" type="date" value="{{ default_date }}">
+                    <label for="date-to">To</label>
+                    <input id="date-to" class="date-input" type="date" value="{{ default_date }}">
+                </div>
                 <input id="report-notes" class="report-notes" type="text" maxlength="100"
                        placeholder="Notes (optional, e.g. price changes)">
                 <button id="run-btn" class="btn btn-run" onclick="runReport()">
@@ -182,16 +196,54 @@
         let pollTimer = null;
         let tickTimer = null;
 
+        // The date range a task was run for, shown under the report name so
+        // repeat runs of the same report are told apart. Blank for reports
+        // that take no dates.
+        function dateRangeLabel(task) {
+            const params = task.params || {};
+            const from = params.date_from, to = params.date_to;
+            if (!from && !to) return '';
+            const text = (from === to || !to) ? (from || to) : `${from} to ${to}`;
+            return `<div class="task-daterange">${escapeHtml(text)}</div>`;
+        }
+
+        // Show the date pickers only for reports that accept a range.
+        function syncDateRange() {
+            const select = document.getElementById('report-select');
+            const opt = select.options[select.selectedIndex];
+            const takesRange = opt && opt.dataset.dateRange === '1';
+            document.getElementById('date-range').style.display = takesRange ? 'flex' : 'none';
+        }
+
         async function runReport() {
-            const reportType = document.getElementById('report-select').value;
+            const select = document.getElementById('report-select');
+            const reportType = select.value;
+            const opt = select.options[select.selectedIndex];
             const notesInput = document.getElementById('report-notes');
+            const body = { notes: notesInput.value.trim() };
+
+            if (opt && opt.dataset.dateRange === '1') {
+                const from = document.getElementById('date-from').value;
+                const to = document.getElementById('date-to').value;
+                if (!from || !to) {
+                    alert('Pick both a From and a To date.');
+                    return;
+                }
+                if (from > to) {
+                    alert('The From date must be on or before the To date.');
+                    return;
+                }
+                body.date_from = from;
+                body.date_to = to;
+            }
+
             try {
-                // If this report is already running, the server attaches us
-                // to the in-flight task instead of starting a duplicate.
+                // If this report is already running with the same parameters,
+                // the server attaches us to that task instead of duplicating it.
                 const resp = await fetch(BASE_URL + '/api/reports/' + reportType + '/start', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ notes: notesInput.value.trim() }),
+                    body: JSON.stringify(body),
                 });
                 if (!resp.ok) throw new Error('Failed to start report (' + resp.status + ')');
                 notesInput.value = '';
@@ -310,7 +362,7 @@
 
             return `
                 <tr data-task-id="${task.task_id}" data-status="${task.status}">
-                    <td>${escapeHtml(task.report_label)}</td>
+                    <td>${escapeHtml(task.report_label)}${dateRangeLabel(task)}</td>
                     <td class="task-user">${escapeHtml(task.user || '—')}</td>
                     <td title="${escapeHtml(task.notes || '')}">${escapeHtml(task.notes || '')}</td>
                     <td><span class="task-badge ${badgeClass}">${badgeText}</span></td>
@@ -361,6 +413,12 @@
         document.getElementById('task-search').addEventListener('keydown', e => {
             if (e.key === 'Enter') applySearch();
         });
+        document.querySelectorAll('.date-input').forEach(input => {
+            input.addEventListener('keydown', e => {
+                if (e.key === 'Enter') runReport();
+            });
+        });
+        syncDateRange();
         refreshTasks();
         tickTimer = setInterval(tickDurations, 1000);
     </script>
