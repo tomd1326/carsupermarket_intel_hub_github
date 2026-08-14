@@ -27,6 +27,7 @@ import boto3
 from fastapi import APIRouter, Request, Depends, HTTPException
 from fastapi.responses import HTMLResponse, RedirectResponse
 
+from utils.db_utils import get_database_connection, get_user_preference
 from utils.snowflake_client import SnowflakeClient
 from .core import BASE_URL, templates, _track, get_current_user, s3_bucketname, s3_bucket_region, _S3_ENV
 
@@ -265,13 +266,39 @@ def warm_cache() -> None:
     logger.info("Home cache warm (Orders & Deliveries) complete")
 
 
+_FONT_DEFAULT = 11
+_FONT_MIN, _FONT_MAX = 8, 20
+
+
+def _saved_font(conn, user: str, pref_key: str) -> int:
+    """Mirrors the JS loadFont() clamp/fallback so the server-rendered label
+    always matches what loadFont() would set — otherwise the label jumps on
+    load. Kept in sync manually with FONT_MIN/FONT_MAX/FONT_DEFAULT in the JS."""
+    try:
+        v = get_user_preference(conn, user, pref_key)
+        v = int(v)
+        if _FONT_MIN <= v <= _FONT_MAX:
+            return v
+    except Exception:
+        pass
+    return _FONT_DEFAULT
+
+
 @router.get("/reports/orders-deliveries", response_class=HTMLResponse)
 def orders_deliveries_page(request: Request, user: str = Depends(get_current_user)):
     if user != 'tdrayson':
         return RedirectResponse(url=BASE_URL + "/home", status_code=303)
     _track(request, 'page_view', '/reports/orders-deliveries')
+    try:
+        with get_database_connection() as conn:
+            font_summary = _saved_font(conn, user, 'orders_deliveries_font_summary')
+            font_vehicle = _saved_font(conn, user, 'orders_deliveries_font_vehicle')
+    except Exception as e:
+        logger.warning("Orders & Deliveries: could not load saved font sizes: %s", e)
+        font_summary = font_vehicle = _FONT_DEFAULT
     return templates.TemplateResponse("orders_deliveries.html", {
         "request": request, "user": user, "BASE_URL": BASE_URL,
+        "font_summary": font_summary, "font_vehicle": font_vehicle,
     })
 
 

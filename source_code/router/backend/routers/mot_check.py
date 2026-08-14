@@ -6,6 +6,7 @@ from fastapi import APIRouter, Request, Depends, HTTPException
 from fastapi.responses import HTMLResponse, RedirectResponse, FileResponse
 import json
 import os
+import re as _re
 import time
 import logging
 import datetime
@@ -208,6 +209,93 @@ def _mot_process_background(sid: str, vrms: list, user: str, mot_workers: int):
         _write_progress_to_s3(error_state)
 
 
+def _warned_cell_indices(columns: list, row: list) -> set:
+    """Mirrors warnedCells() in mot_check.html so the xlsx highlights the same
+    individual mileage/date cells as the web results table, not just Comments."""
+    warned = set()
+
+    def to_int(v):
+        try:
+            return int(str(v).replace(",", "")) if v not in (None, "") else None
+        except ValueError:
+            return None
+
+    def to_date(v):
+        try:
+            return datetime.datetime.strptime(v, "%d/%m/%Y").date() if v else None
+        except ValueError:
+            return None
+
+    hist_mileage = []
+    for i, col in enumerate(columns):
+        if _re.match(r"^\d+(st|nd|rd|th) MOT Mileage$", col, _re.I):
+            hist_mileage.append({"idx": i, "val": to_int(row[i])})
+    for j in range(1, len(hist_mileage)):
+        prev, curr = hist_mileage[j - 1], hist_mileage[j]
+        if prev["val"] is not None and curr["val"] is not None and curr["val"] < prev["val"]:
+            warned.add(curr["idx"])
+
+    if "Odometer" in columns and hist_mileage:
+        odom_idx = columns.index("Odometer")
+        last_m = hist_mileage[-1]["val"]
+        odom = to_int(row[odom_idx])
+        if last_m is not None and odom is not None and odom < last_m:
+            warned.add(odom_idx)
+
+    if "Cars Bought Mileage" in columns and hist_mileage:
+        cbm_idx = columns.index("Cars Bought Mileage")
+        first_m = hist_mileage[0]["val"]
+        cbm = to_int(row[cbm_idx])
+        if first_m is not None and cbm is not None and cbm < first_m:
+            warned.add(cbm_idx)
+
+    hist_dates = []
+    for i, col in enumerate(columns):
+        m = _re.match(r"^(\d+)(st|nd|rd|th) MOT Date$", col, _re.I)
+        if m:
+            result_idx = columns.index(f"{m.group(1)}{m.group(2)} MOT Result") if f"{m.group(1)}{m.group(2)} MOT Result" in columns else -1
+            passed = row[result_idx] != "FAIL" if result_idx >= 0 else True
+            hist_dates.append({"idx": i, "date": to_date(row[i]), "passed": passed})
+
+    if "Date Registered" in columns and hist_dates:
+        reg = to_date(row[columns.index("Date Registered")])
+        first = hist_dates[0]
+        if reg is not None and first["date"] is not None:
+            try:
+                due = datetime.date(reg.year + 3, reg.month, reg.day)
+            except ValueError:
+                due = datetime.date(reg.year + 3, 3, 1)
+            if (due - first["date"]).days >= 1:
+                warned.add(first["idx"])
+
+    for j in range(1, len(hist_dates)):
+        prev, curr = hist_dates[j - 1], hist_dates[j]
+        if prev["date"] is None or curr["date"] is None:
+            continue
+        if not prev["passed"]:
+            continue
+        try:
+            due = datetime.date(prev["date"].year + 1, prev["date"].month, prev["date"].day)
+        except ValueError:
+            due = datetime.date(prev["date"].year + 1, 3, 1)
+        if (due - curr["date"]).days >= 60:
+            warned.add(curr["idx"])
+
+    if "Most Recent MOT Date" in columns and hist_dates:
+        recent_idx = columns.index("Most Recent MOT Date")
+        last_hist = hist_dates[-1]
+        recent = to_date(row[recent_idx])
+        if last_hist["passed"] and last_hist["date"] is not None and recent is not None and recent > last_hist["date"]:
+            try:
+                due = datetime.date(last_hist["date"].year + 1, last_hist["date"].month, last_hist["date"].day)
+            except ValueError:
+                due = datetime.date(last_hist["date"].year + 1, 3, 1)
+            if (due - recent).days >= 60:
+                warned.add(recent_idx)
+
+    return warned
+
+
 def _mot_build_and_upload(results: list, vrms: list, user: str):
     import openpyxl
     from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
@@ -266,6 +354,7 @@ def _mot_build_and_upload(results: list, vrms: list, user: str):
     for row in rows:
         ws.append(row)
         row_idx = ws.max_row
+        warned = _warned_cell_indices(columns, row)
         for col_idx, cell in enumerate(ws[row_idx], start=1):
             cell.border = border
             if col_idx == status_col:
@@ -275,6 +364,8 @@ def _mot_build_and_upload(results: list, vrms: list, user: str):
                 elif val == "EXPIRED":
                     cell.fill = expired_fill
             elif col_idx == comments_col and cell.value:
+                cell.fill = expired_fill
+            elif (col_idx - 1) in warned:
                 cell.fill = expired_fill
 
     ws.freeze_panes = "A2"
