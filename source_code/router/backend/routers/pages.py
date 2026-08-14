@@ -49,8 +49,23 @@ def home(request: Request, user: str = Depends(get_current_user)):
                 orders_deliveries.warm_cache()
             except Exception as e:
                 logger.warning(f"Home cache warm (Orders & Deliveries) failed: {e}")
-        with ThreadPoolExecutor(max_workers=5) as ex:
+        def _apis():
+            # Build the CAP and Autotrader clients and get an AT access token
+            # now. Both read credentials from AWS Secrets Manager in their
+            # constructors, and both are singletons, so doing it here means a
+            # manual vehicle check does not pay for the secret fetch or the auth
+            # round trip on its first use.
+            try:
+                import requests as _requests
+                from list_processor.cap_client import CAPClient
+                from list_processor.autotrader_client import AutoTraderClient
+                CAPClient()
+                AutoTraderClient().get_access_token(_requests.Session())
+            except Exception as e:
+                logger.warning(f"Home cache warm (CAP/Autotrader credentials) failed: {e}")
+        with ThreadPoolExecutor(max_workers=6) as ex:
             ex.submit(_sf); ex.submit(_dbs); ex.submit(_cb); ex.submit(_sp); ex.submit(_od)
+            ex.submit(_apis)
     threading.Thread(target=_warm_caches, daemon=True).start()
     _track(request, 'page_view', '/home')
     return templates.TemplateResponse("home.html", {"request": request, "user": user, "BASE_URL": BASE_URL})

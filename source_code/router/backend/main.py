@@ -160,8 +160,7 @@ app.mount("/static", StaticFiles(directory=os.path.join(os.path.dirname(__file__
 async def favicon():
     return FileResponse(os.path.join(os.path.dirname(__file__), "static", "icon.png"))
 
-# TODO: probably it's more correct to put api_gateway_base_path="/dev" here
-handler = Mangum(app, lifespan="auto")
+handler = Mangum(app, lifespan="auto", api_gateway_base_path="/dev")
 lambda_requests_manager = LambdaRequestsManager()
 lambda_requests_manager.init(mangum_handler=handler)
 

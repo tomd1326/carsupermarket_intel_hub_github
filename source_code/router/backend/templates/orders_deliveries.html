@@ -19,6 +19,20 @@
         .back-link:hover { color: #ffffff !important; }
 
         .panel { background: #ffffff; border-radius: 12px; padding: 13px 18px; }
+        /* Matches the slicer bar's rendered width at the base (unwidened)
+           panel size (8 * 163px + 7 * 10px gaps + this bar's own padding),
+           so the bar is already correctly sized before any data/JS has run.
+           JS widens both the panels and this bar together, to match the
+           summary table's natural width, once real data renders — see
+           matchFilterWidthToTable(). This is only the pre-JS / loading-state
+           fallback. If a slicer dimension is ever added or removed, update
+           this number too (or just let JS take over once data loads). */
+        #control-bar { box-sizing: border-box; width: 1410px; max-width: 100%; }
+        /* Real summary tables hug their own content; the loading spinner
+           instead spans the same width as the control bar so it doesn't look
+           like a narrow box floating under a full-width bar. */
+        #summary-area { width: fit-content; }
+        #summary-area.is-loading { width: 1410px; box-sizing: border-box; }
         .control-row { display: flex; align-items: center; gap: 18px; flex-wrap: wrap; }
         .control-group { display: flex; align-items: center; gap: 8px; }
         .control-label { font-size: 0.85rem; font-weight: 600; color: #6a7a88; }
@@ -56,11 +70,12 @@
 
         /* Slicer bar — fixed-width panels; scroll horizontally rather than
            squashing them narrower to fit. */
+        :root { --slicer-width: 163px; }
         .slicer-bar { display: flex; gap: 10px; overflow-x: auto; padding-bottom: 6px; }
         .slicer {
             background: #ffffff; border-radius: 10px; padding: 8px 10px;
             display: flex; flex-direction: column; min-height: 0;
-            flex: 0 0 163px; width: 163px;
+            flex: 0 0 var(--slicer-width); width: var(--slicer-width);
         }
         .slicer-head {
             display: flex; align-items: center; justify-content: space-between;
@@ -89,7 +104,7 @@
         /* --vehicle-font and --summary-font are independent — the font
            resizer changes whichever view is active, and each is persisted
            per user in Aurora separately. Padding scales with them (em). */
-        :root { --vehicle-font: 11px; --summary-font: 11px; }
+        :root { --vehicle-font: {{ font_vehicle }}px; --summary-font: {{ font_summary }}px; }
         .grid-wrap { max-height: 74vh; overflow: auto; border: 1px solid #b8c4cf; border-radius: 6px; }
         table.grid { border-collapse: collapse; font-size: var(--vehicle-font); table-layout: fixed; width: 100%; }
         table.grid thead th {
@@ -123,6 +138,14 @@
         table.grid a:hover { text-decoration: underline; }
         .empty-state { color: #8a96a3; font-size: 0.9rem; text-align: center; padding: 40px 0; }
         .spinner-wrap { text-align: center; padding: 60px 0; color: #0d3d5f; }
+        /* Pure-CSS spinner — doesn't depend on the Font Awesome CDN having
+           loaded, so it always animates even if that request is slow/blocked. */
+        .css-spinner {
+            width: 32px; height: 32px; margin: 0 auto;
+            border: 4px solid #dce6ee; border-top-color: #0d3d5f;
+            border-radius: 50%; animation: css-spin 0.8s linear infinite;
+        }
+        @keyframes css-spin { to { transform: rotate(360deg); } }
 
         /* Summary tables — one per dimension, stacked vertically. Sized to
            content (not full width) with a shared colgroup so every table's
@@ -161,10 +184,10 @@
     <div class="container-fluid py-4" style="max-width: 100%; padding-left: 24px; padding-right: 24px;">
         <div class="d-flex align-items-center justify-content-between mb-3">
             <h3 class="page-header mb-0">Orders &amp; Deliveries</h3>
-            <a href="{{ BASE_URL }}/reports" class="btn btn-outline-secondary nav-btn"><i class="fas fa-arrow-left me-1"></i>Reports</a>
+            <a href="{{ BASE_URL }}/reports/tom" class="btn btn-outline-secondary nav-btn"><i class="fas fa-arrow-left me-1"></i>Tom Reports</a>
         </div>
 
-        <div class="panel shadow-sm mb-3">
+        <div class="panel shadow-sm mb-3" id="control-bar">
             <div class="control-row">
                 <div class="control-group">
                     <span class="control-label">Lens</span>
@@ -190,10 +213,12 @@
                         <span id="apply-label"><i class="fas fa-spinner fa-spin"></i> Loading</span>
                     </button>
                 </div>
-                <div class="control-group ms-auto">
+            </div>
+            <div class="control-row mt-2">
+                <div class="control-group">
                     <div class="font-resizer" title="Table font size">
                         <button type="button" onclick="changeFont(-1)" aria-label="Smaller font">A&minus;</button>
-                        <span class="font-size-label" id="font-size-label">11px</span>
+                        <span class="font-size-label" id="font-size-label">{{ font_summary }}px</span>
                         <button type="button" onclick="changeFont(1)" aria-label="Larger font">A+</button>
                     </div>
                     <span class="cache-note" id="cache-note"></span>
@@ -207,18 +232,25 @@
         </div>
 
         <!-- Slicer bar: full-width, one panel per dimension, multi-select,
-             cross-filtering. Built by JS from the loaded rows. -->
-        <div id="slicer-bar" class="slicer-bar mb-3"></div>
+             cross-filtering. Built by JS from the loaded rows. The bar
+             already has 6px of padding-bottom (scrollbar clearance), so its
+             own bottom margin is trimmed by that much — keeps the visible
+             gap to the summary table equal to the gap above the filters
+             (which has no such padding). -->
+        <div id="slicer-bar" class="slicer-bar" style="margin-bottom: 10px;"></div>
 
-        <!-- Summary View body: one table per dimension, stacked -->
-        <div class="panel shadow-sm" id="summary-area" style="width: fit-content; max-width: 100%;">
-            <div class="spinner-wrap"><i class="fas fa-spinner fa-spin fa-2x"></i><div style="margin-top:12px;font-size:0.9rem;">Loading vehicles...</div></div>
+        <!-- Summary View body: one table per dimension, stacked. Starts at the
+             loading-spinner width (full, matching the control bar above) —
+             renderSummary() removes is-loading once real tables are in, which
+             lets the fit-content rule below take over and hug the content. -->
+        <div class="panel shadow-sm is-loading" id="summary-area" style="max-width: 100%;">
+            <div class="spinner-wrap"><div class="css-spinner"></div><div style="margin-top:12px;font-size:0.9rem;">Loading vehicles...</div></div>
         </div>
 
         <!-- Vehicle View body (the grid) -->
         <div class="panel shadow-sm" id="vehicle-area" style="display:none;">
             <div id="grid-area">
-                <div class="spinner-wrap"><i class="fas fa-spinner fa-spin fa-2x"></i><div style="margin-top:12px;font-size:0.9rem;">Loading vehicles...</div></div>
+                <div class="spinner-wrap"><div class="css-spinner"></div><div style="margin-top:12px;font-size:0.9rem;">Loading vehicles...</div></div>
             </div>
         </div>
     </div>
@@ -429,7 +461,10 @@
             summary: { prefKey: 'orders_deliveries_font_summary', cssVar: '--summary-font' },
             vehicle: { prefKey: 'orders_deliveries_font_vehicle', cssVar: '--vehicle-font' },
         };
-        const fontSizes = { summary: FONT_DEFAULT, vehicle: FONT_DEFAULT };
+        // Seeded from the server-rendered values (see :root and the label's
+        // initial text above) so this matches first paint exactly — loadFont()
+        // still confirms against Aurora, but has nothing left to visibly change.
+        const fontSizes = { summary: {{ font_summary }}, vehicle: {{ font_vehicle }} };
         let fontSaveTimer = null;
 
         function applyFont(which) {
@@ -672,11 +707,21 @@
         // Fixed column widths shared by every summary table, so they all line
         // up vertically regardless of which dimension is shown. The label
         // column width is measured (not guessed) from the actual longest
-        // heading/label text that will appear across all seven tables —
-        // see measureSummaryLabelWidth().
-        const SUMMARY_DATA_COL_WIDTH = 66;
+        // heading/label text that will appear across all seven tables — see
+        // measureSummaryLabelWidth(). The table renders at its own natural
+        // best fit — nothing stretches it. Instead the filter panels and
+        // control bar above are widened to match the table afterwards (see
+        // matchFilterWidthToTable()), so data columns never get squeezed.
+        const SUMMARY_DATA_COL_WIDTH_BASE = 66;
         const SUMMARY_LABEL_PADDING = 20;   // matches the cell's left+right padding
-        let summaryLabelColWidth = 95;      // recomputed before each render
+        let summaryLabelColWidth = 95;        // recomputed before each render
+        let summaryDataColWidth = SUMMARY_DATA_COL_WIDTH_BASE;
+
+        // Base (unwidened) filter panel width — matches the .slicer CSS
+        // fallback and #control-bar's pre-JS fallback width. Panels reset to
+        // this before each render, then matchFilterWidthToTable() widens
+        // them (and only them) to match the summary table.
+        const SLICER_WIDTH_BASE = 163;
 
         // Measure the pixel width of the longest label-column text (every
         // table heading + every row/Grand Total label) using the real font,
@@ -698,7 +743,7 @@
 
         function summaryColgroupHtml() {
             const cols = [`<col style="width:${summaryLabelColWidth}px">`];
-            SUMMARY_COLS.forEach(() => cols.push(`<col style="width:${SUMMARY_DATA_COL_WIDTH}px">`));
+            SUMMARY_COLS.forEach(() => cols.push(`<col style="width:${summaryDataColWidth}px">`));
             return `<colgroup>${cols.join('')}</colgroup>`;
         }
 
@@ -776,10 +821,20 @@
             // Measure the true longest label across every table's heading and
             // row labels (including Grand Total), so all seven tables share
             // one exact-fit label column width — no guessing, no truncation.
+            // The label column itself is left at this natural width — it's
+            // sized to fit specific text ("Rate/Cash", "Grand Total"), not
+            // stretched like the data columns.
             summaryLabelColWidth = tables.length ? measureSummaryLabelWidth(tables) : summaryLabelColWidth;
+            summaryDataColWidth = SUMMARY_DATA_COL_WIDTH_BASE;
 
-            const html = tables.map(renderSummaryTableHtml).join('');
-            area.innerHTML = html || '<div class="empty-state">No rows match the current view.</div>';
+            const emptyHtml = '<div class="empty-state">No rows match the current view.</div>';
+            area.classList.remove('is-loading');   // let the fit-content width rule take over
+            area.innerHTML = tables.map(renderSummaryTableHtml).join('') || emptyHtml;
+
+            // The table is now at its natural best fit. Widen the filter
+            // panels + control bar to match it (never the other way round —
+            // see matchFilterWidthToTable()).
+            if (tables.length) matchFilterWidthToTable();
         }
 
         // ── Slicer rendering & interaction ──────────────────────────────────
@@ -868,6 +923,69 @@
                     rerender();
                 });
             });
+
+            // Reset filter panels to their natural width before the summary
+            // table (which renders after this) has a chance to widen them
+            // back to match its own natural width — see
+            // matchFilterWidthToTable(). Without this reset, panel width
+            // would only ever grow across renders and never shrink back down
+            // (e.g. after switching to a narrower dimension set).
+            document.documentElement.style.setProperty('--slicer-width', SLICER_WIDTH_BASE + 'px');
+            document.getElementById('control-bar').style.width = '';
+        }
+
+        // Widens the 8 filter panels (uniformly, same width each) and the
+        // control bar above so their right edge matches the summary card's
+        // right edge — never the other way round, so the table's data
+        // columns are never squeezed to fit the filters. Run once, after the
+        // summary table has rendered at its own best-fit width.
+        function matchFilterWidthToTable() {
+            const bar = document.getElementById('slicer-bar');
+            const allTables = document.querySelectorAll('#summary-area table.summary');
+            const panels = bar.children;
+            if (!panels.length || !allTables.length) return;
+
+            // Match the summary CARD's right edge, not the table's. The card
+            // (#summary-area) is a .panel with 18px of side padding and
+            // width: fit-content, so it sits 18px wider than the table on
+            // each side — lining the filters up with the table itself leaves
+            // them visibly short of the card below.
+            const card = document.getElementById('summary-area');
+            const targetRight = card.getBoundingClientRect().right;
+
+            // Solve for the panel width directly. The panels lay out as
+            //   n * w + gaps, starting at the bar's left edge
+            // so with the gaps measured off the live DOM (rather than
+            // assumed from the CSS), the width that lands the last panel
+            // exactly on targetRight is one division. Measured, not guessed:
+            // reading panel 0's real width and the last panel's real right
+            // edge gives the gap total including any sub-pixel rounding.
+            const n = panels.length;
+            const barLeft = bar.getBoundingClientRect().left;
+            const baseWidth = panels[0].getBoundingClientRect().width;
+            const gaps = panels[n - 1].getBoundingClientRect().right - barLeft - n * baseWidth;
+
+            document.documentElement.style.setProperty(
+                '--slicer-width', Math.round((targetRight - barLeft - gaps) / n) + 'px');
+
+            // n * Math.round() can still land a few px off the target, since
+            // each panel absorbs the same rounding n times over. Read the
+            // real right edge back and spread the exact leftover across the
+            // panels — one correction against a measurement, not another
+            // estimate.
+            const residual = targetRight - panels[n - 1].getBoundingClientRect().right;
+            if (Math.abs(residual) > 0.5) {
+                const w = panels[0].getBoundingClientRect().width;
+                document.documentElement.style.setProperty(
+                    '--slicer-width', Math.round(w + residual / n) + 'px');
+            }
+
+            // Control bar (Lens/View/Group by row) matches the slicer bar's
+            // actual rendered right edge, after the width above takes effect.
+            const barLeftFinal = bar.getBoundingClientRect().left;
+            const lastRectFinal = panels[n - 1].getBoundingClientRect();
+            document.getElementById('control-bar').style.width =
+                Math.ceil(lastRectFinal.right - barLeftFinal) + 'px';
         }
 
         // Full refresh of everything actually on screen — slicer panels, row
@@ -1132,9 +1250,11 @@
         }
 
         function showLoading(msg) {
-            const html = `<div class="spinner-wrap"><i class="fas fa-spinner fa-spin fa-2x"></i><div style="margin-top:12px;font-size:0.9rem;">${escapeHtml(msg || 'Loading...')}</div></div>`;
+            const html = `<div class="spinner-wrap"><div class="css-spinner"></div><div style="margin-top:12px;font-size:0.9rem;">${escapeHtml(msg || 'Loading...')}</div></div>`;
             document.getElementById('grid-area').innerHTML = html;
-            document.getElementById('summary-area').innerHTML = html;
+            const summaryArea = document.getElementById('summary-area');
+            summaryArea.classList.add('is-loading');   // full width to match the control bar, like the initial load state
+            summaryArea.innerHTML = html;
         }
 
         function showCacheNote(data) {
@@ -1168,7 +1288,9 @@
             } catch (e) {
                 const html = `<div class="empty-state">Could not load data: ${escapeHtml(e.message)}</div>`;
                 document.getElementById('grid-area').innerHTML = html;
-                document.getElementById('summary-area').innerHTML = html;
+                const summaryArea = document.getElementById('summary-area');
+                summaryArea.classList.add('is-loading');   // full width, matching the control bar, rather than shrink-wrapping the message
+                summaryArea.innerHTML = html;
             } finally {
                 btn.disabled = false;
                 setApplyLoading(false);

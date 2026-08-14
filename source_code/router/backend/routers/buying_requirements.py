@@ -367,6 +367,12 @@ _dbs_cache: dict = {"purchases": None, "vehicles": None, "expires": 0.0, "fetche
 _cb_cache: dict  = {"purchases": None, "vehicles": None, "expires": 0.0, "fetched_at": None, "no_rrp": None}
 _cache_lock = threading.Lock()
 
+# VRM -> {mileage, date, buyer, supplier} for every row of Cars Bought, built from the
+# same sheet fetch as _cb_cache but with no dedup/CAP/RRP filtering — _cb_cache's own
+# "vehicles" list drops any VRM already on Apex or missing a CAP ID/RRP, so it can't
+# answer a plain "what's on the sheet for this VRM" lookup (needed by the MOT check page).
+_cb_extra_cache: dict = {"extra": None, "expires": 0.0, "fetched_at": None}
+
 # Raw Daily Buyers Sheet worksheet values — short-lived, process-local cache so
 # concurrent callers reuse one fetch instead of each re-running the whole
 # 5-round-trip SharePoint fetch for the same file/sheet. Short TTL because this
@@ -482,6 +488,7 @@ _S3_BUCKET         = "aa-raw-sources-uk"
 _SF_S3_KEY         = f"applications/pricing/uk-vehicle-list-evaluator/{_S3_ENV}/cache/buying_requirements_v22.json"
 _DBS_S3_KEY        = f"applications/pricing/uk-vehicle-list-evaluator/{_S3_ENV}/cache/dbs_purchases_v17.json"
 _CB_S3_KEY         = f"applications/pricing/uk-vehicle-list-evaluator/{_S3_ENV}/cache/cb_purchases_v13.json"
+_CB_EXTRA_S3_KEY   = f"applications/pricing/uk-vehicle-list-evaluator/{_S3_ENV}/cache/cb_extra_v2.json"
 _VRM_CAP_S3_KEY    = f"applications/pricing/uk-vehicle-list-evaluator/shared/vrm_cap_id_cache.json"
 
 
@@ -1251,6 +1258,7 @@ def _build_cb_purchases() -> dict:
 
     raw_rows = []
     purchases: dict = {}
+    all_vrm_extra: dict = {}
     if headers:
         try:
             reg_idx  = headers.index("REG")
@@ -1270,6 +1278,8 @@ def _build_cb_purchases() -> dict:
             deriv_idx    = headers.index("VARIANT")        if "VARIANT"        in headers else None
             supplier_idx = headers.index("SUPPLIER")       if "SUPPLIER"       in headers else None
             mileage_idx  = headers.index("MILEAGE")        if "MILEAGE"        in headers else None
+            date_idx     = headers.index("DATE")           if "DATE"           in headers else None
+            buyer_idx    = headers.index("BUYERS")         if "BUYERS"         in headers else None
             siv_idx      = headers.index("SIV")            if "SIV"            in headers else (
                            headers.index("PURCHASE PRICE") if "PURCHASE PRICE" in headers else (
                            headers.index("PURCHASE_PRICE") if "PURCHASE_PRICE" in headers else None))
@@ -1286,6 +1296,24 @@ def _build_cb_purchases() -> dict:
                 vrm = str(row[reg_idx]).strip().replace(' ', '').upper() if reg_idx < len(row) and row[reg_idx] not in (None, '') else ''
                 if not vrm or vrm in ('NONE', 'N/A'):
                     continue
+                # These are recorded for every row on the sheet, including VRMs
+                # already on Apex — collect them before the dedup skip below drops them.
+                if vrm not in all_vrm_extra:
+                    raw_mileage = row[mileage_idx] if mileage_idx is not None and mileage_idx < len(row) and row[mileage_idx] not in (None, '') else None
+                    if raw_mileage is not None:
+                        try:
+                            raw_mileage = str(int(float(str(raw_mileage).replace(',', '').strip())))
+                        except (TypeError, ValueError):
+                            raw_mileage = str(raw_mileage).strip()
+                    raw_date = row[date_idx] if date_idx is not None and date_idx < len(row) and row[date_idx] not in (None, '') else None
+                    raw_buyer = str(row[buyer_idx]).strip() if buyer_idx is not None and buyer_idx < len(row) and row[buyer_idx] not in (None, '') else ''
+                    raw_supplier = str(row[supplier_idx]).strip() if supplier_idx is not None and supplier_idx < len(row) and row[supplier_idx] not in (None, '') else ''
+                    all_vrm_extra[vrm] = {
+                        'mileage':  raw_mileage or '',
+                        'date':     _parse_excel_date(raw_date) or '',
+                        'buyer':    raw_buyer,
+                        'supplier': raw_supplier,
+                    }
                 if vrm in apex_vrms or vrm in seen_vrms:
                     continue
                 seen_vrms.add(vrm)
@@ -1377,6 +1405,14 @@ def _build_cb_purchases() -> dict:
         _cb_cache["fetched_at"]  = fetched_at
     _save_cb_cache_to_s3(purchases, vehicles, fetched_at, _sp_cache_seconds(), total_vrms, skipped_no_rrp)
     logger.info(f"Cars Bought: {total_vrms} unique VRMs, {sum(purchases.values())} in table ({len(purchases)} cap/band keys), skipped: {skipped_no_cap} no CAP ID, {skipped_no_rrp} no RRP, {skipped_no_sf} not in Snowflake")
+
+    with _cache_lock:
+        _cb_extra_cache["extra"]      = all_vrm_extra
+        _cb_extra_cache["expires"]    = time.monotonic() + _sp_cache_seconds()
+        _cb_extra_cache["fetched_at"] = fetched_at
+    _s3_save(_CB_EXTRA_S3_KEY, {"extra": all_vrm_extra, "fetched_at": fetched_at}, _sp_cache_seconds())
+    logger.info(f"Cars Bought: extra-fields lookup cache built for {len(all_vrm_extra)} VRMs")
+
     return purchases
 
 
@@ -1400,6 +1436,50 @@ def _get_cb_purchases_cached(quiet: bool = False) -> tuple[dict, list] | None:
         age = time.time() - (fetched_at or time.time())
         logger.info(f"Cars Bought: served from S3 cache (data {_fmt_age(age)} old)")
     return result
+
+
+def _get_cb_extra_cached() -> dict | None:
+    """VRM -> {mileage, date, buyer, supplier} from in-process or S3 cache only, never
+    triggers a live fetch. Built as a byproduct of the same sheet read as _cb_cache —
+    see _cb_extra_cache."""
+    with _cache_lock:
+        if _cb_extra_cache["extra"] and time.monotonic() < _cb_extra_cache["expires"]:
+            return _cb_extra_cache["extra"]
+    payload = _s3_load(_CB_EXTRA_S3_KEY)
+    if not payload:
+        return None
+    extra = payload.get("extra") or {}
+    if not extra:
+        return None
+    with _cache_lock:
+        _cb_extra_cache["extra"]      = extra
+        _cb_extra_cache["fetched_at"] = payload.get("fetched_at")
+        remaining = max(0.0, payload.get("expires_at", 0.0) - time.time())
+        _cb_extra_cache["expires"]    = time.monotonic() + min(_sp_cache_seconds(), remaining)
+    return extra
+
+
+def _get_cb_extra() -> dict:
+    """VRM -> {mileage, date, buyer, supplier} for every Cars Bought row. Uses the cache
+    if fresh, otherwise rebuilds from the sheet.
+
+    Must call _build_cb_purchases directly, not _get_cb_purchases: the latter returns
+    early when the purchases cache is fresh (memory or S3), so it can skip the sheet read
+    entirely — and this cache is only filled as a side effect of that read, which would
+    leave every field blank."""
+    cached = _get_cb_extra_cached()
+    if cached:
+        return cached
+    with _cb_build_lock:
+        # Another caller may have rebuilt while we waited for the lock.
+        with _cache_lock:
+            existing = _cb_extra_cache["extra"]
+            fresh = existing and time.monotonic() < _cb_extra_cache["expires"]
+        if fresh:
+            return existing
+        _build_cb_purchases()
+    with _cache_lock:
+        return _cb_extra_cache["extra"] or {}
 
 
 def _sse(message: str, kind: str = "log") -> str:
