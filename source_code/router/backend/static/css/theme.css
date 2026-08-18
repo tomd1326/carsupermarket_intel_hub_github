@@ -1,0 +1,153 @@
+/* ─────────────────────────────────────────────────────────────────────────
+   Shared theme tokens.
+
+   One source of truth for the colours, borders, radii and shading scale used
+   across pages. Link this BEFORE any page-specific stylesheet so a page can
+   still override a token or a rule where it genuinely needs to.
+
+       <link href="{{ static_url('css/theme.css') }}" rel="stylesheet">
+       <link href="{{ static_url('css/<page>.css') }}" rel="stylesheet">
+
+   The palette follows the buying requirements page, which in turn stays close
+   to stock Bootstrap — the point is to work WITH Bootstrap's own colours
+   rather than maintain a competing set. Prefer Bootstrap's classes
+   (btn-primary, btn-outline-secondary, btn-dark) over hand-written buttons;
+   the tokens here are for the parts Bootstrap does not cover: data tables,
+   the red/amber/green cell shading, filter pills and popups.
+
+   Adding a colour? Put it here, not in a page stylesheet. If two pages need
+   slightly different values for the same idea, that is usually a sign the
+   pages should agree rather than that a second token is needed.
+   ───────────────────────────────────────────────────────────────────────── */
+
+:root {
+    /* ── Surfaces ─────────────────────────────────────────────────────── */
+    --c-page-bg:          #ffffff;   /* page background */
+    --c-surface:          #ffffff;   /* cards, panels, popups */
+    --c-surface-alt:      #f8f9fa;   /* zebra striping, hover fills, muted bars */
+    --c-surface-sunken:   #f3f4f6;   /* inset tracks, e.g. behind a toggle group */
+
+    /* ── Table furniture ──────────────────────────────────────────────── */
+    --c-table-header-bg:      #dbeafe;   /* column headings */
+    --c-table-header-hover:   #bfdbfe;   /* sortable heading under the pointer */
+    --c-table-header-text:    #1e3a5f;
+    --c-table-total-bg:       #eff6ff;   /* totals / grand total rows */
+
+    /* ── Borders ──────────────────────────────────────────────────────── */
+    /* --c-border is the standard visible border: card edges, table outlines,
+       cell separators. --c-border-soft is only for separators INSIDE an
+       already-bordered box, where a full-strength line would read as clutter. */
+    --c-border:        #b0b0b0;
+    --c-border-soft:   #d0d0d0;
+    --c-border-strong: #606060;   /* emphasis rules, e.g. above a totals row */
+
+    /* ── Text ─────────────────────────────────────────────────────────── */
+    --c-text:         #343a40;
+    --c-text-muted:   #6c757d;
+    --c-text-heading: #1e3a5f;
+    --c-text-danger:  #b91c1c;   /* negative values, destructive hover */
+
+    /* ── Interactive (aligned to Bootstrap's own palette) ─────────────── */
+    --c-primary:        #0d6efd;
+    --c-primary-hover:  #0b5ed7;
+    --c-success:        #198754;
+    --c-success-hover:  #157347;
+    --c-dark:           #212529;   /* selected/active state on toggles + pills */
+    --c-control-border: #6c757d;   /* outline on white-filled buttons */
+    --c-control-border-hover: #495057;
+    --c-disabled-bg:     #e9ecef;
+    --c-disabled-border: #ced4da;
+    --c-disabled-text:   #6c757d;
+
+    /* ── Shape ────────────────────────────────────────────────────────── */
+    --radius-sm:  4px;   /* buttons, pills, cells */
+    --radius-md:  6px;   /* tables, inputs */
+    --radius-lg:  8px;   /* cards and panels */
+
+    /* ── Conditional cell shading ─────────────────────────────────────── */
+    /* Endpoints for the red -> amber -> green scale applied to metric cells.
+       Held as bare "r, g, b" triples so JS can read them straight off the
+       computed style and interpolate — see shading.js. Changing a colour here
+       changes every shaded table on every page. */
+    --shade-low:  214, 110, 111;   /* worst end */
+    --shade-mid:  255, 243, 180;
+    --shade-high:  99, 190, 123;   /* best end */
+}
+
+/* ── Shared building blocks ───────────────────────────────────────────────
+   Small, genuinely cross-page pieces. Anything used by exactly one page
+   belongs in that page's own stylesheet, not here. */
+
+/* Back / Home / nav buttons — same size wherever they appear. */
+.nav-btn { font-size: 1rem; padding: 0.35rem 0.7rem; }
+
+/* Card / panel surface. */
+.panel {
+    background: var(--c-surface);
+    border: 1px solid var(--c-border);
+    border-radius: var(--radius-lg);
+    padding: 13px 18px;
+}
+
+/* Small "i" marker after a column heading, explaining what the column means.
+   Sized in em so it tracks whatever font size the table is rendered at.
+
+   The explanation is a CSS tooltip rather than the browser's own `title`
+   attribute: `title` cannot be styled and has a fixed ~1s delay before it
+   appears, which is too slow when scanning several columns. This shows
+   immediately on hover. Put the text in data-info, NOT title, or both will
+   appear. */
+.info-mark {
+    position: relative;
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 1.25em; height: 1.25em; border-radius: 50%;
+    border: 1px solid var(--c-text-heading); color: var(--c-text-heading);
+    font-size: 0.8em; font-style: italic; font-weight: 700;
+    line-height: 1; cursor: help; vertical-align: middle;
+}
+.info-mark:hover {
+    background: var(--c-text-heading);
+    color: var(--c-surface);
+    border-color: var(--c-text-heading);
+}
+/* Opens DOWNWARD, into the table body. A tooltip above the header would be
+   clipped away entirely: the header cell has overflow:hidden for its ellipsis
+   and the table has it for its rounded corners, so anything drawn above the
+   first row is cut off. Downward, it overlays the rows instead. */
+.info-mark[data-info]::after {
+    content: attr(data-info);
+    position: absolute; top: calc(100% + 8px); left: 50%; transform: translateX(-50%);
+    z-index: 1080; width: max-content; max-width: 260px;
+    background: var(--c-surface); color: var(--c-text);
+    border: 1px solid var(--c-border); border-radius: var(--radius-md);
+    box-shadow: 0 6px 24px rgba(0,0,0,0.18);
+    padding: 8px 10px;
+    /* rem, not em — the marker is 0.8em of an already-small heading, so an
+       em-sized tooltip would be unreadably small. */
+    font-size: 0.8rem; font-weight: 400; font-style: normal;
+    line-height: 1.45; text-align: left; white-space: normal;
+    letter-spacing: normal; text-transform: none;
+    opacity: 0; visibility: hidden; pointer-events: none;
+}
+/* Small arrow joining the tooltip to the marker, pointing up at it. */
+.info-mark[data-info]::before {
+    content: ''; position: absolute; top: calc(100% + 2px); left: 50%;
+    transform: translateX(-50%); z-index: 1081;
+    border: 6px solid transparent; border-bottom-color: var(--c-border);
+    opacity: 0; visibility: hidden; pointer-events: none;
+}
+.info-mark[data-info]:hover::after,
+.info-mark[data-info]:hover::before {
+    opacity: 1; visibility: visible;
+}
+
+/* Pure-CSS spinner — does not depend on the Font Awesome CDN having loaded,
+   so it still animates if that request is slow or blocked. */
+.css-spinner {
+    width: 32px; height: 32px; margin: 0 auto;
+    border: 4px solid #dee2e6;
+    border-top-color: var(--c-text-heading);
+    border-radius: 50%;
+    animation: css-spin 0.8s linear infinite;
+}
+@keyframes css-spin { to { transform: rotate(360deg); } }

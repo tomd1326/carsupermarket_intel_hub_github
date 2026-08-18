@@ -485,7 +485,7 @@ def _sp_cache_seconds() -> int:
     return _cache_durations()[0]
 _S3_BUCKET         = "aa-raw-sources-uk"
 # _S3_ENV imported from core
-_SF_S3_KEY         = f"applications/pricing/uk-vehicle-list-evaluator/{_S3_ENV}/cache/buying_requirements_v22.json"
+_SF_S3_KEY         = f"applications/pricing/uk-vehicle-list-evaluator/{_S3_ENV}/cache/buying_requirements_v23.json"
 _DBS_S3_KEY        = f"applications/pricing/uk-vehicle-list-evaluator/{_S3_ENV}/cache/dbs_purchases_v17.json"
 _CB_S3_KEY         = f"applications/pricing/uk-vehicle-list-evaluator/{_S3_ENV}/cache/cb_purchases_v13.json"
 _CB_EXTRA_S3_KEY   = f"applications/pricing/uk-vehicle-list-evaluator/{_S3_ENV}/cache/cb_extra_v2.json"
@@ -727,6 +727,11 @@ def _build_sf_rows(force: bool = False) -> list:
                 GPU_MS,
                 PURCHASE_PRICE_INC_VAT,
                 SELLING_PRICE_INC_VAT,
+                -- Sold/ordered vehicles use the admin fee actually charged (a
+                -- sales manager can waive it); unsold stock has no deal yet, so
+                -- the model falls back to the standard fee. Built in the model
+                -- alongside AUTOTRADER_PERCENT so the two always agree.
+                SELLING_PRICE_INCL_ADMIN_FEE,
                 AUTOTRADER_LATEST_RETAIL_VALUATION,
                 AUTOTRADER_PERCENT,
                 AUTOTRADER_LATEST_RETAIL_RATING,
@@ -761,7 +766,7 @@ def _build_sf_rows(force: bool = False) -> list:
     #  24:date_first_registered, 25:mileage, 26:autotrader_portal_link,
     #  27:invoice_posted_date, 28:vehicle_updated_at, 29:make_model, 30:cap_live_clean,
     #  31:vehicle_costs, 32:gpu_m_costs, 33:mileage_band, 34:website_url,
-    #  35:is_advertised]
+    #  35:is_advertised, 36:sell_price_incl_admin_fee]
     col_map = {name.upper(): i for i, name in enumerate(col_names)}
     def _g(r, name): return r[col_map[name]] if name in col_map else None
     def _s(r, name): v = _g(r, name); return str(v) if v is not None else None
@@ -784,6 +789,7 @@ def _build_sf_rows(force: bool = False) -> list:
         _gbp(r, 'VEHICLE_COSTS'), _gbp(r, 'GPU_M_COSTS'), _g(r, 'MILEAGE_BAND'),
         _g(r, 'WEBSITE_URL'),
         (1 if _g(r, 'IS_ADVERTISED') else 0),
+        _gbp(r, 'SELLING_PRICE_INCL_ADMIN_FEE'),
     ] for r in rows]
     _save_sf_cache_to_s3(result, cached_at)
 
