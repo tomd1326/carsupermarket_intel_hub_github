@@ -1,27 +1,11 @@
 /* ── Admin fee ───────────────────────────────────────────────
- * Internal selling prices end in 98 and exclude the admin fee. The advertised
- * price (website and Autotrader) must include the fee, so AT PTM % is always
- * the fee-inclusive price divided by the Autotrader valuation. During the
- * transition both prices are shown side by side.
- *
- * The fee-inclusive price comes from Snowflake (index 36), NOT from adding a
- * flat amount here: the fee is mandatory but a sales manager can waive it, so
- * a sold vehicle uses the fee actually charged on the deal. Unsold stock has
- * no deal yet, so the model falls back to the standard fee for those rows.
+ * Internal selling prices end in 98 and exclude the £199 admin fee. The
+ * advertised price (website and Autotrader) must include the fee, so AT PTM %
+ * is always the fee-inclusive price divided by the Autotrader valuation.
+ * During the transition both prices are shown side by side.
  */
-// Standard fee, used ONLY where there is no Snowflake row to read the real one
-// from — currently just the assess-vehicle popup, which prices a hypothetical
-// vehicle (an RRP typed in by the user) that has no deal behind it.
 const ADMIN_FEE = 199;
 function sellInclFee(v) { return (v == null || v === 0) ? null : Number(v) + ADMIN_FEE; }
-// Real fee-inclusive price for one Snowflake row (index 36) — the fee actually
-// charged on a sold deal, or the standard fee for unsold stock. Use this
-// wherever a row is available, and sum it per vehicle rather than adding a
-// flat amount to an average.
-function rowSellInclFee(r) {
-    const v = Array.isArray(r) ? r[36] : null;
-    return (v == null || v === 0) ? null : Number(v);
-}
 
 /* ── Status helpers ──────────────────────────────────────── */
 const SF_LABEL = '<i class="fas fa-snowflake me-1 text-info"></i>Snowflake';
@@ -756,7 +740,6 @@ function aggregateRawData() {
                 gpu_s_sum: 0, gpu_s_n: 0,
                 gpu_ms_sum: 0, gpu_ms_n: 0,
                 sell_sum: 0, sell_n: 0,
-                sell_fee_sum: 0, sell_fee_n: 0,
                 at_val_sum: 0, at_val_n: 0,
                 at_rating_sum: 0, at_rating_n: 0,
             });
@@ -803,12 +786,6 @@ function aggregateRawData() {
         if (gpu_ms  != null && sold)     { g.gpu_ms_sum     += gpu_ms; g.gpu_ms_n++;     }
         const soldForPrice = g.price_band === 'interest_free' ? sold : soldRate;
         if (sell    != null && sell !== 0 && soldForPrice) { g.sell_sum += sell; g.sell_n++; }
-        // Fee-inclusive price is summed per vehicle, not derived from the
-        // average above — the fee actually charged varies (it can be waived),
-        // so adding a flat amount to an average would misstate any group
-        // containing a waiver.
-        const sellFee = rowSellInclFee(r);
-        if (sellFee != null && soldForPrice) { g.sell_fee_sum += sellFee; g.sell_fee_n++; }
         if (at_val  != null && soldForPrice) { g.at_val_sum += at_val; g.at_val_n++;          }
         if (at_rate != null && sold)     { g.at_rating_sum  += at_rate; g.at_rating_n++; }
     }
@@ -818,7 +795,7 @@ function aggregateRawData() {
     for (const g of groups.values()) {
         if (g.stock === 0 && g.sales90 === 0) continue;
         const avgSell     = avg(g.sell_sum,   g.sell_n);
-        const avgSellIncl = avg(g.sell_fee_sum, g.sell_fee_n);
+        const avgSellIncl = sellInclFee(avgSell);
         const avgAtVal    = avg(g.at_val_sum, g.at_val_n);
         tableData.push([
             g.cap_id,                                   // 0
@@ -876,7 +853,6 @@ function aggregateModelData() {
                 gpu_s_sum: 0, gpu_s_n: 0,
                 gpu_ms_sum: 0, gpu_ms_n: 0,
                 sell_sum: 0, sell_n: 0,
-                sell_fee_sum: 0, sell_fee_n: 0,
                 at_val_sum: 0, at_val_n: 0,
                 at_rating_sum: 0, at_rating_n: 0,
             });
@@ -919,8 +895,6 @@ function aggregateModelData() {
         if (gpu_s  != null && sales90 === 1) { g.gpu_s_sum  += gpu_s;  g.gpu_s_n++;  }
         if (gpu_ms != null && sales90 === 1) { g.gpu_ms_sum += gpu_ms; g.gpu_ms_n++; }
         if (sell   != null && sell !== 0 && sales90 === 1) { g.sell_sum += sell; g.sell_n++; }
-        // Summed per vehicle — see the note in aggregateRawData().
-        { const sf = rowSellInclFee(r); if (sf != null && sales90 === 1) { g.sell_fee_sum += sf; g.sell_fee_n++; } }
         if (at_val != null && sales90 === 1) { g.at_val_sum  += at_val;  g.at_val_n++;  }
         if (at_rate!= null && sales90 === 1) { g.at_rating_sum += at_rate; g.at_rating_n++; }
     }
@@ -930,7 +904,7 @@ function aggregateModelData() {
     for (const g of groups.values()) {
         if (g.stock === 0 && g.sales90 === 0) continue;
         const avgSell     = avg(g.sell_sum,   g.sell_n);
-        const avgSellIncl = avg(g.sell_fee_sum, g.sell_fee_n);
+        const avgSellIncl = sellInclFee(avgSell);
         const avgAtVal    = avg(g.at_val_sum, g.at_val_n);
         tableData.push([
             g.cap_id,
@@ -974,21 +948,38 @@ function getNumberToBuy() {
     return isNaN(val) ? 0 : Math.max(0, val);
 }
 
-/* ── Colour scale helpers ─────────────────────────────────────────────────
-   The scale itself (colours + interpolation) lives in shading.js, shared with
-   the other report pages so they all shade identically — the colours come from
-   theme.css. The wrappers below keep this page's existing call signatures. */
-
-function _excelScale(ratio) { return shadeColour(ratio); }        // 0 = worst, 1 = best
-function _gradScale(ratio)  { return shadeColour(1 - ratio); }    // inverted: high = worst
+/* ── Colour scale helpers ────────────────────────────────── */
+const _RED = [248, 105, 107];
+const _YEL = [255, 243, 180];
+const _GRN = [ 99, 190, 123];
+function _excelScale(ratio) {
+    const r = Math.min(1, Math.max(0, ratio));
+    const lerp = (a, b, t) => Math.round(a + (b - a) * t);
+    const [c1, c2, t] = r < 0.5 ? [_RED, _YEL, r * 2] : [_YEL, _GRN, (r - 0.5) * 2];
+    return `rgb(${lerp(c1[0],c2[0],t)},${lerp(c1[1],c2[1],t)},${lerp(c1[2],c2[2],t)})`;
+}
+function _gradScale(ratio) { return _excelScale(1 - ratio); }
 
 function greenScale(v, max) {
     if (v <= 0 || max <= 0) return '';
-    return shadeAroundZero(v, 0, max);
+    const MIN_R = 0.25;
+    const r = MIN_R + (1 - MIN_R) * Math.min(1, v / max);
+    const lerp = (a, b, t) => Math.round(a + (b - a) * t);
+    return `rgb(${lerp(255,_GRN[0],r)},${lerp(255,_GRN[1],r)},${lerp(255,_GRN[2],r)})`;
 }
 
 function redGreenScale(v, min, max) {
-    return shadeAroundZero(v, min, max);
+    const MIN_R = 0.25;
+    const lerp = (a, b, t) => Math.round(a + (b - a) * t);
+    if (v < 0 && min < 0) {
+        const r = MIN_R + (1 - MIN_R) * Math.min(1, v / min);
+        return `rgb(${lerp(255,_RED[0],r)},${lerp(255,_RED[1],r)},${lerp(255,_RED[2],r)})`;
+    }
+    if (v > 0 && max > 0) {
+        const r = MIN_R + (1 - MIN_R) * Math.min(1, v / max);
+        return `rgb(${lerp(255,_GRN[0],r)},${lerp(255,_GRN[1],r)},${lerp(255,_GRN[2],r)})`;
+    }
+    return '';
 }
 
 function dtsScale(v) {
@@ -1934,7 +1925,7 @@ function _getModalSortValue(r, col) {
     if (col === 'cap_clean')  return Number(r[30]) || 0;
     if (col === 'cap_pct')    return (r[12] && r[30]) ? r[12] / r[30] : 0;
     if (col === 'sell_price') return Number(r[13]) || 0;
-    if (col === 'sell_price_fee') return rowSellInclFee(r) || 0;
+    if (col === 'sell_price_fee') return sellInclFee(r[13]) || 0;
     if (col === 'at_ptm')      return Number(r[14]) || 0;
     if (col === 'at_ptm_pct')  return Number(r[15]) || 0;
     if (col === 'at_rating')   return Number(r[16]) || 0;
@@ -1984,7 +1975,7 @@ function _renderModalRows() {
     tbody.innerHTML = '';
 
     // accumulators for averages rows — split by stock vs sales
-    const _acc = () => ({ mileSum:0,mileN:0, disSum:0,disN:0, dtsSum:0,dtsN:0, ppSum:0,ppN:0, capSum:0,capN:0, sellSum:0,sellN:0, sellFeeSum:0,sellFeeN:0, ptmSum:0,ptmN:0, ratingSum:0,ratingN:0, gpumSum:0,gpumN:0 });
+    const _acc = () => ({ mileSum:0,mileN:0, disSum:0,disN:0, dtsSum:0,dtsN:0, ppSum:0,ppN:0, capSum:0,capN:0, sellSum:0,sellN:0, ptmSum:0,ptmN:0, ratingSum:0,ratingN:0, gpumSum:0,gpumN:0 });
     const accStock = _acc(), accSales = _acc();
 
     const visibleVehicles = _modalBand === 'All' ? _modalVehicles
@@ -2047,7 +2038,7 @@ function _renderModalRows() {
         addTd(r[30] != null && r[30] !== 0 ? fmtGBP(r[30]) : '—', 'right');
         const capPct = (r[12] && r[30]) ? ((r[12] / r[30]) * 100).toFixed(1) + '%' : '—';
         addTd(capPct, 'right');
-        const sellFee = rowSellInclFee(r);
+        const sellFee = sellInclFee(r[13]);
         addTd(r[13] != null && r[13] !== 0 ? fmtGBP(r[13]) : '—', 'right');
         addTd(sellFee != null ? fmtGBP(sellFee) : '—', 'right');
         addTd(r[14] != null ? fmtGBP(r[14]) : '—', 'right');
@@ -2067,7 +2058,6 @@ function _renderModalRows() {
         if (r[12] != null && r[12] !== 0) { acc.ppSum     += Number(r[12]); acc.ppN++;     }
         if (r[30] != null && r[30] !== 0) { acc.capSum    += Number(r[30]); acc.capN++;    }
         if (r[13] != null && r[13] !== 0) { acc.sellSum   += Number(r[13]); acc.sellN++;   }
-        { const sf = rowSellInclFee(r); if (sf != null) { acc.sellFeeSum += sf; acc.sellFeeN++; } }
         if (r[14] != null)                { acc.ptmSum    += Number(r[14]); acc.ptmN++;    }
         if (r[16] != null)                { acc.ratingSum += Number(r[16]); acc.ratingN++; }
         if (r[22] != null)                { acc.gpumSum   += Number(r[22]); acc.gpumN++;   }
@@ -2188,7 +2178,7 @@ function _renderModalRows() {
         const avgPTM    = acc.ptmN    ? acc.ptmSum    / acc.ptmN                 : null;
         const avgRating = acc.ratingN ? acc.ratingSum / acc.ratingN              : null;
         const avgGPUM   = acc.gpumN   ? acc.gpumSum   / acc.gpumN               : null;
-        const avgSellFee = acc.sellFeeN ? acc.sellFeeSum / acc.sellFeeN : null;
+        const avgSellFee = sellInclFee(avgSell);
         const avgCapPct = (avgPP  && avgCap) ? (avgPP  / avgCap)  * 100 : null;
         const avgPTMPct = (avgSellFee && avgPTM) ? (avgSellFee / avgPTM) * 100 : null;
 

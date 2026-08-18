@@ -225,17 +225,19 @@ def _mark_failed_if_stale(entry: dict) -> dict:
 @router.get("/reports")
 def reports_root():
     """Old single Reports entry point — home now links straight to
-    /reports/apex and /reports/orders-deliveries."""
-    return RedirectResponse(url=BASE_URL + "/reports/orders-deliveries", status_code=303)
+    /reports/apex and /reports/tom."""
+    return RedirectResponse(url=BASE_URL + "/reports/tom", status_code=303)
 
 
 @router.get("/reports/tom", response_class=HTMLResponse)
-def tom_reports():
-    """Old Tom Reports landing page — it only ever held one card (Orders &
-    Deliveries), so home now links straight there instead. Kept as a redirect
-    so any existing bookmark still lands somewhere real. Access control lives
-    on /reports/orders-deliveries itself, not here."""
-    return RedirectResponse(url=BASE_URL + "/reports/orders-deliveries", status_code=303)
+def tom_reports(request: Request, user: str = Depends(get_current_user)):
+    """Tom Reports landing page — currently the Orders & Deliveries report."""
+    if user != 'tdrayson':
+        return RedirectResponse(url=BASE_URL + "/home", status_code=303)
+    _track(request, 'page_view', '/reports/tom')
+    return templates.TemplateResponse("reports_landing.html", {
+        "request": request, "user": user, "BASE_URL": BASE_URL,
+    })
 
 
 @router.get("/reports/apex", response_class=HTMLResponse)
