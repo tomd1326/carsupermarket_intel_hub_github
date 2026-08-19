@@ -4,6 +4,12 @@ Adding a new report only requires:
   1. A module under reports/ exposing run_report(progress_cb) -> file bytes
   2. An entry in REPORTS below (label, module, output extension/content-type)
 
+A report that needs a date range sets 'date_range': True on its REPORTS entry.
+That shows the From/To pickers on the page and changes the module's signature to
+run_report(progress_cb, params), where params carries 'date_from'/'date_to' as
+YYYY-MM-DD strings. The report applies its own default for anything missing.
+Reports without the flag keep the plain run_report(progress_cb) signature.
+
 Flow (mirrors the /elaborate-task background pattern):
   POST /api/reports/{report_type}/start  -> creates task_id, writes initial
        status JSON + appends to the S3 task index, fires an async
@@ -61,6 +67,15 @@ REPORTS = {
         'extension': 'xlsx',
         'content_type': _XLSX_CONTENT_TYPE,
     },
+    'crm-selling-enquiries': {
+        'label': 'CRM - Selling - Enquiries',
+        'module': 'reports.crm_selling_enquiries',
+        'extension': 'xlsx',
+        'content_type': _XLSX_CONTENT_TYPE,
+        # Shows the date range pickers on the page and passes the chosen dates
+        # to run_report as params. Both default to yesterday.
+        'date_range': True,
+    },
 }
 
 
@@ -89,14 +104,50 @@ def _slugify(text: str) -> str:
     return slug[:40].rstrip('-')
 
 
+def _clean_date(value) -> str:
+    """Keep a YYYY-MM-DD string, or drop it. The report module applies its own
+    default (yesterday) for anything missing, so a bad value is not fatal."""
+    if not isinstance(value, str):
+        return ''
+    value = value.strip()[:10]
+    try:
+        datetime.date.fromisoformat(value)
+    except ValueError:
+        return ''
+    return value
+
+
+def _report_params(report_type: str, payload: dict) -> dict:
+    """The run parameters a report accepts, taken off the start request."""
+    if not REPORTS.get(report_type, {}).get('date_range'):
+        return {}
+    return {
+        'date_from': _clean_date(payload.get('date_from')),
+        'date_to': _clean_date(payload.get('date_to')),
+    }
+
+
+def _date_range_slug(params: dict) -> str:
+    """Date range for the output filename: one day is just that day."""
+    params = params or {}
+    date_from, date_to = params.get('date_from'), params.get('date_to')
+    if not date_from and not date_to:
+        return ''
+    if date_from == date_to or not date_to:
+        return date_from or ''
+    if not date_from:
+        return date_to
+    return f'{date_from}-to-{date_to}'
+
+
 def _write_status(task_id: str, report_type: str, status: str, pct: int, stage: str,
                   started_at: str, user: str = None, notes: str = None,
-                  filename: str = None, error: str = None):
+                  filename: str = None, error: str = None, params: dict = None):
     body = {
         'task_id': task_id, 'report_type': report_type, 'user': user, 'notes': notes,
         'status': status, 'pct': pct, 'stage': stage,
         'started_at': started_at, 'updated_at': _now_iso(),
-        'filename': filename, 'error': error,
+        'filename': filename, 'error': error, 'params': params or {},
     }
     if status in ('done', 'error'):
         body['completed_at'] = body['updated_at']
@@ -171,16 +222,20 @@ def _mark_failed_if_stale(entry: dict) -> dict:
     )
 
 
-@router.get("/reports", response_class=HTMLResponse)
-def reports_landing(request: Request, user: str = Depends(get_current_user)):
-    """Landing page: choose Apex Reports (the report runner) or the
-    Orders & Deliveries report."""
-    if user != 'tdrayson':
-        return RedirectResponse(url=BASE_URL + "/home", status_code=303)
-    _track(request, 'page_view', '/reports')
-    return templates.TemplateResponse("reports_landing.html", {
-        "request": request, "user": user, "BASE_URL": BASE_URL,
-    })
+@router.get("/reports")
+def reports_root():
+    """Old single Reports entry point — home now links straight to
+    /reports/apex and /reports/orders-deliveries."""
+    return RedirectResponse(url=BASE_URL + "/reports/orders-deliveries", status_code=303)
+
+
+@router.get("/reports/tom", response_class=HTMLResponse)
+def tom_reports():
+    """Old Tom Reports landing page — it only ever held one card (Orders &
+    Deliveries), so home now links straight there instead. Kept as a redirect
+    so any existing bookmark still lands somewhere real. Access control lives
+    on /reports/orders-deliveries itself, not here."""
+    return RedirectResponse(url=BASE_URL + "/reports/orders-deliveries", status_code=303)
 
 
 @router.get("/reports/apex", response_class=HTMLResponse)
@@ -188,9 +243,15 @@ def reports_page(request: Request, user: str = Depends(get_current_user)):
     if user != 'tdrayson':
         return RedirectResponse(url=BASE_URL + "/home", status_code=303)
     _track(request, 'page_view', '/reports/apex')
-    report_options = [{'type': k, 'label': v['label']} for k, v in REPORTS.items()]
+    report_options = [
+        {'type': k, 'label': v['label'], 'date_range': bool(v.get('date_range'))}
+        for k, v in REPORTS.items()
+    ]
+    # Both date pickers default to yesterday — the most recent complete day.
+    yesterday = (datetime.date.today() - datetime.timedelta(days=1)).isoformat()
     return templates.TemplateResponse("reports.html", {
-        "request": request, "user": user, "BASE_URL": BASE_URL, "report_options": report_options,
+        "request": request, "user": user, "BASE_URL": BASE_URL,
+        "report_options": report_options, "default_date": yesterday,
     })
 
 
@@ -204,7 +265,8 @@ def list_report_tasks(user: str = Depends(get_current_user)):
     return {'tasks': entries}
 
 
-def _run_report_worker(task_id: str, report_type: str, started_at: str, user: str = None, notes: str = None):
+def _run_report_worker(task_id: str, report_type: str, started_at: str, user: str = None,
+                       notes: str = None, params: dict = None):
     """The actual report build + upload. Runs either inside the async worker
     Lambda invocation (dev/prod) or a background thread (local dev), so
     either way the caller of start_report gets an immediate response and the
@@ -214,25 +276,34 @@ def _run_report_worker(task_id: str, report_type: str, started_at: str, user: st
         module = importlib.import_module(config['module'])
 
         def progress(pct, stage):
-            _write_status(task_id, report_type, 'running', pct, stage, started_at, user=user, notes=notes)
+            _write_status(task_id, report_type, 'running', pct, stage, started_at,
+                          user=user, notes=notes, params=params)
 
-        file_bytes = module.run_report(progress_cb=progress)
+        # Only pass params to reports that take them, so existing report
+        # modules keep their zero-argument run_report signature.
+        if config.get('date_range'):
+            file_bytes = module.run_report(progress_cb=progress, params=params or {})
+        else:
+            file_bytes = module.run_report(progress_cb=progress)
 
-        _write_status(task_id, report_type, 'running', 97, 'Uploading report', started_at, user=user, notes=notes)
+        _write_status(task_id, report_type, 'running', 97, 'Uploading report', started_at,
+                      user=user, notes=notes, params=params)
         _s3_client().put_object(
             Bucket=s3_bucketname, Key=_output_key(task_id, config['extension']),
             Body=file_bytes, ContentType=config['content_type'],
         )
         timestamp = datetime.datetime.now().strftime('%Y%m%d%H%M%S')
         notes_slug = _slugify(notes)
-        name_parts = [report_type] + ([notes_slug] if notes_slug else []) + [timestamp]
+        date_slug = _date_range_slug(params)
+        name_parts = ([report_type] + ([date_slug] if date_slug else [])
+                      + ([notes_slug] if notes_slug else []) + [timestamp])
         filename = f"{'-'.join(name_parts)}.{config['extension']}"
         _write_status(task_id, report_type, 'done', 100, 'Complete', started_at,
-                      user=user, notes=notes, filename=filename)
+                      user=user, notes=notes, filename=filename, params=params)
     except Exception as e:
         logger.exception('Report task %s (%s) failed', task_id, report_type)
         _write_status(task_id, report_type, 'error', 100, 'Failed', started_at,
-                      user=user, notes=notes, error=str(e))
+                      user=user, notes=notes, error=str(e), params=params)
 
 
 @router.post("/api/reports/{report_type}/start")
@@ -241,14 +312,19 @@ def start_report(report_type: str, request: Request, payload: dict = None,
     if user != 'tdrayson':
         raise HTTPException(status_code=403)
     _report_config(report_type)  # 404s if unknown
-    notes = ((payload or {}).get('notes') or '').strip()[:100] or None
+    payload = payload or {}
+    notes = (payload.get('notes') or '').strip()[:100] or None
+    params = _report_params(report_type, payload)
 
-    # Single-flight per report type: reports aren't configurable, so a
-    # concurrent duplicate would produce identical output while doubling the
-    # Snowflake/API load (and racing the delta cache). Attach the caller to
-    # the in-flight run instead of starting another.
+    # Single-flight per report type: a report with no parameters would produce
+    # identical output twice while doubling the Snowflake/API load (and racing
+    # the delta cache), so the caller is attached to the in-flight run instead.
+    # A report with a date range is only a duplicate when the range matches -
+    # two different ranges are genuinely different reports.
     for entry in _read_index():
         if entry.get('report_type') == report_type and entry.get('status') == 'running':
+            if (entry.get('params') or {}) != params:
+                continue
             entry = _mark_failed_if_stale(entry)
             if entry.get('status') == 'running':
                 logger.info('Report %s already running as task %s — attaching caller',
@@ -257,8 +333,10 @@ def start_report(report_type: str, request: Request, payload: dict = None,
 
     task_id = uuid.uuid4().hex
     started_at = _now_iso()
-    _write_status(task_id, report_type, 'running', 0, 'Queued', started_at, user=user, notes=notes)
-    _track(request, 'run_report', '/reports', {'report': report_type, 'task_id': task_id, 'notes': notes})
+    _write_status(task_id, report_type, 'running', 0, 'Queued', started_at,
+                  user=user, notes=notes, params=params)
+    _track(request, 'run_report', '/reports', {'report': report_type, 'task_id': task_id,
+                                               'notes': notes, **params})
 
     aws_context = request.scope.get("aws.context")
     if _is_local or aws_context is None:
@@ -269,7 +347,7 @@ def start_report(report_type: str, request: Request, payload: dict = None,
         # matching the dev/prod async-Lambda behaviour.
         threading.Thread(
             target=_run_report_worker,
-            args=(task_id, report_type, started_at, user, notes),
+            args=(task_id, report_type, started_at, user, notes, params),
             daemon=True,
         ).start()
     else:
@@ -278,7 +356,7 @@ def start_report(report_type: str, request: Request, payload: dict = None,
             path=BASE_URL + "/api/reports/run",
             method="POST",
             data={'task_id': task_id, 'report_type': report_type, 'started_at': started_at,
-                  'user': user, 'notes': notes},
+                  'user': user, 'notes': notes, 'params': params},
         )
     return {'task_id': task_id}
 
@@ -288,7 +366,7 @@ async def run_report_task(data: dict):
     """Internal worker route, invoked via async Lambda self-invocation
     (dev/prod only — local dev uses the background thread in start_report)."""
     _run_report_worker(data['task_id'], data['report_type'], data['started_at'],
-                       data.get('user'), data.get('notes'))
+                       data.get('user'), data.get('notes'), data.get('params'))
     return {'ok': True}
 
 

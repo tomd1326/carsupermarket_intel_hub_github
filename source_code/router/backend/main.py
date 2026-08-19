@@ -8,6 +8,7 @@ from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.sessions import SessionMiddleware
+from starlette.middleware.gzip import GZipMiddleware
 from starlette.status import HTTP_401_UNAUTHORIZED
 from mangum import Mangum
 import json
@@ -62,6 +63,13 @@ _is_local = __name__ == '__main__' or os.getenv('LOCAL_ENV') == '1'
 app.add_middleware(SessionMiddleware, secret_key="as#$RD$26xc04$GF3r1dFDmhjd", max_age=30 * 24 * 3600, https_only=not _is_local, same_site="none" if not _is_local else "lax")
 # Add middleware for base path
 app.add_middleware(BasePathMiddleware)
+# Compresses any response over 1KB whose client sends Accept-Encoding: gzip
+# (every browser does). Large JSON payloads (repeated keys, short numeric
+# values) compress especially well — this is what keeps big API responses,
+# e.g. Orders & Deliveries' per-vehicle data, under the Lambda/API Gateway 6MB
+# synchronous response limit. Must be registered before Mangum wraps the app
+# (it wraps `app` as a whole, so middleware order here still applies).
+app.add_middleware(GZipMiddleware, minimum_size=1024)
 
 # OAuth2 password bearer token utilization (assuming token-based auth for simplicity)
 #oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
@@ -160,8 +168,7 @@ app.mount("/static", StaticFiles(directory=os.path.join(os.path.dirname(__file__
 async def favicon():
     return FileResponse(os.path.join(os.path.dirname(__file__), "static", "icon.png"))
 
-# TODO: probably it's more correct to put api_gateway_base_path="/dev" here
-handler = Mangum(app, lifespan="auto")
+handler = Mangum(app, lifespan="auto", api_gateway_base_path="/dev")
 lambda_requests_manager = LambdaRequestsManager()
 lambda_requests_manager.init(mangum_handler=handler)
 

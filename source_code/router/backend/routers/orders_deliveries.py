@@ -24,9 +24,10 @@ import zoneinfo
 
 import boto3
 
-from fastapi import APIRouter, Request, Depends, HTTPException
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi import APIRouter, Request, Depends
+from fastapi.responses import HTMLResponse
 
+from utils.db_utils import get_database_connection, get_user_preference
 from utils.snowflake_client import SnowflakeClient
 from .core import BASE_URL, templates, _track, get_current_user, s3_bucketname, s3_bucket_region, _S3_ENV
 
@@ -48,7 +49,11 @@ _COLUMNS = [
     ("ACKNOWLEDGED_DAYS_IN_STOCK_BAND", "dis_band"),
     ("ACKNOWLEDGED_DAYS_ADVERTISED", "dts"),
     ("PURCHASE_PRICE_INC_VAT", "purch_price"),
-    ("SALE_PRICE_AFTER_DISCOUNT", "sell_price_after_disc"),
+    # Selling price before the vehicle discount, including the admin fee
+    # actually charged on the deal (the fee is mandatory but can be waived, so
+    # a flat amount would overstate a waived one). Built in the model beside
+    # SALE_PRICE_AFTER_DISCOUNT_INCL_ADMIN_FEE. The discount is its own column.
+    ("SALE_PRICE_BEFORE_DISCOUNT_INCL_ADMIN_FEE", "sell_price_incl_fee"),
     ("PRICE_BAND", "price_band"),
     ("FINANCE_SUBSIDY", "finance_subsidy"),
     ("CHASSIS_MARGIN_AFTER_SUBSIDY", "chassis_mgn_aft_subs"),
@@ -62,10 +67,10 @@ _COLUMNS = [
     ("GPU_S_COSTS", "gpu_s_costs"),
     ("GPU_S", "gpu_s"),
     ("GPU_MS", "gpu_ms"),
-    ("ROI_PERCENTAGE", "roi_pct"),
     ("CAP_LIVE_CLEAN_PURCHASE", "cap_live_purchase"),
     ("CAP_LIVE_CLEAN_LATEST", "cap_live_order"),
     ("AUTOTRADER_LATEST_RETAIL_VALUATION", "at_val_order"),
+    ("AUTOTRADER_LATEST_RETAIL_RATING", "at_rating"),
     ("FUEL_TYPE_CATEGORY", "fuel"),
     ("COLOUR", "colour"),
     ("MILEAGE", "mileage"),
@@ -74,30 +79,59 @@ _COLUMNS = [
     ("AGE_BAND", "age_band"),
     ("DEAL_SITE_CLEAN", "site"),
     ("SALES_TYPE", "sales_type"),
+    # Rate/Cash vs 0% split, bucketed in the model so the browser does not
+    # redo it on every slicer click.
+    ("SALES_TYPE_BUCKET", "sales_type_bucket"),
     ("DISCOUNT_INC_VAT", "discount"),
-    ("PX_VALUATION_STATUS", "px_status"),
+    # Not displayed — drives the Orders/Deliveries lens filter (see LENS in the
+    # template), so it must stay in the payload even though no column shows it.
     ("DEAL_STATUS", "deal_status"),
     ("INVOICE_STATUS", "invoice_status"),
     ("ORDER_ACKNOWLEDGED_DATE", "order_date"),
+    # Period keys for the Order/Delivery Week/Month slicer, one per lens and
+    # granularity. Built in the model so the browser does not recompute ISO
+    # weeks for every row on every render. Weeks are already 'yyyy-Www'; the
+    # month columns are DATEs, so they are cast to 'yyyy-MM' to match.
     ("ORDER_ACKNOWLEDGED_WEEK", "order_week"),
+    ("TO_CHAR(ORDER_ACKNOWLEDGED_MONTH, 'YYYY-MM') AS ORDER_MONTH", "order_month"),
+    ("INVOICE_POSTED_WEEK", "delivered_week"),
+    ("TO_CHAR(INVOICE_POSTED_MONTH, 'YYYY-MM') AS DELIVERED_MONTH", "delivered_month"),
     ("INVOICE_POSTED_DATE", "delivered"),
     ("ORDER_URL", "order_url"),
     ("INVOICE_URL", "invoice_url"),
 ]
 
-# Hard limit on the data: 12 complete months plus the current month. The floor
-# is the first day of the month 12 months before the current month, so the
-# current month + the 12 prior months are fully covered. Applies to both the
-# order date and the invoice-posted date (see the OR filter in _build_data).
-_FETCH_MONTHS_BACK = 12
+# Hard limit on the data: 3 complete calendar months, plus the current
+# (in-progress) month. The floor is the 1st of the month 3 months before the
+# current one, so every day of those 3 months is covered in full — no partial
+# month or week ever enters the fetch. Applies to both the order date and the
+# invoice-posted date (see the OR filter in _build_data).
+#
+# Calendar months, not a week count: a fixed number of weeks can land the
+# floor mid-month depending on where in the month "today" falls, which is
+# exactly what caused a real bug — the Period slicer offered an early week
+# (W18 2026, 484 real orders) as if it had data, when the fetch floor only
+# actually captured 1 of those 484 rows (via the OTHER lens's date, pulled in
+# by the OR clause in the SQL below). Anchoring on calendar months makes "is
+# this month complete" a fact the server guarantees, not something the
+# frontend has to work out.
+#
+# Was 13 months, then 13 weeks — the original 13-month window made the JSON
+# payload big enough to hit the Lambda/API Gateway 6MB response limit (a real
+# PROD 500 with no application-level exception, since the failure happens
+# after the handler returns, during response marshalling — nothing to catch
+# or log).
+_FETCH_MONTHS_BACK = 3
 
 
 def _fetch_start() -> datetime.date:
     today = datetime.date.today()
-    first = today.replace(day=1)
-    for _ in range(_FETCH_MONTHS_BACK):
-        first = (first - datetime.timedelta(days=1)).replace(day=1)
-    return first
+    first_of_this_month = today.replace(day=1)
+    y, m = first_of_this_month.year, first_of_this_month.month - _FETCH_MONTHS_BACK
+    while m <= 0:
+        m += 12
+        y -= 1
+    return datetime.date(y, m, 1)
 
 
 # ── Caching ───────────────────────────────────────────────────────────────
@@ -111,7 +145,7 @@ def _fetch_start() -> datetime.date:
 #
 # Version the S3 key: bump _CACHE_VERSION whenever _COLUMNS changes, otherwise
 # an old cached payload (missing the new columns) is served until it expires.
-_CACHE_VERSION = 2
+_CACHE_VERSION = 9
 _S3_KEY = (f"applications/pricing/uk-vehicle-list-evaluator/shared/cache/"
            f"orders_deliveries_v{_CACHE_VERSION}.json")
 
@@ -179,7 +213,17 @@ def _build_data() -> dict:
     idx = {c.upper(): i for i, c in enumerate(cols)}
 
     def _val(r, sf_col):
-        i = idx.get(sf_col.upper())
+        # Entries in _COLUMNS may be a bare column ("VRM") or a full expression
+        # with an alias ("TO_CHAR(...) AS ORDER_MONTH"). Snowflake returns the
+        # ALIAS as the column name, so look up the alias, not the expression —
+        # otherwise the lookup misses and every row silently gets None. That is
+        # what emptied the whole page under "By Month": order_month /
+        # delivered_month came back null for every row, so no row matched the
+        # period selection and every other slicer lost its values too.
+        name = sf_col.upper()
+        if " AS " in name:
+            name = name.rsplit(" AS ", 1)[1].strip()
+        i = idx.get(name)
         if i is None:
             return None
         v = r[i]
@@ -206,17 +250,14 @@ def _build_data() -> dict:
         row = {key: _val(r, sf) for sf, key in _COLUMNS}
         # Derived columns (matched to the Power Query)
         row["purchase_cap_pct"] = _ratio(row["purch_price"], row["cap_live_purchase"])
-        row["sell_pct_at"] = _ratio(row["sell_price_after_disc"], row["at_val_order"])
-        # year_month from the posted date (Deliveries grouping);
-        # year_week comes straight from ORDER_ACKNOWLEDGED_WEEK
-        row["year_month"] = (row["delivered"] or "")[:7] or None
+        row["sell_pct_at"] = _ratio(row["sell_price_incl_fee"], row["at_val_order"])
         out.append(row)
 
     return {
         "status": "ok",
         "today": datetime.date.today().isoformat(),
         "fetch_start": fetch_start.isoformat(),
-        "columns": keys + ["purchase_cap_pct", "sell_pct_at", "year_month"],
+        "columns": keys + ["purchase_cap_pct", "sell_pct_at"],
         "rows": out,
     }
 
@@ -265,13 +306,40 @@ def warm_cache() -> None:
     logger.info("Home cache warm (Orders & Deliveries) complete")
 
 
+_FONT_DEFAULT = 13          # page font (everything except the vehicle grid)
+_FONT_DEFAULT_VEHICLE = 12  # the vehicle view's grid, which has its own resizer
+_FONT_MIN, _FONT_MAX = 8, 20
+
+
+def _saved_font(conn, user: str, pref_key: str, default: int = _FONT_DEFAULT) -> int:
+    """Mirrors the JS loadFont() clamp/fallback so the server-rendered label
+    always matches what loadFont() would set — otherwise the label jumps on
+    load. Kept in sync manually with FONT_MIN/FONT_MAX/FONT_DEFAULT in the JS."""
+    try:
+        v = get_user_preference(conn, user, pref_key)
+        v = int(v)
+        if _FONT_MIN <= v <= _FONT_MAX:
+            return v
+    except Exception:
+        pass
+    return default
+
+
 @router.get("/reports/orders-deliveries", response_class=HTMLResponse)
 def orders_deliveries_page(request: Request, user: str = Depends(get_current_user)):
-    if user != 'tdrayson':
-        return RedirectResponse(url=BASE_URL + "/home", status_code=303)
     _track(request, 'page_view', '/reports/orders-deliveries')
+    try:
+        with get_database_connection() as conn:
+            font_summary = _saved_font(conn, user, 'orders_deliveries_font_summary')
+            font_vehicle = _saved_font(conn, user, 'orders_deliveries_font_vehicle',
+                                       _FONT_DEFAULT_VEHICLE)
+    except Exception as e:
+        logger.warning("Orders & Deliveries: could not load saved font sizes: %s", e)
+        font_summary = _FONT_DEFAULT
+        font_vehicle = _FONT_DEFAULT_VEHICLE
     return templates.TemplateResponse("orders_deliveries.html", {
         "request": request, "user": user, "BASE_URL": BASE_URL,
+        "font_summary": font_summary, "font_vehicle": font_vehicle,
     })
 
 
@@ -280,8 +348,6 @@ def orders_deliveries_data(request: Request, refresh: int = 0,
                            user: str = Depends(get_current_user)):
     """Cached deal rows. `refresh=1` forces a rebuild from Snowflake (the
     page's manual Refresh button)."""
-    if user != 'tdrayson':
-        raise HTTPException(status_code=403)
     try:
         return _get_data(force_refresh=bool(refresh))
     except Exception as e:
