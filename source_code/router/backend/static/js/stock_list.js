@@ -1,7 +1,9 @@
 /* ── Formatters ──────────────────────────────────────────────────────────── */
 function fmtGBP(v) {
     if (v == null) return '—';
-    return '£' + Number(v).toLocaleString('en-GB', { minimumFractionDigits: 0, maximumFractionDigits: 0 });
+    // Sign before the symbol: -£1,234, never £-1,234.
+    const n = Number(v);
+    return (n < 0 ? '-£' : '£') + Math.abs(n).toLocaleString('en-GB', { minimumFractionDigits: 0, maximumFractionDigits: 0 });
 }
 function fmtInt(v) {
     if (v == null) return '—';

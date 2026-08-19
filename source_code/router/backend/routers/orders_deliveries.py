@@ -101,19 +101,37 @@ _COLUMNS = [
     ("INVOICE_URL", "invoice_url"),
 ]
 
-# Hard limit on the data: 12 complete months plus the current month. The floor
-# is the first day of the month 12 months before the current month, so the
-# current month + the 12 prior months are fully covered. Applies to both the
-# order date and the invoice-posted date (see the OR filter in _build_data).
-_FETCH_MONTHS_BACK = 12
+# Hard limit on the data: 3 complete calendar months, plus the current
+# (in-progress) month. The floor is the 1st of the month 3 months before the
+# current one, so every day of those 3 months is covered in full — no partial
+# month or week ever enters the fetch. Applies to both the order date and the
+# invoice-posted date (see the OR filter in _build_data).
+#
+# Calendar months, not a week count: a fixed number of weeks can land the
+# floor mid-month depending on where in the month "today" falls, which is
+# exactly what caused a real bug — the Period slicer offered an early week
+# (W18 2026, 484 real orders) as if it had data, when the fetch floor only
+# actually captured 1 of those 484 rows (via the OTHER lens's date, pulled in
+# by the OR clause in the SQL below). Anchoring on calendar months makes "is
+# this month complete" a fact the server guarantees, not something the
+# frontend has to work out.
+#
+# Was 13 months, then 13 weeks — the original 13-month window made the JSON
+# payload big enough to hit the Lambda/API Gateway 6MB response limit (a real
+# PROD 500 with no application-level exception, since the failure happens
+# after the handler returns, during response marshalling — nothing to catch
+# or log).
+_FETCH_MONTHS_BACK = 3
 
 
 def _fetch_start() -> datetime.date:
     today = datetime.date.today()
-    first = today.replace(day=1)
-    for _ in range(_FETCH_MONTHS_BACK):
-        first = (first - datetime.timedelta(days=1)).replace(day=1)
-    return first
+    first_of_this_month = today.replace(day=1)
+    y, m = first_of_this_month.year, first_of_this_month.month - _FETCH_MONTHS_BACK
+    while m <= 0:
+        m += 12
+        y -= 1
+    return datetime.date(y, m, 1)
 
 
 # ── Caching ───────────────────────────────────────────────────────────────
@@ -127,7 +145,7 @@ def _fetch_start() -> datetime.date:
 #
 # Version the S3 key: bump _CACHE_VERSION whenever _COLUMNS changes, otherwise
 # an old cached payload (missing the new columns) is served until it expires.
-_CACHE_VERSION = 8
+_CACHE_VERSION = 9
 _S3_KEY = (f"applications/pricing/uk-vehicle-list-evaluator/shared/cache/"
            f"orders_deliveries_v{_CACHE_VERSION}.json")
 

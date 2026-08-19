@@ -52,38 +52,66 @@ function shadeColour(ratio) {
     return `rgb(${[0, 1, 2].map(i => lerp(from[i], to[i], t)).join(',')})`;
 }
 
-/* Builds a shading function for one column, scaled to that column's own
-   min..max across the rows given.
+/* Builds a shading function for one column, centred on that column's own mean
+   across the rows given: the mean is amber, and values shade toward red or
+   green in proportion to how many standard deviations they sit from it. A
+   column whose values are all close together therefore stays mostly amber,
+   rather than having its extremes forced to full red and full green.
      rows     — the rows the table is about to draw
      getValue — pulls the column's value out of a row
      options.inScale — optional (value) => boolean deciding which values SET the
-        min and max. Use it to keep known anomalies from stretching the scale:
-        one 900-day vehicle otherwise pushes every real value to the good end,
-        so the whole column reads green. Excluded values are still coloured —
-        they just land at the end of the scale rather than defining it.
+        min and max, AND which values get a colour at all. Use it to keep known
+        anomalies out of the scale entirely: one 900-day vehicle otherwise
+        pushes every real value to the good end, so the whole column reads
+        green. Values failing this test are left UNSHADED (no background), not
+        clamped to an end of the scale — an anomaly is not "the worst case",
+        it is a data problem, and colouring it as though it were on the same
+        scale as real values is misleading.
    Returns (value, direction) => css colour string ('' when not shadeable).
 
-   Returns a no-op shader when there are fewer than two known values, or when
-   every value is identical: with nothing to compare against, colouring cells
-   would imply a spread that is not there. That is also why a two- or
-   three-row table is usually better left unshaded entirely — min..max across
-   three rows only marks "biggest of three". */
+   Returns a no-op shader when there are fewer than two known values, when
+   every value is identical, or when the standard deviation is zero: with
+   nothing to compare against, colouring cells would imply a spread that is
+   not there. A two- or three-row table is usually better left unshaded
+   entirely for the same reason — across three rows the shading only really
+   marks "biggest of three". */
 function shadeScale(rows, getValue, options) {
     const inScale = (options && options.inScale) || null;
     const all = rows
         .map(getValue)
         .filter(v => v !== null && v !== undefined && v !== '' && !Number.isNaN(Number(v)))
         .map(Number);
-    // Values outside the scale set its endpoints aside but still get coloured,
-    // clamped to whichever end they sit past.
     const vals = inScale ? all.filter(inScale) : all;
     if (vals.length < 2) return () => '';
     const min = Math.min(...vals), max = Math.max(...vals);
     if (max === min) return () => '';
 
+    // Anchor the amber midpoint on the MEAN, not halfway between min and max,
+    // and measure each value in standard deviations from it.
+    //
+    // Scaling edge-to-edge (ratio = (v - min) / (max - min)) forces the lowest
+    // value to full red and the highest to full green no matter how close
+    // together they are: a column spanning £1,542..£1,694 — a 10% spread —
+    // came out as one saturated red row and one saturated green row, with
+    // almost nothing in between, because only a value landing near the exact
+    // centre ever reached amber. That reads as "worst vs best" when it should
+    // read "all much of a muchness".
+    //
+    // Against the mean, a value one SPREAD_SDS deviation away hits full
+    // colour and everything nearer sits in the amber band in proportion, so a
+    // tight column stays mostly yellow and only genuine outliers saturate.
+    const mean = vals.reduce((a, b) => a + b, 0) / vals.length;
+    const variance = vals.reduce((a, b) => a + (b - mean) ** 2, 0) / vals.length;
+    const sd = Math.sqrt(variance);
+    if (!sd) return () => '';
+    const SPREAD_SDS = 1.5;
+
     return (value, direction) => {
         if (value === null || value === undefined || value === '' || Number.isNaN(Number(value))) return '';
-        const ratio = (Number(value) - min) / (max - min);
+        // Outside the scale means no colour at all, not a clamped one.
+        if (inScale && !inScale(Number(value))) return '';
+        // 0.5 = mean (amber), 0 = SPREAD_SDS below, 1 = SPREAD_SDS above.
+        const ratio = 0.5 + (Number(value) - mean) / (sd * SPREAD_SDS * 2);
         return shadeColour(direction === 'high-bad' ? 1 - ratio : ratio);
     };
 }
