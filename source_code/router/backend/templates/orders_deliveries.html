@@ -3,30 +3,36 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Orders &amp; Deliveries</title>
+    <title>Orders &amp; Deliveries Report</title>
     <link rel="icon" type="image/png" href="{{ BASE_URL }}/static/icon.png">
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css" rel="stylesheet">
+    <!-- Shared tokens (colours, borders, radii, shading scale) — see theme.css.
+         Loaded before the page's own styles so anything below can override. -->
+    <link href="{{ static_url('css/theme.css') }}" rel="stylesheet">
     <style>
         @font-face { font-family: 'DM Sans'; src: url('{{ BASE_URL }}/static/fonts/DMSans-Regular.ttf');  font-weight: 400; }
         @font-face { font-family: 'DM Sans'; src: url('{{ BASE_URL }}/static/fonts/DMSans-Medium.ttf');   font-weight: 500; }
         @font-face { font-family: 'DM Sans'; src: url('{{ BASE_URL }}/static/fonts/DMSans-SemiBold.ttf'); font-weight: 600; }
         @font-face { font-family: 'DM Sans'; src: url('{{ BASE_URL }}/static/fonts/DMSans-Bold.ttf');     font-weight: 700; }
         body, button, input, select, textarea { font-family: 'DM Sans', system-ui, sans-serif; }
-        body { background-color: #003c57; }
-        .page-header { color: #ffffff; font-weight: 600; letter-spacing: -0.3px; }
-        .back-link { color: rgba(255,255,255,0.6) !important; text-decoration: none; }
-        .back-link:hover { color: #ffffff !important; }
-
-        .panel { background: #ffffff; border-radius: 12px; padding: 13px 18px; }
-        /* Matches the slicer bar's rendered width at the base (unwidened)
-           panel size (8 * 163px + 7 * 10px gaps + this bar's own padding),
-           so the bar is already correctly sized before any data/JS has run.
-           JS widens both the panels and this bar together, to match the
-           summary table's natural width, once real data renders — see
-           matchFilterWidthToTable(). This is only the pre-JS / loading-state
-           fallback. If a slicer dimension is ever added or removed, update
-           this number too (or just let JS take over once data loads). */
+        body { background-color: var(--c-page-bg); }
+        /* Sized in em so the whole header block follows the page font resizer.
+           The h3's own Bootstrap size is overridden for the same reason. */
+        .page-header { color: var(--c-text-heading); font-weight: 700; letter-spacing: -0.3px; font-size: 1.6em; }
+        .back-link { color: var(--c-text-muted) !important; text-decoration: none; }
+        .back-link:hover { color: var(--c-text) !important; }
+        /* .panel, .info-mark and .css-spinner come from theme.css. .nav-btn is
+           overridden here (em not rem) so it scales with the page font. */
+        .nav-btn { font-size: 1em; padding: 0.35em 0.7em; }
+        /* Matches the slicer bar's rendered width at the base panel size
+           (8 * 163px + 7 * 10px gaps + this bar's own padding), so the bar is
+           already correctly sized before any data/JS has run. Once data
+           renders, JS measures the panels' real right edge and sets this
+           width to match (matchFilterWidthToTable()) — the panels themselves
+           always stay at the base width, in both views. If a slicer dimension
+           is ever added or removed, update this number too (or just let JS
+           take over once data loads). */
         #control-bar { box-sizing: border-box; width: 1410px; max-width: 100%; }
         /* Real summary tables hug their own content; the loading spinner
            instead spans the same width as the control bar so it doesn't look
@@ -34,173 +40,392 @@
         #summary-area { width: fit-content; }
         #summary-area.is-loading { width: 1410px; box-sizing: border-box; }
         .control-row { display: flex; align-items: center; gap: 18px; flex-wrap: wrap; }
+        /* This row (Lens/View/Group by/Apply) must always stay on one line.
+           #control-bar's width is set by JS to match the filter panels
+           (matchFilterWidthToTable()), which can be narrower than this bar's
+           1410px loading-state fallback once real data replaces the
+           placeholder. Without nowrap, that narrower width can wrap this row
+           onto two lines, growing #control-bar taller and shifting the
+           slicer bar below it down — a layout jump with no data change to
+           explain it. The second control-row (font resizer/Refresh/CSV) is
+           left wrapping, since it can genuinely reflow on a narrow screen. */
+        #toolbar-row { flex-wrap: nowrap; }
         .control-group { display: flex; align-items: center; gap: 8px; }
-        .control-label { font-size: 0.85rem; font-weight: 600; color: #6a7a88; }
+        /* 1em throughout the control bar so it reads at the same size as the
+           summary tables below it, rather than a notch smaller. */
+        .control-label { font-size: 1em; font-weight: 600; color: var(--c-text-muted); }
 
-        /* Orders / Deliveries toggle */
-        .lens-toggle { display: inline-flex; background: #eef2f6; border-radius: 8px; padding: 3px; }
+        /* Lens / View / Group by toggles — dark active state, grey outline when
+           inactive, same idea as the filter pills on buying requirements. */
+        .lens-toggle { display: inline-flex; background: var(--c-surface-sunken); border-radius: var(--radius-md); padding: 3px; }
         .lens-toggle button {
-            border: none; background: transparent; color: #4a5a66;
-            font-weight: 600; font-size: 0.9rem; padding: 7px 18px; border-radius: 6px; cursor: pointer;
+            border: 1px solid var(--c-control-border); background: var(--c-surface); color: var(--c-text);
+            font-weight: 600; font-size: 1em; padding: 0.5em 1.2em; border-radius: var(--radius-sm); cursor: pointer;
         }
-        .lens-toggle button.active { background: #0d3d5f; color: #ffffff; }
+        .lens-toggle button + button { margin-left: 3px; }
+        .lens-toggle button:hover { border-color: var(--c-control-border-hover); background: var(--c-surface-alt); }
+        .lens-toggle button.active { background: var(--c-dark); color: var(--c-surface); border-color: var(--c-dark); }
+        .lens-toggle button.active:hover { background: var(--c-dark); }
 
-        /* Always green (matching CSV) except while data is actually loading —
-           the colour signals "ready", not "you have unsaved changes". It
-           greys out during the initial load and any Refresh, then turns back
-           green the moment loading finishes, so its colour doubles as a
-           loading indicator. */
+        /* Apply / Refresh / CSV. These carry page-specific state (Apply greys
+           out while loading) so they are hand-written rather than plain
+           Bootstrap classes, but they use the same colours. */
         .btn-apply {
-            background-color: #7ed321; border: 1px solid #7ed321; color: #0d3d5f; font-weight: 600;
-            font-size: 0.9rem; padding: 7px 18px; border-radius: 6px; cursor: pointer;
+            background-color: var(--c-primary); border: 1px solid var(--c-primary); color: var(--c-surface); font-weight: 600;
+            font-size: 1em; padding: 0.5em 1.2em; border-radius: var(--radius-md); cursor: pointer;
         }
-        .btn-apply:hover { background-color: #6cba18; border-color: #6cba18; }
+        .btn-apply:hover { background-color: var(--c-primary-hover); border-color: var(--c-primary-hover); }
         .btn-apply.loading {
-            background-color: #eef2f6; border-color: #d6dee5; color: #9aa7b2; cursor: default;
+            background-color: var(--c-disabled-bg); border-color: var(--c-disabled-border); color: var(--c-disabled-text); cursor: default;
         }
-        .btn-apply.loading:hover { background-color: #eef2f6; border-color: #d6dee5; }
-        .filter-input { border: 1px solid #d6dee5; border-radius: 6px; padding: 4px 8px; font-size: 0.75rem; color: #33424f; width: 180px; }
-        .btn-csv { background-color: #7ed321; border: none; color: #0d3d5f; font-weight: 600; font-size: 0.9rem; padding: 7px 18px; }
-        .btn-csv:hover { background-color: #6cba18; color: #0d3d5f; }
-        .btn-refresh { background-color: #ffffff; border: 1px solid #0d3d5f; color: #0d3d5f; font-weight: 600; font-size: 0.9rem; padding: 7px 15px; }
-        .btn-refresh:hover { background-color: #0d3d5f; color: #ffffff; }
+        .btn-apply.loading:hover { background-color: var(--c-disabled-bg); border-color: var(--c-disabled-border); }
+        .filter-input { border: 1px solid var(--c-disabled-border); border-radius: var(--radius-md); padding: 4px 8px; font-size: 0.75em; color: var(--c-text); width: 180px; }
+        .btn-csv { background-color: var(--c-success); border: 1px solid var(--c-success); color: var(--c-surface); font-weight: 600; font-size: 0.9em; padding: 7px 18px; }
+        .btn-csv:hover { background-color: var(--c-success-hover); border-color: var(--c-success-hover); color: var(--c-surface); }
+        .btn-refresh { background-color: var(--c-surface); border: 1px solid var(--c-control-border); color: var(--c-text); font-weight: 600; font-size: 0.9em; padding: 7px 15px; }
+        .btn-refresh:hover { background-color: var(--c-disabled-bg); color: var(--c-dark); }
         .btn-refresh:disabled { opacity: 0.6; cursor: default; }
-        .row-count { color: #6a7a88; font-size: 0.82rem; }
-        .cache-note { color: #9aa7b2; font-size: 0.75rem; }
+        .cache-note { color: var(--c-text-muted); font-size: 1em; }
 
         /* Slicer bar — fixed-width panels; scroll horizontally rather than
            squashing them narrower to fit. */
         :root { --slicer-width: 163px; }
         .slicer-bar { display: flex; gap: 10px; overflow-x: auto; padding-bottom: 6px; }
         .slicer {
-            background: #ffffff; border-radius: 10px; padding: 8px 10px;
+            background: var(--c-surface); border: 1px solid var(--c-border); border-radius: var(--radius-lg); padding: 8px 10px;
             display: flex; flex-direction: column; min-height: 0;
+            /* border-box: matchFilterWidthToTable() measures panels with
+               getBoundingClientRect() (the real rendered/border-box size) and
+               writes its result straight into --slicer-width. Without
+               border-box, width: var(--slicer-width) sets the CONTENT box only,
+               so the actual panel renders padding+border wider than the value
+               the JS calculated — a ~22px error per panel that compounds across
+               all 8 and pushes the last panel's right edge past the card's. */
+            box-sizing: border-box;
             flex: 0 0 var(--slicer-width); width: var(--slicer-width);
         }
         .slicer-head {
             display: flex; align-items: center; justify-content: space-between;
-            font-weight: 600; font-size: 0.8rem; color: #0d3d5f;
-            padding-bottom: 6px; margin-bottom: 6px; border-bottom: 1px solid #e6edf2;
+            font-weight: 600; font-size: 1em; color: var(--c-text-heading);
+            padding-bottom: 6px; margin-bottom: 6px; border-bottom: 1px solid var(--c-border-soft);
         }
         .slicer-clear {
-            border: none; background: transparent; color: #8a96a3; cursor: pointer;
-            font-size: 0.72rem; padding: 2px 4px;
+            border: none; background: transparent; color: var(--c-text-muted); cursor: pointer;
+            font-size: 0.85em; padding: 2px 4px;
         }
-        .slicer-clear:hover { color: #c53030; }
+        .slicer-clear:hover { color: var(--c-text-danger); }
         .slicer-clear.hidden { visibility: hidden; }
         /* Tall enough to fit Price Band's 8 full-height pills with no scroll.
-           Only longer lists (Supplier) scroll. */
-        .slicer-list { overflow-y: auto; height: 296px; display: flex; flex-direction: column; gap: 4px; }
+           Only longer lists (Supplier) scroll. Height is in em, not px, so the
+           panel grows with the font and still fits those 8 pills — a fixed
+           pixel height would start scrolling as soon as the text got bigger.
+           8 pills x (1.4em line + 0.7em padding + 2px border) + 7 x 4px gaps. */
+        .slicer-list { overflow-y: auto; height: 19em; display: flex; flex-direction: column; gap: 4px; }
         .slicer-item {
-            font-size: 0.78rem; color: #33424f; padding: 5px 10px; border-radius: 5px;
-            cursor: pointer; border: 1px solid #cfe0f0; background: #eaf3fb;
+            font-size: 1em; color: var(--c-text); padding: 0.35em 0.7em; border-radius: var(--radius-sm);
+            cursor: pointer; border: 1px solid var(--c-border-soft); background: var(--c-surface-alt);
             white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
             user-select: none;
             flex: 0 0 auto;   /* never shrink — full-height pills always */
         }
-        .slicer-item:hover { border-color: #7ea9cf; }
-        .slicer-item.selected { background: #0d3d5f; color: #ffffff; border-color: #0d3d5f; }
+        .slicer-item:hover { border-color: var(--c-control-border); }
+        .slicer-item.selected { background: var(--c-dark); color: var(--c-surface); border-color: var(--c-dark); }
 
-        /* --vehicle-font and --summary-font are independent — the font
-           resizer changes whichever view is active, and each is persisted
-           per user in Aurora separately. Padding scales with them (em). */
-        :root { --vehicle-font: {{ font_vehicle }}px; --summary-font: {{ font_summary }}px; }
-        .grid-wrap { max-height: 74vh; overflow: auto; border: 1px solid #b8c4cf; border-radius: 6px; }
+        /* Two independent sizes, each persisted per user in Aurora:
+             --page-font    everything on the page EXCEPT the vehicle grid —
+                            control bar, slicers, summary tables, buttons. Set
+                            on <body> so anything sized in em/rem follows it.
+             --vehicle-font the vehicle view's grid only, which has its own
+                            resizer next to that table's CSV button.
+           Padding is in em throughout, so it scales with the text. */
+        :root { --vehicle-font: {{ font_vehicle }}px; --page-font: {{ font_summary }}px; }
+        body { font-size: var(--page-font); }
+        /* Bootstrap sets its own font-size on .btn/.form-control, so those need
+           pointing back at the page size to scale with everything else. */
+        .btn, .form-control, .form-label { font-size: 1em; }
+        .grid-wrap { max-height: 74vh; overflow: auto; border: 1px solid var(--c-border); border-radius: var(--radius-md); }
         table.grid { border-collapse: collapse; font-size: var(--vehicle-font); table-layout: fixed; width: 100%; }
         table.grid thead th {
-            position: sticky; top: 0; z-index: 2; background: #0d3d5f; color: #ffffff;
+            position: sticky; top: 0; z-index: 2; background: var(--c-table-header-bg); color: var(--c-table-header-text);
             text-align: left; font-size: 0.95em; font-weight: 600; padding: 0.4em 0.6em;
-            cursor: pointer; user-select: none; border-right: 1px solid #1c5378;
+            cursor: pointer; user-select: none; border-right: 1px solid var(--c-border);
             white-space: normal; line-height: 1.2; vertical-align: bottom;
             overflow-wrap: break-word;
+            /* Header/body divider, matching the summary and popup tables.
+               Drawn as a box-shadow, not a border: this table is
+               border-collapse: collapse, where a collapsed border belongs to
+               the table grid rather than the cell, so it scrolls away with the
+               rows instead of staying under the pinned header. A shadow is
+               painted with the sticky cell itself and stays put. */
+            box-shadow: inset 0 -1px 0 var(--c-border);
         }
-        table.grid thead th:hover { background: #12496f; }
+        table.grid thead th:hover { background: var(--c-table-header-hover); }
         table.grid thead th .sort-caret { opacity: 0.5; margin-left: 4px; font-size: 0.85em; white-space: nowrap; }
         table.grid td {
-            padding: 0.35em 0.6em; color: #33424f; border-bottom: 1px solid #c4ced8; border-right: 1px solid #d9e0e7;
+            padding: 0.35em 0.6em; color: var(--c-text); border-bottom: 1px solid var(--c-border); border-right: 1px solid var(--c-border-soft);
             white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
         }
-        table.grid tbody tr:nth-child(even) { background: #eef2f6; }
-        table.grid tbody tr:hover { background: #e2ecf5; }
+        table.grid tbody tr:nth-child(even) { background: var(--c-surface-alt); }
+        table.grid tbody tr:hover { background: var(--c-table-total-bg); }
         table.grid td.num { text-align: right; font-variant-numeric: tabular-nums; }
-        table.grid td.neg { color: #c53030; }
+        table.grid td.neg { color: var(--c-text-danger); }
 
-        /* Font resizer */
-        .font-resizer { display: inline-flex; align-items: center; gap: 4px; }
-        .font-resizer button {
-            border: 1px solid #d6dee5; background: #ffffff; color: #0d3d5f;
-            width: 30px; height: 32px; border-radius: 6px; font-weight: 700; cursor: pointer;
-            display: inline-flex; align-items: center; justify-content: center; font-size: 0.9rem;
-        }
-        .font-resizer button:hover { background: #eef2f6; }
-        .font-resizer .font-size-label { font-size: 0.82rem; color: #6a7a88; min-width: 38px; text-align: center; font-variant-numeric: tabular-nums; }
-        table.grid a { color: #1a5fd6; text-decoration: none; }
+        /* Both font resizers use Bootstrap's btn-outline-secondary btn-sm,
+           matching buying_requirements.html — no bespoke styling needed. */
+        table.grid a { color: var(--c-primary); text-decoration: none; }
         table.grid a:hover { text-decoration: underline; }
-        .empty-state { color: #8a96a3; font-size: 0.9rem; text-align: center; padding: 40px 0; }
-        .spinner-wrap { text-align: center; padding: 60px 0; color: #0d3d5f; }
-        /* Pure-CSS spinner — doesn't depend on the Font Awesome CDN having
-           loaded, so it always animates even if that request is slow/blocked. */
-        .css-spinner {
-            width: 32px; height: 32px; margin: 0 auto;
-            border: 4px solid #dce6ee; border-top-color: #0d3d5f;
-            border-radius: 50%; animation: css-spin 0.8s linear infinite;
-        }
-        @keyframes css-spin { to { transform: rotate(360deg); } }
+        .empty-state { color: var(--c-text-muted); font-size: 0.9em; text-align: center; padding: 40px 0; }
+        .spinner-wrap { text-align: center; padding: 60px 0; color: var(--c-text-heading); }
+        /* .css-spinner comes from theme.css */
 
         /* Summary tables — one per dimension, stacked vertically. Sized to
            content (not full width) with a shared colgroup so every table's
            columns line up exactly regardless of which dimension it shows. */
-        .summary-table-wrap { margin-bottom: 22px; overflow-x: auto; padding: 1px; }
+        /* No overflow here at all. overflow-x: auto forces overflow-y to auto
+           too (`visible` is not kept on one axis while the other scrolls), and
+           when the table is wider than the wrapper the horizontal scrollbar
+           takes height INSIDE the box — which then overflows vertically and
+           adds a second, pointless scrollbar. overflow-y: hidden would stop
+           that but clip the DIS/Sell info-mark tooltips, which open downward
+           out of the header. The summary card (#summary-area) is already
+           width: fit-content and the filter panels are sized to match it, so
+           these tables are not actually forced to scroll — leaving overflow
+           alone keeps the tooltips visible and both scrollbars away. */
+        .summary-table-wrap { margin: 0 1px 22px; }
         .summary-table-wrap:last-child { margin-bottom: 0; }
         table.summary {
-            border-collapse: separate; border-spacing: 0; font-size: var(--summary-font); white-space: nowrap;
+            border-collapse: separate; border-spacing: 0; font-size: 1em; white-space: nowrap;
             table-layout: fixed; width: auto;
-            border: 2px solid #0d3d5f; border-radius: 6px; overflow: hidden;
+            border: 1px solid var(--c-border); border-radius: var(--radius-md);
         }
         table.summary th {
-            background: #0d3d5f; color: #ffffff; text-align: left;
+            background: var(--c-table-header-bg); color: var(--c-table-header-text); text-align: left;
             font-size: 0.95em; font-weight: 600; padding: 0.5em 0.7em;
-            border-right: 1px solid #1c5378;
+            border-right: 1px solid var(--c-border);
+            /* Same line the popup's header already has (table.vehicle-modal-table
+               th) — was missing here, so there was nothing separating the
+               header from the first data row, just the row's own top-adjacent
+               border which reads as a body-row divider, not a header edge. */
+            border-bottom: 1px solid var(--c-border);
             overflow: hidden; text-overflow: ellipsis;
         }
         table.summary th.num, table.summary td.num { text-align: right; font-variant-numeric: tabular-nums; }
+        /* A heading carrying an info marker must not clip, or its tooltip is
+           cut off at the cell edge. Only these cells opt out of the ellipsis
+           overflow above; their labels are short enough not to need it. */
+        table.summary th:has(.info-mark),
+        table.vehicle-modal-table th:has(.info-mark) { overflow: visible; }
         table.summary td {
-            padding: 0.35em 0.7em; color: #33424f;
-            border-bottom: 1px solid #c4ced8; border-right: 1px solid #d9e0e7;
+            padding: 0.35em 0.7em; color: var(--c-text);
+            border-bottom: 1px solid var(--c-border); border-right: 1px solid var(--c-border-soft);
             overflow: hidden; text-overflow: ellipsis;
         }
-        table.summary td.neg { color: #c53030; }
-        table.summary td.dim-label { font-weight: 600; color: #0d3d5f; }
-        /* Grand Total separator: one solid dark-blue line, same colour as the
-           border, with no lighter line adjacent (that's what read as a "gap"). */
-        table.summary tbody tr.total-row td { font-weight: 700; background: #eef2f6; border-top: 2px solid #0d3d5f; border-bottom: none; }
+        /* The last column's right border sits directly on the table's own
+           outer frame (border: 1px solid var(--c-border) above) instead of
+           against another cell. Two different border colours stacked in the
+           same pixel column don't blend into one soft line — the darker frame
+           colour wins by contrast and reads as a heavier edge than the
+           interior gridlines. Drop the cell's own border there; the frame
+           alone draws that edge. */
+        table.summary th:last-child, table.summary td:last-child { border-right: none; }
+        table.summary td.neg { color: var(--c-text-danger); }
+        /* .info-mark comes from theme.css */
+        table.summary td.dim-label { font-weight: 600; color: var(--c-text-heading); }
+        /* Grand Total separator: one solid line, with no lighter line adjacent
+           (that's what read as a "gap"). */
+        table.summary tbody tr.total-row td { font-weight: 700; background: var(--c-table-total-bg); border-top: 2px solid var(--c-border-strong); border-bottom: none; }
         table.summary tbody tr:has(+ tr.total-row) td { border-bottom: none; }
         table.summary tbody tr.spacer-row td { padding: 4px 0; border: none; background: transparent; }
-        /* Shared Back / Home / nav button size across all pages */
-        .nav-btn { font-size: 1rem; padding: 0.35rem 0.7rem; }
+        /* Corner rounding on the cells themselves, not overflow:hidden on the
+           table — same fix as table.vehicle-modal-table below. overflow:hidden
+           clips the header cell's own square-cornered border into a rounded
+           shape rather than the border being drawn rounded to start with; where
+           the th's border-bottom (added above) and border-right meet the
+           table's own outer border in that corner, the clip leaves an
+           extra-thick pixel cluster instead of a clean curve. */
+        table.summary thead tr:first-child th:first-child { border-top-left-radius: var(--radius-md); }
+        table.summary thead tr:first-child th:last-child { border-top-right-radius: var(--radius-md); }
+        table.summary tbody tr:last-child td:first-child { border-bottom-left-radius: var(--radius-md); }
+        table.summary tbody tr:last-child td:last-child { border-bottom-right-radius: var(--radius-md); }
+        /* View column — button sized off the summary font so the row height
+           doesn't jump when the font resizer is used. */
+        table.summary td.view-cell { text-align: center; padding: 0.15em 0.3em; }
+        .btn-view {
+            border: 1px solid var(--c-primary); background: var(--c-surface); color: var(--c-primary);
+            font-weight: 600; font-size: 0.9em; line-height: 1.2;
+            padding: 0.15em 0.6em; border-radius: var(--radius-sm); cursor: pointer;
+        }
+        .btn-view:hover { background: var(--c-primary); color: var(--c-surface); }
+
+        /* Vehicle list popup */
+        .modal-backdrop-custom {
+            position: fixed; inset: 0; background: rgba(0,0,0,0.45); z-index: 1050;
+        }
+        /* Sized to the table's own content (13 columns), capped so it never
+           runs off screen — the body scrolls in both directions instead. */
+        .vehicle-modal {
+            position: fixed; top: 8vh; left: 50%; transform: translateX(-50%);
+            z-index: 1060; background: var(--c-surface); border-radius: var(--radius-lg);
+            width: max-content; max-width: 94vw; max-height: 80vh;
+            display: flex; flex-direction: column; overflow: hidden;
+            box-shadow: 0 8px 32px rgba(0,0,0,0.22);
+            /* One step smaller than the page font — this sizes the popup's
+               CHROME (title, subtitle, close button). The table inside sets its
+               own size from --vehicle-font instead, so it matches the Vehicle
+               view exactly; see table.vehicle-modal-table. */
+            font-size: calc(var(--page-font) - 1px);
+        }
+        .vehicle-modal-head {
+            display: flex; align-items: center; justify-content: space-between;
+            /* 18px sides match the body's padding below, so the title lines up
+               with the table's left edge and the close button with its right. */
+            padding: 12px 18px; border-bottom: 1px solid var(--c-border-soft);
+        }
+        /* Matches the table body's own text size (table.vehicle-modal-table is
+           1em of the page font) rather than a fraction of the page font
+           directly — was 0.95em/0.78em of the page font, which read
+           noticeably smaller than the table underneath it. */
+        .vehicle-modal-title { font-weight: 600; color: var(--c-text-heading); font-size: 1.1em; }
+        .vehicle-modal-sub { color: var(--c-text-muted); font-size: 0.95em; }
+        .vehicle-modal-close {
+            border: none; background: transparent; color: var(--c-text-muted);
+            font-size: 1.8em; line-height: 1; cursor: pointer; padding: 2px 6px;
+        }
+        .vehicle-modal-close:hover { color: var(--c-text-danger); }
+        /* Same white surround the summary tables sit in — .panel's 13px/18px
+           padding — so the table has an identical margin inside its card. */
+        /* No TOP padding on the scroll container: a sticky <th> pins to the
+           padding box, so 13px of top padding leaves a 13px gap above the
+           header that scrolling rows show through. The table's own top margin
+           gives the same visual inset without affecting where the header
+           sticks — it scrolls away, the padding would not. */
+        /* No top padding: the header pins at top:0, flush with the scroll edge,
+           so there is no gap above it for rows to scroll through and nothing to
+           mask. The head bar above already provides the visual separation.
+           A top padding here would either hold a row-revealing gap open (with
+           top:0) or need the header's `top` kept exactly in step with it. */
+        .vehicle-modal-body { overflow: auto; padding: 0 18px 13px; }
+        /* Gridlines and outer frame identical to table.summary: grey border,
+           6px radius, 1px separators between cells.
+           No `overflow: hidden` here (unlike table.summary) — it would clip a
+           sticky <th>, since the table would become the nearest overflow
+           ancestor instead of .vehicle-modal-body. The rounded corners are
+           preserved a different way: see the th/td corner rules below. */
+        /* table-layout: fixed so the colgroup widths measured in JS are honoured
+           exactly — auto layout would re-widen columns to fit the header on one
+           line, which is the wrapping we are trying to allow. */
+        table.vehicle-modal-table {
+            border-collapse: separate; border-spacing: 0; width: auto;
+            /* --vehicle-font, not 1em of the popup: this table shows the same
+               columns as the Vehicle view and its widths are measured by the
+               same function (measureVehicleColumnWidths, which measures against
+               --vehicle-font). Sizing the text off anything else would leave
+               the measured widths and the rendered text out of step. */
+            font-size: var(--vehicle-font); white-space: nowrap; table-layout: fixed;
+            border: 1px solid var(--c-border); border-radius: var(--radius-md);
+        }
+        table.vehicle-modal-table th {
+            /* Pins flush to the scroll container's top edge, which has no top
+               padding (see .vehicle-modal-body) — so it neither jumps on the
+               first scroll nor leaves a gap for rows to show through. */
+            position: sticky; top: 0; z-index: 3;
+            background: var(--c-table-header-bg); color: var(--c-table-header-text); text-align: left;
+            /* 0.6em sides, matching table.grid's header — the shared width
+               measurement (VEHICLE_COL_PADDING) is calibrated to that padding,
+               so a wider one here would leave every column slightly too tight. */
+            font-size: 0.95em; font-weight: 600; padding: 0.5em 0.6em;
+            border-right: 1px solid var(--c-border);
+            /* Drawn explicitly: with border-collapse:separate a sticky header
+               keeps no border from the row below it as that row scrolls under. */
+            border-bottom: 1px solid var(--c-border);
+            cursor: pointer; user-select: none;
+            /* Wraps like the vehicle grid's headers rather than forcing the
+               column as wide as the whole phrase. Bottom-aligned so a one-line
+               and a three-line heading still sit on the same baseline.
+               Capped at 3 lines: the widths are measured so nothing needs a 4th,
+               but the clamp keeps one unexpectedly long label from making every
+               popup header row tall. */
+            white-space: normal; overflow-wrap: break-word;
+            line-height: 1.2; vertical-align: bottom;
+        }
+        /* Three lines is the cap. Applied to an inner span rather than the cell:
+           a max-height on the <th> itself does nothing (table cells grow to
+           their content regardless), and -webkit-line-clamp would need
+           display:-webkit-box, which fights the `overflow: visible` the
+           info-mark tooltip relies on. 3 x the 1.2 line-height above. */
+        table.vehicle-modal-table th .th-label {
+            /* inline-block, not block: the info marker and sort caret sit
+               alongside the label on its last line, and a block would push them
+               onto a line of their own. */
+            display: inline-block; max-width: 100%;
+            max-height: 3.6em; overflow: hidden; vertical-align: bottom;
+        }
+        table.vehicle-modal-table th:hover { background: var(--c-table-header-hover); }
+        table.vehicle-modal-table th.num { text-align: right; }
+        table.vehicle-modal-table th .sort-caret { opacity: 0.5; margin-left: 4px; font-size: 0.85em; }
+        table.vehicle-modal-table td {
+            /* 0.6em sides to match table.grid's cells — see the th rule above. */
+            padding: 0.35em 0.6em; color: var(--c-text);
+            border-bottom: 1px solid var(--c-border); border-right: 1px solid var(--c-border-soft);
+            /* Columns are fixed-width, so a value longer than its measured
+               column (one capped at VEHICLE_COL_MAX_WIDTH) must be trimmed
+               rather than spill into the next cell — same as the vehicle grid.
+               (Last-column border-right is dropped below — see that rule for
+               why: it would otherwise sit on the table's own outer frame
+               border, a different, darker colour, and read as a thicker edge.) */
+            white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+        }
+        /* The 2px frame already draws the bottom edge — a row border under the
+           last row would sit just inside it and read as a doubled line. */
+        table.vehicle-modal-table tbody tr:last-child td { border-bottom: none; }
+        /* Corner rounding, done on the cells themselves rather than via
+           `overflow: hidden` on the table (which would break the sticky
+           header above). Only the header's radius survives scrolling, since
+           it stays pinned at the top; the body corners round the frame's
+           bottom edge, which never moves. */
+        table.vehicle-modal-table thead tr:first-child th:first-child { border-top-left-radius: 4px; }
+        table.vehicle-modal-table thead tr:first-child th:last-child { border-top-right-radius: 4px; }
+        table.vehicle-modal-table tbody tr:last-child td:first-child { border-bottom-left-radius: 4px; }
+        table.vehicle-modal-table tbody tr:last-child td:last-child { border-bottom-right-radius: 4px; }
+        /* Last column's td right border would otherwise sit directly on the
+           table's own outer frame border (a darker colour — see table.summary
+           for the same fix and why it reads as a thicker edge). The th's own
+           border-right already matches the frame colour exactly, so only td
+           needs this. */
+        table.vehicle-modal-table td:last-child { border-right: none; }
+        table.vehicle-modal-table td.num { text-align: right; font-variant-numeric: tabular-nums; }
+        table.vehicle-modal-table td.neg { color: var(--c-text-danger); }
+        table.vehicle-modal-table tbody tr:nth-child(even) { background: var(--c-surface-alt); }
+        /* .nav-btn comes from theme.css */
     </style>
 </head>
 <body>
     <div class="container-fluid py-4" style="max-width: 100%; padding-left: 24px; padding-right: 24px;">
-        <div class="d-flex align-items-center justify-content-between mb-3">
-            <h3 class="page-header mb-0">Orders &amp; Deliveries</h3>
-            <a href="{{ BASE_URL }}/reports/tom" class="btn btn-outline-secondary nav-btn"><i class="fas fa-arrow-left me-1"></i>Tom Reports</a>
+        <div class="d-flex align-items-center mb-3">
+            <h3 class="page-header mb-0">Orders &amp; Deliveries Report</h3>
+            <span class="cache-note ms-3" id="cache-note"></span>
+            <button class="btn btn-refresh ms-2" id="refresh-btn" onclick="refreshData()" title="Reload the latest data from Snowflake">
+                <i class="fas fa-rotate-right"></i> Refresh Data
+            </button>
+            <!-- Page font resizer — scales everything except the vehicle grid,
+                 which has its own resizer next to its CSV button. -->
+            <div class="d-flex align-items-center gap-1 ms-auto">
+                <span class="small text-muted">Font</span>
+                <button class="btn btn-outline-secondary btn-sm px-2 py-0" onclick="changeFont('page', -1)">&minus;</button>
+                <span id="font-size-label" class="small text-muted" style="min-width:32px;text-align:center">{{ font_summary }}</span>
+                <button class="btn btn-outline-secondary btn-sm px-2 py-0" onclick="changeFont('page', 1)">+</button>
+                <button class="btn btn-outline-secondary btn-sm px-2 py-0" title="Reset font size" onclick="resetFont('page')"><i class="fas fa-rotate-left"></i></button>
+            </div>
+            <a href="{{ BASE_URL }}/home" class="btn btn-outline-secondary nav-btn ms-3"><i class="fas fa-arrow-left me-1"></i>Home</a>
         </div>
 
         <div class="panel shadow-sm mb-3" id="control-bar">
-            <div class="control-row">
+            <div class="control-row" id="toolbar-row">
                 <div class="control-group">
-                    <span class="control-label">Lens</span>
+                    <span class="control-label">Date Type</span>
                     <div class="lens-toggle" id="lens-toggle">
-                        <button data-lens="orders" class="active">Orders</button>
-                        <button data-lens="deliveries">Deliveries</button>
-                    </div>
-                </div>
-                <div class="control-group">
-                    <span class="control-label">View</span>
-                    <div class="lens-toggle" id="view-toggle">
-                        <button data-view="summary" class="active">Summary</button>
-                        <button data-view="vehicle">Vehicle</button>
+                        <button data-lens="orders" class="active">Order Date</button>
+                        <button data-lens="deliveries">Delivery Date</button>
                     </div>
                 </div>
                 <div class="control-group">
@@ -209,24 +434,16 @@
                         <button data-granularity="week" class="active">By Week</button>
                         <button data-granularity="month">By Month</button>
                     </div>
+                </div>
+                <div class="control-group">
+                    <span class="control-label">View</span>
+                    <div class="lens-toggle" id="view-toggle">
+                        <button data-view="summary" class="active">Summary</button>
+                        <button data-view="vehicle">Vehicle</button>
+                    </div>
                     <button class="btn btn-apply loading" id="apply-btn" onclick="applyFilters()" title="Apply the selected filters below">
                         <span id="apply-label"><i class="fas fa-spinner fa-spin"></i> Loading</span>
                     </button>
-                </div>
-            </div>
-            <div class="control-row mt-2">
-                <div class="control-group">
-                    <div class="font-resizer" title="Table font size">
-                        <button type="button" onclick="changeFont(-1)" aria-label="Smaller font">A&minus;</button>
-                        <span class="font-size-label" id="font-size-label">{{ font_summary }}px</span>
-                        <button type="button" onclick="changeFont(1)" aria-label="Larger font">A+</button>
-                    </div>
-                    <span class="cache-note" id="cache-note"></span>
-                    <span class="row-count" id="row-count"></span>
-                    <button class="btn btn-refresh" id="refresh-btn" onclick="refreshData()" title="Reload the latest data from Snowflake">
-                        <i class="fas fa-rotate-right"></i> Refresh
-                    </button>
-                    <button class="btn btn-csv" onclick="downloadCsv()"><i class="fas fa-download"></i> CSV</button>
                 </div>
             </div>
         </div>
@@ -247,14 +464,32 @@
             <div class="spinner-wrap"><div class="css-spinner"></div><div style="margin-top:12px;font-size:0.9rem;">Loading vehicles...</div></div>
         </div>
 
-        <!-- Vehicle View body (the grid) -->
+        <!-- Vehicle View body (the grid). The CSV button lives in here rather
+             than the control bar because it exports the vehicle grid — sitting
+             inside #vehicle-area means it is shown and hidden with the view
+             itself, with no separate visibility handling. -->
         <div class="panel shadow-sm" id="vehicle-area" style="display:none;">
+            <div class="d-flex justify-content-end align-items-center gap-2 mb-2">
+                <!-- Resizes the vehicle grid only — the page-wide resizer at the
+                     top of the page deliberately leaves this table alone. -->
+                <div class="d-flex align-items-center gap-1">
+                    <span class="small text-muted">Table font</span>
+                    <button class="btn btn-outline-secondary btn-sm px-2 py-0" onclick="changeFont('vehicle', -1)">&minus;</button>
+                    <span id="vehicle-font-size-label" class="small text-muted" style="min-width:32px;text-align:center">{{ font_vehicle }}</span>
+                    <button class="btn btn-outline-secondary btn-sm px-2 py-0" onclick="changeFont('vehicle', 1)">+</button>
+                    <button class="btn btn-outline-secondary btn-sm px-2 py-0" title="Reset font size" onclick="resetFont('vehicle')"><i class="fas fa-rotate-left"></i></button>
+                </div>
+                <button class="btn btn-csv" onclick="downloadCsv()"><i class="fas fa-download"></i> CSV</button>
+            </div>
             <div id="grid-area">
                 <div class="spinner-wrap"><div class="css-spinner"></div><div style="margin-top:12px;font-size:0.9rem;">Loading vehicles...</div></div>
             </div>
         </div>
     </div>
 
+    <!-- shadeScale()/shadeColour() — shared with the other report pages so the
+         red/amber/green scale stays identical everywhere. -->
+    <script src="{{ static_url('js/shading.js') }}"></script>
     <script>
         const BASE_URL = "{{ BASE_URL }}";
 
@@ -264,30 +499,37 @@
             { key: 'vrm', label: 'VRM' },
             { key: 'order_date', label: 'Order Date', type: 'date' },
             { key: 'delivered', label: 'Delivered', type: 'date' },
-            { key: 'make_model', label: 'Make Model' },
-            { key: 'derivative', label: 'Derivative' },
+            // Make, model and derivative in one column — built by vehicleDesc()
+            // (declared below; only called at render time, so order is fine).
+            { key: 'description', label: 'Description', derived: r => vehicleDesc(r) },
             { key: 'supplier', label: 'Supplier' },
-            { key: 'ack_dis', label: 'Ack DIS', type: 'num' },
+            { key: 'ack_dis', label: 'DIS', type: 'num',
+              info: 'Days In Stock — purchase date to acknowledged date' },
             { key: 'dis_band', label: 'DIS Band' },
             { key: 'dts', label: 'DTS', type: 'num' },
-            { key: 'purch_price', label: 'Purch Price', type: 'money' },
-            { key: 'sell_price_after_disc', label: 'Sell Price After Disc', type: 'money' },
+            { key: 'purch_price', label: 'Purch', type: 'money' },
+            { key: 'sell_price_incl_fee', label: 'Sell', type: 'money',
+              info: 'Selling price before discount, including the admin fee actually charged on the deal' },
             { key: 'price_band', label: 'Price Band' },
+            { key: 'discount', label: 'Discount', type: 'money' },
             { key: 'finance_subsidy', label: 'Finance Subsidy', type: 'money' },
-            { key: 'chassis_mgn_aft_subs', label: 'Chassis Mgn Aft Subs', type: 'money' },
-            { key: 'vehicle_costs', label: 'Vehicle Costs', type: 'money' },
+            { key: 'chassis_mgn_aft_subs', label: 'Chassis', type: 'money',
+              info: 'Chassis margin — sale price minus purchase price, discount and VAT cost, plus admin fee margin, after finance subsidy' },
+            { key: 'vehicle_costs', label: 'Costs', type: 'money' },
             { key: 'write_down', label: 'Write Down', type: 'money' },
-            { key: 'metal_mgn', label: 'Metal Mgn', type: 'money' },
+            { key: 'metal_mgn', label: 'Metal', type: 'money' },
             { key: 'gpu_m_costs', label: 'GPU-M Costs', type: 'money' },
             { key: 'gpu_m', label: 'GPU-M', type: 'money' },
+            { key: 'at_val_order', label: 'AT Valuation', type: 'money' },
+            { key: 'sell_pct_at', label: 'PTM %', type: 'pct',
+              info: 'Price To Market — selling price including admin fee as a percentage of the Autotrader market valuation' },
+            { key: 'at_rating', label: 'AT Rating', type: 'num' },
             { key: 'finance_comm', label: 'Finance Comm', type: 'money' },
             { key: 'product_mgn', label: 'Product Mgn', type: 'money' },
             { key: 'gpu_s_costs', label: 'GPU-S Costs', type: 'money' },
             { key: 'gpu_s', label: 'GPU-S', type: 'money' },
             { key: 'gpu_ms', label: 'GPU-MS', type: 'money' },
-            { key: 'roi_pct', label: 'ROI %', type: 'pct' },
             { key: 'purchase_cap_pct', label: 'Purchase CAP %', type: 'pct' },
-            { key: 'sell_pct_at', label: 'Sell % of AT', type: 'pct' },
             { key: 'fuel', label: 'Fuel' },
             { key: 'colour', label: 'Colour' },
             { key: 'mileage', label: 'Mileage', type: 'num' },
@@ -295,14 +537,10 @@
             { key: 'dfr', label: 'DFR', type: 'date' },
             { key: 'age_band', label: 'Age Band' },
             { key: 'supplier_channel', label: 'Supplier Channel' },
-            { key: 'deal_status', label: 'Invoice Status' },
             { key: 'site', label: 'Site' },
             { key: 'sales_type', label: 'Sales Type' },
-            { key: 'cap_live_purchase', label: 'CAP Live at Purchase', type: 'num' },
-            { key: 'cap_live_order', label: 'CAP Live at Order', type: 'num' },
-            { key: 'at_val_order', label: 'AT Valuation at Order', type: 'num' },
-            { key: 'discount', label: 'Discount', type: 'money' },
-            { key: 'px_status', label: 'PX?' },
+            { key: 'cap_live_purchase', label: 'CAP Live at Purchase', type: 'money' },
+            { key: 'cap_live_order', label: 'CAP Live at Order', type: 'money' },
             { key: 'order_url', label: 'Order', type: 'link' },
             { key: 'invoice_url', label: 'Invoice', type: 'link' },
         ];
@@ -310,8 +548,10 @@
         // Lens config: which date field drives filtering/labels, and which
         // deal statuses are kept. Mirrors the two Power Query variants.
         const LENS = {
-            orders:     { dateKey: 'order_date', label: 'Order date',    statuses: ['Acknowledged', 'Delivered'] },
-            deliveries: { dateKey: 'delivered',  label: 'Delivery date', statuses: ['Delivered'] },
+            orders:     { dateKey: 'order_date', label: 'Order date',    statuses: ['Acknowledged', 'Delivered'],
+                          periodKeys: { week: 'order_week',     month: 'order_month' } },
+            deliveries: { dateKey: 'delivered',  label: 'Delivery date', statuses: ['Delivered'],
+                          periodKeys: { week: 'delivered_week', month: 'delivered_month' } },
         };
 
         let allRows = [];
@@ -335,7 +575,7 @@
             { key: 'supplier',         label: 'Supplier' },
             { key: 'sales_type',       label: 'Sales Type' },
             { key: 'fuel',             label: 'Fuel' },
-            { key: 'price_band',       label: 'Price Band' },
+            { key: 'price_band',       label: 'Price Band (Rate/Cash)' },
             { key: 'mileage_band',     label: 'Mileage Band' },
             { key: 'age_band',         label: 'Age Band' },
         ];
@@ -355,9 +595,15 @@
             return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
         }
 
-        // ISO week key (yyyy-Www) for a yyyy-mm-dd date string, computed
-        // client-side so it works identically for both the order date and the
-        // invoice-posted date (the backend only supplies ORDER_ACKNOWLEDGED_WEEK).
+        // ISO week key (yyyy-Www) for a yyyy-mm-dd date string. The rows carry
+        // their own week keys from Snowflake — this is only used to build the
+        // contiguous list of periods for the slicer and the default selection,
+        // both of which work from today's date rather than from a row.
+        //
+        // It must therefore produce keys IDENTICAL to the SQL ones, including
+        // sales__c's rule of folding week 53 into week 1 (see
+        // order_acknowledged_week). Without that fold, a late-December pill
+        // would carry a key no row could ever match.
         function isoWeekKey(dateStr) {
             const d = new Date(dateStr + 'T00:00:00');
             const target = new Date(d.getTime());
@@ -366,7 +612,8 @@
             const firstThursday = new Date(target.getFullYear(), 0, 4);
             const firstDayNum = (firstThursday.getDay() + 6) % 7;
             firstThursday.setDate(firstThursday.getDate() - firstDayNum + 3);
-            const week = 1 + Math.round((target - firstThursday) / (7 * 86400000));
+            let week = 1 + Math.round((target - firstThursday) / (7 * 86400000));
+            if (week === 53) week = 1;                          // matches sales__c
             return `${target.getFullYear()}-W${String(week).padStart(2, '0')}`;
         }
         // Monday date (yyyy-mm-dd) for an ISO week key — used to sort weeks
@@ -412,23 +659,20 @@
         // granularity toggle (week vs month). Takes lens/granularity explicitly
         // — callers pass the Applied pair for real data, the Pending pair for
         // the slicer panels' live preview of what's being staged.
+        // Reads the period key straight off the row — the four keys (order/
+        // delivery x week/month) are built in sales_performance__p, so nothing
+        // is recomputed here on every render. Format is unchanged from what the
+        // client used to produce: 'yyyy-Www' and 'yyyy-MM'.
         function periodOf(r, lensVal, granularityVal) {
-            const d = r[LENS[lensVal].dateKey];
-            if (!d) return null;
-            return granularityVal === 'week' ? isoWeekKey(d) : d.slice(0, 7);
+            return r[LENS[lensVal].periodKeys[granularityVal]] || null;
         }
-        // Sales type is bucketed for slicing: any rate/cash finance is one
-        // "Rate/Cash" option; interest-free is "0%".
-        function mapSalesType(v) {
-            const s = String(v == null ? '' : v).trim();
-            if (!s) return '';
-            const low = s.toLowerCase();
-            if (low === '0%' || low.includes('interest')) return '0%';
-            return 'Rate/Cash';
-        }
+        // Sales type is bucketed for slicing — any rate/cash finance is one
+        // "Rate/Cash" option, interest-free is "0%". The split is built in
+        // sales_performance__p as SALES_TYPE_BUCKET rather than derived here,
+        // so it is not recomputed for every row on every slicer click.
         function slicerValue(r, key, lensVal, granularityVal) {
             if (key === 'period') return periodOf(r, lensVal, granularityVal);
-            if (key === 'sales_type') return mapSalesType(r[key]);
+            if (key === 'sales_type') return r.sales_type_bucket;
             return r[key];
         }
         // Normalise a slicer value to a trimmed string, or '' if empty/blank —
@@ -440,7 +684,7 @@
 
         // Explicit display order for slicers where alphabetical is wrong.
         const SLICER_ORDER = {
-            sales_type: ['Rate/Cash', '0%'],
+            sales_type: ['Rate/Cash', '0%', 'Unknown'],
             fuel: ['Petrol', 'Diesel', 'Electric', 'Hybrid', 'Plug-In Hybrid'],
         };
         // Heading reflects APPLIED lens/granularity — frozen until Apply,
@@ -453,34 +697,57 @@
             return SLICERS.find(s => s.key === key).label;
         }
 
-        // ── Font resizer (persisted per user in Aurora via /api/user-prefs) ──
-        // Summary and Vehicle views remember their own font size separately —
-        // the resizer always acts on whichever view is currently active.
-        const FONT_MIN = 8, FONT_MAX = 20, FONT_DEFAULT = 11;
+        // ── Font resizers (persisted per user in Aurora via /api/user-prefs) ──
+        // Two independent controls:
+        //   'page'    — everything except the vehicle grid. Sets --page-font on
+        //               <body>, so every em-sized rule on the page follows it.
+        //   'vehicle' — the vehicle grid only, resized from its own buttons
+        //               next to that table's CSV button.
+        // The pref keys are unchanged from when these were the summary/vehicle
+        // sizes, so an existing saved preference still applies.
+        // Defaults mirror _FONT_DEFAULT / _FONT_DEFAULT_VEHICLE in
+        // orders_deliveries.py — keep the two in step.
+        const FONT_MIN = 8, FONT_MAX = 20, FONT_DEFAULT = 13;
         const FONT_CONFIG = {
-            summary: { prefKey: 'orders_deliveries_font_summary', cssVar: '--summary-font' },
-            vehicle: { prefKey: 'orders_deliveries_font_vehicle', cssVar: '--vehicle-font' },
+            page:    { prefKey: 'orders_deliveries_font_summary', cssVar: '--page-font',    labelId: 'font-size-label',         fallback: 13 },
+            vehicle: { prefKey: 'orders_deliveries_font_vehicle', cssVar: '--vehicle-font', labelId: 'vehicle-font-size-label', fallback: 12 },
         };
-        // Seeded from the server-rendered values (see :root and the label's
+        // Seeded from the server-rendered values (see :root and the labels'
         // initial text above) so this matches first paint exactly — loadFont()
         // still confirms against Aurora, but has nothing left to visibly change.
-        const fontSizes = { summary: {{ font_summary }}, vehicle: {{ font_vehicle }} };
-        let fontSaveTimer = null;
+        const fontSizes = { page: {{ font_summary }}, vehicle: {{ font_vehicle }} };
+        const fontSaveTimers = {};
 
         function applyFont(which) {
             document.documentElement.style.setProperty(FONT_CONFIG[which].cssVar, fontSizes[which] + 'px');
-            if (which === viewApplied) {
-                document.getElementById('font-size-label').textContent = fontSizes[which] + 'px';
-            }
+            const label = document.getElementById(FONT_CONFIG[which].labelId);
+            if (label) label.textContent = fontSizes[which];
+
+            // Both tables size their columns by MEASURING text at the current
+            // font (measureSummaryLabelWidth / measureVehicleColumnWidths), so a
+            // font change needs a re-render, not just a CSS variable swap —
+            // otherwise the columns keep their old widths and the filter panels
+            // and control bar no longer line up with the summary card's edge.
+            // Guarded on allRows so this does nothing during the initial load,
+            // when loadFont() runs before any data has arrived.
+            if (!allRows.length) return;
+            if (which === 'page' && viewApplied === 'summary') renderSummary();
+            if (which === 'vehicle' && viewApplied === 'vehicle') renderGrid();
         }
 
-        function changeFont(delta) {
-            const which = viewApplied;   // resize whichever view is actually on screen
+        function changeFont(which, delta) {
             fontSizes[which] = Math.min(FONT_MAX, Math.max(FONT_MIN, fontSizes[which] + delta));
             applyFont(which);
             // Debounced save so rapid clicks don't spam Aurora
-            clearTimeout(fontSaveTimer);
-            fontSaveTimer = setTimeout(() => saveFont(which), 500);
+            clearTimeout(fontSaveTimers[which]);
+            fontSaveTimers[which] = setTimeout(() => saveFont(which), 500);
+        }
+
+        function resetFont(which) {
+            fontSizes[which] = FONT_CONFIG[which].fallback;
+            applyFont(which);
+            clearTimeout(fontSaveTimers[which]);
+            fontSaveTimers[which] = setTimeout(() => saveFont(which), 500);
         }
 
         async function saveFont(which) {
@@ -520,11 +787,26 @@
             if (v === null || v === undefined || v === '') return '';
             return (Number(v) * 100).toFixed(1) + '%';
         }
+        // ISO 'yyyy-MM-dd' (what the API sends) -> 'dd/MM/yyyy'. Split on the
+        // string rather than going through new Date(): a bare ISO date is
+        // parsed as UTC, so formatting it back in a UK summer timezone can
+        // land on the previous day.
+        function fmtDate(v) {
+            if (v === null || v === undefined || v === '') return '';
+            const m = String(v).slice(0, 10).match(/^(\d{4})-(\d{2})-(\d{2})$/);
+            return m ? `${m[3]}/${m[2]}/${m[1]}` : String(v);
+        }
         function fmtCell(col, v) {
+            // AT Rating comes through with decimals (e.g. 73.64) but is shown
+            // as a whole number everywhere — rounded before fmtNum's own
+            // formatting rather than given its own 'type', since every other
+            // num column on this page genuinely wants fmtNum as-is.
+            if (col.key === 'at_rating') return fmtNum(v === null || v === undefined || v === '' ? v : Math.round(Number(v)));
             switch (col.type) {
                 case 'money': return fmtMoney(v);
                 case 'num':   return fmtNum(v);
                 case 'pct':   return fmtPct(v);
+                case 'date':  return fmtDate(v);
                 default:      return (v === null || v === undefined) ? '' : String(v);
             }
         }
@@ -557,7 +839,17 @@
             for (const s of SLICERS) {
                 if (s.key === exceptKey) continue;
                 const sel = sel_map[s.key];
-                if (sel.size === 0) continue;
+                // An empty selection means "no filter — show every row" for
+                // every slicer EXCEPT Period. Weeks/months span the whole
+                // history the page can hold, so an empty Period would load
+                // every row ever seen instead of nothing — the opposite of
+                // what Clear is for. So an empty Period matches NO rows: the
+                // one case where the reverse of every other slicer is what
+                // "too much data" actually needs.
+                if (sel.size === 0) {
+                    if (s.key === 'period') return false;
+                    continue;
+                }
                 const v = normVal(slicerValue(r, s.key, lensVal, granularityVal));
                 if (!v || !sel.has(v)) return false;
             }
@@ -570,6 +862,14 @@
             return baseRows(lensApplied).filter(r => passesSlicers(r, slicerSel, lensApplied, granularityApplied));
         }
 
+        // A column's value for one row. Derived columns (Description) build
+        // theirs from several fields; everything else reads the row directly.
+        // Used by the grid's sort, render, column measuring and CSV export, so
+        // they all agree on what a column contains.
+        function cellValue(col, r) {
+            return col && col.derived ? col.derived(r) : r[col.key];
+        }
+
         // The vehicle grid: filtered rows, sorted.
         function visibleRows() {
             const rows = filteredRows();
@@ -577,7 +877,7 @@
                 const col = COLS.find(c => c.key === sortKey);
                 const numeric = col && (col.type === 'num' || col.type === 'money' || col.type === 'pct');
                 rows.sort((a, b) => {
-                    let av = a[sortKey], bv = b[sortKey];
+                    let av = cellValue(col, a), bv = cellValue(col, b);
                     if (av == null) return 1; if (bv == null) return -1;
                     if (numeric) { av = Number(av); bv = Number(bv); return (av - bv) * sortDir; }
                     return String(av).localeCompare(String(bv)) * sortDir;
@@ -593,28 +893,55 @@
         const SUMMARY_COLS = [
             { key: 'units',        label: 'Units',              agg: 'count' },
             { key: 'units_pct',    label: 'Units %',            agg: 'pct_of_total' },
-            { key: 'ack_dis',      label: 'DIS',                 agg: 'mean' },
+            { key: 'ack_dis',      label: 'DIS',                 agg: 'mean',
+              info: 'Days In Stock — purchase date to acknowledged date' },
             { key: 'purch_price',  label: 'Purch',               agg: 'mean', money: true },
-            { key: 'sell_price_after_disc', label: 'Sell',       agg: 'mean', money: true },
-            { key: 'chassis_mgn_aft_subs',  label: 'Chassis',    agg: 'mean', money: true },
+            { key: 'sell_price_incl_fee', label: 'Sell',       agg: 'mean', money: true,
+              info: 'Selling price before discount, including the admin fee actually charged on the deal' },
+            { key: 'discount',     label: 'Discount',            agg: 'mean', money: true },
+            { key: 'chassis_mgn_aft_subs',  label: 'Chassis',    agg: 'mean', money: true,
+              info: 'Chassis margin — sale price minus purchase price, discount and VAT cost, plus admin fee margin, after finance subsidy' },
             { key: 'vehicle_costs', label: 'Costs',              agg: 'mean', money: true },
             { key: 'metal_mgn',    label: 'Metal',               agg: 'mean', money: true },
             { key: 'gpu_m',        label: 'GPU-M',               agg: 'mean', money: true },
+            { key: 'at_val_order', label: 'AT Valuation',        agg: 'mean', money: true },
+            { key: 'sell_pct_at',  label: 'PTM %',               agg: 'mean',
+              info: 'Price To Market — selling price including admin fee as a percentage of the Autotrader market valuation' },
+            { key: 'at_rating',    label: 'AT Rating',           agg: 'mean' },
             { key: 'fin_pen_pct',  label: 'Fin Pen %',           agg: 'fin_pen_pct' },
             { key: 'fin_comm_all', label: 'Fin Comm',            agg: 'fin_comm_all', money: true },
             { key: 'fin_comm_fin', label: 'Fin Comm / unit',     agg: 'fin_comm_financed', money: true },
-            { key: 'product_mgn',  label: 'Prod mgn',            agg: 'mean', money: true },
+            { key: 'product_mgn',  label: 'Product Mgn',         agg: 'mean', money: true },
             { key: 'gpu_s',        label: 'GPU-S',               agg: 'mean', money: true },
             { key: 'gpu_ms',       label: 'GPU-MS',              agg: 'mean', money: true },
-            { key: 'roi_pct',      label: 'ROI %',               agg: 'mean' },
         ];
-        // Columns shaded per-column (relative min->max within the table).
-        // Money/margin columns and the two percentage columns read "higher is
-        // better" green; nothing is shaded red-for-high.
-        const SHADE_COLS = new Set([
-            'chassis_mgn_aft_subs', 'metal_mgn', 'gpu_m', 'fin_pen_pct',
-            'fin_comm_all', 'fin_comm_fin', 'product_mgn', 'gpu_s', 'gpu_ms', 'roi_pct',
-        ]);
+        // Columns shaded per-column (relative min->max within the table, red to
+        // yellow to green — same scale as the buying requirements page).
+        // 'green' = higher is better; 'red' = higher is worse (DIS — longer in
+        // stock is bad). Finance/product-related columns (Fin Pen %, Fin Comm,
+        // Fin Comm/unit, Prod mgn) are deliberately NOT shaded.
+        // 'red' on vehicle_costs because this table stores costs as POSITIVE
+        // numbers (unlike the VSE cost columns, which are already negative) —
+        // so a high value here is a high cost, i.e. bad.
+        const SHADE_DIRECTION = {
+            ack_dis: 'red', vehicle_costs: 'red',
+            chassis_mgn_aft_subs: 'green', gpu_m: 'green', gpu_ms: 'green',
+            at_rating: 'green',
+        };
+        const SHADE_COLS = new Set(Object.keys(SHADE_DIRECTION));
+
+        // Values that decide a column's min/max. Day counts over a year are
+        // data problems (a vehicle never marked sold, a bad purchase date), not
+        // genuinely slow stock — left in, a single 900-day row stretches the
+        // scale so far that every real value lands near the good end and the
+        // column reads uniformly green. Anomalies still get a colour; they just
+        // sit at the red end instead of defining where it is.
+        const DAY_COUNT_MAX = 365;
+        const withinYear = v => v <= DAY_COUNT_MAX;
+        const SHADE_IN_SCALE = {
+            ack_dis: withinYear,
+            dts: withinYear,
+        };
 
         function mean(vals) {
             const known = vals.filter(v => v !== null && v !== undefined && v !== '' && !Number.isNaN(Number(v))).map(Number);
@@ -628,15 +955,36 @@
             out.units_pct = totalUnits ? rows.length / totalUnits : null;
             out.ack_dis = mean(rows.map(r => r.ack_dis));
             out.purch_price = mean(rows.map(r => r.purch_price));
-            out.sell_price_after_disc = mean(rows.map(r => r.sell_price_after_disc));
+            out.sell_price_incl_fee = mean(rows.map(r => r.sell_price_incl_fee));
+            out.discount = mean(rows.map(r => r.discount));
             out.chassis_mgn_aft_subs = mean(rows.map(r => r.chassis_mgn_aft_subs));
             out.vehicle_costs = mean(rows.map(r => r.vehicle_costs));
             out.metal_mgn = mean(rows.map(r => r.metal_mgn));
             out.gpu_m = mean(rows.map(r => r.gpu_m));
+            out.at_val_order = mean(rows.map(r => r.at_val_order));
+            // Ratio of the two averages shown alongside it (Sell / AT
+            // Valuation), NOT a mean of each vehicle's own %. An average of
+            // per-vehicle ratios can land far from what the two adjacent
+            // columns divide to — a handful of low-value vehicles with an
+            // unusual % barely move the two £ averages but swing their own
+            // average heavily. Both averages are restricted to vehicles that
+            // have BOTH figures, so the numerator and denominator are means
+            // over the same set of rows and the on-screen division is exact.
+            // Vehicles missing an AT valuation (no listing found) are excluded
+            // from both, same as they already were from at_val_order's own
+            // average.
+            {
+                const withBoth = rows.filter(r =>
+                    r.sell_price_incl_fee !== null && r.sell_price_incl_fee !== undefined &&
+                    r.at_val_order !== null && r.at_val_order !== undefined);
+                const sellOverBoth = mean(withBoth.map(r => r.sell_price_incl_fee));
+                const atValOverBoth = mean(withBoth.map(r => r.at_val_order));
+                out.sell_pct_at = atValOverBoth ? sellOverBoth / atValOverBoth : null;
+            }
+            out.at_rating = mean(rows.map(r => r.at_rating));
             out.product_mgn = mean(rows.map(r => r.product_mgn));
             out.gpu_s = mean(rows.map(r => r.gpu_s));
             out.gpu_ms = mean(rows.map(r => r.gpu_ms));
-            out.roi_pct = mean(rows.map(r => r.roi_pct));
 
             // Fin Pen % = units on Rate finance / all units in the row
             // (0% and Cash both excluded from the numerator)
@@ -655,7 +1003,26 @@
         }
 
         // Build a full summary table for one dimension: { key, heading, rows: [{label, ...cols}], total }
-        function buildSummaryTable(rows, groupKey, heading, order) {
+        // Full vehicle description: make/model plus derivative. Either part can
+        // be blank, so they're joined only when both are present — otherwise a
+        // missing derivative would leave a trailing space.
+        function vehicleDesc(r) {
+            return [r.make_model, r.derivative].map(v => normVal(v)).filter(Boolean).join(' ');
+        }
+
+        // The popup shows exactly the Vehicle view's columns, in the same
+        // order — it IS COLS, not a copy or a subset. Anything added, removed
+        // or reordered in COLS lands in both views automatically, and there is
+        // no second list to keep in step. (It used to stop at GPU-MS and layer
+        // on its own info text; both of those were sources of drift.)
+        const MODAL_COLS = COLS;
+
+        // Sentinel used as the View button's data-label on a Grand Total row —
+        // no real group label can collide with it because group labels come
+        // from row values, and '(blank)' is used for empty ones.
+        const GRAND_TOTAL_LABEL = '__grand_total__';
+
+        function buildSummaryTable(rows, groupKey, heading, order, dimKey) {
             const groups = new Map();
             rows.forEach(r => {
                 const v = normVal(r[groupKey]) || '(blank)';
@@ -675,33 +1042,31 @@
             const total = rows.length;
             const dataRows = labels.map(label => ({ label, ...summariseGroup(groups.get(label), total) }));
             const totalRow = { label: 'Grand Total', ...summariseGroup(rows, total) };
-            return { heading, rows: dataRows, totalRow, groupKey };
+            return { heading, rows: dataRows, totalRow, groupKey, dimKey: dimKey || groupKey };
         }
 
-        // Per-column relative shading (min->max within this table's data rows,
-        // excluding the Grand Total row). Returns a 0..1 intensity or null.
-        function shadeScale(dataRows, key) {
-            const vals = dataRows.map(r => r[key]).filter(v => v !== null && v !== undefined && !Number.isNaN(Number(v))).map(Number);
-            if (vals.length < 2) return () => null;
-            const min = Math.min(...vals), max = Math.max(...vals);
-            if (max === min) return () => null;
-            return v => (v === null || v === undefined || Number.isNaN(Number(v))) ? null : (Number(v) - min) / (max - min);
+        // Per-column shading, scaled to that column's own min..max across the
+        // rows being drawn. The scale itself (colours, interpolation) lives in
+        // shading.js so every page shades identically; these two wrap it for
+        // this page's "build a shader per column key, emit an HTML attribute"
+        // rendering style.
+        function columnShader(dataRows, key) {
+            return shadeScale(dataRows, r => r[key], { inScale: SHADE_IN_SCALE[key] });
         }
-
-        function shadeStyle(t) {
-            if (t === null) return '';
-            // White (#ffffff) -> brand green (#7ed321), light to avoid drowning text
-            const start = [255, 255, 255], end = [200, 232, 165];
-            const rgb = start.map((s, i) => Math.round(s + (end[i] - s) * t));
-            return ` style="background: rgb(${rgb.join(',')})"`;
+        // Returns a ready-to-inline style attribute (or '' when not shadeable).
+        function shadeAttr(shader, value, direction) {
+            if (!shader) return '';
+            const colour = shader(value, direction === 'red' ? 'high-bad' : 'high-good');
+            return colour ? ` style="background: ${colour}"` : '';
         }
 
         function fmtSummaryCell(col, v) {
             if (v === null || v === undefined) return '';
             if (col.key === 'units') return Math.round(v).toLocaleString('en-GB');
             if (col.key === 'ack_dis') return Number(v).toFixed(1);
+            if (col.key === 'at_rating') return Number(v).toFixed(0);
             if (col.money) return fmtMoney(v);
-            return fmtPct(v);   // units_pct, fin_pen_pct, roi_pct
+            return fmtPct(v);   // units_pct, fin_pen_pct
         }
 
         // Fixed column widths shared by every summary table, so they all line
@@ -709,18 +1074,23 @@
         // column width is measured (not guessed) from the actual longest
         // heading/label text that will appear across all seven tables — see
         // measureSummaryLabelWidth(). The table renders at its own natural
-        // best fit — nothing stretches it. Instead the filter panels and
-        // control bar above are widened to match the table afterwards (see
-        // matchFilterWidthToTable()), so data columns never get squeezed.
+        // best fit — nothing stretches it, and nothing is sized from it
+        // either: the filter panels above are a fixed width independent of
+        // this table and of which view is showing.
         const SUMMARY_DATA_COL_WIDTH_BASE = 66;
+        // The View column sits immediately after Units. It holds a fixed-size
+        // button, so it gets its own fixed width rather than the shared data
+        // column width — and it's excluded from every aggregation/shading path.
+        const SUMMARY_VIEW_COL_WIDTH = 52;
+        const VIEW_COL_AFTER = 'units';   // View column is rendered after this column
         const SUMMARY_LABEL_PADDING = 20;   // matches the cell's left+right padding
         let summaryLabelColWidth = 95;        // recomputed before each render
         let summaryDataColWidth = SUMMARY_DATA_COL_WIDTH_BASE;
 
-        // Base (unwidened) filter panel width — matches the .slicer CSS
-        // fallback and #control-bar's pre-JS fallback width. Panels reset to
-        // this before each render, then matchFilterWidthToTable() widens
-        // them (and only them) to match the summary table.
+        // Filter panel width — matches the .slicer CSS fallback and
+        // #control-bar's pre-JS fallback width. This is the width the panels
+        // always render at, in both views; the control bar is measured to
+        // match them rather than the other way round.
         const SLICER_WIDTH_BASE = 163;
 
         // Measure the pixel width of the longest label-column text (every
@@ -729,7 +1099,7 @@
         function measureSummaryLabelWidth(tables) {
             const canvas = measureSummaryLabelWidth._canvas || (measureSummaryLabelWidth._canvas = document.createElement('canvas'));
             const ctx = canvas.getContext('2d');
-            const size = getComputedStyle(document.documentElement).getPropertyValue('--summary-font').trim() || '11px';
+            const size = getComputedStyle(document.documentElement).getPropertyValue('--page-font').trim() || '11px';
             ctx.font = `600 ${size} 'DM Sans', system-ui, sans-serif`;   // bold, matches .dim-label/.total-row weight
             let max = 0;
             tables.forEach(t => {
@@ -743,16 +1113,45 @@
 
         function summaryColgroupHtml() {
             const cols = [`<col style="width:${summaryLabelColWidth}px">`];
-            SUMMARY_COLS.forEach(() => cols.push(`<col style="width:${summaryDataColWidth}px">`));
+            SUMMARY_COLS.forEach(c => {
+                cols.push(`<col style="width:${summaryDataColWidth}px">`);
+                if (c.key === VIEW_COL_AFTER) cols.push(`<col style="width:${SUMMARY_VIEW_COL_WIDTH}px">`);
+            });
             return `<colgroup>${cols.join('')}</colgroup>`;
+        }
+
+        // Small "i" marker after a column heading. The explanation is rendered
+        // from data-info by a CSS tooltip (see theme.css) rather than the
+        // browser's `title`, which cannot be styled and waits ~1s before
+        // showing. Deliberately NOT title — setting both shows two tooltips.
+        function infoMarkHtml(col) {
+            if (!col.info) return '';
+            return ` <span class="info-mark" data-info="${escapeHtml(col.info)}">i</span>`;
         }
 
         function renderSummaryTableHtml(table) {
             const shaders = {};
-            SHADE_COLS.forEach(k => { shaders[k] = shadeScale(table.rows, k); });
+            // Sales Type only ever has 2-3 rows (Rate/Cash, 0%, Unknown) — a
+            // min->max shade over that few rows just marks "biggest of three",
+            // not a meaningful spread, so it is left unshaded.
+            if (table.dimKey !== '__sales_type_bucket') {
+                SHADE_COLS.forEach(k => { shaders[k] = columnShader(table.rows, k); });
+            }
 
             const head = `<tr><th>${escapeHtml(table.heading)}</th>` +
-                SUMMARY_COLS.map(c => `<th class="num">${escapeHtml(c.label)}</th>`).join('') + '</tr>';
+                SUMMARY_COLS.map(c => {
+                    // title only when there is no info marker — otherwise the
+                    // browser tooltip and the marker's own would both appear.
+                    const t = c.info ? '' : ` title="${escapeHtml(c.label)}"`;
+                    const th = `<th class="num"${t}>${escapeHtml(c.label)}${infoMarkHtml(c)}</th>`;
+                    return c.key === VIEW_COL_AFTER ? th + '<th>View</th>' : th;
+                }).join('') + '</tr>';
+
+            // The button carries the group's identity (which table, which row
+            // label) so the popup can rebuild exactly the rows that produced
+            // the Units figure next to it.
+            const viewCellHtml = label =>
+                `<td class="view-cell"><button type="button" class="btn-view" data-dim="${escapeHtml(table.dimKey)}" data-label="${escapeHtml(label)}">View</button></td>`;
 
             // Period rows show a friendly label (e.g. "W30 20-Jul"); the raw
             // key (r.label) is only used internally for grouping/sorting.
@@ -761,9 +1160,9 @@
             const rowHtml = r => {
                 const cells = SUMMARY_COLS.map(c => {
                     const v = r[c.key];
-                    const shade = shaders[c.key] ? shaders[c.key](v) : null;
                     const negCls = (typeof v === 'number' && v < 0) ? ' neg' : '';
-                    return `<td class="num${negCls}"${shadeStyle(shade)}>${escapeHtml(fmtSummaryCell(c, v))}</td>`;
+                    const td = `<td class="num${negCls}"${shadeAttr(shaders[c.key], v, SHADE_DIRECTION[c.key])}>${escapeHtml(fmtSummaryCell(c, v))}</td>`;
+                    return c.key === VIEW_COL_AFTER ? td + viewCellHtml(r.label) : td;
                 }).join('');
                 return `<tr><td class="dim-label">${escapeHtml(displayLabel(r.label))}</td>${cells}</tr>`;
             };
@@ -771,7 +1170,8 @@
             const totalCells = SUMMARY_COLS.map(c => {
                 const v = table.totalRow[c.key];
                 const negCls = (typeof v === 'number' && v < 0) ? ' neg' : '';
-                return `<td class="num${negCls}">${escapeHtml(fmtSummaryCell(c, v))}</td>`;
+                const td = `<td class="num${negCls}">${escapeHtml(fmtSummaryCell(c, v))}</td>`;
+                return c.key === VIEW_COL_AFTER ? td + viewCellHtml(GRAND_TOTAL_LABEL) : td;
             }).join('');
             const totalHtml = `<tr class="total-row"><td class="dim-label">${escapeHtml(table.totalRow.label)}</td>${totalCells}</tr>`;
 
@@ -784,11 +1184,11 @@
 
         // Dimensions and their column key + explicit ordering (undefined = alphabetical)
         const SUMMARY_DIMENSIONS = [
-            { key: '__sales_type_bucket', heading: 'Sales Type', order: ['Rate/Cash', '0%'], skipOwnFilter: true },
+            { key: '__sales_type_bucket', heading: 'Sales Type', order: ['Rate/Cash', '0%', 'Unknown'], skipOwnFilter: true },
             { key: '__period', heading: null /* set per-lens */ },
             { key: 'supplier_channel', heading: 'Channel' },
             { key: 'fuel', heading: 'Fuel Type', order: SLICER_ORDER.fuel },
-            { key: 'price_band', heading: 'Price Band', order: ['<10k','10-12.5k','12.5-15k','15-20k','20-25k','25-30k','30k+','Interest Free'] },
+            { key: 'price_band', heading: 'Price Band (Rate/Cash)', order: ['<10k','10-12.5k','12.5-15k','15-20k','20-25k','25-30k','30k+','Interest Free'] },
             { key: 'mileage_band', heading: 'Mileage Band' },
             { key: 'age_band', heading: 'Age Band' },
         ];
@@ -803,8 +1203,9 @@
             const tables = SUMMARY_DIMENSIONS.map(dim => {
                 let rows, groupKey, heading, order;
                 if (dim.skipOwnFilter) {
-                    rows = filteredExceptSalesType.map(r => ({ ...r, __sales_type_bucket: mapSalesType(r.sales_type) || '(blank)' }));
-                    groupKey = '__sales_type_bucket'; heading = dim.heading; order = dim.order;
+                    // Groups straight off the column — no per-row object copy.
+                    rows = filteredExceptSalesType;
+                    groupKey = 'sales_type_bucket'; heading = dim.heading; order = dim.order;
                 } else if (dim.key === '__period') {
                     rows = filtered.map(r => ({ ...r, __period: periodOf(r, lensApplied, granularityApplied) || '(blank)' }));
                     groupKey = '__period';
@@ -815,7 +1216,7 @@
                 } else {
                     rows = filtered; groupKey = dim.key; heading = dim.heading; order = dim.order;
                 }
-                return buildSummaryTable(rows, groupKey, heading, order);
+                return buildSummaryTable(rows, groupKey, heading, order, dim.key);
             });
 
             // Measure the true longest label across every table's heading and
@@ -831,10 +1232,184 @@
             area.classList.remove('is-loading');   // let the fit-content width rule take over
             area.innerHTML = tables.map(renderSummaryTableHtml).join('') || emptyHtml;
 
-            // The table is now at its natural best fit. Widen the filter
-            // panels + control bar to match it (never the other way round —
-            // see matchFilterWidthToTable()).
-            if (tables.length) matchFilterWidthToTable();
+            area.querySelectorAll('button.btn-view').forEach(btn => {
+                btn.addEventListener('click', () =>
+                    openVehicleModal(btn.dataset.dim, btn.dataset.label));
+            });
+
+            // The summary card sizes itself to its own content (fit-content).
+            // The filter panels above are deliberately NOT tied to it — the
+            // top section is a fixed width in both views, set once in
+            // renderSlicers().
+        }
+
+        // ── Vehicle list popup ──────────────────────────────────────────────
+        // Rebuilds the exact set of rows behind one summary cell's Units
+        // figure, using the same filtering the table itself used, so the
+        // popup's row count always equals the Units number next to the button.
+        function rowsForSummaryGroup(dimKey, label) {
+            const dim = SUMMARY_DIMENSIONS.find(d => d.key === dimKey);
+            if (!dim) return [];
+            const base = baseRows(lensApplied);
+            // Sales Type's table ignores the Sales Type slicer (skipOwnFilter),
+            // exactly as renderSummary() builds it.
+            const rows = base.filter(r => passesSlicers(
+                r, slicerSel, lensApplied, granularityApplied,
+                dim.skipOwnFilter ? 'sales_type' : undefined));
+            if (label === GRAND_TOTAL_LABEL) return rows;
+
+            const valueOf = r => {
+                if (dim.key === '__sales_type_bucket') return normVal(r.sales_type_bucket) || '(blank)';
+                if (dim.key === '__period') return periodOf(r, lensApplied, granularityApplied) || '(blank)';
+                return normVal(r[dim.key]) || '(blank)';
+            };
+            return rows.filter(r => valueOf(r) === label);
+        }
+
+        function closeVehicleModal() {
+            document.getElementById('vehicle-modal-backdrop')?.remove();
+            document.getElementById('vehicle-modal')?.remove();
+            document.removeEventListener('keydown', vehicleModalKeydown);
+        }
+        function vehicleModalKeydown(e) { if (e.key === 'Escape') closeVehicleModal(); }
+
+        // Sort state for the popup, independent of the vehicle grid's own.
+        // Reset on each open so a popup always starts in Make Model order.
+        let modalRows = [], modalSortKey = 'description', modalSortDir = 1;
+        let modalLabel = '';   // the open popup's group label, for its CSV filename
+
+
+        function sortedModalRows() {
+            const col = MODAL_COLS.find(c => c.key === modalSortKey);
+            const numeric = col && (col.type === 'num' || col.type === 'money' || col.type === 'pct');
+            // Blanks always sort to the bottom regardless of direction, so a
+            // descending sort still leads with real values rather than gaps.
+            return [...modalRows].sort((a, b) => {
+                let av = cellValue(col, a), bv = cellValue(col, b);
+                const aEmpty = av === null || av === undefined || av === '';
+                const bEmpty = bv === null || bv === undefined || bv === '';
+                if (aEmpty && bEmpty) return 0;
+                if (aEmpty) return 1;
+                if (bEmpty) return -1;
+                if (numeric) return (Number(av) - Number(bv)) * modalSortDir;
+                return String(av).localeCompare(String(bv)) * modalSortDir;
+            });
+        }
+
+        // The popup uses the vehicle grid's own width measurement
+        // (measureVehicleColumnWidths, declared further down) — same columns,
+        // same font, so the same widths. It used to have its own near-copy with
+        // slightly different min/max/padding constants, which is why the two
+        // tables never quite looked alike.
+
+        function renderModalTable() {
+            const head = MODAL_COLS.map(c => {
+                const caret = modalSortKey === c.key ? (modalSortDir === 1 ? '▲' : '▼') : '⇅';
+                const cls = (c.type === 'num' || c.type === 'money' || c.type === 'pct') ? ' class="num"' : '';
+                // title only when there is no info marker — see the summary
+                // table's header for why.
+                const t = c.info ? '' : ` title="${escapeHtml(c.label)}"`;
+                // .th-label wraps only the text, so the 3-line cap applies to
+                // the label without clipping the marker or caret beside it.
+                return `<th${cls} data-key="${c.key}"${t}><span class="th-label">${escapeHtml(c.label)}</span>${infoMarkHtml(c)}<span class="sort-caret">${caret}</span></th>`;
+            }).join('');
+
+            const rows = sortedModalRows();
+            const modalWidths = measureVehicleColumnWidths(rows);
+            const colgroup = `<colgroup>${modalWidths.map(w => `<col style="width:${w}px">`).join('')}</colgroup>`;
+            // Same red/yellow/green scale as the summary tables, computed over
+            // this popup's own rows (min->max within THIS group, same as a
+            // single summary table's shading — not across the whole page).
+            const shaders = {};
+            Object.keys(SHADE_DIRECTION).forEach(k => {
+                if (MODAL_COLS.some(c => c.key === k)) shaders[k] = columnShader(rows, k);
+            });
+            const body = rows.length
+                ? rows.map(r => '<tr>' + MODAL_COLS.map(c => {
+                    const v = cellValue(c, r);
+                    // Link columns (Order/Invoice) render as an icon, same as
+                    // the vehicle grid — otherwise the raw URL prints as text.
+                    if (c.type === 'link') {
+                        return v ? `<td><a href="${escapeHtml(v)}" target="_blank" rel="noopener"><i class="fas fa-external-link-alt"></i></a></td>` : '<td></td>';
+                    }
+                    const numCls = (c.type === 'num' || c.type === 'money' || c.type === 'pct') ? ' num' : '';
+                    const negCls = isNeg(c, v) ? ' neg' : '';
+                    // title so a value trimmed by the fixed column width is
+                    // still readable on hover.
+                    const text = escapeHtml(fmtCell(c, v));
+                    return `<td class="${(numCls + negCls).trim()}" title="${text}"${shadeAttr(shaders[c.key], v, SHADE_DIRECTION[c.key])}>${text}</td>`;
+                }).join('') + '</tr>').join('')
+                : `<tr><td colspan="${MODAL_COLS.length}" style="text-align:center;color:var(--c-text-muted);padding:20px 0;">No vehicles</td></tr>`;
+
+            const table = document.getElementById('vehicle-modal-table');
+            // Pin the table to the colgroup's own total. With table-layout:
+            // fixed and width: auto, the browser sizes the table to its content
+            // and then redistributes the surplus over the colgroup widths — a
+            // nowrap column like Description simply took the space it wanted
+            // (558px against the 145px the colgroup asked for), so every
+            // reduction to the measured width did nothing. With the table
+            // pinned to the sum there is no surplus and the colgroup is
+            // honoured exactly.
+            table.style.width = modalWidths.reduce((a, b) => a + b, 0) + 'px';
+            table.innerHTML = `${colgroup}<thead><tr>${head}</tr></thead><tbody>${body}</tbody>`;
+            table.querySelectorAll('th[data-key]').forEach(th => {
+                th.addEventListener('click', () => {
+                    const key = th.dataset.key;
+                    if (modalSortKey === key) modalSortDir = -modalSortDir;
+                    else { modalSortKey = key; modalSortDir = 1; }
+                    renderModalTable();
+                });
+            });
+        }
+
+        function openVehicleModal(dimKey, label) {
+            closeVehicleModal();
+            modalRows = rowsForSummaryGroup(dimKey, label);
+            modalSortKey = 'description';
+            modalSortDir = 1;
+
+            const dim = SUMMARY_DIMENSIONS.find(d => d.key === dimKey);
+            const heading = dim
+                ? (dim.key === '__period' ? slicerHeadingApplied('period') : dim.heading)
+                : '';
+            const shownLabel = label === GRAND_TOTAL_LABEL
+                ? 'Grand Total'
+                : (dimKey === '__period' ? periodDisplayLabel(label) : label);
+            // Remembered for the popup's CSV filename, so a group's export is
+            // distinguishable from the full Vehicle view one.
+            modalLabel = shownLabel;
+
+            const backdrop = document.createElement('div');
+            backdrop.id = 'vehicle-modal-backdrop';
+            backdrop.className = 'modal-backdrop-custom';
+            backdrop.addEventListener('click', closeVehicleModal);
+
+            const modal = document.createElement('div');
+            modal.id = 'vehicle-modal';
+            modal.className = 'vehicle-modal';
+            modal.innerHTML = `
+                <div class="vehicle-modal-head">
+                    <div>
+                        <div class="vehicle-modal-title">${escapeHtml(heading)}: ${escapeHtml(shownLabel)}</div>
+                        <div class="vehicle-modal-sub">${modalRows.length.toLocaleString('en-GB')} vehicle${modalRows.length === 1 ? '' : 's'}</div>
+                    </div>
+                    <div class="d-flex align-items-center gap-2">
+                        <!-- Same classes/icon as the Vehicle view's CSV button,
+                             and the same columns — see downloadCsvRows(). -->
+                        <button type="button" class="btn btn-csv" id="vehicle-modal-csv"><i class="fas fa-download"></i> CSV</button>
+                        <button type="button" class="vehicle-modal-close" aria-label="Close">&times;</button>
+                    </div>
+                </div>
+                <div class="vehicle-modal-body">
+                    <table class="vehicle-modal-table" id="vehicle-modal-table"></table>
+                </div>`;
+            modal.querySelector('.vehicle-modal-close').addEventListener('click', closeVehicleModal);
+            modal.querySelector('#vehicle-modal-csv').addEventListener('click', downloadModalCsv);
+
+            document.body.appendChild(backdrop);
+            document.body.appendChild(modal);
+            renderModalTable();
+            document.addEventListener('keydown', vehicleModalKeydown);
         }
 
         // ── Slicer rendering & interaction ──────────────────────────────────
@@ -904,7 +1479,7 @@
                 const clearCls = 'slicer-clear' + (sel.size ? '' : ' hidden');
                 return `<div class="slicer">
                     <div class="slicer-head"><span>${escapeHtml(slicerHeadingApplied(s.key))}</span>
-                        <button class="${clearCls}" data-clear="${s.key}" title="Clear">clear</button></div>
+                        <button class="${clearCls}" data-clear="${s.key}" title="Clear">Clear</button></div>
                     <div class="slicer-list">${items}</div>
                 </div>`;
             }).join('');
@@ -924,68 +1499,36 @@
                 });
             });
 
-            // Reset filter panels to their natural width before the summary
-            // table (which renders after this) has a chance to widen them
-            // back to match its own natural width — see
-            // matchFilterWidthToTable(). Without this reset, panel width
-            // would only ever grow across renders and never shrink back down
-            // (e.g. after switching to a narrower dimension set).
+            // Panels are always their base width — the top section is a fixed
+            // size independent of the view (see matchFilterWidthToTable).
             document.documentElement.style.setProperty('--slicer-width', SLICER_WIDTH_BASE + 'px');
-            document.getElementById('control-bar').style.width = '';
+            // Size the control bar to those panels. Done here rather than in
+            // renderSummary() so it happens in BOTH views — the top section
+            // must look identical whichever view is applied.
+            matchFilterWidthToTable();
         }
 
-        // Widens the 8 filter panels (uniformly, same width each) and the
-        // control bar above so their right edge matches the summary card's
-        // right edge — never the other way round, so the table's data
-        // columns are never squeezed to fit the filters. Run once, after the
-        // summary table has rendered at its own best-fit width.
+        // Sizes the control bar to the filter panels' own rendered right edge.
+        //
+        // The whole top section (control bar + filter panels) is a FIXED width
+        // that does not depend on which view is showing: the panels stay at
+        // SLICER_WIDTH_BASE and the control bar is measured to match them.
+        // Previously the panels were widened to the summary card's right edge,
+        // which made the top section a different width in Summary than in
+        // Vehicle view and moved every filter when the view changed.
         function matchFilterWidthToTable() {
             const bar = document.getElementById('slicer-bar');
-            const allTables = document.querySelectorAll('#summary-area table.summary');
             const panels = bar.children;
-            if (!panels.length || !allTables.length) return;
+            if (!panels.length) return;
 
-            // Match the summary CARD's right edge, not the table's. The card
-            // (#summary-area) is a .panel with 18px of side padding and
-            // width: fit-content, so it sits 18px wider than the table on
-            // each side — lining the filters up with the table itself leaves
-            // them visibly short of the card below.
-            const card = document.getElementById('summary-area');
-            const targetRight = card.getBoundingClientRect().right;
-
-            // Solve for the panel width directly. The panels lay out as
-            //   n * w + gaps, starting at the bar's left edge
-            // so with the gaps measured off the live DOM (rather than
-            // assumed from the CSS), the width that lands the last panel
-            // exactly on targetRight is one division. Measured, not guessed:
-            // reading panel 0's real width and the last panel's real right
-            // edge gives the gap total including any sub-pixel rounding.
+            // Measured off the live DOM, not computed from the CSS: the panels
+            // are laid out by flex with gaps, so their real right edge already
+            // accounts for the gaps and any sub-pixel rounding.
             const n = panels.length;
             const barLeft = bar.getBoundingClientRect().left;
-            const baseWidth = panels[0].getBoundingClientRect().width;
-            const gaps = panels[n - 1].getBoundingClientRect().right - barLeft - n * baseWidth;
-
-            document.documentElement.style.setProperty(
-                '--slicer-width', Math.round((targetRight - barLeft - gaps) / n) + 'px');
-
-            // n * Math.round() can still land a few px off the target, since
-            // each panel absorbs the same rounding n times over. Read the
-            // real right edge back and spread the exact leftover across the
-            // panels — one correction against a measurement, not another
-            // estimate.
-            const residual = targetRight - panels[n - 1].getBoundingClientRect().right;
-            if (Math.abs(residual) > 0.5) {
-                const w = panels[0].getBoundingClientRect().width;
-                document.documentElement.style.setProperty(
-                    '--slicer-width', Math.round(w + residual / n) + 'px');
-            }
-
-            // Control bar (Lens/View/Group by row) matches the slicer bar's
-            // actual rendered right edge, after the width above takes effect.
-            const barLeftFinal = bar.getBoundingClientRect().left;
-            const lastRectFinal = panels[n - 1].getBoundingClientRect();
+            const lastRight = panels[n - 1].getBoundingClientRect().right;
             document.getElementById('control-bar').style.width =
-                Math.ceil(lastRectFinal.right - barLeftFinal) + 'px';
+                Math.ceil(lastRight - barLeft) + 'px';
         }
 
         // Full refresh of everything actually on screen — slicer panels, row
@@ -996,10 +1539,6 @@
             renderSlicers();
             document.getElementById('summary-area').style.display = viewApplied === 'summary' ? '' : 'none';
             document.getElementById('vehicle-area').style.display = viewApplied === 'vehicle' ? '' : 'none';
-            document.getElementById('font-size-label').textContent = fontSizes[viewApplied] + 'px';
-            const n = filteredRows().length;
-            document.getElementById('row-count').textContent =
-                n.toLocaleString('en-GB') + ' vehicle' + (n === 1 ? '' : 's');
             if (viewApplied === 'vehicle') renderGrid(); else renderSummary();
         }
 
@@ -1042,6 +1581,9 @@
         // their header, and wrapping the header is what makes that possible.
         const VEHICLE_COL_MIN_WIDTH = 46;
         const VEHICLE_COL_MAX_WIDTH = 220;
+        // Description is set outright, not measured or capped — see the
+        // description branch in measureVehicleColumnWidths for why.
+        const DESCRIPTION_COL_WIDTH = 400;
         const VEHICLE_COL_PADDING = 22;      // matches td/th left+right padding
         const VEHICLE_SAMPLE_ROWS = 400;     // measuring every row is unnecessary and slower
 
@@ -1058,18 +1600,31 @@
 
                 // Header: only the longest WORD matters, since the phrase wraps.
                 ctx.font = `600 ${size} 'DM Sans', system-ui, sans-serif`;
-                const headerWordMax = Math.max(...c.label.split(' ').map(w => ctx.measureText(w).width));
+                let headerWordMax = Math.max(...c.label.split(' ').map(w => ctx.measureText(w).width));
+                // The info marker and sort caret sit on the header's last line,
+                // so the column has to be wide enough to hold them beside a word.
+                if (c.info) headerWordMax += ctx.measureText('  i ').width;
 
                 // Data: measure the sample's formatted values at regular weight.
                 ctx.font = `400 ${size} 'DM Sans', system-ui, sans-serif`;
                 let dataMax = 0;
                 sample.forEach(r => {
-                    const w = ctx.measureText(fmtCell(c, r[c.key])).width;
+                    const w = ctx.measureText(fmtCell(c, cellValue(c, r))).width;
                     if (w > dataMax) dataMax = w;
                 });
 
                 const px = Math.ceil(Math.max(headerWordMax, dataMax)) + VEHICLE_COL_PADDING;
-                return Math.min(VEHICLE_COL_MAX_WIDTH, Math.max(VEHICLE_COL_MIN_WIDTH, px));
+                const width = Math.min(VEHICLE_COL_MAX_WIDTH, Math.max(VEHICLE_COL_MIN_WIDTH, px));
+
+                // Description gets a fixed width rather than a measured one.
+                // Full descriptions run well past any sensible column width, so
+                // the measurement only ever hit VEHICLE_COL_MAX_WIDTH — this is
+                // the one column where the right width is a judgement about how
+                // much of the text to show, not a fit to its content. Values
+                // longer than this truncate with an ellipsis (the full text is
+                // on the cell's title attribute).
+                if (c.key === 'description') return DESCRIPTION_COL_WIDTH;
+                return width;
             });
         }
 
@@ -1089,11 +1644,15 @@
 
             const head = COLS.map((c, i) => {
                 const caret = sortKey === c.key ? (sortDir === 1 ? '▲' : '▼') : '⇅';
-                return `<th data-key="${c.key}" title="${escapeHtml(c.label)}">${escapeHtml(c.label)}<span class="sort-caret">${caret}</span></th>`;
+                // title only when there is no info marker — same reasoning as
+                // the summary/popup headers: a native title tooltip and the
+                // info-mark's own tooltip would both fire on hover otherwise.
+                const t = c.info ? '' : ` title="${escapeHtml(c.label)}"`;
+                return `<th data-key="${c.key}"${t}>${escapeHtml(c.label)}${infoMarkHtml(c)}<span class="sort-caret">${caret}</span></th>`;
             }).join('');
 
             const body = rows.map(r => '<tr>' + COLS.map(c => {
-                const v = r[c.key];
+                const v = cellValue(c, r);
                 if (c.type === 'link') {
                     return v ? `<td><a href="${escapeHtml(v)}" target="_blank" rel="noopener"><i class="fas fa-external-link-alt"></i></a></td>` : '<td></td>';
                 }
@@ -1103,7 +1662,13 @@
                 return `<td class="${(numCls + negCls).trim()}" title="${text}">${text}</td>`;
             }).join('') + '</tr>').join('');
 
-            area.innerHTML = `<div class="grid-wrap"><table class="grid">${vehicleColgroupHtml(widths)}<thead><tr>${head}</tr></thead><tbody>${body}</tbody></table></div>`;
+            // Explicit width = the colgroup's own total, overriding the CSS
+            // width: 100%. Left at 100% the table stretches to the container
+            // and table-layout: fixed spreads the surplus across the columns,
+            // so the measured widths (Description's reduction especially) are
+            // not what actually renders. See renderModalTable for the same fix.
+            const gridWidth = widths.reduce((a, b) => a + b, 0);
+            area.innerHTML = `<div class="grid-wrap"><table class="grid" style="width:${gridWidth}px">${vehicleColgroupHtml(widths)}<thead><tr>${head}</tr></thead><tbody>${body}</tbody></table></div>`;
 
             area.querySelectorAll('th[data-key]').forEach(th => {
                 th.addEventListener('click', () => {
@@ -1146,41 +1711,45 @@
             return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
         }
 
-        function downloadCsv() {
-            const rows = visibleRows();
+        // Shared by the Vehicle view's CSV button and the popup's — same
+        // columns (COLS === MODAL_COLS), same row/column shape, just a
+        // different row source and filename suffix.
+        function downloadCsvRows(rows, filenameSuffix) {
             const header = COLS.map(c => csvEscape(c.label)).join(',');
             const lines = rows.map(r => COLS.map(c => {
-                const v = r[c.key];
                 // Raw values in the CSV (not the formatted display) so numbers stay numeric
-                return csvEscape(v);
+                return csvEscape(cellValue(c, r));
             }).join(','));
             const csv = [header, ...lines].join('\r\n');
             const blob = new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8;' });
             const url = URL.createObjectURL(blob);
             const a = document.createElement('a');
             a.href = url;
-            a.download = `orders_deliveries_${lensApplied}_${new Date().toISOString().slice(0,10)}.csv`;
+            a.download = `orders_deliveries_${filenameSuffix}_${new Date().toISOString().slice(0,10)}.csv`;
             a.click();
             URL.revokeObjectURL(url);
         }
+        function downloadCsv() {
+            downloadCsvRows(visibleRows(), lensApplied);
+        }
+        function downloadModalCsv() {
+            // Group labels contain spaces and punctuation ("C2B2C - PX",
+            // "W34 17-Aug"), so reduce to a filename-safe slug.
+            const slug = String(modalLabel).replace(/[^A-Za-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+            downloadCsvRows(sortedModalRows(), slug ? `${lensApplied}_${slug}` : lensApplied);
+        }
 
-        // Default period selection: current week + 5 complete weeks before it
-        // (6 total), or current month + 1 complete month before it (2 total),
-        // depending on the granularity toggle. "Complete" = fully elapsed,
-        // ending before the current (in-progress) period. Recomputed whenever
-        // granularity changes, since week keys and month keys aren't the same
-        // shape — a stale selection from the other granularity would just
-        // silently match nothing.
+        // Default period selection: the current week on its own, or the current
+        // month + 1 complete month before it (2 total), depending on the
+        // granularity toggle. "Complete" = fully elapsed, ending before the
+        // current (in-progress) period. Recomputed whenever granularity
+        // changes, since week keys and month keys aren't the same shape — a
+        // stale selection from the other granularity would just silently match
+        // nothing.
         function defaultPeriodSelection(today, granularityVal) {
             const keys = [];
             if (granularityVal === 'week') {
-                const currentWeek = isoWeekKey(today);
-                let monday = isoWeekMonday(currentWeek);
-                for (let i = 0; i < 6; i++) {
-                    const wk = isoWeekKey(ymdLocal(monday));
-                    keys.push(wk);
-                    monday.setDate(monday.getDate() - 7);
-                }
+                keys.push(isoWeekKey(today));
             } else {
                 const d = new Date(today + 'T00:00:00');
                 for (let i = 0; i < 2; i++) {
@@ -1239,22 +1808,20 @@
             periodDefaulted = true;
         }
 
-        let salesTypeDefaulted = false;
-        function defaultSalesTypeFilter() {
-            // Default the Sales Type slicer to Rate/Cash (excludes 0% interest-free,
-            // whose inflated price would otherwise skew price-related averages).
-            // Only set once — a manual refresh must not stomp a user's own choice.
-            if (salesTypeDefaulted) return;
-            slicerSel['sales_type'] = new Set(['Rate/Cash']);
-            salesTypeDefaulted = true;
-        }
-
         function showLoading(msg) {
             const html = `<div class="spinner-wrap"><div class="css-spinner"></div><div style="margin-top:12px;font-size:0.9rem;">${escapeHtml(msg || 'Loading...')}</div></div>`;
             document.getElementById('grid-area').innerHTML = html;
             const summaryArea = document.getElementById('summary-area');
             summaryArea.classList.add('is-loading');   // full width to match the control bar, like the initial load state
             summaryArea.innerHTML = html;
+
+            // The panels are a fixed width and the control bar is measured
+            // from them, so both are already correct and must NOT be reset
+            // here — clearing the control bar's width would drop it back to
+            // the 1410px CSS fallback for the length of the spinner, then
+            // snap it back once data renders. Only #summary-area changes
+            // width during loading (the is-loading class above).
+            document.documentElement.style.setProperty('--slicer-width', SLICER_WIDTH_BASE + 'px');
         }
 
         function showCacheNote(data) {
@@ -1266,7 +1833,7 @@
             if (!data.cached_at) { note.textContent = ''; return; }
             const when = new Date(data.cached_at * 1000);
             note.textContent = 'Data as of ' + when.toLocaleString('en-GB',
-                { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' });
+                { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
         }
 
         async function load(force) {
@@ -1274,7 +1841,6 @@
             btn.disabled = true;
             setApplyLoading(true);   // Apply greys out while loading, back to green when done
             showLoading(force ? 'Refreshing from Snowflake...' : 'Loading vehicles...');
-            document.getElementById('row-count').textContent = '';
             try {
                 const url = BASE_URL + '/reports/orders-deliveries/data' + (force ? '?refresh=1' : '');
                 const resp = await fetch(url);
@@ -1282,7 +1848,6 @@
                 if (data.status !== 'ok') throw new Error(data.message || 'Failed to load data');
                 allRows = data.rows || [];
                 defaultPeriodFilter(data.today);
-                defaultSalesTypeFilter();
                 showCacheNote(data);
                 rerender();
             } catch (e) {
