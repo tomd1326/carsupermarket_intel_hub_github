@@ -378,7 +378,8 @@
         function money(v) {
             if (v == null || v === '') return '—';
             const n = Number(v);
-            return isNaN(n) ? '—' : '£' + n.toLocaleString('en-GB', {maximumFractionDigits: 0});
+            // Sign before the symbol: -£1,234, never £-1,234.
+            return isNaN(n) ? '—' : (n < 0 ? '-£' : '£') + Math.abs(n).toLocaleString('en-GB', {maximumFractionDigits: 0});
         }
         function num(v, dp) {
             if (v == null || v === '') return '—';
