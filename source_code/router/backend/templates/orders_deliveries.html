@@ -410,11 +410,11 @@
             <!-- Page font resizer — scales everything except the vehicle grid,
                  which has its own resizer next to its CSV button. -->
             <div class="d-flex align-items-center gap-1 ms-auto">
-                <span class="small text-muted">Font</span>
-                <button class="btn btn-outline-secondary btn-sm px-2 py-0" onclick="changeFont('page', -1)">&minus;</button>
-                <span id="font-size-label" class="small text-muted" style="min-width:32px;text-align:center">{{ font_summary }}</span>
-                <button class="btn btn-outline-secondary btn-sm px-2 py-0" onclick="changeFont('page', 1)">+</button>
-                <button class="btn btn-outline-secondary btn-sm px-2 py-0" title="Reset font size" onclick="resetFont('page')"><i class="fas fa-rotate-left"></i></button>
+                <span class="text-muted">Font</span>
+                <button class="btn btn-outline-secondary px-2 py-0" onclick="changeFont('page', -1)">&minus;</button>
+                <span id="font-size-label" class="text-muted" style="min-width:32px;text-align:center">{{ font_summary }}</span>
+                <button class="btn btn-outline-secondary px-2 py-0" onclick="changeFont('page', 1)">+</button>
+                <button class="btn btn-outline-secondary px-2 py-0" title="Reset font size" onclick="resetFont('page')"><i class="fas fa-rotate-left"></i></button>
             </div>
             <a href="{{ BASE_URL }}/home" class="btn btn-outline-secondary nav-btn ms-3"><i class="fas fa-arrow-left me-1"></i>Home</a>
         </div>
@@ -473,11 +473,11 @@
                 <!-- Resizes the vehicle grid only — the page-wide resizer at the
                      top of the page deliberately leaves this table alone. -->
                 <div class="d-flex align-items-center gap-1">
-                    <span class="small text-muted">Table font</span>
-                    <button class="btn btn-outline-secondary btn-sm px-2 py-0" onclick="changeFont('vehicle', -1)">&minus;</button>
-                    <span id="vehicle-font-size-label" class="small text-muted" style="min-width:32px;text-align:center">{{ font_vehicle }}</span>
-                    <button class="btn btn-outline-secondary btn-sm px-2 py-0" onclick="changeFont('vehicle', 1)">+</button>
-                    <button class="btn btn-outline-secondary btn-sm px-2 py-0" title="Reset font size" onclick="resetFont('vehicle')"><i class="fas fa-rotate-left"></i></button>
+                    <span class="text-muted">Table font</span>
+                    <button class="btn btn-outline-secondary px-2 py-0" onclick="changeFont('vehicle', -1)">&minus;</button>
+                    <span id="vehicle-font-size-label" class="text-muted" style="min-width:32px;text-align:center">{{ font_vehicle }}</span>
+                    <button class="btn btn-outline-secondary px-2 py-0" onclick="changeFont('vehicle', 1)">+</button>
+                    <button class="btn btn-outline-secondary px-2 py-0" title="Reset font size" onclick="resetFont('vehicle')"><i class="fas fa-rotate-left"></i></button>
                 </div>
                 <button class="btn btn-csv" onclick="downloadCsv()"><i class="fas fa-download"></i> CSV</button>
             </div>
@@ -584,6 +584,11 @@
         // are staged behind the Apply button.
         const slicerSel = {};
         SLICERS.forEach(s => { slicerSel[s.key] = new Set(); });
+        // Last pill clicked in each panel, per panel — the anchor a
+        // shift-click extends a range from. Kept outside slicerSel because it
+        // is interaction state, not part of the filter itself: it must not
+        // affect what is filtered, only what a subsequent shift-click selects.
+        const slicerAnchor = {};
 
         // Local yyyy-mm-dd for a Date. NEVER use toISOString().slice(0,10)
         // for this — that converts to UTC, so a local midnight in a positive
@@ -777,7 +782,10 @@
         function fmtMoney(v) {
             if (v === null || v === undefined || v === '') return '';
             const n = Math.round(Number(v));
-            return '£' + n.toLocaleString('en-GB');
+            // Sign goes BEFORE the symbol: -£1,234, never £-1,234. Prepending
+            // '£' to the formatted number puts the minus in the wrong place,
+            // since toLocaleString renders it as "-1,234".
+            return (n < 0 ? '-£' : '£') + Math.abs(n).toLocaleString('en-GB');
         }
         function fmtNum(v) {
             if (v === null || v === undefined || v === '') return '';
@@ -919,23 +927,21 @@
         // yellow to green — same scale as the buying requirements page).
         // 'green' = higher is better; 'red' = higher is worse (DIS — longer in
         // stock is bad). Finance/product-related columns (Fin Pen %, Fin Comm,
-        // Fin Comm/unit, Prod mgn) are deliberately NOT shaded.
-        // 'red' on vehicle_costs because this table stores costs as POSITIVE
-        // numbers (unlike the VSE cost columns, which are already negative) —
-        // so a high value here is a high cost, i.e. bad.
+        // Fin Comm/unit, Prod mgn) and Costs are deliberately NOT shaded.
         const SHADE_DIRECTION = {
-            ack_dis: 'red', vehicle_costs: 'red',
+            ack_dis: 'red',
             chassis_mgn_aft_subs: 'green', gpu_m: 'green', gpu_ms: 'green',
             at_rating: 'green',
         };
         const SHADE_COLS = new Set(Object.keys(SHADE_DIRECTION));
 
-        // Values that decide a column's min/max. Day counts over a year are
-        // data problems (a vehicle never marked sold, a bad purchase date), not
-        // genuinely slow stock — left in, a single 900-day row stretches the
-        // scale so far that every real value lands near the good end and the
-        // column reads uniformly green. Anomalies still get a colour; they just
-        // sit at the red end instead of defining where it is.
+        // Which values are shaded at all, and which set the column's min/max.
+        // Day counts over a year are data problems (a vehicle never marked
+        // sold, a bad purchase date), not genuinely slow stock — left in, a
+        // single 900-day row stretches the scale so far that every real value
+        // lands near the good end and the column reads uniformly green. These
+        // rows are left UNSHADED entirely rather than pinned to the red end:
+        // an anomaly is not "the worst case", it is bad data.
         const DAY_COUNT_MAX = 365;
         const withinYear = v => v <= DAY_COUNT_MAX;
         const SHADE_IN_SCALE = {
@@ -1453,13 +1459,24 @@
                 const eligible = base.filter(r => passesSlicers(r, slicerSel, lensApplied, granularityApplied, s.key));
                 const avail = new Set();
                 eligible.forEach(r => { const v = normVal(slicerValue(r, s.key, lensApplied, granularityApplied)); if (v) avail.add(v); });
-                // The Period panel always offers the full contiguous span of
-                // weeks/months from the earliest data period up to the current
-                // one — even a period with zero rows (e.g. the in-progress
-                // current week before any sale lands) stays selectable, since
-                // "nothing this period" is real information, not a reason to
-                // hide it.
-                if (s.key === 'period') periodRange(granularityApplied).forEach(k => avail.add(k));
+                // Period is REPLACED by periodRange(), not merely topped up by
+                // it. The row scan above cannot be trusted for periods: the
+                // fetch pulls rows in on EITHER date (see the OR clause in
+                // _build_data), so a vehicle ordered before the fetch floor but
+                // delivered after it puts its old ORDER week into `avail` —
+                // e.g. W13 2026 showing "2 units" from two vehicles ordered
+                // 23-Mar and delivered 4-May. Those weeks are real rows but
+                // wildly incomplete (W18 held 2 of its 484 real orders), so
+                // offering them as if they were normal weeks is misleading.
+                // periodRange() is anchored on the server's own fetch floor and
+                // is the authoritative list of periods whose data is whole; it
+                // also still includes periods with zero rows (e.g. the
+                // in-progress current week before any sale lands), since
+                // "nothing this period" is real information.
+                if (s.key === 'period') {
+                    avail.clear();
+                    periodRange(granularityApplied).forEach(k => avail.add(k));
+                }
                 // A currently-selected value must stay visible even if it's not
                 // in avail, so the user can still see and deselect it —
                 // everything else not in avail is left out entirely.
@@ -1485,10 +1502,34 @@
             }).join('');
 
             bar.querySelectorAll('.slicer-item').forEach(el => {
-                el.addEventListener('click', () => {
+                el.addEventListener('click', (ev) => {
                     const key = el.dataset.key, val = el.dataset.val;
                     const sel = slicerSel[key];
+
+                    // Shift-click selects everything between the last pill
+                    // clicked in this panel and this one, in the order the
+                    // panel actually displays them (which for periods is
+                    // newest-first, not alphabetical) — so "W30 to W25" picks
+                    // up the five weeks in between regardless of direction.
+                    // Range selection only ever ADDS: it would be too easy to
+                    // wipe a careful selection with one mis-aimed shift-click.
+                    const anchor = slicerAnchor[key];
+                    if (ev.shiftKey && anchor && anchor !== val) {
+                        const order = [...bar.querySelectorAll(`.slicer-item[data-key="${key}"]`)]
+                            .map(n => n.dataset.val);
+                        const from = order.indexOf(anchor), to = order.indexOf(val);
+                        if (from !== -1 && to !== -1) {
+                            const [lo, hi] = from < to ? [from, to] : [to, from];
+                            for (let i = lo; i <= hi; i++) sel.add(order[i]);
+                            // Anchor stays put, so a second shift-click can
+                            // extend or redraw the range from the same origin.
+                            rerender();
+                            return;
+                        }
+                    }
+
                     sel.has(val) ? sel.delete(val) : sel.add(val);
+                    slicerAnchor[key] = val;
                     rerender();   // live — filters the tables/grid immediately
                 });
             });
@@ -1739,55 +1780,75 @@
             downloadCsvRows(sortedModalRows(), slug ? `${lensApplied}_${slug}` : lensApplied);
         }
 
-        // Default period selection: the current week on its own, or the current
-        // month + 1 complete month before it (2 total), depending on the
-        // granularity toggle. "Complete" = fully elapsed, ending before the
-        // current (in-progress) period. Recomputed whenever granularity
-        // changes, since week keys and month keys aren't the same shape — a
-        // stale selection from the other granularity would just silently match
-        // nothing.
+        // Default period selection:
+        //   Week  — the current (in-progress) week plus the 6 complete weeks
+        //           before it, 7 in total. The full fetched window is ~4
+        //           months of weeks, which is more than anyone wants on first
+        //           load; the panel still offers every one of them.
+        //   Month — every month in range.
+        // Taken from the front of periodRange() (newest first), so the default
+        // can never include a period the panel does not offer. Recomputed
+        // whenever granularity changes, since week keys and month keys aren't
+        // the same shape — a stale selection from the other granularity would
+        // just silently match nothing.
+        const DEFAULT_WEEKS_SELECTED = 7;   // current + 6 complete
+
         function defaultPeriodSelection(today, granularityVal) {
-            const keys = [];
-            if (granularityVal === 'week') {
-                keys.push(isoWeekKey(today));
-            } else {
-                const d = new Date(today + 'T00:00:00');
-                for (let i = 0; i < 2; i++) {
-                    const y = d.getFullYear(), m = d.getMonth() - i;
-                    const dt = new Date(y, m, 1);
-                    keys.push(`${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}`);
-                }
-            }
-            return keys;
+            const range = periodRange(granularityVal);
+            return granularityVal === 'week'
+                ? range.slice(0, DEFAULT_WEEKS_SELECTED)
+                : range;
         }
 
-        // Full contiguous list of period keys (newest first) from the earliest
-        // period present in the data up to the current one — so the Period
-        // panel always shows every week/month in range, including empty ones.
-        function periodRange(granularityVal) {
-            if (!todayIso || !allRows.length) return [];
-            const dateKey = LENS[lensApplied].dateKey;
-            let earliest = null;
-            for (const r of allRows) {
-                const d = r[dateKey];
-                if (d && (earliest === null || d < earliest)) earliest = d;
-            }
-            if (!earliest) return [];
+        // Period options are anchored on the server's own fetch floor
+        // (fetchStartIso — the 1st of the month N months back; see
+        // _fetch_start() in orders_deliveries.py), never inferred from
+        // allRows. Row data is NOT a reliable guide to which periods are
+        // complete: a row can appear earlier than the real fetch floor via
+        // the OTHER lens's date (e.g. ordered 4 months ago but delivered
+        // last week, pulled in by the Deliveries-date OR clause in the SQL),
+        // so scanning for "the earliest row" can find a single stray row
+        // sitting in an otherwise near-empty period and wrongly offer it as
+        // available. (This bit us for real: W18 2026 had 484 orders but only
+        // 1 row made it into the fetch window — the old earliest-row logic
+        // still offered "W18" as if it had data.)
+        //
+        // Months: a fixed count (current + PERIOD_MONTHS_SHOWN complete
+        // months), matching _FETCH_MONTHS_BACK on the server exactly — the
+        // fetch floor is the 1st of that oldest month, so every month shown
+        // is complete by construction. No per-month check needed.
+        //
+        // Weeks: NOT fixed — the true number of complete weeks between the
+        // fetch floor and today, computed here rather than guessed. The
+        // fetch window is sized in calendar months, and a calendar month is
+        // not a whole number of weeks, so this count varies run to run.
+        const PERIOD_MONTHS_SHOWN = 3;   // keep in step with _FETCH_MONTHS_BACK
 
+        function periodRange(granularityVal) {
+            if (!todayIso || !fetchStartIso) return [];
             const keys = [];
             if (granularityVal === 'week') {
                 let monday = isoWeekMonday(isoWeekKey(todayIso));
-                const earliestMonday = isoWeekMonday(isoWeekKey(earliest));
-                while (monday >= earliestMonday) {
+                // The FIRST MONDAY ON OR AFTER the fetch floor, not the Monday
+                // of the floor's own week: fetchStartIso is the 1st of a
+                // calendar month, which is rarely itself a Monday. Rounding it
+                // to that week's Monday (isoWeekMonday(isoWeekKey(...))) would
+                // land BEFORE the real floor, offering a week whose early days
+                // the SQL WHERE clause actually excluded — the same
+                // incomplete-period bug this whole rewrite exists to fix, via
+                // a different path.
+                let floorMonday = isoWeekMonday(isoWeekKey(fetchStartIso));
+                if (floorMonday < new Date(fetchStartIso + 'T00:00:00')) {
+                    floorMonday.setDate(floorMonday.getDate() + 7);
+                }
+                while (monday >= floorMonday) {
                     keys.push(isoWeekKey(ymdLocal(monday)));
                     monday.setDate(monday.getDate() - 7);
                 }
             } else {
                 const now = new Date(todayIso + 'T00:00:00');
-                const start = new Date(earliest + 'T00:00:00');
                 let y = now.getFullYear(), m = now.getMonth();
-                const startY = start.getFullYear(), startM = start.getMonth();
-                while (y > startY || (y === startY && m >= startM)) {
+                for (let i = 0; i <= PERIOD_MONTHS_SHOWN; i++) {
                     keys.push(`${y}-${String(m + 1).padStart(2, '0')}`);
                     m--; if (m < 0) { m = 11; y--; }
                 }
@@ -1796,6 +1857,16 @@
         }
 
         let todayIso = null;          // remembered so a granularity toggle can recompute the default
+        // The server's own fetch floor — the 1st of the month
+        // _FETCH_MONTHS_BACK months before the current one; see
+        // _fetch_start() in orders_deliveries.py. NOT the same as "the
+        // earliest date seen in allRows": a row can appear before this floor
+        // via the OTHER lens's date (e.g. ordered before the floor but
+        // delivered after it, included via the Deliveries-date OR clause) —
+        // that row does not mean its order period is complete. Only this real
+        // server floor tells us whether a week or month's data is actually
+        // whole.
+        let fetchStartIso = null;
         let periodDefaulted = false;
         function defaultPeriodFilter(today) {
             todayIso = today;
@@ -1803,7 +1874,17 @@
             // user's own period selection. Switching granularity resets it
             // deliberately (see setGranularity), since old week/month keys
             // don't carry over to the other granularity.
-            if (periodDefaulted) return;
+            if (periodDefaulted) {
+                // Drop any selected period that is no longer in range. The
+                // panel re-adds a selected value even when it is not offered
+                // (so it can still be deselected), so without this a period
+                // selected before a refresh — or one left over from an older
+                // fetch window — would stay selected and keep filtering, while
+                // showing the incomplete data that made it unofferable.
+                const inRange = new Set(periodRange(granularityApplied));
+                slicerSel['period'].forEach(k => { if (!inRange.has(k)) slicerSel['period'].delete(k); });
+                return;
+            }
             slicerSel['period'] = new Set(defaultPeriodSelection(today, granularityApplied));
             periodDefaulted = true;
         }
@@ -1847,6 +1928,7 @@
                 const data = await resp.json();
                 if (data.status !== 'ok') throw new Error(data.message || 'Failed to load data');
                 allRows = data.rows || [];
+                fetchStartIso = data.fetch_start || null;
                 defaultPeriodFilter(data.today);
                 showCacheNote(data);
                 rerender();

@@ -1011,7 +1011,8 @@ const _fitCanvas = document.createElement('canvas');
 /* ── Format helpers ──────────────────────────────────────── */
 function fmt(v, dp=2)  { return (v == null || v === '') ? '' : Number(v).toFixed(dp); }
 function fmtInt(v)     { return (v == null || v === '') ? '' : Math.round(Number(v)).toLocaleString(); }
-function fmtGBP(v)     { return (v == null || v === '') ? '' : '£' + Math.round(Number(v)).toLocaleString(); }
+// Sign before the symbol: -£1,234, never £-1,234.
+function fmtGBP(v)     { if (v == null || v === '') return ''; const n = Math.round(Number(v)); return (n < 0 ? '-£' : '£') + Math.abs(n).toLocaleString(); }
 function fmtPct(v)     { return (v == null || v === '') ? '' : Number(v).toFixed(1) + '%'; }
 
 /* ── Totals / averages rows ──────────────────────────────── */
