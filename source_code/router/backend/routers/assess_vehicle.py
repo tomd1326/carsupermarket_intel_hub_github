@@ -63,6 +63,24 @@ def _age_hours(fetched_at) -> float | None:
     return (now - fetched_at).total_seconds() / 3600.0
 
 
+def _valued_today(fetched_at) -> bool:
+    """
+    True when the stored valuation was fetched on today's UK calendar day.
+
+    CAP and Autotrader refresh their valuations overnight (around 2am), so a
+    second call on the same day returns the same figures. The Update button is
+    disabled while this is true.
+    """
+    if fetched_at is None:
+        return False
+    import datetime as _dt
+    from zoneinfo import ZoneInfo
+    uk = ZoneInfo('Europe/London')
+    if fetched_at.tzinfo is None:
+        fetched_at = fetched_at.replace(tzinfo=_dt.timezone.utc)
+    return fetched_at.astimezone(uk).date() == _dt.datetime.now(uk).date()
+
+
 def _stored_lookup(vrm: str, mileage: int) -> dict | None:
     """
     Rebuild a CAP/Autotrader result from the shared vehicle store.
@@ -140,6 +158,7 @@ def _stored_lookup(vrm: str, mileage: int) -> dict | None:
         'fetched_at': val['fetched_at'].astimezone().strftime('%d/%m/%Y %H:%M') if val.get('fetched_at') else None,
         'age_hours': round(age, 1) if age is not None else None,
         'is_stale': age is not None and age > _STALE_AFTER_HOURS,
+        'valued_today': _valued_today(val.get('fetched_at')),
     }
 
 
@@ -292,6 +311,7 @@ def assess_vehicle_cached(vrm: str, mileage: int, user: str = Depends(get_curren
             'fetched_at': stored['fetched_at'],
             'age_hours':  stored['age_hours'],
             'is_stale':   stored['is_stale'],
+            'valued_today': stored['valued_today'],
         },
         user,
     )}
@@ -670,7 +690,11 @@ def assess_vehicle_lookup(request: Request, payload: dict, user: str = Depends(g
     # Show what the store already holds rather than paying for the APIs again.
     # A supplier list run and a manual check write the same rows, so this hits
     # whether the VRM was last seen on a list or looked up here.
-    stored = None if force else _stored_lookup(vrm, mileage)
+    stored = _stored_lookup(vrm, mileage)
+    if force and stored and not stored['valued_today']:
+        # A forced update is only worth an API call once the overnight refresh
+        # has run. Same day means the same figures come back.
+        stored = None
 
     if stored:
         cap, at = stored['cap'], stored['at']
@@ -682,6 +706,7 @@ def assess_vehicle_lookup(request: Request, payload: dict, user: str = Depends(g
             'fetched_at':    stored['fetched_at'],
             'age_hours':     stored['age_hours'],
             'is_stale':      stored['is_stale'],
+            'valued_today':  stored['valued_today'],
         }
     else:
         # CAP and Autotrader are independent, so run them together.
@@ -706,6 +731,7 @@ def assess_vehicle_lookup(request: Request, payload: dict, user: str = Depends(g
             'fetched_at': _uk_now().strftime('%d/%m/%Y %H:%M'),
             'age_hours':  0.0,
             'is_stale':   False,
+            'valued_today': True,
         }
 
         # Write into the shared store so the evaluator picks this up as a cache

@@ -67,6 +67,15 @@ _KEEPALIVE_KWARGS = {
 }
 
 
+def _is_prod_lambda() -> bool:
+    return os.getenv('AWS_REGION') == 'eu-west-1'
+
+
+def _has_local_vehicle_override() -> bool:
+    """True when local dev points the vehicle DB somewhere other than the environment secret."""
+    return os.getenv('LOCAL_ENV') == '1' and bool(os.getenv('VEHICLE_DB_HOST') or os.getenv('DB_HOST'))
+
+
 def _get_pool() -> psycopg2.pool.ThreadedConnectionPool:
     global _db_pool
     if _db_pool is None:
@@ -81,6 +90,17 @@ def _get_pool() -> psycopg2.pool.ThreadedConnectionPool:
 
 
 def _get_prod_pricer_pool() -> psycopg2.pool.ThreadedConnectionPool:
+    """Pool for analytics reads, which always target the PROD pricer DB.
+
+    On the prod Lambda that is the same cluster, user and database as the main
+    pool, so the two share one pool and the container opens one set of
+    connections instead of two. In dev and local this must stay a separate pool:
+    there the main pool points at the dev cluster while analytics still has to
+    read prod, so sharing would silently read the wrong cluster.
+    """
+    if _is_prod_lambda():
+        return _get_pool()
+
     global _prod_pricer_pool
     if _prod_pricer_pool is None:
         data = get_secret('prod/aramis_group/data_platform/rds/aurora_pg_core_cluster_admin_credentials')
@@ -94,6 +114,17 @@ def _get_prod_pricer_pool() -> psycopg2.pool.ThreadedConnectionPool:
 
 
 def _get_vehicle_pool() -> psycopg2.pool.ThreadedConnectionPool:
+    """Pool for vehicle reads.
+
+    When deployed, get_vehicle_db_credentials() resolves to the same secret,
+    endpoint, user and database as get_db_credentials() — prod secret on the
+    prod Lambda, dev secret on the dev Lambda — so the two share one pool. Only
+    a local VEHICLE_DB_HOST/DB_HOST override can point somewhere else, and that
+    keeps its own pool.
+    """
+    if not _has_local_vehicle_override():
+        return _get_pool()
+
     global _vehicle_db_pool
     if _vehicle_db_pool is None:
         creds = get_vehicle_db_credentials()
@@ -471,7 +502,7 @@ def get_prod_pricer_connection():
 
 @contextmanager
 def get_vehicle_database_connection():
-    """Connection to the prod vehicle DB — always prod regardless of deployment environment."""
+    """Connection to the vehicle DB — prod cluster on the prod Lambda, dev cluster on the dev Lambda."""
     try:
         pool = _get_vehicle_pool()
     except UnauthorizedSSOTokenError:
