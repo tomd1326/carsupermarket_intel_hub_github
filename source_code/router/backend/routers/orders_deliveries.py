@@ -54,8 +54,8 @@ _COLUMNS = [
     # Selling price before the vehicle discount, including the admin fee
     # actually charged on the deal (the fee is mandatory but can be waived, so
     # a flat amount would overstate a waived one). Built in the model beside
-    # SALE_PRICE_AFTER_DISCOUNT_INCL_ADMIN_FEE. The discount is its own column.
-    ("SALE_PRICE_BEFORE_DISCOUNT_INCL_ADMIN_FEE", "sell_price_incl_fee"),
+    # SALE_PRICE_AFTER_DISCOUNT_INC_ADMIN_FEE. The discount is its own column.
+    ("SALE_PRICE_BEFORE_DISCOUNT_INC_ADMIN_FEE", "sell_price_incl_fee"),
     ("PRICE_BAND", "price_band"),
     ("FINANCE_SUBSIDY", "finance_subsidy"),
     ("CHASSIS_MARGIN_AFTER_SUBSIDY", "chassis_mgn_aft_subs"),

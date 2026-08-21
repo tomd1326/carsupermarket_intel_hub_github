@@ -27,11 +27,11 @@ const BASE_URL = window.BASE_URL;
             { key: 'sell_price_incl_fee', label: 'Sell', type: 'money',
               info: 'Selling price before discount, including the admin fee actually charged on the deal' },
             // Apex deep links. Two-word labels so the header wraps onto two
-            // lines, keeping these at the fixed icon-column width.
+            // lines, keeping these at the fixed icon-column width. The AT
+            // Portal link is the same shape but sits next to AT Valuation.
             { key: 'vehicle_url', label: 'Apex Vehicle', type: 'link' },
             { key: 'order_url', label: 'Apex Order', type: 'link' },
             { key: 'invoice_url', label: 'Apex Invoice', type: 'link' },
-            { key: 'at_portal_url', label: 'AT Portal', type: 'link' },
             { key: 'price_band', label: 'Price Band' },
             { key: 'discount', label: 'Discount', type: 'money' },
             { key: 'finance_subsidy', label: 'Finance Subsidy', type: 'money' },
@@ -43,6 +43,9 @@ const BASE_URL = window.BASE_URL;
             { key: 'gpu_m_costs', label: 'GPU-M Costs', type: 'money' },
             { key: 'gpu_m', label: 'GPU-M', type: 'money' },
             { key: 'at_val_order', label: 'AT Valuation', type: 'money' },
+            // Autotrader deep link. Two-word label so the header wraps onto
+            // two lines, keeping this at the fixed icon-column width.
+            { key: 'at_portal_url', label: 'AT Portal', type: 'link' },
             { key: 'sell_pct_at', label: 'PTM %', type: 'pct',
               info: 'Price To Market — selling price including admin fee as a percentage of the Autotrader market valuation' },
             { key: 'at_rating', label: 'AT Rating', type: 'num' },
@@ -1221,8 +1224,11 @@ const BASE_URL = window.BASE_URL;
             // Both the control bar above the slicers and the Ask AI panel below
             // them line up with the panels' right edge, so the three stack as
             // one column. Same measurement for both — they cannot disagree.
+            // The Ask AI panel is only rendered for tdrayson (see the template),
+            // so it may not exist here.
             document.getElementById('control-bar').style.width = w;
-            document.getElementById('ai-panel').style.width = w;
+            const aiPanel = document.getElementById('ai-panel');
+            if (aiPanel) aiPanel.style.width = w;
         }
 
         // Full refresh of everything actually on screen — slicer panels, row
@@ -2024,9 +2030,13 @@ const BASE_URL = window.BASE_URL;
         document.querySelectorAll('#granularity-toggle button').forEach(b =>
             b.addEventListener('click', () => setGranularity(b.dataset.granularity)));
 
-        document.getElementById('ai-question').addEventListener('keydown', e => {
-            if (e.key === 'Enter') { e.preventDefault(); askAi(); }
-        });
+        // The Ask AI panel is only rendered for tdrayson (see the template).
+        const aiQuestionEl = document.getElementById('ai-question');
+        if (aiQuestionEl) {
+            aiQuestionEl.addEventListener('keydown', e => {
+                if (e.key === 'Enter') { e.preventDefault(); askAi(); }
+            });
+        }
 
         loadFont();
         load();

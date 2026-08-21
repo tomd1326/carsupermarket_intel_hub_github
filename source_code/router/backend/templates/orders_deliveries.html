@@ -80,7 +80,9 @@
         <!-- Ask AI: free-text question answered from a pre-aggregated slice
              table built client-side (buildAiContext) — the vehicle rows
              themselves are never sent. Follows the current lens, granularity
-             and every live slicer selection. -->
+             and every live slicer selection. Restricted to tdrayson while the
+             shared Gemini key is in use — matches the /ask-ai backend gate. -->
+        {% if user == 'tdrayson' %}
         <div class="panel shadow-sm mb-3" id="ai-panel">
             <div class="ai-row">
                 <span class="control-label ai-label"><i class="fas fa-wand-magic-sparkles me-1"></i>Ask AI</span>
@@ -95,6 +97,7 @@
             </div>
             <div id="ai-answer" class="ai-output" style="display:none;"></div>
         </div>
+        {% endif %}
 
         <!-- Summary View body: one table per dimension, stacked. Starts at the
              loading-spinner width (full, matching the control bar above) —
