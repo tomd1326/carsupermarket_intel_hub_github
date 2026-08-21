@@ -590,12 +590,23 @@
 
             const age = pr.age_hours == null ? '' : ageText(pr.age_hours);
             el.className = 'stale-banner ' + (pr.is_stale ? 'warn' : 'fresh');
+
+            // CAP and Autotrader refresh their valuations overnight, so a second
+            // call on the same calendar day returns the same figures. No point
+            // paying for it — the button only becomes available tomorrow.
+            const updateBtn = pr.valued_today
+                ? `<button class="btn-update" disabled` +
+                  ` title="Valuations only change overnight — already valued today">` +
+                  `<i class="fas fa-rotate me-1"></i>Update</button>`
+                : `<button class="btn-update" onclick="updateVehicle('${esc(d.vrm)}', ${d.mileage})">` +
+                  `<i class="fas fa-rotate me-1"></i>Update</button>`;
+
             el.innerHTML =
                 `<i class="fas fa-${pr.is_stale ? 'triangle-exclamation' : 'clock'}"></i>` +
                 `<span>${pr.is_stale ? 'This data is ' + age + ' old' : 'Existing data from ' + age + ' ago'}` +
-                ` — ${esc(srcLabel)}, ${esc(pr.fetched_at)}.</span>` +
-                `<button class="btn-update" onclick="updateVehicle('${esc(d.vrm)}', ${d.mileage})">` +
-                `<i class="fas fa-rotate me-1"></i>Update</button>`;
+                ` — ${esc(srcLabel)}, ${esc(pr.fetched_at)}.` +
+                `${pr.valued_today ? ' Already valued today.' : ''}</span>` +
+                updateBtn;
             el.style.display = '';
         }
 

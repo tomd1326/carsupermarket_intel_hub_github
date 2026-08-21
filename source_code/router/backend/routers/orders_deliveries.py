@@ -23,13 +23,15 @@ import time
 import zoneinfo
 
 import boto3
+import requests
 
-from fastapi import APIRouter, Request, Depends
+from fastapi import APIRouter, Request, Depends, HTTPException
 from fastapi.responses import HTMLResponse
 
 from utils.db_utils import get_database_connection, get_user_preference
 from utils.snowflake_client import SnowflakeClient
 from .core import BASE_URL, templates, _track, get_current_user, s3_bucketname, s3_bucket_region, _S3_ENV
+from .kpi import _get_gemini_api_key
 
 logger = logging.getLogger(__name__)
 
@@ -97,8 +99,10 @@ _COLUMNS = [
     ("INVOICE_POSTED_WEEK", "delivered_week"),
     ("TO_CHAR(INVOICE_POSTED_MONTH, 'YYYY-MM') AS DELIVERED_MONTH", "delivered_month"),
     ("INVOICE_POSTED_DATE", "delivered"),
+    ("VEHICLE_URL", "vehicle_url"),
     ("ORDER_URL", "order_url"),
     ("INVOICE_URL", "invoice_url"),
+    ("AUTOTRADER_PORTAL_LINK", "at_portal_url"),
 ]
 
 # Hard limit on the data: 3 complete calendar months, plus the current
@@ -145,7 +149,7 @@ def _fetch_start() -> datetime.date:
 #
 # Version the S3 key: bump _CACHE_VERSION whenever _COLUMNS changes, otherwise
 # an old cached payload (missing the new columns) is served until it expires.
-_CACHE_VERSION = 9
+_CACHE_VERSION = 10
 _S3_KEY = (f"applications/pricing/uk-vehicle-list-evaluator/shared/cache/"
            f"orders_deliveries_v{_CACHE_VERSION}.json")
 
@@ -353,3 +357,211 @@ def orders_deliveries_data(request: Request, refresh: int = 0,
     except Exception as e:
         logger.error(f"Orders & Deliveries data failed: {e}")
         return {"status": "error", "message": str(e)}
+
+
+# ── Ask AI ──────────────────────────────────────────────────────────────────
+# The browser does the slicing and sends a compact table of per-slice figures,
+# not the vehicle rows. Gemini is being asked to read a ranked breakdown and
+# explain it, never to aggregate raw data itself — it is unreliable at
+# arithmetic over thousands of rows and reliable at narrating a table that
+# already has the totals worked out.
+_AI_SYSTEM_PROMPT = """You are a motor retail analyst for a UK used-car supermarket.
+
+You are given per-slice figures for a set of deal metrics, already aggregated.
+Each row gives a slice (one dimension value, or a pair of them), the number of
+vehicles, the mean per vehicle for each period, the change against the previous
+period, and `impact` = change x volume, which is that slice's contribution to
+the overall movement in currency.
+
+Answer as a buyer would want it: what went wrong, in what part of the business,
+on what kind of vehicle, and where to go and look. Structure it as:
+
+1. WHAT MOVED — one line. The metric, the per-unit change, the period pair.
+2. WHY — the causal chain through the component metrics.
+   For GPU-M: chassis margin after subsidy, vehicle costs and write-downs. Say
+   which moved and by how much per unit. "GPU-M fell because chassis margin fell
+   £180/unit, while costs were flat" is the answer; "GPU-M fell because GPU-M
+   fell" is not.
+   For GPU-S: finance penetration, finance commission per financed deal, and
+   total product margin. Penetration and commission rate are different problems
+   with different fixes — always say which one moved. A GPU-S fall with flat
+   commission per financed deal is a penetration problem; a fall with flat
+   penetration is a rate or product-mix problem.
+3. WHERE — the supplier channel, then the kind of vehicle within it (fuel, price
+   band, age, mileage). Name the specific combination, not each dimension
+   separately: "B2B2C diesels over 60k miles", not "B2B2C was down and diesel was
+   down".
+4. GO AND LOOK — finish with the slicer selection that isolates the problem, as
+   a short instruction: "Select Supplier Channel = B2B2C, Fuel = Diesel to see
+   these 40 vehicles." Pick the narrowest slice that still holds enough vehicles
+   to matter.
+
+On figures:
+- Lead with per-unit changes — that is how the business thinks about GPU. Use
+  the total impact only to establish that a slice is material enough to mention,
+  or when the reader needs the cash number. Do not open with total impact and do
+  not quote it for every slice. Quote it at most twice in an answer; a slice's
+  per-unit change and its vehicle count together already say how much it matters.
+- Do not repeat the same slice list under two headings. If WHY already named the
+  slices, WHERE should add what those vehicles have in common (age, mileage,
+  price band) rather than listing them again.
+- A per-unit swing on a handful of vehicles is not an explanation. Check the
+  volume before calling something a driver, and say when a finding rests on a
+  small number of vehicles.
+- NEVER present a change in purchase price or sell price as a cause. Those move
+  whenever the profile of vehicles sold changes — a week with pricier cars has a
+  higher purchase price and a higher sell price, and neither says anything about
+  performance. Margin is what matters: chassis margin and GPU-M on the metal
+  side, finance and product margin on the back end. Use the price columns only
+  as evidence that the mix changed ("purchase price up £3,900/unit, so these are
+  materially different cars"), never as the explanation itself.
+- Mix matters: a metric can fall because the mix shifted toward lower-margin
+  vehicles even when no slice got worse. Check for that and say so when it is
+  what happened, because the fix is a different one. If a slice's margin fell
+  while its purchase and sell prices both moved a lot, suspect mix first and say
+  so rather than calling it a margin problem.
+- If the figures do not support a clear cause, say so plainly rather than
+  picking the largest number and calling it the reason.
+
+Money is GBP. Metric names: GPU-M is metal gross profit per unit, GPU-S is
+service/product gross profit per unit, GPU-MS is the two combined. Chassis
+margin after subsidy is the vehicle's own margin before costs.
+
+Be concise — aim for under 250 words unless the question asks for more. No
+preamble, no restating the question, no summary paragraph at the end. Prefer
+short bullets over long sentences.
+
+Follow-up questions continue this conversation. The data table above is the
+only data you get for the whole thread, so answer follow-ups from it and from
+what you have already said. If a follow-up asks for a figure the table does not
+contain — a dimension that was not broken out, or a slice listed as omitted —
+say so and name what would need to be selected on the page to get it, rather
+than estimating."""
+
+# Turns kept when replaying a conversation: the first (which carries the data
+# table) plus the most recent ones. Each turn adds to the prompt, and the free
+# tier caps input tokens per minute, so an unbounded thread would eventually
+# fail on quota mid-conversation.
+_AI_MAX_HISTORY_TURNS = 11
+
+
+@router.post("/reports/orders-deliveries/ask-ai")
+def orders_deliveries_ask_ai(request: Request, payload: dict,
+                             user: str = Depends(get_current_user)):
+    """Answer a free-text question about the pre-aggregated slice table the
+    browser sends up. Restricted while the shared Gemini key is in use.
+
+    `history` (optional) is the conversation so far, as
+    [{"role": "user"|"model", "text": ...}, ...]. When present the question is
+    a follow-up: the turns are replayed and `context` may be omitted, since the
+    data table is already in the first user turn."""
+    if user != 'tdrayson':
+        raise HTTPException(status_code=403)
+
+    question = (payload or {}).get("question")
+    context = (payload or {}).get("context")
+    history = (payload or {}).get("history") or []
+    if not isinstance(question, str) or not question.strip():
+        return {"status": "error", "message": "Missing question"}
+    if not isinstance(history, list):
+        return {"status": "error", "message": "history must be a list of turns"}
+    # Only a first turn has to carry the data — a follow-up rides on history.
+    if not history and (not isinstance(context, str) or not context.strip()):
+        return {"status": "error", "message": "Missing data context"}
+    # A runaway thread would quietly grow the prompt on every turn until it
+    # trips the token quota, so cap it here rather than trusting the browser.
+    if len(history) > _AI_MAX_HISTORY_TURNS:
+        history = history[:1] + history[-(_AI_MAX_HISTORY_TURNS - 1):]
+
+    api_key = _get_gemini_api_key()
+    if not api_key:
+        return {"status": "error", "message": "Gemini API key is not configured"}
+
+    # Follow-ups replay the conversation as separate turns rather than one
+    # concatenated blob, so the model can tell its own previous answers from
+    # the new question. The data table is sent ONCE, on the first turn — the
+    # browser omits it on follow-ups it judges answerable from the exchange so
+    # far, which is what keeps a multi-question thread inside the token quota.
+    contents = []
+    first = f"{_AI_SYSTEM_PROMPT}\n\n=== DATA ===\n{context}\n\n=== QUESTION ===\n{question.strip()}"
+    if history:
+        # history[0] carries the data table; later turns are question/answer text.
+        for i, turn in enumerate(history):
+            role = turn.get("role")
+            text = turn.get("text")
+            if role not in ("user", "model") or not isinstance(text, str) or not text.strip():
+                continue
+            contents.append({"role": role, "parts": [{"text": text}]})
+        contents.append({"role": "user", "parts": [{"text": question.strip()}]})
+    else:
+        contents.append({"role": "user", "parts": [{"text": first}]})
+
+    prompt_chars = sum(len(p["parts"][0]["text"]) for p in contents)
+    logger.info("Orders & Deliveries Ask AI: turns=%s prompt_chars=%s follow_up=%s",
+                len(contents), prompt_chars, bool(history))
+
+    try:
+        resp = requests.post(
+            "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent",
+            params={"key": api_key},
+            headers={"Content-Type": "application/json"},
+            json={
+                # gemini-2.5-flash is a thinking model: its reasoning tokens are
+                # charged against maxOutputTokens BEFORE any visible text, so a
+                # 4096 cap truncated answers mid-sentence. thinkingBudget caps
+                # the reasoning separately, leaving the rest for the answer.
+                "contents": contents,
+                "generationConfig": {
+                    "maxOutputTokens": 16384,
+                    "temperature": 0.2,
+                    "thinkingConfig": {"thinkingBudget": 8192},
+                },
+            },
+            timeout=60,
+        )
+        try:
+            data = resp.json()
+        except ValueError:
+            data = {}
+
+        if not resp.ok:
+            error = data.get("error") if isinstance(data, dict) else None
+            message = error.get("message") if isinstance(error, dict) else None
+            return {"status": "error", "message": message or resp.reason or "Gemini request failed"}
+
+        candidate = data["candidates"][0]
+        usage = data.get("usageMetadata", {})
+        finish_reason = candidate.get("finishReason", "unknown")
+        logger.info(
+            "Orders & Deliveries Ask AI: finishReason=%s tokens_in=%s tokens_out=%s thoughts=%s",
+            finish_reason,
+            usage.get("promptTokenCount"),
+            usage.get("candidatesTokenCount"),
+            usage.get("thoughtsTokenCount"),
+        )
+        parts = candidate["content"]["parts"]
+        answer = "".join(part.get("text", "") for part in parts).strip()
+        if not answer:
+            # MAX_TOKENS with no text means the whole budget went on reasoning.
+            if finish_reason == "MAX_TOKENS":
+                return {"status": "error",
+                        "message": "The model used its whole output budget on reasoning "
+                                   "and returned no answer. Try a more specific question."}
+            return {"status": "error", "message": "Gemini returned an empty answer"}
+        # On a first turn, hand back the exact text the prompt was built from.
+        # The browser stores it as turn 0 so a later follow-up replays the data
+        # table verbatim instead of re-deriving (and possibly re-wording) it.
+        return {"status": "ok", "answer": answer,
+                # The browser marks a truncated answer rather than showing it as
+                # if it were complete — a cut-off analysis reads as a finished
+                # one otherwise.
+                "truncated": finish_reason == "MAX_TOKENS",
+                **({} if history else {"first_turn_text": first}),
+                "tokens_in": usage.get("promptTokenCount"),
+                "tokens_out": usage.get("candidatesTokenCount")}
+    except requests.exceptions.RequestException as e:
+        logger.error("Orders & Deliveries Ask AI request failed: %s", e)
+        return {"status": "error", "message": str(e)}
+    except (KeyError, IndexError, TypeError) as e:
+        logger.error("Orders & Deliveries Ask AI response parse failed: %s", e)
+        return {"status": "error", "message": "Could not read Gemini response"}
