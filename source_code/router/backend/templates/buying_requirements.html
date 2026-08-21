@@ -1,3 +1,4 @@
+{% from '_navigation.html' import account_nav with context %}
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -13,11 +14,7 @@
     <link href="{{ static_url('css/buying_requirements.css') }}" rel="stylesheet">
 </head>
 <body>
-    <div class="logout-link d-flex align-items-center gap-2">
-        <span>{{ user }}</span>
-        <span>·</span>
-        <a href="{{ BASE_URL }}/logout" class="text-decoration-none"><i class="fas fa-sign-out-alt"></i> Logout</a>
-    </div>
+    {{ account_nav(user) }}
 
     <div id="resize-ghost"></div>
 
@@ -27,9 +24,6 @@
             <h2 class="mb-0">Buying Requirements</h2>
             <a href="javascript:history.back()" class="btn btn-outline-secondary nav-btn">
                 <i class="fas fa-arrow-left me-1"></i>Back
-            </a>
-            <a href="{{ BASE_URL }}/home" class="btn btn-outline-secondary nav-btn">
-                <i class="fas fa-home me-1"></i>Home
             </a>
         </div>
 

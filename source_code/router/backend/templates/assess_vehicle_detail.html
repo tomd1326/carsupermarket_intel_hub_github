@@ -1,0 +1,385 @@
+{% from '_navigation.html' import account_nav with context %}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ vrm }} — Assess Vehicle</title>
+    <link rel="icon" type="image/png" href="{{ BASE_URL }}/static/icon.png">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css" rel="stylesheet">
+    <!-- Shared colours, borders and radii. Keep this before the page stylesheet
+         so Assess Vehicle can add its vehicle-specific presentation on top. -->
+    <link href="{{ static_url('css/theme.css') }}" rel="stylesheet">
+    <link href="{{ static_url('css/assess_vehicle.css') }}" rel="stylesheet">
+    <style>
+        @font-face { font-family: 'DM Sans'; src: url('{{ BASE_URL }}/static/fonts/DMSans-Regular.ttf');  font-weight: 400; }
+        @font-face { font-family: 'DM Sans'; src: url('{{ BASE_URL }}/static/fonts/DMSans-Medium.ttf');   font-weight: 500; }
+        @font-face { font-family: 'DM Sans'; src: url('{{ BASE_URL }}/static/fonts/DMSans-SemiBold.ttf'); font-weight: 600; }
+        @font-face { font-family: 'DM Sans'; src: url('{{ BASE_URL }}/static/fonts/DMSans-Bold.ttf');     font-weight: 700; }
+        body, button, input, select, textarea { font-family: 'DM Sans', system-ui, sans-serif; }
+        body { background-color: var(--c-page-bg); color: var(--c-text); min-height: 100vh; }
+
+        .page-wrap { min-height: 100vh; padding: 40px 32px 64px; max-width: 1500px; margin: 0 auto; }
+        .brand-logo { width: 48px; height: 48px; border-radius: var(--radius-lg); }
+        .page-title { color: var(--c-text-heading); font-weight: 600; font-size: 1.5rem; letter-spacing: -0.2px; }
+        .card { border: 1px solid var(--c-border); border-radius: var(--radius-lg); box-shadow: none; }
+        .card-body { padding: 22px 26px; }
+        .plate {
+            display: inline-block; background: #ffd400; color: #111;
+            font-weight: 700; letter-spacing: 0.5px; border-radius: 5px;
+            padding: 3px 10px; font-size: 0.95rem;
+        }
+        .plate.lg { font-size: 1.35rem; padding: 6px 16px; }
+
+        /* Vehicle header card — the page equivalent of the old popup header. */
+        .veh-head {
+            display: flex; align-items: center; gap: 22px; flex-wrap: wrap;
+            background: var(--c-surface); border: 1px solid var(--c-border);
+            border-radius: var(--radius-lg); padding: 20px 24px;
+            box-shadow: none; margin-bottom: 18px;
+        }
+        .veh-head .veh-desc { font-size: 1.2rem; }
+        /* Takes the remaining width so the banner's Update button, pushed right
+           by its own margin-left:auto, lands at the card's right edge. */
+        .veh-head-text { flex: 1 1 320px; min-width: 0; }
+        /* Inside the card the banner is a strip under the description, not a
+           standalone bar — no bottom margin, tighter padding. */
+        .veh-head .stale-banner { margin: 10px 0 0; padding: 8px 14px; }
+
+        .loading-state { color: var(--c-text-muted); text-align: center; padding: 60px 0; }
+        .loading-state i { font-size: 1.6rem; display: block; margin-bottom: 12px; }
+    </style>
+</head>
+<body>
+    {{ account_nav(user) }}
+
+    <!-- Full-size CAP image -->
+    <div id="imgLightbox" class="img-lightbox" style="display:none;" onclick="closeImage()">
+        <img id="imgLightboxPic" alt="Vehicle image">
+    </div>
+
+    <!-- Additional spec picker -->
+    <div id="specModal" class="spec-modal" style="display:none;">
+        <div class="spec-dialog">
+            <div class="spec-head">
+                <h5 class="mb-0">Additional spec</h5>
+                <button class="av-modal-close" onclick="closeSpecPicker()" aria-label="Close">&times;</button>
+            </div>
+            <div class="spec-note">
+                Autotrader does not provide the fitted spec for this vehicle, so tick
+                the extras it actually has. The valuation is recalculated on save.
+            </div>
+            <input type="text" id="specSearch" class="form-control spec-search"
+                   placeholder="Type a spec item..." autocomplete="off"
+                   oninput="renderSpecPicker(this.value)">
+            <div id="specBody" class="spec-body"></div>
+            <div class="spec-foot">
+                <button class="btn btn-outline-secondary" onclick="closeSpecPicker()">Cancel</button>
+                <button class="btn btn-primary" id="specSaveBtn" onclick="saveSpec()">Apply extras</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Confirm before an HPI Spec Check. Every one is a billable check, so it
+         never runs without the user saying yes to this first. -->
+    <div id="hpiConfirm" class="spec-modal" style="display:none;">
+        <div class="spec-dialog" style="width: 480px;">
+            <div class="spec-head">
+                <h5 class="mb-0">Run HPI Spec Check?</h5>
+                <button class="av-modal-close" onclick="closeHpiConfirm()" aria-label="Close">&times;</button>
+            </div>
+            <div class="spec-note pb-3">
+                <p class="mb-2">
+                    This is a <strong>billable HPI check</strong> for
+                    <strong id="hpiConfirmVrm"></strong>.
+                </p>
+                <p class="mb-0">
+                    It returns the factory-fitted options and their original prices.
+                    The result is stored permanently, so this vehicle is only ever
+                    charged once — factory options never change.
+                </p>
+            </div>
+            <div class="spec-foot">
+                <button class="btn btn-outline-secondary" onclick="closeHpiConfirm()">Cancel</button>
+                <button class="btn btn-primary" id="hpiConfirmBtn" onclick="runSpecCheck()">
+                    Run Spec Check
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <div class="page-wrap">
+        <div class="d-flex align-items-center gap-3 mb-4">
+            <img src="{{ BASE_URL }}/static/icon.png" alt="" class="brand-logo">
+            <h1 class="page-title mb-0">Assess Vehicle</h1>
+            <!-- Explicit link rather than history.back(): arriving here after a
+                 search means the previous entry is the list page in a pre-search
+                 state, and going "back" to a stale list is confusing. -->
+            <a href="{{ BASE_URL }}/assess-vehicle" class="btn btn-outline-secondary nav-btn">
+                <i class="fas fa-arrow-left me-1"></i>Back
+            </a>
+        </div>
+
+        <div id="loadingState" class="loading-state">
+            <i class="fas fa-spinner fa-spin"></i>
+            Loading {{ vrm }}...
+        </div>
+
+        <div id="detail" style="display:none;">
+            <div class="veh-head">
+                <img id="hdrImage" class="veh-image" alt="" style="display:none;">
+                <span class="plate lg" id="hdrVrm"></span>
+                <div class="veh-head-text">
+                    <div class="veh-desc" id="hdrDesc"></div>
+                    <div class="veh-sub d-flex align-items-center gap-2 flex-wrap">
+                        <span id="hdrMileage"></span>
+                        <button type="button" class="mileage-edit-btn" onclick="openMileageEditor()"
+                                title="Edit mileage" aria-label="Edit mileage">
+                            <i class="fas fa-pencil"></i>
+                        </button>
+                        <span id="hdrSub"></span>
+                    </div>
+                    <div id="mileageEditor" class="mileage-editor" style="display:none;">
+                        <label for="mileageEditInput">Mileage</label>
+                        <input id="mileageEditInput" type="number" min="1" step="1" class="form-control form-control-sm">
+                        <button type="button" class="btn btn-primary btn-sm" id="mileageApplyBtn" onclick="applyMileageEdit()">Apply</button>
+                        <button type="button" class="btn btn-outline-secondary btn-sm" onclick="closeMileageEditor()">Cancel</button>
+                        <span id="mileageEditStatus" class="small text-muted"></span>
+                    </div>
+                    <!-- Where the figures came from, and the Update button.
+                         Inside the card because it describes this vehicle's
+                         data rather than being a page-level notice. -->
+                    <div id="staleBanner" class="stale-banner" style="display:none;"></div>
+                </div>
+            </div>
+
+            <div class="card mb-3">
+                <div class="card-body">
+                    <div class="presence-row" id="presenceRow"></div>
+                    <div id="presenceDetail" class="mt-3"></div>
+                </div>
+            </div>
+
+            <div class="row g-3 align-items-stretch">
+                <div class="col-12 col-md-6 col-xl-3">
+                    <div class="card h-100"><div class="card-body">
+                        <div class="section-title">CAP <span class="src">CAP API</span></div>
+                        <div id="capBody"></div>
+                    </div></div>
+                </div>
+                <div class="col-12 col-md-6 col-xl-3">
+                    <div class="card h-100"><div class="card-body">
+                        <div class="section-title">HPI <span class="src" id="hpiSrc">Spec Check</span></div>
+                        <div id="hpiBody"></div>
+                    </div></div>
+                </div>
+                <div class="col-12 col-md-6 col-xl-3">
+                    <div class="card h-100"><div class="card-body">
+                        <div class="section-title">Autotrader <span class="src" id="atPortal"></span></div>
+                        <div id="atBody"></div>
+                    </div></div>
+                </div>
+                <div class="col-12 col-md-6 col-xl-3">
+                    <div class="card h-100"><div class="card-body">
+                        <div class="section-title">Buying Requirements <span class="src" id="brBand"></span></div>
+                        <div id="brBody"></div>
+                    </div></div>
+                </div>
+            </div>
+
+            <!-- Every check for this VRM, from supplier lists and manual lookups -->
+            <div class="card mt-3">
+                <div class="card-body">
+                    <div class="section-title">
+                        Check History
+                        <span class="src">Supplier lists and manual checks</span>
+                    </div>
+                    <div id="checksBody"></div>
+                </div>
+            </div>
+        </div>
+
+        <div id="errorState" class="loading-state" style="display:none;"></div>
+    </div>
+
+    <script>
+        window.BASE_URL = "{{ BASE_URL }}";
+        const VRM = "{{ vrm }}";
+        const MILEAGE = {{ mileage }};
+    </script>
+    <script src="{{ BASE_URL }}/static/js/assess_vehicle.js"></script>
+    <script>
+        let editingMileage = MILEAGE;
+        let editingCheckId = null;
+        function render(d) {
+            const cap = d.cap || {}, at = d.autotrader || {};
+
+            $('hdrVrm').textContent = d.vrm;
+            $('hdrDesc').textContent = describe(d);
+            const subParts = [];
+            $('hdrMileage').textContent = d.mileage ? num(d.mileage) + ' miles' : '';
+            if (cap.cap_id) subParts.push('CAP ID ' + cap.cap_id);
+            if (cap.registered) subParts.push('Reg ' + cap.registered);
+            if (d.looked_up) subParts.push('Valued ' + d.looked_up);
+            $('hdrSub').textContent = subParts.join('  ·  ');
+
+            renderImage(cap);
+            renderProvenance(d);
+            renderCap(cap);
+            renderAt(at, d.vrm, d.mileage);
+            renderChecks(d.checks || []);
+            // Separate request: reads the store only, never calls HPI, so it
+            // does not hold up the rest of the page.
+            loadSpecCheck();
+            // Also separate: these need the SharePoint sheets, which are far
+            // slower than the valuation. Shown as loading until they arrive.
+            loadMarket(cap.cap_id, at.retail_valuation);
+
+            $('loadingState').style.display = 'none';
+            $('errorState').style.display = 'none';
+            $('detail').style.display = '';
+        }
+
+        // Presence (Apex / Daily Buyers Sheet / Cars Bought) and buying
+        // requirements. Fetched after the valuation is already on screen — a
+        // cold SharePoint cache takes ~30s and must not hold up the page.
+        function loadMarket(capId, retailValuation) {
+            showPresenceLoading();
+            showBrLoading();
+
+            const params = new URLSearchParams();
+            if (capId) params.set('cap_id', capId);
+            if (retailValuation != null) params.set('retail_valuation', retailValuation);
+
+            jsonFetch(BASE_URL + '/assess-vehicle/market/' + encodeURIComponent(VRM)
+                      + (params.toString() ? '?' + params.toString() : ''))
+                .then(m => {
+                    renderPresence(m.presence || {});
+                    renderBr(m.buying || {}, {cap_id: capId});
+                })
+                .catch(err => {
+                    showPresenceError(err.message);
+                    showBrError(err.message);
+                });
+        }
+
+        // Says where the figures came from. Data pulled from the store is shown
+        // as-is; the Update button forces a fresh CAP/Autotrader call, but only
+        // once the overnight valuation refresh has run.
+        function renderProvenance(d) {
+            const pr = d.provenance || {};
+            const el = $('staleBanner');
+            if (!pr.fetched_at || !pr.from_store) { el.style.display = 'none'; return; }
+
+            const srcLabel = pr.source === 'manual'
+                ? ('Manual check' + (pr.checked_by ? ' by ' + pr.checked_by : ''))
+                : 'Supplier list check';
+            const age = pr.age_hours == null ? '' : ageText(pr.age_hours);
+            el.className = 'stale-banner ' + (pr.is_stale ? 'warn' : 'fresh');
+
+            // CAP and Autotrader refresh their valuations overnight, so a second
+            // call on the same calendar day returns the same figures.
+            const updateBtn = pr.valued_today
+                ? `<button class="btn-update" disabled` +
+                  ` title="Valuations only change overnight — already valued today">` +
+                  `<i class="fas fa-rotate me-1"></i>Update</button>`
+                : `<button class="btn-update" onclick="updateVehicle()">` +
+                  `<i class="fas fa-rotate me-1"></i>Update</button>`;
+
+            el.innerHTML =
+                `<i class="fas fa-${pr.is_stale ? 'triangle-exclamation' : 'clock'}"></i>` +
+                `<span>${pr.is_stale ? 'This data is ' + age + ' old' : 'Existing data from ' + age + ' ago'}` +
+                ` — ${esc(srcLabel)}, ${esc(pr.fetched_at)}.` +
+                `${pr.valued_today ? ' Already valued today.' : ''}</span>` +
+                updateBtn;
+            el.style.display = '';
+        }
+
+        function updateVehicle() {
+            const btn = document.querySelector('#staleBanner .btn-update');
+            if (btn) { btn.disabled = true; btn.innerHTML = '<i class="fas fa-spinner fa-spin me-1"></i>Updating...'; }
+            jsonFetch(BASE_URL + '/assess-vehicle/lookup', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({vrm: VRM, mileage: MILEAGE, force: true})
+            })
+            .then(data => render(data.result))
+            .catch(err => {
+                if (btn) { btn.disabled = false; btn.innerHTML = '<i class="fas fa-rotate me-1"></i>Update'; }
+                alert('Update failed: ' + err.message);
+            });
+        }
+
+        function openMileageEditor(mileage, checkId) {
+            const input = $('mileageEditInput');
+            editingMileage = mileage || MILEAGE;
+            editingCheckId = checkId || null;
+            input.value = editingMileage;
+            $('mileageEditor').style.display = '';
+            $('mileageEditStatus').textContent = '';
+            input.focus();
+            input.select();
+        }
+
+        function closeMileageEditor() {
+            $('mileageEditor').style.display = 'none';
+        }
+
+        function applyMileageEdit() {
+            const mileage = Number($('mileageEditInput').value);
+            if (!Number.isInteger(mileage) || mileage <= 0) {
+                $('mileageEditStatus').textContent = 'Enter a valid mileage.';
+                return;
+            }
+            const btn = $('mileageApplyBtn');
+            btn.disabled = true;
+            $('mileageEditStatus').textContent = 'Checking valuation…';
+            jsonFetch(BASE_URL + '/assess-vehicle/reassess-mileage', {
+                method: 'POST', headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({vrm: VRM, previous_mileage: editingMileage, mileage, check_id: editingCheckId})
+            })
+            .then(d => {
+                if (!d.refresh_required) return d;
+                $('mileageEditStatus').textContent = 'Mileage changed valuation band — refreshing CAP and Autotrader…';
+                return jsonFetch(BASE_URL + '/assess-vehicle/lookup', {
+                    method: 'POST', headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({vrm: VRM, mileage, force: true, force_mileage: true})
+                });
+            })
+            .then(() => {
+                window.location.href = BASE_URL + '/assess-vehicle/vehicle/'
+                    + encodeURIComponent(VRM) + '?mileage=' + encodeURIComponent(mileage);
+            })
+            .catch(err => {
+                btn.disabled = false;
+                $('mileageEditStatus').textContent = err.message;
+            });
+        }
+
+        function showError(msg) {
+            $('loadingState').style.display = 'none';
+            $('detail').style.display = 'none';
+            $('errorState').innerHTML =
+                `<i class="fas fa-triangle-exclamation"></i>${esc(msg)}` +
+                `<div class="mt-3"><a href="${BASE_URL}/assess-vehicle" ` +
+                `class="btn btn-outline-secondary nav-btn">` +
+                `<i class="fas fa-arrow-left me-1"></i>Back to list</a></div>`;
+            $('errorState').style.display = '';
+        }
+
+        document.addEventListener('keydown', e => {
+            if (e.key !== 'Escape') return;
+            if ($('imgLightbox').style.display !== 'none') { closeImage(); return; }
+            if ($('hpiConfirm').style.display !== 'none') { closeHpiConfirm(); return; }
+            if ($('specModal').style.display !== 'none') closeSpecPicker();
+        });
+
+        /* ── Initial load ────────────────────────────────── */
+        jsonFetch(BASE_URL + '/assess-vehicle/lookup/' + encodeURIComponent(VRM)
+                  + '?mileage=' + encodeURIComponent(MILEAGE))
+            .then(d => render(d.result))
+            .catch(err => showError(err.message));
+    </script>
+</body>
+</html>

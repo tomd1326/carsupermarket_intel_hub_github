@@ -1,0 +1,19 @@
+{# Shared navigation controls. Import with context so BASE_URL is available. #}
+{% macro home_button(extra_class='') -%}
+<a href="{{ BASE_URL }}/home" class="btn btn-outline-secondary nav-btn{% if extra_class %} {{ extra_class }}{% endif %}">
+    <i class="fas fa-home me-1"></i>Home
+</a>
+{%- endmacro %}
+
+{% macro account_nav(user_name=None) -%}
+<div class="account-nav">
+    {{ home_button() }}
+    {% if user_name %}
+    <span class="account-user">{{ user_name }}</span>
+    <span aria-hidden="true">&middot;</span>
+    <a href="{{ BASE_URL }}/logout" class="account-logout">
+        <i class="fas fa-sign-out-alt"></i> Logout
+    </a>
+    {% endif %}
+</div>
+{%- endmacro %}

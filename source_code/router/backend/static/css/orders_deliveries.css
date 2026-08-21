@@ -23,7 +23,6 @@
         .back-link:hover { color: var(--c-text) !important; }
         /* .panel, .info-mark and .css-spinner come from theme.css. .nav-btn is
            overridden here (em not rem) so it scales with the page font. */
-        .nav-btn { font-size: 1em; padding: 0.35em 0.7em; }
         /* Matches the slicer bar's rendered width at the base panel size
            (8 * 163px + 7 * 10px gaps + this bar's own padding), so the bar is
            already correctly sized before any data/JS has run. Once data

@@ -1,0 +1,282 @@
+/* Vehicle detail styling, shared by the Assess Vehicle list page and the
+   per-vehicle page. Both show the same blocks — CAP, Autotrader, buying
+   requirements, check history — so the rules live here rather than being
+   duplicated in each template. */
+
+.section-title {
+    font-size: 0.78rem; font-weight: 700; text-transform: uppercase;
+    letter-spacing: 0.6px; color: var(--c-text-muted);
+    padding-bottom: 8px; margin-bottom: 14px; border-bottom: 2px solid var(--c-border-soft);
+    display: flex; align-items: center; justify-content: space-between;
+}
+.section-title .src { font-weight: 600; text-transform: none; letter-spacing: 0; font-size: 0.72rem; color: var(--c-text-muted); }
+
+.kv { display: flex; justify-content: space-between; align-items: baseline;
+      padding: 6px 0; border-bottom: 1px solid var(--c-border-soft); gap: 12px; }
+.kv:last-child { border-bottom: none; }
+.kv .k { font-size: 0.82rem; color: var(--c-text-muted); white-space: nowrap; }
+.kv .v { font-size: 0.92rem; font-weight: 600; color: var(--c-dark); text-align: right; }
+.kv .v.mono { font-variant-numeric: tabular-nums; }
+.kv .v.pos { color: #146c43; }
+.kv .v.neg { color: var(--c-text-danger); }
+
+.val-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 12px; }
+/* Average / No spec / This car, side by side for comparison. */
+.val-grid-3 { grid-template-columns: repeat(3, 1fr); }
+.val-grid-3 .vb-value { font-size: 1.02rem; }
+.val-box { background: var(--c-surface-alt); border-radius: var(--radius-lg); padding: 10px 12px; }
+.val-box .vb-label { font-size: 0.7rem; font-weight: 700; color: var(--c-text-muted);
+                     text-transform: uppercase; letter-spacing: 0.4px; }
+.val-box .vb-value { font-size: 1.15rem; font-weight: 700; color: var(--c-text-heading);
+                     font-variant-numeric: tabular-nums; margin-top: 2px; }
+.val-box.accent { background: var(--c-table-total-bg); }
+.val-box.accent .vb-value { color: #084298; }
+
+.stat-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
+.stat { background: var(--c-surface-alt); border-radius: var(--radius-lg); padding: 12px 10px; text-align: center; }
+.stat .s-label { font-size: 0.68rem; font-weight: 700; color: var(--c-text-muted);
+                 text-transform: uppercase; letter-spacing: 0.3px; line-height: 1.25; }
+.stat .s-value { font-size: 1.45rem; font-weight: 700; color: var(--c-text-heading);
+                 font-variant-numeric: tabular-nums; margin-top: 4px; line-height: 1.1; }
+.stat.pos .s-value { color: #146c43; }
+.stat.neg .s-value { color: var(--c-text-danger); }
+.stat.hl { background: var(--c-table-total-bg); }
+
+.presence-row { display: flex; gap: 10px; flex-wrap: wrap; }
+.presence {
+    display: flex; align-items: center; gap: 8px;
+    border-radius: 8px; padding: 9px 14px; font-size: 0.85rem; font-weight: 600;
+    background: var(--c-surface-sunken); color: var(--c-text-muted);
+}
+.presence.on { background: #d1e7dd; color: #0f5132; }
+/* Waiting on the SharePoint sheets — lighter than a result so it does not read
+   as a confirmed "not found" while it is still loading. */
+.presence.loading { font-weight: 500; opacity: 0.75; }
+
+.rating-pill { display: inline-block; padding: 2px 10px; border-radius: 20px;
+               font-weight: 700; font-size: 0.9rem; }
+.rating-a { background: #d1e7dd; color: #0f5132; }
+.rating-b { background: #e2f0d9; color: #375623; }
+.rating-c { background: #fff3cd; color: #664d03; }
+.rating-d { background: #ffe0cc; color: #8a4b18; }
+.rating-e { background: #f8d7da; color: #842029; }
+
+/* Stale / stored-data banner */
+.stale-banner {
+    display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+    border-radius: 10px; padding: 11px 16px; margin-bottom: 14px;
+    font-size: 0.88rem; font-weight: 600;
+}
+.stale-banner.warn  { background: #fff3cd; color: #664d03; }
+.stale-banner.fresh { background: #e8f4ff; color: #084298; }
+.stale-banner .btn-update {
+    margin-left: auto; background: var(--c-primary); border: none; color: var(--c-surface);
+    font-weight: 700; font-size: 0.82rem; padding: 6px 14px; border-radius: var(--radius-md);
+}
+.stale-banner.warn .btn-update { background: #a97a00; }
+.stale-banner .btn-update:hover { filter: brightness(1.1); }
+.stale-banner .btn-update:disabled { opacity: 0.6; cursor: not-allowed; }
+
+/* Check history table */
+.checks-table { width: 100%; font-size: 0.83rem; }
+.checks-table th {
+    font-size: 0.68rem; font-weight: 700; color: var(--c-text-muted);
+    text-transform: uppercase; letter-spacing: 0.3px;
+    padding: 6px 10px; border-bottom: 2px solid var(--c-border-soft); white-space: nowrap;
+}
+.checks-table td {
+    padding: 7px 10px; border-bottom: 1px solid var(--c-border-soft);
+    font-variant-numeric: tabular-nums; white-space: nowrap;
+}
+.checks-table tbody tr:last-child td { border-bottom: none; }
+.checks-table .num { text-align: right; }
+.src-badge {
+    font-size: 0.65rem; font-weight: 700; text-transform: uppercase;
+    letter-spacing: 0.3px; padding: 2px 7px; border-radius: 4px;
+}
+.src-manual    { background: #cfe2ff; color: #084298; }
+.src-evaluator { background: #e2e3e5; color: #41464b; }
+
+.empty-hint { color: var(--c-text-muted); font-size: 0.88rem; text-align: center; padding: 28px 0; }
+.err-box { background: #f8d7da; color: #842029; border-radius: var(--radius-lg);
+           padding: 10px 14px; font-size: 0.85rem; font-weight: 600; }
+.veh-desc { font-size: 1.05rem; font-weight: 700; color: var(--c-dark); }
+.veh-sub  { font-size: 0.85rem; color: var(--c-text-muted); }
+.mileage-edit-btn {
+    border: 0; background: none; color: var(--c-text-muted); padding: 0 2px;
+    font-size: 0.78rem; line-height: 1; cursor: pointer;
+}
+.mileage-edit-btn:hover { color: var(--c-primary); }
+.mileage-editor {
+    display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+    margin-top: 8px; font-size: 0.82rem;
+}
+.mileage-editor .form-control { width: 112px; }
+
+/* CAP model image. Fixed height so the header does not jump between vehicles;
+   width follows the picture's own aspect ratio. Click enlarges to full size. */
+.veh-image {
+    height: 130px; width: auto; max-width: 230px;
+    object-fit: contain; border-radius: var(--radius-md); flex-shrink: 0;
+    cursor: zoom-in; transition: transform 0.12s ease;
+}
+.veh-image:hover { transform: scale(1.03); }
+
+/* ── Additional spec ─────────────────────────────── */
+.spec-row {
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 10px; margin-top: 12px; padding-top: 12px;
+    border-top: 1px solid var(--c-border-soft);
+}
+.spec-count { font-size: 0.82rem; color: var(--c-text-muted); }
+.btn-spec {
+    background: var(--c-surface-sunken); border: 1px solid var(--c-disabled-border); color: var(--c-control-border-hover);
+    font-size: 0.78rem; font-weight: 700; padding: 5px 12px; border-radius: var(--radius-md);
+}
+.btn-spec:hover { background: var(--c-disabled-bg); color: var(--c-dark); }
+
+.spec-uplift { font-size: 0.85rem; font-weight: 700; padding-top: 2px; }
+.spec-uplift.pos { color: #146c43; }
+.spec-uplift.neg { color: var(--c-text-danger); }
+
+/* Picker dialog. Above the image lightbox is not needed — they never both
+   open — but it must clear the page content. */
+.spec-modal {
+    position: fixed; inset: 0; z-index: 1050;
+    background: rgba(0,0,0,0.5);
+    display: flex; align-items: flex-start; justify-content: center;
+    padding: 6vh 16px;
+}
+.spec-dialog {
+    background: var(--c-surface); border-radius: var(--radius-lg); width: 760px; max-width: 96vw;
+    max-height: 88vh; display: flex; flex-direction: column; overflow: hidden;
+    box-shadow: 0 12px 48px rgba(0,0,0,0.35);
+}
+.spec-head {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 16px 22px; border-bottom: 1px solid var(--c-border-soft); flex-shrink: 0;
+}
+.spec-note {
+    padding: 12px 22px 0; font-size: 0.85rem; color: var(--c-text-muted);
+}
+.spec-search { margin: 12px 22px; width: calc(100% - 44px); flex-shrink: 0; }
+.spec-body { padding: 0 22px 8px; overflow-y: auto; flex: 1 1 auto; }
+.spec-foot {
+    display: flex; justify-content: flex-end; gap: 10px;
+    padding: 14px 22px; border-top: 1px solid var(--c-border-soft); flex-shrink: 0;
+}
+
+.spec-group { border-bottom: 1px solid var(--c-border-soft); }
+.spec-group:last-child { border-bottom: none; }
+.spec-cat {
+    display: flex; align-items: center; gap: 12px; width: 100%;
+    background: none; border: none; text-align: left;
+    font-size: 0.95rem; font-weight: 700; color: #0d9488;
+    padding: 14px 2px; cursor: pointer;
+}
+.spec-cat:hover { color: #0b7c72; }
+.spec-cat i { font-size: 0.85rem; color: var(--c-control-border-hover); width: 14px; flex-shrink: 0; }
+/* An expanded section is the one being worked on, so it reads darker than the
+   collapsed headings rather than staying the accent colour. */
+.spec-cat.open { color: var(--c-text-heading); }
+.spec-chosen { font-weight: 600; color: var(--c-text-muted); font-size: 0.88rem; }
+.spec-items { padding-bottom: 12px; }
+.spec-item {
+    display: flex; align-items: center; gap: 10px;
+    background: var(--c-surface-alt); border-radius: var(--radius-lg); padding: 10px 14px;
+    margin-bottom: 6px; cursor: pointer; font-size: 0.88rem;
+}
+.spec-item:hover { background: var(--c-table-total-bg); }
+.spec-item input { flex-shrink: 0; width: 16px; height: 16px; cursor: pointer; }
+.spec-name { flex: 1 1 auto; }
+.spec-badges { display: flex; gap: 6px; flex-shrink: 0; }
+.spec-badge {
+    background: #3d5a80; color: #fff; font-size: 0.7rem; font-weight: 700;
+    padding: 3px 9px; border-radius: var(--radius-sm); white-space: nowrap;
+}
+.spec-badge.val { background: #2a6f4e; }
+/* Marks an option as confirmed by Autotrader's own VIN data, distinct from
+   something picked by hand — shown even after the item has been deselected. */
+.spec-badge.vin { background: #6d4fa6; }
+
+.spec-vin-note {
+    margin-left: 8px; color: #6d4fa6; font-weight: 600; font-size: 0.78rem;
+}
+
+/* ── Collapsible option lists (HPI + Autotrader) ──── */
+/* Says the button costs money, right next to the button. */
+.hpi-cost-note {
+    font-size: 0.72rem; color: #a97a00; font-weight: 600;
+    text-align: center; margin-top: 8px;
+}
+
+/* Reuses .spec-group / .spec-cat / .spec-items from the picker above so every
+   collapsible list on the page — HPI options, Autotrader's two option lists,
+   the spec picker itself — looks the same, with the picker's own spacing
+   removed. */
+.opt-group { border-bottom: none; }
+.opt-group .spec-cat { font-size: 0.85rem; padding: 12px 2px 8px; }
+.opt-group .spec-items { padding-bottom: 4px; }
+
+.opt-note {
+    font-size: 0.76rem; color: var(--c-text-muted); padding: 0 2px 8px; line-height: 1.35;
+}
+
+.opt-item {
+    background: var(--c-surface-alt); border-radius: var(--radius-lg);
+    padding: 8px 12px; margin-bottom: 6px; font-size: 0.84rem;
+}
+.opt-item-head { display: flex; align-items: baseline; gap: 10px; }
+.opt-name { flex: 1 1 auto; font-weight: 600; color: var(--c-dark); }
+.opt-price {
+    flex-shrink: 0; font-weight: 700; color: var(--c-text-heading);
+    font-variant-numeric: tabular-nums;
+}
+.opt-info {
+    flex-shrink: 0; background: none; border: none; padding: 0;
+    color: var(--c-text-muted); font-size: 0.85rem; line-height: 1; cursor: pointer;
+}
+.opt-info:hover { color: var(--c-text); }
+
+/* A VIN-spec item that has been turned off — still listed, never hidden, but
+   reads as inactive rather than fitted. */
+.opt-item-off { background: var(--c-surface-sunken); opacity: 0.72; }
+.opt-item-off .opt-name { text-decoration: line-through; color: var(--c-text-muted); }
+.opt-off {
+    flex-shrink: 0; font-size: 0.7rem; font-weight: 700; color: var(--c-text-danger);
+    text-transform: uppercase; letter-spacing: 0.3px;
+}
+/* The manufacturer's own description of what the option includes, or the
+   Autotrader category — long, so it sits under the name rather than beside it. */
+.opt-detail { font-size: 0.78rem; color: var(--c-text-muted); margin-top: 4px; line-height: 1.35; }
+
+.hpi-rating {
+    display: inline-block; min-width: 26px; text-align: center;
+    padding: 2px 9px; border-radius: 20px; font-weight: 700; font-size: 0.85rem;
+}
+/* 1 is under 2% of list price in extras, 5 is over 16%. */
+.hpi-rating-1 { background: #f1f3f5; color: #495057; }
+.hpi-rating-2 { background: #e2f0d9; color: #375623; }
+.hpi-rating-3 { background: #d1e7dd; color: #0f5132; }
+.hpi-rating-4 { background: #cfe2ff; color: #084298; }
+.hpi-rating-5 { background: #e8dbfc; color: #4b2d80; }
+
+/* Autotrader Portal link, sitting where the section's source label goes. */
+.portal-link {
+    color: var(--c-primary); font-weight: 700; text-decoration: none;
+    text-transform: none; letter-spacing: 0; font-size: 0.78rem;
+}
+.portal-link:hover { color: var(--c-primary-hover); text-decoration: underline; }
+
+/* Full-size image, over everything else on the page. */
+.img-lightbox {
+    position: fixed; inset: 0; z-index: 1100;
+    background: rgba(0,0,0,0.75);
+    display: flex; align-items: center; justify-content: center;
+    cursor: zoom-out;
+}
+.img-lightbox img {
+    width: 600px; height: 448px; max-width: 94vw; max-height: 90vh;
+    object-fit: contain; background: var(--c-surface);
+    border-radius: var(--radius-lg); box-shadow: 0 12px 40px rgba(0,0,0,0.45);
+}

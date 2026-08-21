@@ -37,6 +37,115 @@ def _unwrap_vehicles_result(payload: dict) -> dict:
     return payload or {}
 
 
+def _factory_fitted_features(features: list) -> tuple[list, list]:
+    """
+    Split the features list into the factory-fitted ones, as (payload, names).
+
+    `names` is the plain list for display and storage — genuinely VIN-detected
+    extras, shown to flag "Autotrader confirmed this is fitted".
+
+    `payload` is NOT what should be sent to /valuations on its own — see
+    _valuation_features_payload for that. It is kept here only because some
+    callers want just the fitted subset by itself (its shape happens to match
+    the valuations feature format, [{"name": ...}]).
+
+    On this account Autotrader does not resolve VIN spec for most vehicles, so
+    `factoryFitted` is null on nearly every feature and both lists come back
+    empty. That is expected, not a fault — see optional_features() for the
+    list of extras a user can pick from instead.
+    """
+    fitted_features = []
+    fitted_names = []
+    for feature in features or []:
+        if feature.get('factoryFitted') is True:
+            feature_name = feature.get('name')
+            if feature_name:
+                name = feature_name.strip()
+                fitted_names.append(name)
+                fitted_features.append({"name": name})
+    return fitted_features, fitted_names
+
+
+def _valuation_features_payload(features: list) -> list:
+    """
+    The features payload to send to /valuations for this vehicle's own spec.
+
+    Confirmed against Autotrader's docs and a live call (2026-08-21, VIN
+    YV1XZK7V6P2046295 @ 66,811 miles — reproduced Portal's £20,418 exactly):
+    the `features` field is not an additive list of extras on top of a base
+    price. Per the docs, "This will need to be a list of all features for the
+    vehicle" — sending only the factory-fitted Optional items (or any other
+    partial list) prices the car as if every omitted feature, Standard
+    included, were absent, and comes back identical to the empty/base request.
+
+    So this sends every Standard feature (fitted to every car of the
+    derivative) plus any Optional feature Autotrader has flagged
+    factoryFitted: true for this VIN — the full spec, not just the extras.
+    """
+    payload = []
+    for feature in features or []:
+        name = feature.get('name')
+        if not name:
+            continue
+        if feature.get('type') == 'Standard' or feature.get('factoryFitted') is True:
+            payload.append({"name": name.strip()})
+    return payload
+
+
+# The API's own category strings, mapped to the names the Autotrader Portal
+# shows and the order it lists them in. The API returns no ordering of its own,
+# and the Portal renames several, so both live here rather than in the page.
+# Anything not listed keeps its API name and sorts to the end alphabetically.
+_FEATURE_CATEGORIES = [
+    ('Drivers Assistance',       'Driver convenience'),
+    ('Exterior',                 'Exterior features'),
+    ('Interior',                 'Interior features'),
+    ('Paint',                    'Paint'),
+    ('Safety and Security',      'Safety'),
+    ('Audio and Communications', 'Audio and communications'),
+    ('Illumination',             'Illumination'),
+    ('Performance',              'Performance'),
+    ('Upholstery',               'Upholstery'),
+]
+_CATEGORY_LABEL = {api: label for api, label in _FEATURE_CATEGORIES}
+_CATEGORY_ORDER = {api: i for i, (api, _) in enumerate(_FEATURE_CATEGORIES)}
+
+
+def optional_features(features: list) -> list:
+    """
+    The optional extras that can be fitted to this derivative, for the picker
+    on the Assess Vehicle page.
+
+    Autotrader marks each feature Standard (fitted to every car of this
+    derivative) or Optional (an extra that may or may not be on this one).
+    Only the Optional ones are worth choosing between. rarityRating and
+    valueRating come straight from the API and drive the Rare/Valuable badges,
+    matching what the Autotrader Portal shows.
+
+    Ordered by category as the Portal orders them, then by name within each.
+    """
+    out = []
+    for feature in features or []:
+        if feature.get('type') != 'Optional':
+            continue
+        name = (feature.get('name') or '').strip()
+        if not name:
+            continue
+        api_category = feature.get('category') or 'Other'
+        out.append({
+            'name':          name,
+            'category':      _CATEGORY_LABEL.get(api_category, api_category),
+            'rarity_rating': feature.get('rarityRating'),
+            'value_rating':  feature.get('valueRating'),
+            # Unknown categories sort after the known ones, alphabetically.
+            '_order':        _CATEGORY_ORDER.get(api_category, len(_FEATURE_CATEGORIES)),
+        })
+    out.sort(key=lambda f: (f['_order'], f['category'], f['name']))
+    for f in out:
+        del f['_order']
+    return out
+
+
 class AutoTraderClient(metaclass=Singleton):
     def __init__(self):
         # Basic urls
@@ -100,10 +209,19 @@ class AutoTraderClient(metaclass=Singleton):
                 return 'N/A'
 
     @cache(ignore_args=['session', 'headers'], ex=60*60*24)
-    def send_vehicles_post_request(self, session, headers, vrm, mileage):
+    def send_vehicles_post_request(self, session, headers, vrm, mileage, lookup_by='registration'):
+        """
+        `lookup_by` selects which identifier is sent — the API rejects both at
+        once with "Must supply exactly one of vin or registration". Tested
+        2026-08-21: a VIN lookup returns exactly the same features and
+        valuation as the VRM one on this account, so there is no reason to
+        prefer it. Kept for if Autotrader ever enables VIN spec.
+        """
+        if lookup_by not in ('registration', 'vin'):
+            raise ValueError("lookup_by must be either 'registration' or 'vin'")
         vehicles_params = {
             'advertiserId': self.advertiser_id,
-            'registration': vrm,
+            lookup_by: vrm,
             'valuations': 'true',
             'vehicleMetrics': 'true',
             'odometerReadingMiles': mileage,
@@ -177,6 +295,61 @@ class AutoTraderClient(metaclass=Singleton):
                 logger.debug(f"Valuations API error for VRM {vrm}: Status code {valuations_response.status_code}", extra={'extra_vrm': vrm})
                 return None
 
+    def valuation_with_features(self, session, headers, vrm, derivative_id,
+                                first_registration_date, mileage, feature_names,
+                                all_features=None, average_valuation=None):
+        """
+        The three retail figures, as (average, base, with_spec).
+
+        - average:   average spec for this derivative. Pass in the inline retail
+                     figure from the /vehicles response as `average_valuation`;
+                     it is already fetched, so there is no call for it here.
+        - base:      no extras at all — /valuations with an empty feature list.
+        - with_spec: Standard features plus the chosen Optional extras. None
+                     when nothing is selected.
+
+        Confirmed 2026-08-21 against Autotrader's docs and a live call (VIN
+        YV1XZK7V6P2046295 @ 66,811 miles): `features` is not additive extras on
+        top of a base price — the docs say "This will need to be a list of all
+        features for the vehicle". Sending only the chosen Optional names
+        (without every Standard feature) prices the car as if it had no
+        Standard equipment at all and returns the same figure as the empty/base
+        request. `all_features` — the vehicle's full feature list from
+        /vehicles — is required so this can include every Standard feature
+        alongside the selected Optional ones; without it, with_spec silently
+        matches base for every vehicle, which is the bug this replaces.
+
+        The Autotrader Portal measures its "Spec: £N above/below average"
+        against the AVERAGE, not the base.
+
+        Only used when someone picks a spec on the Assess Vehicle page. The bulk
+        supplier list runs never reach this, so their timings are unchanged.
+        """
+        def _retail(data):
+            if not data:
+                return None
+            return data.get('valuations', {}).get('retail', {}).get('amountGBP')
+
+        base = _retail(self.send_valuations_post_request(
+            session, headers, vrm, derivative_id, first_registration_date, mileage, []
+        ))
+
+        with_spec = None
+        if feature_names:
+            standard_names = {
+                f['name'].strip() for f in (all_features or [])
+                if f.get('type') == 'Standard' and f.get('name')
+            }
+            # Sorted so the same spec always produces the same cache key — the
+            # decorator keys on str() of the arguments, which is order-sensitive.
+            chosen = {n.strip() for n in feature_names if n and n.strip()}
+            features = [{"name": n} for n in sorted(standard_names | chosen)]
+            with_spec = _retail(self.send_valuations_post_request(
+                session, headers, vrm, derivative_id, first_registration_date, mileage, features
+            ))
+
+        return average_valuation, base, with_spec
+
     @classmethod
     def concatenate_description(cls, make, model, derivative) -> str:
         make = make if make is not None else ''
@@ -235,9 +408,10 @@ class AutoTraderClient(metaclass=Singleton):
             valuations_retail_valuation = 'N/A'
             total_results = 'N/A'
             description = ''
-            factory_fitted_features = []
             factory_fitted_feature_names = []
+            valuation_features = []
             features_data = []
+            vehicle_info = {}
 
             vehicles_data = None  # Initialize vehicles_data to None
 
@@ -263,18 +437,14 @@ class AutoTraderClient(metaclass=Singleton):
                 market_condition = vehicle_metrics.get('marketCondition', {}).get('value', 'N/A')
 
                 features_data = vehicles_result.get('features', [])
-                for feature in features_data:
-                    if feature.get('factoryFitted') is True:
-                        feature_name = feature.get('name')
-                        if feature_name:
-                            factory_fitted_feature_names.append(feature_name.strip())
-                            factory_fitted_features.append({"name": feature_name.strip()})
+                _, factory_fitted_feature_names = _factory_fitted_features(features_data)
+                valuation_features = _valuation_features_payload(features_data)
 
             # Valuations API call — requires derivative_id, first_registration_date and mileage
             valuations_data = None
             if vehicles_data is not None and derivative_id and first_registration_date and vehicle.mileage:
                 valuations_data = self.send_valuations_post_request(
-                    session, headers, vehicle.vrm, derivative_id, first_registration_date, vehicle.mileage, factory_fitted_features
+                    session, headers, vehicle.vrm, derivative_id, first_registration_date, vehicle.mileage, valuation_features
                 )
             if valuations_data is not None:
 
@@ -321,6 +491,8 @@ class AutoTraderClient(metaclass=Singleton):
                 'market_condition': market_condition,
                 'factory_fitted_feature_names': ', '.join(factory_fitted_feature_names),
                 'at_first_registration_date': first_registration_date,
+                'derivative_id': derivative_id,
+                'vin': vehicle_info.get('vin', ''),
             }
 
         except Exception as e:
@@ -346,6 +518,8 @@ class AutoTraderClient(metaclass=Singleton):
                 'market_condition': 'N/A',
                 'factory_fitted_feature_names': 'N/A',
                 'at_first_registration_date': 'N/A',
+                'derivative_id': '',
+                'vin': '',
             }
 
     def process_file(self, input_df: pd.DataFrame, column_mapper: BaseColumnsMapper, max_workers: int = 40, rate_limit: int = 60) -> pd.DataFrame:

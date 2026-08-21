@@ -81,6 +81,26 @@
 /* Back / Home / nav buttons — same size wherever they appear. */
 .nav-btn { font-size: 1rem; padding: 0.35rem 0.7rem; }
 
+/* Global account/navigation strip. Home always sits immediately before the
+   signed-in user, in the same top-right position on every application page. */
+.account-nav {
+    position: fixed;
+    top: 18px;
+    right: 22px;
+    z-index: 1040;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    color: var(--c-text-muted);
+    font-size: 0.85rem;
+}
+.account-nav .nav-btn { margin-right: 0.25rem; }
+.account-nav .account-logout { color: inherit; text-decoration: none; }
+.account-nav .account-logout:hover { color: var(--c-text); }
+/* Use on a top row that already has right-aligned controls, so those controls
+   stop before the fixed account strip rather than sitting underneath it. */
+.account-nav-clear { padding-right: 290px; }
+
 /* Card / panel surface. */
 .panel {
     background: var(--c-surface);
