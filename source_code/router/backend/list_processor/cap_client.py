@@ -11,6 +11,7 @@ from list_processor.structs import VehicleRow
 from list_processor.columns_mapper import BaseColumnsMapper
 from typing import Optional, Tuple
 import datetime
+import hashlib
 import time
 import requests
 import os
@@ -56,6 +57,7 @@ class CAPClient(metaclass=Singleton):
         self.live_valuation_url = "https://soap.cap.co.uk/usedvalueslive/capusedvalueslive.asmx/GetUsedLive_IdRegDate"
         self.monthly_valuation_url = "https://soap.cap.co.uk/vrm/capvrm.asmx/CAPIDValuation"
         self.vrm_url = "https://soap.cap.co.uk/vrm/capvrm.asmx/VRMValuation"
+        self.image_url = "https://soap.cap.co.uk/images/VehicleImage.aspx"
 
         # Auth data — use override creds from settings if enabled, otherwise fall back to AWS secret
         env = 'prod' if os.getenv('AWS_REGION') == 'eu-west-1' else 'dev'
@@ -76,6 +78,21 @@ class CAPClient(metaclass=Singleton):
             secrets = get_secret(f'{env}/carsupermarket/car_pricer/api_access')
             self.subscriber_id = secrets['CAP_SUBSCRIBER_ID']
             self.cap_password = secrets['CAP_PASSWORD']
+
+        # Vehicle Image is a separate CAP product the main account does not
+        # subscribe to, so images use the time-limited test account instead.
+        # Kept apart from the valuation credentials on purpose: the valuation
+        # calls must never start billing the test account by accident. When the
+        # main account gets the product, drop these and use the pair above.
+        try:
+            _img_secrets = get_secret(f'{env}/carsupermarket/car_pricer/api_access')
+            self.image_subscriber_id = _img_secrets.get('CAP_SUBSCRIBER_ID_TEST')
+            self.image_password = _img_secrets.get('CAP_PASSWORD_TEST')
+        except Exception as _e:
+            logger.warning("[CAP] Could not load image credentials: %s", _e)
+            self.image_subscriber_id = None
+            self.image_password = None
+
         self.database = "CAR"
 
         # Rate limiter
@@ -144,6 +161,84 @@ class CAPClient(metaclass=Singleton):
                 wait = 2 ** attempt
                 logger.warning(f"CAP request failed [{label}] ({type(e).__name__}, attempt {attempt + 1}/{retries}), retrying in {wait}s")
                 time.sleep(wait)
+
+    def image_hashcode(self, capid: int) -> str:
+        """
+        MD5 for the image API's GET form.
+
+        DOES NOT WORK - do not use. CAP documents the hash as subscriber id +
+        password + database + CAP id, but plain concatenation in that order is
+        rejected with "Validate_MD5Hash Exception: Unable to verify MD5 hash
+        code" (tested 2026-08-21 against an account that the POST form works
+        on, so this is the recipe being wrong, not a subscription problem).
+        There is presumably a separator, a different order or a casing rule
+        that CAP has not documented.
+
+        Kept only as a starting point if the GET form is ever needed. Use the
+        POST form in vehicle_image() instead, which works and keeps the
+        password off the page.
+        """
+        raw = f"{self.subscriber_id}{self.cap_password}{self.database}{capid}"
+        return hashlib.md5(raw.encode('utf-8')).hexdigest()
+
+    def vehicle_image(self, capid: int, registration_date: str = None,
+                      width: int = 600, height: int = 448,
+                      image_text: str = None, viewpoint: str = None):
+        """
+        Model image for a CAP id, as (bytes, content_type).
+
+        With a registration date this is CAP's "Get Image for CAPId and Date" —
+        it picks the model year that was current on that date, so a facelifted
+        model shows the right one. Without a date CAP falls back to the last
+        model year, which is wrong for older stock, so pass the date whenever
+        it is known.
+
+        `registration_date` must be dd/mm/yyyy. The VRM lookup's
+        `registered_date` is already in that format and can be passed straight
+        in. Width and height cap at 1024x768. `viewpoint` needs the Enhanced
+        Image Product subscription — leave it unset without one.
+
+        Returns (None, None) when CAP has no image, rather than raising: a
+        missing picture should not fail the rest of a lookup.
+        """
+        if not self.image_subscriber_id or not self.image_password:
+            logger.warning("CAP image credentials not configured - skipping image request")
+            return None, None
+
+        payload = {
+            'SUBID': self.image_subscriber_id,
+            'PWD':   self.image_password,
+            'DB':    self.database,
+            'CAPID': str(capid),
+            'WIDTH': str(width),
+            'HEIGHT': str(height),
+        }
+        if registration_date:
+            payload['DATE'] = registration_date
+        if image_text:
+            payload['IMAGETEXT'] = image_text
+        if viewpoint:
+            payload['VIEWPOINT'] = viewpoint
+
+        response = self._post_with_retry(self.image_url, payload, label=f"CAP image {capid}")
+        if response is None or response.status_code != 200:
+            status = response.status_code if response is not None else 'no response'
+            logger.warning(f"CAP image request failed for capid={capid}: {status}")
+            return None, None
+
+        content_type = response.headers.get('Content-Type', '')
+        # CAP answers an error with a 200 and a short "VI Error: ..." text body
+        # rather than a non-200, so the content type is what tells us whether we
+        # actually got a picture.
+        if not content_type.startswith('image/'):
+            body = (response.text or '').strip()[:200]
+            if 'do not subscribe' in body:
+                logger.warning(f"CAP Vehicle Image not on this subscription (capid={capid}): {body}")
+            else:
+                logger.info(f"CAP returned no image for capid={capid}: {body or content_type}")
+            return None, None
+
+        return response.content, content_type
 
     def fetch_and_parse_data(self, url, payload, vrm=''):
         endpoint = url.split('/')[-1]

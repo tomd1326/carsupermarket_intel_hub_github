@@ -1,3 +1,4 @@
+{% from '_navigation.html' import account_nav with context %}
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -20,8 +21,9 @@
     <link href="{{ static_url('css/orders_deliveries.css') }}" rel="stylesheet">
 </head>
 <body>
+    {{ account_nav(user) }}
     <div class="container-fluid py-4" style="max-width: 100%; padding-left: 24px; padding-right: 24px;">
-        <div class="d-flex align-items-center mb-3">
+        <div class="d-flex align-items-center mb-3 account-nav-clear">
             <h3 class="page-header mb-0">Orders &amp; Deliveries Report</h3>
             <span class="cache-note ms-3" id="cache-note"></span>
             <button class="btn btn-refresh ms-2" id="refresh-btn" onclick="refreshData()" title="Reload the latest data from Snowflake">
@@ -36,7 +38,6 @@
                 <button class="btn btn-outline-secondary px-2 py-0" onclick="changeFont('page', 1)">+</button>
                 <button class="btn btn-outline-secondary px-2 py-0" title="Reset font size" onclick="resetFont('page')"><i class="fas fa-rotate-left"></i></button>
             </div>
-            <a href="{{ BASE_URL }}/home" class="btn btn-outline-secondary nav-btn ms-3"><i class="fas fa-arrow-left me-1"></i>Home</a>
         </div>
 
         <div class="panel shadow-sm mb-3" id="control-bar">

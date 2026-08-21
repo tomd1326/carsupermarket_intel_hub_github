@@ -1,3 +1,4 @@
+{% from '_navigation.html' import account_nav with context %}
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -7,35 +8,29 @@
     <link rel="icon" type="image/png" href="{{ BASE_URL }}/static/icon.png">
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css" rel="stylesheet">
+    <!-- Shared colours, borders and radii. Keep this before the page stylesheet
+         so Assess Vehicle can add its vehicle-specific presentation on top. -->
+    <link href="{{ static_url('css/theme.css') }}" rel="stylesheet">
+    <link href="{{ static_url('css/assess_vehicle.css') }}" rel="stylesheet">
     <style>
         @font-face { font-family: 'DM Sans'; src: url('{{ BASE_URL }}/static/fonts/DMSans-Regular.ttf');  font-weight: 400; }
         @font-face { font-family: 'DM Sans'; src: url('{{ BASE_URL }}/static/fonts/DMSans-Medium.ttf');   font-weight: 500; }
         @font-face { font-family: 'DM Sans'; src: url('{{ BASE_URL }}/static/fonts/DMSans-SemiBold.ttf'); font-weight: 600; }
         @font-face { font-family: 'DM Sans'; src: url('{{ BASE_URL }}/static/fonts/DMSans-Bold.ttf');     font-weight: 700; }
         body, button, input, select, textarea { font-family: 'DM Sans', system-ui, sans-serif; }
-        body { background-color: #003c57; min-height: 100vh; }
+        body { background-color: var(--c-page-bg); color: var(--c-text); min-height: 100vh; }
 
         .page-wrap { min-height: 100vh; padding: 40px 32px 64px; max-width: 1500px; margin: 0 auto; }
-        .brand-logo { width: 48px; height: 48px; border-radius: 10px; }
-        .page-title { color: #ffffff; font-weight: 600; font-size: 1.5rem; letter-spacing: -0.2px; }
-        .card { border: none; border-radius: 12px; box-shadow: 0 4px 24px rgba(0,0,0,0.18); }
+        .brand-logo { width: 48px; height: 48px; border-radius: var(--radius-lg); }
+        .page-title { color: var(--c-text-heading); font-weight: 600; font-size: 1.5rem; letter-spacing: -0.2px; }
+        .card { border: 1px solid var(--c-border); border-radius: var(--radius-lg); box-shadow: none; }
         .card-body { padding: 22px 26px; }
-        .nav-btn { font-size: 1rem; padding: 0.35rem 0.7rem; }
-
-        .logout-link {
-            position: fixed; top: 18px; right: 22px;
-            display: flex; align-items: center; gap: 6px;
-            font-size: 0.85rem; color: rgba(255,255,255,0.55); text-decoration: none;
-        }
-        .logout-link a { color: inherit; text-decoration: none; }
-        .logout-link a:hover { color: #fff; }
-
         /* ── Search panel ─────────────────────────────────── */
         .search-card { max-width: 620px; margin: 0 auto 28px; }
         .search-card .card-body { padding: 20px 26px 22px; }
         .search-heading {
             text-align: center; font-weight: 700; font-size: 1.05rem;
-            color: #0d3d5f; margin-bottom: 14px;
+            color: var(--c-text-heading); margin-bottom: 14px;
         }
         /* Number-plate styled VRM box, as on the CAP screen */
         #vrmInput {
@@ -48,11 +43,11 @@
         #vrmInput:focus { background: #f5d300; border-color: #b39a00; box-shadow: 0 0 0 0.2rem rgba(245,211,0,0.35); }
         #mileageInput { height: 52px; font-size: 1.05rem; text-align: center; }
         .btn-search {
-            background-color: #7ed321; border: none; color: #0d3d5f;
+            background-color: var(--c-primary); border: 1px solid var(--c-primary); color: var(--c-surface);
             font-weight: 700; font-size: 1rem; height: 52px; width: 100%;
-            border-radius: 8px; transition: background 0.15s;
+            border-radius: var(--radius-md); transition: background 0.15s;
         }
-        .btn-search:hover { background-color: #6cba18; color: #0d3d5f; }
+        .btn-search:hover { background-color: var(--c-primary-hover); border-color: var(--c-primary-hover); color: var(--c-surface); }
         .btn-search:disabled { opacity: 0.6; cursor: not-allowed; }
 
         /* ── Results list ─────────────────────────────────── */
@@ -60,32 +55,32 @@
             display: flex; align-items: center; justify-content: space-between;
             margin-bottom: 12px;
         }
-        .list-title { color: #fff; font-weight: 600; font-size: 1.05rem; }
-        .list-count { color: rgba(255,255,255,0.55); font-size: 0.85rem; font-weight: 400; margin-left: 8px; }
-        .list-note { display: block; color: rgba(255,255,255,0.45); font-size: 0.78rem; font-weight: 400; }
+        .list-title { color: var(--c-text-heading); font-weight: 600; font-size: 1.05rem; }
+        .list-count { color: var(--c-text-muted); font-size: 0.85rem; font-weight: 400; margin-left: 8px; }
+        .list-note { display: block; color: var(--c-text-muted); font-size: 0.78rem; font-weight: 400; }
         .stale-mark { color: #ffc107; margin-right: 5px; }
 
         .result-row {
             display: grid;
             grid-template-columns: 150px minmax(230px, 1fr) repeat(3, 104px) 88px 150px 76px 8px;
             align-items: center; gap: 14px;
-            background: #fff; border-radius: 10px;
+            background: var(--c-surface); border: 1px solid var(--c-border); border-radius: var(--radius-lg);
             padding: 12px 16px; margin-bottom: 8px;
             cursor: pointer; transition: box-shadow 0.12s, transform 0.12s;
-            box-shadow: 0 2px 10px rgba(0,0,0,0.13);
+            box-shadow: none;
         }
-        .result-row:hover { box-shadow: 0 5px 18px rgba(0,0,0,0.24); transform: translateY(-1px); }
+        .result-row:hover { background: var(--c-surface-alt); border-color: var(--c-control-border); transform: translateY(-1px); }
         .result-row.is-new { animation: rowFlash 0.9s ease-out 1; }
-        @keyframes rowFlash { 0% { background: #dbeeff; } 100% { background: #fff; } }
+        @keyframes rowFlash { 0% { background: var(--c-table-header-bg); } 100% { background: var(--c-surface); } }
 
         .cell-label { font-size: 0.66rem; font-weight: 700; color: #adb5bd;
                       text-transform: uppercase; letter-spacing: 0.4px; }
-        .cell-value { font-size: 0.95rem; font-weight: 700; color: #0d3d5f;
+        .cell-value { font-size: 0.95rem; font-weight: 700; color: var(--c-text-heading);
                       font-variant-numeric: tabular-nums; line-height: 1.25; }
         .cell-value.sm { font-size: 0.86rem; font-weight: 600; }
         .cell-value.muted { color: #ced4da; font-weight: 600; }
         .cell-value.pos { color: #146c43; }
-        .cell-value.neg { color: #b02a37; }
+        .cell-value.neg { color: var(--c-text-danger); }
 
         .plate {
             background: #f5d300; color: #111; font-weight: 700; letter-spacing: 1.2px;
@@ -95,7 +90,7 @@
         .plate.lg { font-size: 1.2rem; letter-spacing: 1.8px; padding: 6px 18px; display: inline-block; }
         .row-when { font-size: 0.68rem; color: #adb5bd; text-align: center; margin-top: 3px; }
 
-        .row-desc { font-size: 0.95rem; font-weight: 600; color: #212529;
+        .row-desc { font-size: 0.95rem; font-weight: 600; color: var(--c-dark);
                     overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
         .row-sub { font-size: 0.76rem; color: #868e96;
                    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -104,7 +99,7 @@
             background: none; border: none; color: #dee2e6; font-size: 1rem;
             padding: 4px; line-height: 1; border-radius: 4px;
         }
-        .row-del:hover { color: #b02a37; background: #f8d7da; }
+        .row-del:hover { color: var(--c-text-danger); background: #f8d7da; }
 
         .tags { display: flex; gap: 4px; flex-wrap: wrap; }
         .tag {
@@ -117,126 +112,11 @@
         .tag.on-cb   { background: #fff3cd; color: #664d03; }
 
         .empty-state {
-            background: rgba(255,255,255,0.06); border: 1px dashed rgba(255,255,255,0.22);
-            border-radius: 12px; padding: 44px 20px; text-align: center;
-            color: rgba(255,255,255,0.6); font-size: 0.95rem;
+            background: var(--c-surface-alt); border: 1px dashed var(--c-border);
+            border-radius: var(--radius-lg); padding: 44px 20px; text-align: center;
+            color: var(--c-text-muted); font-size: 0.95rem;
         }
         .empty-state i { font-size: 1.8rem; display: block; margin-bottom: 10px; opacity: 0.5; }
-
-        /* ── Modal ────────────────────────────────────────── */
-        .modal-backdrop-av { position: fixed; inset: 0; background: rgba(0,0,0,0.45); z-index: 1000; }
-        .av-modal {
-            position: fixed; top: 5vh; left: 50%; transform: translateX(-50%);
-            z-index: 1001; background: #f4f7fa; border-radius: 12px;
-            box-shadow: 0 12px 48px rgba(0,0,0,0.35);
-            width: 1180px; max-width: 94vw; max-height: 90vh;
-            display: flex; flex-direction: column; overflow: hidden;
-        }
-        .av-modal-header {
-            display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
-            padding: 16px 22px; background: #fff;
-            border-bottom: 1px solid #e5e9ee; flex-shrink: 0;
-        }
-        .av-modal-close {
-            background: none; border: none; font-size: 26px; line-height: 1;
-            cursor: pointer; color: #adb5bd; padding: 0 4px; margin-left: auto;
-        }
-        .av-modal-close:hover { color: #212529; }
-        .av-modal-body { padding: 20px 22px 24px; overflow-y: auto; flex: 1 1 auto; }
-
-        .section-title {
-            font-size: 0.78rem; font-weight: 700; text-transform: uppercase;
-            letter-spacing: 0.6px; color: #6c757d;
-            padding-bottom: 8px; margin-bottom: 14px; border-bottom: 2px solid #e9eef3;
-            display: flex; align-items: center; justify-content: space-between;
-        }
-        .section-title .src { font-weight: 600; text-transform: none; letter-spacing: 0; font-size: 0.72rem; color: #adb5bd; }
-
-        .kv { display: flex; justify-content: space-between; align-items: baseline;
-              padding: 6px 0; border-bottom: 1px solid #f1f4f7; gap: 12px; }
-        .kv:last-child { border-bottom: none; }
-        .kv .k { font-size: 0.82rem; color: #6c757d; white-space: nowrap; }
-        .kv .v { font-size: 0.92rem; font-weight: 600; color: #212529; text-align: right; }
-        .kv .v.mono { font-variant-numeric: tabular-nums; }
-        .kv .v.pos { color: #146c43; }
-        .kv .v.neg { color: #b02a37; }
-
-        .val-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 12px; }
-        .val-box { background: #f6f9fc; border-radius: 8px; padding: 10px 12px; }
-        .val-box .vb-label { font-size: 0.7rem; font-weight: 700; color: #6c757d;
-                             text-transform: uppercase; letter-spacing: 0.4px; }
-        .val-box .vb-value { font-size: 1.15rem; font-weight: 700; color: #0d3d5f;
-                             font-variant-numeric: tabular-nums; margin-top: 2px; }
-        .val-box.accent { background: #e8f4ff; }
-        .val-box.accent .vb-value { color: #084298; }
-
-        .stat-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
-        .stat { background: #f6f9fc; border-radius: 8px; padding: 12px 10px; text-align: center; }
-        .stat .s-label { font-size: 0.68rem; font-weight: 700; color: #6c757d;
-                         text-transform: uppercase; letter-spacing: 0.3px; line-height: 1.25; }
-        .stat .s-value { font-size: 1.45rem; font-weight: 700; color: #0d3d5f;
-                         font-variant-numeric: tabular-nums; margin-top: 4px; line-height: 1.1; }
-        .stat.pos .s-value { color: #146c43; }
-        .stat.neg .s-value { color: #b02a37; }
-        .stat.hl { background: #e8f4ff; }
-
-        .presence-row { display: flex; gap: 10px; flex-wrap: wrap; }
-        .presence {
-            display: flex; align-items: center; gap: 8px;
-            border-radius: 8px; padding: 9px 14px; font-size: 0.85rem; font-weight: 600;
-            background: #f1f3f5; color: #868e96;
-        }
-        .presence.on { background: #d1e7dd; color: #0f5132; }
-
-        .rating-pill { display: inline-block; padding: 2px 10px; border-radius: 20px;
-                       font-weight: 700; font-size: 0.9rem; }
-        .rating-a { background: #d1e7dd; color: #0f5132; }
-        .rating-b { background: #e2f0d9; color: #375623; }
-        .rating-c { background: #fff3cd; color: #664d03; }
-        .rating-d { background: #ffe0cc; color: #8a4b18; }
-        .rating-e { background: #f8d7da; color: #842029; }
-
-        /* Stale / stored-data banner */
-        .stale-banner {
-            display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
-            border-radius: 10px; padding: 11px 16px; margin-bottom: 14px;
-            font-size: 0.88rem; font-weight: 600;
-        }
-        .stale-banner.warn  { background: #fff3cd; color: #664d03; }
-        .stale-banner.fresh { background: #e8f4ff; color: #084298; }
-        .stale-banner .btn-update {
-            margin-left: auto; background: #0d6efd; border: none; color: #fff;
-            font-weight: 700; font-size: 0.82rem; padding: 6px 14px; border-radius: 6px;
-        }
-        .stale-banner.warn .btn-update { background: #a97a00; }
-        .stale-banner .btn-update:hover { filter: brightness(1.1); }
-        .stale-banner .btn-update:disabled { opacity: 0.6; cursor: not-allowed; }
-
-        /* Check history table */
-        .checks-table { width: 100%; font-size: 0.83rem; }
-        .checks-table th {
-            font-size: 0.68rem; font-weight: 700; color: #6c757d;
-            text-transform: uppercase; letter-spacing: 0.3px;
-            padding: 6px 10px; border-bottom: 2px solid #e9eef3; white-space: nowrap;
-        }
-        .checks-table td {
-            padding: 7px 10px; border-bottom: 1px solid #f1f4f7;
-            font-variant-numeric: tabular-nums; white-space: nowrap;
-        }
-        .checks-table tbody tr:last-child td { border-bottom: none; }
-        .checks-table .num { text-align: right; }
-        .src-badge {
-            font-size: 0.65rem; font-weight: 700; text-transform: uppercase;
-            letter-spacing: 0.3px; padding: 2px 7px; border-radius: 4px;
-        }
-        .src-manual    { background: #cfe2ff; color: #084298; }
-        .src-evaluator { background: #e2e3e5; color: #41464b; }
-
-        .empty-hint { color: #adb5bd; font-size: 0.88rem; text-align: center; padding: 28px 0; }
-        .err-box { background: #f8d7da; color: #842029; border-radius: 8px;
-                   padding: 10px 14px; font-size: 0.85rem; font-weight: 600; }
-        .veh-desc { font-size: 1.05rem; font-weight: 700; color: #212529; }
-        .veh-sub  { font-size: 0.85rem; color: #6c757d; }
 
         @media (max-width: 1250px) {
             .result-row { grid-template-columns: 140px 1fr repeat(3, 100px) 8px; }
@@ -249,11 +129,7 @@
     </style>
 </head>
 <body>
-    <div class="logout-link">
-        <span>{{ user }}</span>
-        <span>·</span>
-        <a href="{{ BASE_URL }}/logout"><i class="fas fa-sign-out-alt"></i> Logout</a>
-    </div>
+    {{ account_nav(user) }}
 
     <div class="page-wrap">
         <div class="d-flex align-items-center gap-3 mb-4">
@@ -261,9 +137,6 @@
             <h1 class="page-title mb-0">Assess Vehicle</h1>
             <a href="javascript:history.back()" class="btn btn-outline-secondary nav-btn">
                 <i class="fas fa-arrow-left me-1"></i>Back
-            </a>
-            <a href="{{ BASE_URL }}/home" class="btn btn-outline-secondary nav-btn">
-                <i class="fas fa-home me-1"></i>Home
             </a>
         </div>
 
@@ -297,150 +170,56 @@
                 <span class="list-note">Every vehicle checked by a supplier list or a manual lookup</span>
             </div>
             <div class="d-flex align-items-center gap-2">
-                <select id="daysSelect" class="form-select form-select-sm" style="width:auto;"
-                        onchange="loadRecent()">
-                    <option value="7">Last 7 days</option>
-                    <option value="30" selected>Last 30 days</option>
-                    <option value="90">Last 90 days</option>
+                <span class="text-muted small">Last 30 days</span>
+                <button class="btn btn-sm btn-outline-secondary" id="prevPageBtn"
+                        onclick="loadRecent(currentPage - 1)" title="Previous page" disabled>
+                    <i class="fas fa-chevron-left"></i>
+                </button>
+                <select id="pageSelect" class="form-select form-select-sm" style="width:auto;"
+                        onchange="loadRecent(this.value)" aria-label="History page">
+                    <option value="1">Page 1</option>
                 </select>
-                <button class="btn btn-sm btn-outline-light" onclick="loadRecent()" title="Refresh">
+                <span class="text-muted small" id="pageTotal">of 1</span>
+                <button class="btn btn-sm btn-outline-secondary" id="nextPageBtn"
+                        onclick="loadRecent(currentPage + 1)" title="Next page" disabled>
+                    <i class="fas fa-chevron-right"></i>
+                </button>
+                <button class="btn btn-sm btn-outline-secondary" id="refreshBtn"
+                        onclick="loadRecent(currentPage)" title="Refresh">
                     <i class="fas fa-sync-alt"></i>
                 </button>
             </div>
         </div>
         <div id="resultsList"></div>
-        <div class="empty-state" id="emptyState">
+        <!-- Shown until the first load finishes, so the list never looks empty
+             when it is really still loading. -->
+        <div class="empty-state" id="loadingState">
+            <i class="fas fa-spinner fa-spin"></i>
+            Loading recent checks...
+        </div>
+        <div class="empty-state" id="errorState" style="display:none;"></div>
+        <div class="empty-state" id="emptyState" style="display:none;">
             <i class="fas fa-car-side"></i>
             No vehicles checked in this period. Enter a registration and mileage above to assess a vehicle.
         </div>
     </div>
 
-    <!-- Vehicle popup -->
-    <div id="avBackdrop" class="modal-backdrop-av" style="display:none;" onclick="closeModal()"></div>
-    <div id="avModal" class="av-modal" style="display:none;" role="dialog" aria-modal="true">
-        <div class="av-modal-header">
-            <span class="plate lg" id="hdrVrm"></span>
-            <div>
-                <div class="veh-desc" id="hdrDesc"></div>
-                <div class="veh-sub" id="hdrSub"></div>
-            </div>
-            <button class="av-modal-close" onclick="closeModal()" aria-label="Close">&times;</button>
-        </div>
-        <div class="av-modal-body">
-            <div id="staleBanner" class="stale-banner" style="display:none;"></div>
-            <div class="card mb-3">
-                <div class="card-body">
-                    <div class="presence-row" id="presenceRow"></div>
-                    <div id="presenceDetail" class="mt-3"></div>
-                </div>
-            </div>
-            <div class="row g-3 align-items-stretch">
-                <div class="col-12 col-lg-4">
-                    <div class="card h-100"><div class="card-body">
-                        <div class="section-title">CAP <span class="src">CAP API</span></div>
-                        <div id="capBody"></div>
-                    </div></div>
-                </div>
-                <div class="col-12 col-lg-4">
-                    <div class="card h-100"><div class="card-body">
-                        <div class="section-title">Autotrader <span class="src">Autotrader API</span></div>
-                        <div id="atBody"></div>
-                    </div></div>
-                </div>
-                <div class="col-12 col-lg-4">
-                    <div class="card h-100"><div class="card-body">
-                        <div class="section-title">Buying Requirements <span class="src" id="brBand"></span></div>
-                        <div id="brBody"></div>
-                    </div></div>
-                </div>
-            </div>
-
-            <!-- Every check for this VRM, from supplier lists and manual lookups -->
-            <div class="card mt-3">
-                <div class="card-body">
-                    <div class="section-title">
-                        Check History
-                        <span class="src">Supplier lists and manual checks</span>
-                    </div>
-                    <div id="checksBody"></div>
-                </div>
-            </div>
-        </div>
-    </div>
-
     <script>
         window.BASE_URL = "{{ BASE_URL }}";
-
-        const $ = id => document.getElementById(id);
+    </script>
+    <script src="{{ static_url('js/assess_vehicle.js') }}"></script>
+    <script>
         let history_ = [];
-
-        /* ── Formatting helpers ──────────────────────────── */
-        function money(v) {
-            if (v == null || v === '') return '—';
-            const n = Number(v);
-            // Sign before the symbol: -£1,234, never £-1,234.
-            return isNaN(n) ? '—' : (n < 0 ? '-£' : '£') + Math.abs(n).toLocaleString('en-GB', {maximumFractionDigits: 0});
-        }
-        function num(v, dp) {
-            if (v == null || v === '') return '—';
-            const n = Number(v);
-            return isNaN(n) ? '—' : n.toLocaleString('en-GB',
-                {minimumFractionDigits: dp || 0, maximumFractionDigits: dp || 0});
-        }
-        function txt(v) { return (v == null || v === '') ? '—' : String(v); }
-        function esc(s) {
-            return String(s ?? '').replace(/[&<>"']/g, c =>
-                ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-        }
-        function kv(label, value, cls) {
-            return `<div class="kv"><span class="k">${esc(label)}</span>` +
-                   `<span class="v ${cls || ''}">${value}</span></div>`;
-        }
-        function valBox(label, value, accent) {
-            return `<div class="val-box ${accent ? 'accent' : ''}">` +
-                   `<div class="vb-label">${esc(label)}</div><div class="vb-value">${value}</div></div>`;
-        }
-        function stat(label, value, cls) {
-            return `<div class="stat ${cls || ''}"><div class="s-label">${esc(label)}</div>` +
-                   `<div class="s-value">${value}</div></div>`;
-        }
-        function bandLabel(b) { return b === 'interest_free' ? '0%' : (b || '—'); }
-
-        function describe(d) {
-            const at = d.autotrader || {}, cap = d.cap || {};
-            return [at.make, at.model, at.derivative].filter(Boolean).join(' ')
-                || at.description
-                || [cap.make, cap.model, cap.derivative].filter(Boolean).join(' ')
-                || 'Vehicle not identified';
-        }
+        let currentPage = 1;
+        let totalPages = 1;
+        let totalChecks = 0;
+        let pageSize = 10;
 
         /* ── Lookup ──────────────────────────────────────── */
-        // The lookup endpoint always answers with JSON. An HTML reply means the
-        // request never got there — usually a redirect to the login page after
-        // the session expired. Parsing that as JSON gives "Unexpected token '<'",
-        // which tells you nothing, so say what actually happened.
-        function parseJsonOrExplain(r, body) {
-            const trimmed = (body || '').trim();
-            try {
-                return JSON.parse(trimmed);
-            } catch (e) {
-                if (trimmed.startsWith('<')) {
-                    throw new Error(`Got a web page instead of data (HTTP ${r.status}) — your session has probably expired. Reload the page and try again.`);
-                }
-                throw new Error(`Unexpected reply from the server (HTTP ${r.status}). Check the terminal for the error.`);
-            }
-        }
-
-        function jsonFetch(url, options) {
-            return fetch(url, options)
-                .then(r => r.text().then(body => ({r, body})))
-                .then(({r, body}) => {
-                    const data = parseJsonOrExplain(r, body);
-                    if (!r.ok) throw new Error(data.detail || `Request failed (HTTP ${r.status}).`);
-                    return data;
-                });
-        }
-
+        // A search runs the lookup, then hands over to the vehicle page. The
+        // POST has to happen first because it may call the APIs and write to
+        // the store; once it has, the vehicle page is a plain GET that reads
+        // back what was saved.
         function doLookup() {
             const vrm = $('vrmInput').value.trim().toUpperCase().replace(/\s+/g, '');
             const mileage = parseInt($('mileageInput').value, 10);
@@ -455,17 +234,16 @@
                 headers: {'Content-Type': 'application/json'},
                 body: JSON.stringify({vrm, mileage})
             })
-            .then(data => {
-                setStatus('');
-                $('vrmInput').value = '';
-                $('mileageInput').value = '';
-                $('vrmInput').focus();
-                history_ = data.history || [];
-                renderList(vrm);
-                openModal(data.result);
-            })
-            .catch(err => setStatus(esc(err.message), true))
-            .finally(() => { $('lookupBtn').disabled = false; });
+            .then(() => { goToVehicle(vrm, mileage); })
+            .catch(err => {
+                setStatus(esc(err.message), true);
+                $('lookupBtn').disabled = false;
+            });
+        }
+
+        function goToVehicle(vrm, mileage) {
+            window.location.href = BASE_URL + '/assess-vehicle/vehicle/'
+                + encodeURIComponent(vrm) + '?mileage=' + encodeURIComponent(mileage);
         }
 
         function setStatus(html, isError) {
@@ -474,16 +252,58 @@
         }
 
         /* ── Results list ────────────────────────────────── */
-        function loadRecent() {
-            const days = $('daysSelect').value;
-            jsonFetch(BASE_URL + '/assess-vehicle/history?days=' + encodeURIComponent(days))
-                .then(d => { history_ = d.history || []; renderList(); })
-                .catch(() => { history_ = []; renderList(); });
+        function loadRecent(page = 1) {
+            page = Math.max(1, Number(page) || 1);
+            // Clear the old rows first — leaving them up while a different date
+            // range loads makes it look like the change did nothing.
+            $('resultsList').innerHTML = '';
+            $('listCount').textContent = '';
+            $('emptyState').style.display = 'none';
+            $('errorState').style.display = 'none';
+            $('loadingState').style.display = '';
+
+            jsonFetch(BASE_URL + '/assess-vehicle/history?page=' + encodeURIComponent(page))
+                .then(d => {
+                    history_ = d.history || [];
+                    currentPage = Number(d.page) || 1;
+                    totalPages = Number(d.total_pages) || 1;
+                    totalChecks = Number(d.total) || 0;
+                    pageSize = Number(d.page_size) || 10;
+                    $('loadingState').style.display = 'none';
+                    renderList();
+                    renderPagination();
+                })
+                .catch(err => {
+                    history_ = [];
+                    $('loadingState').style.display = 'none';
+                    // A failure is not the same as having no vehicles — say so
+                    // rather than showing the "nothing checked yet" message.
+                    $('errorState').innerHTML =
+                        '<i class="fas fa-triangle-exclamation"></i>' +
+                        'Could not load recent checks. ' + esc(err.message) +
+                        '<div class="mt-3"><button class="btn btn-sm btn-outline-secondary" ' +
+                        'onclick="loadRecent(currentPage)"><i class="fas fa-sync-alt me-1"></i>Try again</button></div>';
+                    $('errorState').style.display = '';
+                });
+        }
+
+        function renderPagination() {
+            const select = $('pageSelect');
+            select.innerHTML = Array.from({length: totalPages}, (_, i) =>
+                `<option value="${i + 1}"${i + 1 === currentPage ? ' selected' : ''}>Page ${i + 1}</option>`
+            ).join('');
+            $('pageTotal').textContent = 'of ' + totalPages;
+            $('prevPageBtn').disabled = currentPage <= 1;
+            $('nextPageBtn').disabled = currentPage >= totalPages;
         }
 
         function renderList(newVrm) {
             const list = $('resultsList');
-            $('listCount').textContent = history_.length ? `(${history_.length})` : '';
+            const first = totalChecks ? ((currentPage - 1) * pageSize) + 1 : 0;
+            const last = Math.min(currentPage * pageSize, totalChecks);
+            $('listCount').textContent = totalChecks ? `(${first}-${last} of ${totalChecks})` : '';
+            // Only reached after a successful load, so an empty list here really
+            // does mean no vehicles were checked in this period.
             $('emptyState').style.display = history_.length ? 'none' : '';
 
             list.innerHTML = history_.map(d => {
@@ -495,7 +315,7 @@
                     ? '<i class="fas fa-triangle-exclamation stale-mark" title="Over 24 hours old"></i>' : '';
                 return `
                 <div class="result-row ${d.vrm === newVrm ? 'is-new' : ''}"
-                     onclick="openFromHistory('${esc(d.vrm)}', ${d.mileage || 0})">
+                     onclick="goToVehicle('${esc(d.vrm)}', ${d.mileage || 0})">
                     <div>
                         <span class="plate">${esc(d.vrm)}</span>
                         <div class="row-when">${staleIcon}${esc(d.looked_up || '')}</div>
@@ -535,270 +355,6 @@
                     <div></div>
                 </div>`;
             }).join('');
-        }
-
-        // Rows carry only summary figures, so the full popup is rebuilt from the
-        // store on demand — no API calls, whichever check produced the data.
-        function openFromHistory(vrm, mileage) {
-            setStatus('<i class="fas fa-spinner fa-spin me-1"></i>Loading ' + esc(vrm) + '...');
-            jsonFetch(BASE_URL + '/assess-vehicle/lookup/' + encodeURIComponent(vrm)
-                      + '?mileage=' + encodeURIComponent(mileage))
-                .then(d => { setStatus(''); openModal(d.result); })
-                .catch(err => setStatus(esc(err.message), true));
-        }
-
-        /* ── Modal ───────────────────────────────────────── */
-        function openModal(d) {
-            const cap = d.cap || {}, at = d.autotrader || {}, br = d.buying || {}, p = d.presence || {};
-
-            $('hdrVrm').textContent = d.vrm;
-            $('hdrDesc').textContent = describe(d);
-            const subParts = [];
-            if (d.mileage) subParts.push(num(d.mileage) + ' miles');
-            if (cap.cap_id) subParts.push('CAP ID ' + cap.cap_id);
-            if (cap.registered) subParts.push('Reg ' + cap.registered);
-            if (d.looked_up) subParts.push('Valued ' + d.looked_up);
-            $('hdrSub').textContent = subParts.join('  ·  ');
-
-            renderProvenance(d);
-            renderPresence(p);
-            renderCap(cap);
-            renderAt(at);
-            renderBr(br, cap);
-            renderChecks(d.checks || []);
-
-            $('avBackdrop').style.display = '';
-            $('avModal').style.display = '';
-        }
-
-        // Says where the figures came from. Data pulled from the store is shown
-        // as-is; once past 24 hours it is flagged with an Update button that
-        // forces a fresh CAP/Autotrader call.
-        function renderProvenance(d) {
-            const pr = d.provenance || {};
-            const el = $('staleBanner');
-            if (!pr.fetched_at) { el.style.display = 'none'; return; }
-
-            const srcLabel = pr.source === 'manual'
-                ? ('Manual check' + (pr.checked_by ? ' by ' + pr.checked_by : ''))
-                : 'Supplier list check';
-
-            if (!pr.from_store) {
-                el.style.display = 'none';
-                return;
-            }
-
-            const age = pr.age_hours == null ? '' : ageText(pr.age_hours);
-            el.className = 'stale-banner ' + (pr.is_stale ? 'warn' : 'fresh');
-
-            // CAP and Autotrader refresh their valuations overnight, so a second
-            // call on the same calendar day returns the same figures. No point
-            // paying for it — the button only becomes available tomorrow.
-            const updateBtn = pr.valued_today
-                ? `<button class="btn-update" disabled` +
-                  ` title="Valuations only change overnight — already valued today">` +
-                  `<i class="fas fa-rotate me-1"></i>Update</button>`
-                : `<button class="btn-update" onclick="updateVehicle('${esc(d.vrm)}', ${d.mileage})">` +
-                  `<i class="fas fa-rotate me-1"></i>Update</button>`;
-
-            el.innerHTML =
-                `<i class="fas fa-${pr.is_stale ? 'triangle-exclamation' : 'clock'}"></i>` +
-                `<span>${pr.is_stale ? 'This data is ' + age + ' old' : 'Existing data from ' + age + ' ago'}` +
-                ` — ${esc(srcLabel)}, ${esc(pr.fetched_at)}.` +
-                `${pr.valued_today ? ' Already valued today.' : ''}</span>` +
-                updateBtn;
-            el.style.display = '';
-        }
-
-        function ageText(hours) {
-            if (hours == null) return '';
-            if (hours < 1) return Math.max(1, Math.round(hours * 60)) + ' min';
-            if (hours < 48) return Math.round(hours) + ' hr';
-            return Math.round(hours / 24) + ' days';
-        }
-
-        function updateVehicle(vrm, mileage) {
-            const btn = document.querySelector('#staleBanner .btn-update');
-            if (btn) { btn.disabled = true; btn.innerHTML = '<i class="fas fa-spinner fa-spin me-1"></i>Updating...'; }
-            jsonFetch(BASE_URL + '/assess-vehicle/lookup', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({vrm, mileage, force: true})
-            })
-            .then(data => {
-                history_ = data.history || history_;
-                renderList(vrm);
-                openModal(data.result);
-            })
-            .catch(err => {
-                if (btn) { btn.disabled = false; btn.innerHTML = '<i class="fas fa-rotate me-1"></i>Update'; }
-                alert('Update failed: ' + err.message);
-            });
-        }
-
-        function renderChecks(checks) {
-            if (!checks.length) {
-                $('checksBody').innerHTML =
-                    '<div class="empty-hint">No previous checks recorded for this vehicle.</div>';
-                return;
-            }
-            const rows = checks.map(c => {
-                const badge = c.source === 'manual'
-                    ? '<span class="src-badge src-manual">Manual</span>'
-                    : '<span class="src-badge src-evaluator">Evaluator</span>';
-                const who = c.source === 'manual'
-                    ? (c.by || '—')
-                    : (c.supplier || '—');
-                return `<tr>
-                    <td>${esc(c.when || '—')}</td>
-                    <td>${badge}</td>
-                    <td>${esc(who)}</td>
-                    <td class="num">${num(c.mileage)}</td>
-                    <td class="num">${money(c.cap_clean)}</td>
-                    <td class="num">${money(c.cap_retail)}</td>
-                    <td class="num">${money(c.at_retail)}</td>
-                    <td class="num">${c.at_rating == null ? '—' : num(c.at_rating, 1)}</td>
-                </tr>`;
-            }).join('');
-            $('checksBody').innerHTML = `
-                <div style="overflow-x:auto;">
-                <table class="checks-table">
-                    <thead><tr>
-                        <th>When</th><th>Type</th><th>By / Supplier</th>
-                        <th class="num">Mileage</th>
-                        <th class="num">CAP Clean</th><th class="num">CAP Retail</th>
-                        <th class="num">AT Retail</th><th class="num">AT Rating</th>
-                    </tr></thead>
-                    <tbody>${rows}</tbody>
-                </table></div>`;
-        }
-
-        function closeModal() {
-            $('avBackdrop').style.display = 'none';
-            $('avModal').style.display = 'none';
-        }
-
-        document.addEventListener('keydown', e => {
-            if (e.key === 'Escape' && $('avModal').style.display !== 'none') closeModal();
-        });
-
-        function renderPresence(p) {
-            const badge = (on, label) =>
-                `<div class="presence ${on ? 'on' : ''}">` +
-                `<i class="fas fa-${on ? 'check-circle' : 'circle-xmark'}"></i>` +
-                `<span>${esc(label)}</span></div>`;
-
-            $('presenceRow').innerHTML =
-                badge(!!p.apex, 'Apex' + (p.apex ? '' : ' — not found')) +
-                badge(!!p.dbs, 'Daily Buyers Sheet' + (p.dbs ? '' : ' — not found')) +
-                badge(!!p.cb, 'Cars Bought' + (p.cb ? '' : ' — not found'));
-
-            const blocks = [];
-            if (p.apex) {
-                blocks.push(['Apex', [
-                    kv('Status', txt(p.apex.vehicle_status)),
-                    kv('Supplier', txt(p.apex.supplier)),
-                    kv('Location', txt(p.apex.location)),
-                    kv('Price band', bandLabel(p.apex.price_band)),
-                    kv('Purchase price', money(p.apex.purchase_price), 'mono'),
-                    kv('Selling price', money(p.apex.selling_price), 'mono'),
-                ].join('')]);
-            }
-            if (p.dbs) {
-                blocks.push(['Daily Buyers Sheet', [
-                    kv('Supplier', txt(p.dbs.supplier)),
-                    kv('Price band', bandLabel(p.dbs.band)),
-                    kv('SIV', money(p.dbs.siv), 'mono'),
-                    kv('RRP', money(p.dbs.rrp), 'mono'),
-                    kv('Date of registration', txt(p.dbs.dor)),
-                ].join('')]);
-            }
-            if (p.cb) {
-                blocks.push(['Cars Bought', [
-                    kv('Supplier', txt(p.cb.supplier)),
-                    kv('Price band', bandLabel(p.cb.band)),
-                    kv('SIV', money(p.cb.siv), 'mono'),
-                    kv('RRP', money(p.cb.rrp), 'mono'),
-                    kv('Date of registration', txt(p.cb.dor)),
-                ].join('')]);
-            }
-
-            $('presenceDetail').innerHTML = blocks.length
-                ? '<div class="row g-3">' + blocks.map(([title, html]) =>
-                    `<div class="col-12 col-md-4"><div class="section-title">${esc(title)}</div>${html}</div>`
-                  ).join('') + '</div>'
-                : '';
-        }
-
-        function renderCap(cap) {
-            if (cap.error) { $('capBody').innerHTML = `<div class="err-box">${esc(cap.error)}</div>`; return; }
-            if (!cap.cap_id && cap.note) { $('capBody').innerHTML = `<div class="err-box">${esc(cap.note)}</div>`; return; }
-            $('capBody').innerHTML =
-                kv('VIN', txt(cap.vin), 'mono') +
-                kv('CAP ID', txt(cap.cap_id), 'mono') +
-                kv('Make', txt(cap.make)) +
-                kv('Model', txt(cap.model)) +
-                kv('Derivative', txt(cap.derivative)) +
-                '<div class="val-grid">' +
-                    valBox('Clean Live',   money(cap.live_clean), true) +
-                    valBox('Clean Month',  money(cap.monthly_clean)) +
-                    valBox('Retail Live',  money(cap.live_retail)) +
-                    valBox('Retail Month', money(cap.monthly_retail)) +
-                '</div>';
-        }
-
-        function renderAt(at) {
-            if (at.error) { $('atBody').innerHTML = `<div class="err-box">${esc(at.error)}</div>`; return; }
-            if (!at.found) { $('atBody').innerHTML = '<div class="empty-hint">Vehicle not found on Autotrader.</div>'; return; }
-            const r = at.retail_rating;
-            const ratingHtml = r ? `<span class="rating-pill rating-${String(r).toLowerCase()}">${esc(r)}</span>` : '—';
-            // Stored rows keep one description rather than separate make/model/
-            // derivative, so show whichever shape this result has.
-            const idRows = at.make
-                ? kv('Make', txt(at.make)) + kv('Model', txt(at.model)) + kv('Derivative', txt(at.derivative))
-                : kv('Vehicle', txt(at.description || at.derivative));
-            $('atBody').innerHTML =
-                kv('VIN', txt(at.vin), 'mono') +
-                idRows +
-                kv('Retail rating', ratingHtml) +
-                '<div class="val-grid">' +
-                    valBox('Retail Valuation', money(at.retail_valuation), true) +
-                    valBox('Days to Sell', num(at.days_to_sell)) +
-                '</div>';
-        }
-
-        function renderBr(br, cap) {
-            if (!cap.cap_id) {
-                $('brBody').innerHTML = '<div class="empty-hint">No CAP ID, so buying requirements cannot be matched.</div>';
-                $('brBand').textContent = ''; return;
-            }
-            if (br.error) { $('brBody').innerHTML = `<div class="err-box">${esc(br.error)}</div>`; return; }
-            if (!br.found) {
-                $('brBody').innerHTML = '<div class="empty-hint">This CAP ID has no rows in buying requirements.</div>';
-                $('brBand').textContent = ''; return;
-            }
-
-            $('brBand').textContent = 'Band ' + bandLabel(br.price_band);
-            const reqCls = br.required > 0 ? 'pos' : (br.required < 0 ? 'neg' : '');
-            const remCls = br.remaining > 0 ? 'pos' : (br.remaining < 0 ? 'neg' : '');
-
-            $('brBody').innerHTML =
-                '<div class="stat-grid mb-2">' +
-                    stat('Total Stock',   num(br.stock)) +
-                    stat('Stock on Sale', num(br.stock_on_sale)) +
-                    stat('90d Sales',     num(br.sales90)) +
-                    stat('30d Sales',     num(br.sales30)) +
-                '</div>' +
-                '<div class="stat-grid">' +
-                    stat('Ideal Stock',  num(br.ideal, 1), 'hl') +
-                    stat('Daily Buyers', br.dbs == null ? '—' : num(br.dbs)) +
-                    stat('Cars Bought',  br.cb == null ? '—' : num(br.cb)) +
-                    stat('Remaining to Buy', num(br.remaining, 1), remCls) +
-                '</div>' +
-                '<div class="mt-3">' +
-                    kv('Required (ideal − stock)', num(br.required, 1), 'mono ' + reqCls) +
-                    kv('Number to buy setting', num(br.number_to_buy), 'mono') +
-                '</div>';
         }
 
         $('vrmInput').addEventListener('input', function () {

@@ -2,6 +2,7 @@ import datetime
 import logging
 import re
 
+import psycopg2
 import psycopg2.extras
 
 logger = logging.getLogger(__name__)
@@ -53,10 +54,53 @@ def ensure_manual_check_columns(conn) -> None:
     """
     with conn.cursor() as cur:
         cur.execute("ALTER TABLE vehicles ADD COLUMN IF NOT EXISTS at_vin VARCHAR(20)")
+        # The chosen spec is a fact about the car, so it lives on the vehicle
+        # and is reused by every later valuation of that VRM. Autotrader
+        # resolves real VIN spec for some vehicles and not others — when it is
+        # available it seeds this column automatically (see at_vin_spec_features
+        # below); otherwise these are picked by hand.
+        cur.execute(
+            "ALTER TABLE vehicles "
+            "ADD COLUMN IF NOT EXISTS at_selected_features TEXT, "
+            "ADD COLUMN IF NOT EXISTS at_selected_features_at TIMESTAMPTZ, "
+            "ADD COLUMN IF NOT EXISTS at_selected_features_by VARCHAR(100)"
+        )
+        # What Autotrader itself reports as factory-fitted (factoryFitted: true
+        # on the VIN), kept separately from at_selected_features. The two can
+        # diverge on purpose — a VIN spec item can be un-ticked if it looks
+        # wrong, or extras added on top that VIN spec does not know about — so
+        # this column is what lets the page keep showing "this came from VIN
+        # spec" even after the buyer has turned it off.
+        cur.execute(
+            "ALTER TABLE vehicles "
+            "ADD COLUMN IF NOT EXISTS at_vin_spec_features TEXT, "
+            "ADD COLUMN IF NOT EXISTS at_vin_spec_checked_at TIMESTAMPTZ"
+        )
         cur.execute(
             "ALTER TABLE vehicle_valuations "
             "ADD COLUMN IF NOT EXISTS source VARCHAR(20) NOT NULL DEFAULT 'evaluator', "
-            "ADD COLUMN IF NOT EXISTS checked_by VARCHAR(100)"
+            "ADD COLUMN IF NOT EXISTS checked_by VARCHAR(100), "
+            # `mileage` remains the rounded cache key. Keep the supplier's or
+            # user's actual odometer reading separately for check history.
+            "ADD COLUMN IF NOT EXISTS reported_mileage INTEGER"
+        )
+        # Three different retail figures, all kept so they can be compared:
+        #   at_retail_valuation_average - average spec for the derivative. The
+        #       inline figure from /vehicles, and the baseline the Autotrader
+        #       Portal measures its "Spec: £N above/below average" against.
+        #   at_retail_valuation_base    - no extras at all (/valuations with an
+        #       empty features list). Lower than average on most cars.
+        #   at_retail_valuation_spec    - this car's chosen extras.
+        # Verified 2026-08-21 on DA66VGN: 11294 average, 11107 none, 11647 spec,
+        # reproducing the Portal's "-187" and "+353" exactly.
+        cur.execute(
+            "ALTER TABLE vehicle_valuations "
+            "ADD COLUMN IF NOT EXISTS at_retail_valuation_average INTEGER, "
+            "ADD COLUMN IF NOT EXISTS at_retail_valuation_base INTEGER, "
+            "ADD COLUMN IF NOT EXISTS at_retail_valuation_spec INTEGER, "
+            "ADD COLUMN IF NOT EXISTS at_spec_features TEXT, "
+            "ADD COLUMN IF NOT EXISTS at_spec_updated_at TIMESTAMPTZ, "
+            "ADD COLUMN IF NOT EXISTS at_spec_updated_by VARCHAR(100)"
         )
         cur.execute(
             "CREATE INDEX IF NOT EXISTS idx_vehicle_valuations_vrm_fetched "
@@ -67,6 +111,339 @@ def ensure_manual_check_columns(conn) -> None:
         cur.execute(
             "CREATE INDEX IF NOT EXISTS idx_vehicle_valuations_fetched "
             "ON vehicle_valuations (fetched_at DESC)"
+        )
+        # db/08_cap_images.sql is the canonical schema for this one.
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS cap_images (
+                cap_id              INTEGER         NOT NULL,
+                registration_year   SMALLINT        NOT NULL,
+                image               BYTEA,
+                content_type        VARCHAR(50),
+                width               SMALLINT,
+                height              SMALLINT,
+                not_available       BOOLEAN         NOT NULL DEFAULT FALSE,
+                fetched_at          TIMESTAMPTZ     NOT NULL DEFAULT NOW(),
+                PRIMARY KEY (cap_id, registration_year)
+            )
+            """
+        )
+        # db/09_spec_checks.sql is the canonical schema for this one.
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS vehicle_spec_checks (
+                vrm                 VARCHAR(10)     PRIMARY KEY,
+                status_code         SMALLINT        NOT NULL,
+                status_message      TEXT,
+                base_price          NUMERIC(10, 2),
+                options_price       NUMERIC(10, 2),
+                total_price         NUMERIC(10, 2),
+                options_rating      NUMERIC(3, 1),
+                options             JSONB,
+                option_count        SMALLINT,
+                optional_count      SMALLINT,
+                fetched_at          TIMESTAMPTZ     NOT NULL DEFAULT NOW(),
+                fetched_by          VARCHAR(100)
+            )
+            """
+        )
+    conn.commit()
+
+
+def fetch_selected_features(conn, vrm: str) -> list:
+    """The spec chosen for this VRM, as a list of Autotrader feature names."""
+    with conn.cursor() as cur:
+        cur.execute("SELECT at_selected_features FROM vehicles WHERE vrm = %s", (vrm,))
+        row = cur.fetchone()
+    if not row or not row[0]:
+        return []
+    return [n for n in (part.strip() for part in row[0].split('|')) if n]
+
+
+def save_selected_features(conn, vrm: str, features: list, chosen_by: str) -> None:
+    """
+    Store the spec for a VRM, replacing whatever was chosen before.
+
+    Names are joined with a pipe rather than a comma because Autotrader feature
+    names contain commas and hyphens of their own (e.g. "Tow Bar - Manually
+    Folding - Includes 13-Pin Socket").
+    """
+    joined = '|'.join(n.strip() for n in features if n and n.strip()) or None
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            UPDATE vehicles
+            SET at_selected_features    = %s,
+                at_selected_features_at = NOW(),
+                at_selected_features_by = %s
+            WHERE vrm = %s
+            """,
+            (joined, chosen_by, vrm),
+        )
+    conn.commit()
+
+
+def _split_features(joined) -> list:
+    if not joined:
+        return []
+    return [n for n in (part.strip() for part in joined.split('|')) if n]
+
+
+def fetch_vin_spec_features(conn, vrm: str) -> list:
+    """What Autotrader itself reports as factory-fitted for this VIN, if any."""
+    with conn.cursor() as cur:
+        cur.execute("SELECT at_vin_spec_features FROM vehicles WHERE vrm = %s", (vrm,))
+        row = cur.fetchone()
+    return _split_features(row[0]) if row else []
+
+
+def save_vin_spec_features(conn, vrm: str, features: list) -> None:
+    """
+    Record what Autotrader reports as factory-fitted for this VIN.
+
+    Kept separately from at_selected_features so the page can always show which
+    extras came from Autotrader's own VIN data, even after a buyer un-ticks one
+    they believe is wrong or adds extras on top that VIN spec does not cover.
+    A no-op when the vehicle has no VIN spec (features is empty) — nothing to
+    record, and this must never overwrite a previous real result with nothing.
+    """
+    if not features:
+        return
+    joined = '|'.join(n.strip() for n in features if n and n.strip()) or None
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            UPDATE vehicles
+            SET at_vin_spec_features    = %s,
+                at_vin_spec_checked_at  = NOW()
+            WHERE vrm = %s
+            """,
+            (joined, vrm),
+        )
+    conn.commit()
+
+
+def has_confirmed_spec(conn, vrm: str) -> bool:
+    """
+    Whether a spec has ever been set for this VRM — by VIN-spec seeding or a
+    manual Apply — as opposed to simply never having been looked at yet.
+
+    Used to tell "no extras, because nobody has checked" (should value at the
+    derivative's average, same as the Portal shows before a spec is entered)
+    apart from "no extras, confirmed" (should value at the no-extras base).
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT at_selected_features_at FROM vehicles WHERE vrm = %s", (vrm,)
+        )
+        row = cur.fetchone()
+    return bool(row and row[0] is not None)
+
+
+def ensure_vin_spec_seeded(conn, vrm: str, vin_features: list, chosen_by: str) -> None:
+    """
+    First-check seeding: if Autotrader has VIN spec and nothing has ever been
+    manually chosen for this VRM, use the VIN spec as the starting selection.
+
+    Only fires once per vehicle — as soon as at_selected_features_at is set
+    (whether by this seeding or a manual Apply), it is left alone. A buyer who
+    un-ticks a VIN-spec item is making a deliberate choice; this must never
+    silently re-tick it on a later check.
+    """
+    if not vin_features:
+        return
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT at_selected_features_at FROM vehicles WHERE vrm = %s", (vrm,)
+        )
+        row = cur.fetchone()
+    if row and row[0] is not None:
+        return
+    save_selected_features(conn, vrm, vin_features, chosen_by)
+
+
+def save_spec_valuation(conn, valuation_id: int, average_valuation, base_valuation,
+                        spec_valuation, features: list, updated_by: str) -> None:
+    """
+    Put the three retail figures on an existing valuation row.
+
+    Updates in place and deliberately leaves at_retail_valuation alone — that
+    stays as whatever the original check recorded, so nothing rewrites what was
+    quoted at the time.
+    """
+    joined = '|'.join(n.strip() for n in features if n and n.strip()) or None
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            UPDATE vehicle_valuations
+            SET at_retail_valuation_average = %s,
+                at_retail_valuation_base    = %s,
+                at_retail_valuation_spec    = %s,
+                at_spec_features            = %s,
+                at_spec_updated_at          = NOW(),
+                at_spec_updated_by          = %s
+            WHERE id = %s
+            """,
+            (_to_int(average_valuation), _to_int(base_valuation),
+             _to_int(spec_valuation), joined, updated_by, valuation_id),
+        )
+    conn.commit()
+
+
+def fetch_latest_valuation_id(conn, vrm: str, mileage: int):
+    """
+    Row id of the most recent valuation for this VRM and mileage, or None.
+
+    Rounds the mileage the same way fetch_latest_valuation does, so both find
+    the same row from a raw odometer reading.
+    """
+    rounded = round_mileage_to_nearest_thousand(_to_int(mileage) or 0)
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT id FROM vehicle_valuations
+            WHERE vrm = %s AND mileage = %s
+            ORDER BY fetched_at DESC
+            LIMIT 1
+            """,
+            (vrm, rounded),
+        )
+        row = cur.fetchone()
+    return row[0] if row else None
+
+
+# CAP has no image for plenty of vehicles. Once recorded, that answer is reused
+# for this long before asking again, so a missing picture costs one call a month
+# rather than one per popup open.
+MISSING_IMAGE_RETRY_DAYS = 30
+
+
+def fetch_cap_image(conn, cap_id: int, registration_year: int) -> dict | None:
+    """
+    Stored CAP image for a CAP id + registration year.
+
+    Returns None when nothing is stored, or when a "no image" answer has gone
+    stale and is worth asking about again. A stored not_available row inside the
+    retry window comes back as a row with image=None, so the caller can tell
+    "CAP says there is no picture" apart from "never asked".
+    """
+    with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        cur.execute(
+            """
+            SELECT image, content_type, not_available, fetched_at
+            FROM cap_images
+            WHERE cap_id = %s AND registration_year = %s
+            """,
+            (cap_id, registration_year),
+        )
+        row = cur.fetchone()
+
+    if not row:
+        return None
+
+    if row['not_available']:
+        age = datetime.datetime.now(datetime.timezone.utc) - row['fetched_at']
+        if age.days >= MISSING_IMAGE_RETRY_DAYS:
+            return None
+
+    return dict(row)
+
+
+def save_cap_image(conn, cap_id: int, registration_year: int, image: bytes,
+                   content_type: str, width: int, height: int) -> None:
+    """Store an image, or record that CAP has none. Pass image=None for the latter."""
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO cap_images
+                (cap_id, registration_year, image, content_type, width, height,
+                 not_available, fetched_at)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, NOW())
+            ON CONFLICT (cap_id, registration_year) DO UPDATE SET
+                image         = EXCLUDED.image,
+                content_type  = EXCLUDED.content_type,
+                width         = EXCLUDED.width,
+                height        = EXCLUDED.height,
+                not_available = EXCLUDED.not_available,
+                fetched_at    = NOW()
+            """,
+            (cap_id, registration_year,
+             psycopg2.Binary(image) if image else None,
+             content_type, width, height, image is None),
+        )
+    conn.commit()
+
+
+def fetch_spec_check(conn, vrm: str) -> dict | None:
+    """
+    Stored HPI Spec Check for this VRM, or None if it has never been run.
+
+    No age check on purpose. Factory options were fitted when the car was built
+    and never change, so a stored result is never out of date — and every fresh
+    call is billable. A 103 "no data" answer is stored and returned like any
+    other, so a vehicle HPI has nothing for is not paid for twice.
+    """
+    with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        cur.execute(
+            """
+            SELECT vrm, status_code, status_message, base_price, options_price,
+                   total_price, options_rating, options, option_count,
+                   optional_count, fetched_at, fetched_by
+            FROM vehicle_spec_checks
+            WHERE vrm = %s
+            """,
+            (vrm,),
+        )
+        row = cur.fetchone()
+    return dict(row) if row else None
+
+
+def save_spec_check(conn, vrm: str, result: dict, fetched_by: str) -> None:
+    """
+    Store a Spec Check result, replacing any earlier one for this VRM.
+
+    Called for a 103 "not available" answer as well as a successful one — that
+    is a real answer from HPI and storing it is what stops the same vehicle
+    being re-requested and re-billed.
+    """
+    import json
+
+    options = result.get('options') or []
+    optional = [o for o in options if o.get('option_kind') == 'Optional']
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO vehicle_spec_checks
+                (vrm, status_code, status_message, base_price, options_price,
+                 total_price, options_rating, options, option_count,
+                 optional_count, fetched_at, fetched_by)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW(), %s)
+            ON CONFLICT (vrm) DO UPDATE SET
+                status_code    = EXCLUDED.status_code,
+                status_message = EXCLUDED.status_message,
+                base_price     = EXCLUDED.base_price,
+                options_price  = EXCLUDED.options_price,
+                total_price    = EXCLUDED.total_price,
+                options_rating = EXCLUDED.options_rating,
+                options        = EXCLUDED.options,
+                option_count   = EXCLUDED.option_count,
+                optional_count = EXCLUDED.optional_count,
+                fetched_at     = NOW(),
+                fetched_by     = EXCLUDED.fetched_by
+            """,
+            (
+                vrm,
+                result.get('status_code'),
+                result.get('status_message'),
+                result.get('base_price'),
+                result.get('options_price'),
+                result.get('total_price'),
+                result.get('options_rating'),
+                json.dumps(options) if options else None,
+                len(options),
+                len(optional),
+                fetched_by,
+            ),
         )
     conn.commit()
 
@@ -81,8 +458,11 @@ def fetch_latest_valuation(conn, vrm: str, mileage: int) -> dict | None:
     with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
         cur.execute(
             """
-            SELECT vrm, mileage, fetched_at, source, checked_by,
+            SELECT id, vrm, mileage, fetched_at, source, checked_by,
                    at_retail_valuation, at_rating, at_days_to_sell, at_market_condition,
+                   at_retail_valuation_average, at_retail_valuation_base,
+                   at_retail_valuation_spec, at_spec_features, at_spec_updated_at,
+                   at_spec_updated_by,
                    cap_live_clean, cap_live_retail, cap_monthly_clean, cap_monthly_retail,
                    cap_rounded_mileage
             FROM vehicle_valuations
@@ -105,7 +485,8 @@ def fetch_check_history(conn, vrm: str, limit: int = 25) -> list[dict]:
     with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
         cur.execute(
             """
-            SELECT v.fetched_at, v.mileage, v.source, v.checked_by,
+            SELECT v.id, v.fetched_at, COALESCE(v.reported_mileage, v.mileage) AS mileage,
+                   v.source, v.checked_by,
                    v.at_retail_valuation, v.at_rating,
                    v.cap_live_clean, v.cap_live_retail,
                    v.cap_monthly_clean, v.cap_monthly_retail,
@@ -130,7 +511,8 @@ def fetch_check_history(conn, vrm: str, limit: int = 25) -> list[dict]:
     return [dict(r) for r in rows]
 
 
-def fetch_recent_checks(conn, days: int = 30, limit: int = 500) -> list[dict]:
+def fetch_recent_checks(conn, days: int = 30, limit: int = 10,
+                        offset: int = 0) -> list[dict]:
     """
     One row per VRM for every vehicle checked in the last `days`, from supplier
     list runs and manual lookups alike, newest first.
@@ -138,14 +520,15 @@ def fetch_recent_checks(conn, days: int = 30, limit: int = 500) -> list[dict]:
     DISTINCT ON keeps only the most recent check per VRM, so a vehicle that
     appears on a supplier list every night shows up once rather than 30 times.
     check_count is the number of checks in the window, so the list can show how
-    often a vehicle has been seen.
+    often a vehicle has been seen. total_count is repeated on each returned row
+    so the caller can build pagination without running a second query.
     """
     with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
         cur.execute(
             """
             WITH recent AS (
                 SELECT DISTINCT ON (vrm)
-                       vrm, mileage, fetched_at, source, checked_by,
+                       vrm, mileage, reported_mileage, fetched_at, source, checked_by,
                        at_retail_valuation, at_rating, at_days_to_sell,
                        cap_live_clean, cap_live_retail,
                        cap_monthly_clean, cap_monthly_retail
@@ -160,6 +543,7 @@ def fetch_recent_checks(conn, days: int = 30, limit: int = 500) -> list[dict]:
                 GROUP BY vrm
             )
             SELECT r.*, c.check_count,
+                   (SELECT COUNT(*) FROM recent) AS total_count,
                    v.at_description, v.at_vin, v.cap_capid,
                    v.cap_manufacturer, v.cap_model, v.cap_derivative,
                    (
@@ -176,9 +560,9 @@ def fetch_recent_checks(conn, days: int = 30, limit: int = 500) -> list[dict]:
             JOIN counts c ON c.vrm = r.vrm
             LEFT JOIN vehicles v ON v.vrm = r.vrm
             ORDER BY r.fetched_at DESC
-            LIMIT %s
+            LIMIT %s OFFSET %s
             """,
-            (days, days, limit),
+            (days, days, limit, offset),
         )
         return [dict(r) for r in cur.fetchall()]
 
@@ -324,7 +708,8 @@ def upsert_vehicles(conn, vehicles: list[dict]) -> None:
 def insert_valuations(conn, valuations: list[dict]) -> None:
     """
     Bulk insert new valuation rows. Always appends — never updates existing rows.
-    Mileage is rounded to the nearest 1000 to match fetch_cached_valuations.
+    The cache key is rounded to the nearest 1000 to match
+    fetch_cached_valuations; reported_mileage preserves the source value.
     """
     if not valuations:
         return
@@ -333,6 +718,7 @@ def insert_valuations(conn, valuations: list[dict]) -> None:
         (
             v['vrm'],
             round_mileage_to_nearest_thousand(_to_int(v.get('mileage'))),
+            _to_int(v.get('mileage')),
             v.get('fetched_at', datetime.datetime.utcnow()),
             _to_int(v.get('at_retail_valuation')),
             _to_float(v.get('at_rating')),
@@ -352,7 +738,7 @@ def insert_valuations(conn, valuations: list[dict]) -> None:
             cur,
             """
             INSERT INTO vehicle_valuations
-                (vrm, mileage, fetched_at,
+                (vrm, mileage, reported_mileage, fetched_at,
                  at_retail_valuation, at_rating, at_days_to_sell, at_market_condition,
                  cap_live_clean, cap_live_retail, cap_monthly_clean, cap_monthly_retail, cap_rounded_mileage)
             VALUES %s
@@ -421,15 +807,16 @@ def save_manual_check(conn, vrm: str, mileage: int, checked_by: str, cap: dict, 
             cur.execute(
                 """
                 INSERT INTO vehicle_valuations
-                    (vrm, mileage, fetched_at, source, checked_by,
+                    (vrm, mileage, reported_mileage, fetched_at, source, checked_by,
                      at_retail_valuation, at_rating, at_days_to_sell, at_market_condition,
                      cap_live_clean, cap_live_retail, cap_monthly_clean, cap_monthly_retail,
                      cap_rounded_mileage)
-                VALUES (%s, %s, NOW(), 'manual', %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                VALUES (%s, %s, %s, NOW(), 'manual', %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 """,
                 (
                     vrm,
                     round_mileage_to_nearest_thousand(_to_int(mileage) or 0),
+                    _to_int(mileage),
                     checked_by,
                     _to_int(at.get('retail_valuation')),
                     _to_float(at.get('retail_rating')),
@@ -443,6 +830,46 @@ def save_manual_check(conn, vrm: str, mileage: int, checked_by: str, cap: dict, 
                 ),
             )
     conn.commit()
+
+
+def copy_check_for_mileage(conn, vrm: str, previous_mileage: int,
+                           mileage: int, checked_by: str,
+                           check_id: int | None = None) -> bool:
+    """Record an exact-mileage reassessment without revaluing its cache bucket."""
+    previous_bucket = round_mileage_to_nearest_thousand(_to_int(previous_mileage) or 0)
+    mileage_bucket = round_mileage_to_nearest_thousand(_to_int(mileage) or 0)
+    if previous_bucket != mileage_bucket:
+        return False
+
+    source_filter = "id = %s AND vrm = %s" if check_id else "vrm = %s AND mileage = %s"
+    source_params = (check_id, vrm) if check_id else (vrm, previous_bucket)
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO vehicle_valuations
+                (vrm, mileage, reported_mileage, fetched_at, source, checked_by,
+                 at_retail_valuation, at_rating, at_days_to_sell, at_market_condition,
+                 at_retail_valuation_average, at_retail_valuation_base,
+                 at_retail_valuation_spec, at_spec_features, at_spec_updated_at,
+                 at_spec_updated_by, cap_live_clean, cap_live_retail,
+                 cap_monthly_clean, cap_monthly_retail, cap_rounded_mileage)
+            SELECT vrm, %s, %s, NOW(), 'manual', %s,
+                   at_retail_valuation, at_rating, at_days_to_sell, at_market_condition,
+                   at_retail_valuation_average, at_retail_valuation_base,
+                   at_retail_valuation_spec, at_spec_features, at_spec_updated_at,
+                   at_spec_updated_by, cap_live_clean, cap_live_retail,
+                   cap_monthly_clean, cap_monthly_retail, cap_rounded_mileage
+            FROM vehicle_valuations
+            WHERE """ + source_filter + """
+            ORDER BY fetched_at DESC
+            LIMIT 1
+            RETURNING id
+            """,
+            (mileage_bucket, _to_int(mileage), checked_by, *source_params),
+        )
+        copied = cur.fetchone() is not None
+    conn.commit()
+    return copied
 
 
 def _parse_at_date(value):

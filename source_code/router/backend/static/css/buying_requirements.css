@@ -25,17 +25,6 @@ button.settings-cog {
 }
 button.settings-cog:hover { color: var(--c-text) !important; background: #e9ecef !important; }
 
-.logout-link {
-    position: fixed;
-    top: 20px;
-    right: 24px;
-    font-size: 0.9rem;
-    color: var(--c-text-muted) !important;
-    z-index: 1040;
-    text-decoration: none;
-}
-.logout-link a:hover { color: var(--c-text) !important; }
-
 #data-section { display: none; }
 
 .filter-group {
@@ -590,7 +579,6 @@ button.settings-cog:hover { color: var(--c-text) !important; background: #e9ecef
 
 /* ── Loading indicator (top-left) ─────────────────────────── */
 /* Shared Back / Home / nav button size across all pages */
-.nav-btn { font-size: 1rem; padding: 0.35rem 0.7rem; }
 
 #fetch-loading,
 .controls-area #fetch-loading {

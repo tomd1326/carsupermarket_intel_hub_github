@@ -16,7 +16,8 @@ CREATE TABLE IF NOT EXISTS vehicles (
 CREATE TABLE IF NOT EXISTS vehicle_valuations (
     id                      BIGSERIAL       PRIMARY KEY,
     vrm                     VARCHAR(10)     NOT NULL REFERENCES vehicles(vrm),
-    mileage                 INTEGER         NOT NULL,
+    mileage                 INTEGER         NOT NULL, -- rounded valuation cache key
+    reported_mileage        INTEGER,                  -- exact supplied odometer reading
     fetched_at              TIMESTAMPTZ     NOT NULL DEFAULT NOW(),
     at_retail_valuation     INTEGER,
     at_rating               NUMERIC(6, 2),
