@@ -1,0 +1,490 @@
+/* Orders & Deliveries report - page styles.
+ *
+ * Shared tokens (colours, borders, radii) come from theme.css, which the
+ * template loads first. Only this page's own styles live here.
+ *
+ * The two font-size custom properties (--page-font / --vehicle-font) are
+ * NOT set here: the template renders the saved sizes straight into :root
+ * server-side, so the page paints at the right size instead of flashing
+ * the default and being resized by JS on load.
+ */
+
+        @font-face { font-family: 'DM Sans'; src: url('../fonts/DMSans-Regular.ttf');  font-weight: 400; }
+        @font-face { font-family: 'DM Sans'; src: url('../fonts/DMSans-Medium.ttf');   font-weight: 500; }
+        @font-face { font-family: 'DM Sans'; src: url('../fonts/DMSans-SemiBold.ttf'); font-weight: 600; }
+        @font-face { font-family: 'DM Sans'; src: url('../fonts/DMSans-Bold.ttf');     font-weight: 700; }
+
+        body, button, input, select, textarea { font-family: 'DM Sans', system-ui, sans-serif; }
+        body { background-color: var(--c-page-bg); }
+        /* Sized in em so the whole header block follows the page font resizer.
+           The h3's own Bootstrap size is overridden for the same reason. */
+        .page-header { color: var(--c-text-heading); font-weight: 700; letter-spacing: -0.3px; font-size: 1.6em; }
+        .back-link { color: var(--c-text-muted) !important; text-decoration: none; }
+        .back-link:hover { color: var(--c-text) !important; }
+        /* .panel, .info-mark and .css-spinner come from theme.css. .nav-btn is
+           overridden here (em not rem) so it scales with the page font. */
+        /* Matches the slicer bar's rendered width at the base panel size
+           (8 * 163px + 7 * 10px gaps + this bar's own padding), so the bar is
+           already correctly sized before any data/JS has run. Once data
+           renders, JS measures the panels' real right edge and sets this
+           width to match (matchFilterWidthToTable()) — the panels themselves
+           always stay at the base width, in both views. If a slicer dimension
+           is ever added or removed, update this number too (or just let JS
+           take over once data loads). */
+        #control-bar { box-sizing: border-box; width: 1410px; max-width: 100%; }
+        /* Real summary tables hug their own content; the loading spinner
+           instead spans the same width as the control bar so it doesn't look
+           like a narrow box floating under a full-width bar. */
+        #summary-area { width: fit-content; }
+        #summary-area.is-loading { width: 1410px; box-sizing: border-box; }
+        .control-row { display: flex; align-items: center; gap: 18px; flex-wrap: wrap; }
+        /* This row (Lens/View/Group by/Apply) must always stay on one line.
+           #control-bar's width is set by JS to match the filter panels
+           (matchFilterWidthToTable()), which can be narrower than this bar's
+           1410px loading-state fallback once real data replaces the
+           placeholder. Without nowrap, that narrower width can wrap this row
+           onto two lines, growing #control-bar taller and shifting the
+           slicer bar below it down — a layout jump with no data change to
+           explain it. The second control-row (font resizer/Refresh/CSV) is
+           left wrapping, since it can genuinely reflow on a narrow screen. */
+        #toolbar-row { flex-wrap: nowrap; }
+        .control-group { display: flex; align-items: center; gap: 8px; }
+        /* 1em throughout the control bar so it reads at the same size as the
+           summary tables below it, rather than a notch smaller. */
+        .control-label { font-size: 1em; font-weight: 600; color: var(--c-text-muted); }
+
+        /* Lens / View / Group by toggles — dark active state, grey outline when
+           inactive, same idea as the filter pills on buying requirements. */
+        .lens-toggle { display: inline-flex; background: var(--c-surface-sunken); border-radius: var(--radius-md); padding: 3px; }
+        .lens-toggle button {
+            border: 1px solid var(--c-control-border); background: var(--c-surface); color: var(--c-text);
+            font-weight: 600; font-size: 1em; padding: 0.5em 1.2em; border-radius: var(--radius-sm); cursor: pointer;
+        }
+        .lens-toggle button + button { margin-left: 3px; }
+        .lens-toggle button:hover { border-color: var(--c-control-border-hover); background: var(--c-surface-alt); }
+        .lens-toggle button.active { background: var(--c-dark); color: var(--c-surface); border-color: var(--c-dark); }
+        .lens-toggle button.active:hover { background: var(--c-dark); }
+
+        /* Apply / Refresh / CSV. These carry page-specific state (Apply greys
+           out while loading) so they are hand-written rather than plain
+           Bootstrap classes, but they use the same colours. */
+        .btn-apply {
+            background-color: var(--c-primary); border: 1px solid var(--c-primary); color: var(--c-surface); font-weight: 600;
+            font-size: 1em; padding: 0.5em 1.2em; border-radius: var(--radius-md); cursor: pointer;
+        }
+        .btn-apply:hover { background-color: var(--c-primary-hover); border-color: var(--c-primary-hover); }
+        .btn-apply.loading {
+            background-color: var(--c-disabled-bg); border-color: var(--c-disabled-border); color: var(--c-disabled-text); cursor: default;
+        }
+        .btn-apply.loading:hover { background-color: var(--c-disabled-bg); border-color: var(--c-disabled-border); }
+        .filter-input { border: 1px solid var(--c-disabled-border); border-radius: var(--radius-md); padding: 4px 8px; font-size: 0.75em; color: var(--c-text); width: 180px; }
+        .btn-csv { background-color: var(--c-success); border: 1px solid var(--c-success); color: var(--c-surface); font-weight: 600; font-size: 0.9em; padding: 7px 18px; }
+        .btn-csv:hover { background-color: var(--c-success-hover); border-color: var(--c-success-hover); color: var(--c-surface); }
+        .btn-refresh { background-color: var(--c-surface); border: 1px solid var(--c-control-border); color: var(--c-text); font-weight: 600; font-size: 0.9em; padding: 7px 15px; }
+        .btn-refresh:hover { background-color: var(--c-disabled-bg); color: var(--c-dark); }
+        .btn-refresh:disabled { opacity: 0.6; cursor: default; }
+        .cache-note { color: var(--c-text-muted); font-size: 1em; }
+
+        /* Slicer bar — fixed-width panels; scroll horizontally rather than
+           squashing them narrower to fit. */
+        :root { --slicer-width: 163px; }
+        .slicer-bar { display: flex; gap: 10px; overflow-x: auto; padding-bottom: 6px; }
+        .slicer {
+            background: var(--c-surface); border: 1px solid var(--c-border); border-radius: var(--radius-lg); padding: 8px 10px;
+            display: flex; flex-direction: column; min-height: 0;
+            /* border-box: matchFilterWidthToTable() measures panels with
+               getBoundingClientRect() (the real rendered/border-box size) and
+               writes its result straight into --slicer-width. Without
+               border-box, width: var(--slicer-width) sets the CONTENT box only,
+               so the actual panel renders padding+border wider than the value
+               the JS calculated — a ~22px error per panel that compounds across
+               all 8 and pushes the last panel's right edge past the card's. */
+            box-sizing: border-box;
+            flex: 0 0 var(--slicer-width); width: var(--slicer-width);
+        }
+        .slicer-head {
+            display: flex; align-items: center; justify-content: space-between;
+            font-weight: 600; font-size: 1em; color: var(--c-text-heading);
+            padding-bottom: 6px; margin-bottom: 6px; border-bottom: 1px solid var(--c-border-soft);
+        }
+        .slicer-clear {
+            border: none; background: transparent; color: var(--c-text-muted); cursor: pointer;
+            font-size: 0.85em; padding: 2px 4px;
+        }
+        .slicer-clear:hover { color: var(--c-text-danger); }
+        .slicer-clear.hidden { visibility: hidden; }
+        /* Tall enough to fit Price Band's 8 full-height pills with no scroll.
+           Only longer lists (Supplier) scroll. Height is in em, not px, so the
+           panel grows with the font and still fits those 8 pills — a fixed
+           pixel height would start scrolling as soon as the text got bigger.
+           8 pills x (1.4em line + 0.7em padding + 2px border) + 7 x 4px gaps. */
+        .slicer-list { overflow-y: auto; height: 19em; display: flex; flex-direction: column; gap: 4px; }
+        .slicer-item {
+            font-size: 1em; color: var(--c-text); padding: 0.35em 0.7em; border-radius: var(--radius-sm);
+            cursor: pointer; border: 1px solid var(--c-border-soft); background: var(--c-surface-alt);
+            white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+            user-select: none;
+            flex: 0 0 auto;   /* never shrink — full-height pills always */
+        }
+        .slicer-item:hover { border-color: var(--c-control-border); }
+        .slicer-item.selected { background: var(--c-dark); color: var(--c-surface); border-color: var(--c-dark); }
+
+        /* Two independent sizes, each persisted per user in Aurora:
+             --page-font    everything on the page EXCEPT the vehicle grid —
+                            control bar, slicers, summary tables, buttons. Set
+                            on <body> so anything sized in em/rem follows it.
+             --vehicle-font the vehicle view's grid only, which has its own
+                            resizer next to that table's CSV button.
+           Padding is in em throughout, so it scales with the text. */
+        body { font-size: var(--page-font); }
+        /* Bootstrap sets its own font-size on .btn/.form-control, so those need
+           pointing back at the page size to scale with everything else. */
+        .btn, .form-control, .form-label { font-size: 1em; }
+        .grid-wrap { max-height: 74vh; overflow: auto; border: 1px solid var(--c-border); border-radius: var(--radius-md); }
+        table.grid { border-collapse: collapse; font-size: var(--vehicle-font); table-layout: fixed; width: 100%; }
+        table.grid thead th {
+            position: sticky; top: 0; z-index: 2; background: var(--c-table-header-bg); color: var(--c-table-header-text);
+            text-align: left; font-size: 0.95em; font-weight: 600; padding: 0.4em 0.6em;
+            cursor: pointer; user-select: none; border-right: 1px solid var(--c-border);
+            white-space: normal; line-height: 1.2; vertical-align: bottom;
+            overflow-wrap: break-word;
+            /* Header/body divider, matching the summary and popup tables.
+               Drawn as a box-shadow, not a border: this table is
+               border-collapse: collapse, where a collapsed border belongs to
+               the table grid rather than the cell, so it scrolls away with the
+               rows instead of staying under the pinned header. A shadow is
+               painted with the sticky cell itself and stays put. */
+            box-shadow: inset 0 -1px 0 var(--c-border);
+        }
+        table.grid thead th:hover { background: var(--c-table-header-hover); }
+        table.grid thead th .sort-caret { opacity: 0.5; margin-left: 4px; font-size: 0.85em; white-space: nowrap; }
+        table.grid td {
+            padding: 0.35em 0.6em; color: var(--c-text); border-bottom: 1px solid var(--c-border); border-right: 1px solid var(--c-border-soft);
+            white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+        }
+        table.grid tbody tr:nth-child(even) { background: var(--c-surface-alt); }
+        table.grid tbody tr:hover { background: var(--c-table-total-bg); }
+        table.grid td.num { text-align: right; font-variant-numeric: tabular-nums; }
+        table.grid td.neg { color: var(--c-text-danger); }
+
+        /* Both font resizers use Bootstrap's btn-outline-secondary btn-sm,
+           matching buying_requirements.html — no bespoke styling needed. */
+        table.grid a { color: var(--c-primary); text-decoration: none; }
+        table.grid a:hover { text-decoration: underline; }
+        .empty-state { color: var(--c-text-muted); font-size: 0.9em; text-align: center; padding: 40px 0; }
+        .spinner-wrap { text-align: center; padding: 60px 0; color: var(--c-text-heading); }
+        /* .css-spinner comes from theme.css */
+
+        /* Summary tables — one per dimension, stacked vertically. Sized to
+           content (not full width) with a shared colgroup so every table's
+           columns line up exactly regardless of which dimension it shows. */
+        /* No overflow here at all. overflow-x: auto forces overflow-y to auto
+           too (`visible` is not kept on one axis while the other scrolls), and
+           when the table is wider than the wrapper the horizontal scrollbar
+           takes height INSIDE the box — which then overflows vertically and
+           adds a second, pointless scrollbar. overflow-y: hidden would stop
+           that but clip the DIS/Sell info-mark tooltips, which open downward
+           out of the header. The summary card (#summary-area) is already
+           width: fit-content and the filter panels are sized to match it, so
+           these tables are not actually forced to scroll — leaving overflow
+           alone keeps the tooltips visible and both scrollbars away. */
+        .summary-table-wrap { margin: 0 1px 22px; }
+        .summary-table-wrap:last-child { margin-bottom: 0; }
+        table.summary {
+            border-collapse: separate; border-spacing: 0; font-size: 1em; white-space: nowrap;
+            table-layout: fixed; width: auto;
+            border: 1px solid var(--c-border); border-radius: var(--radius-md);
+        }
+        table.summary th {
+            background: var(--c-table-header-bg); color: var(--c-table-header-text); text-align: left;
+            font-size: 0.95em; font-weight: 600; padding: 0.5em 0.7em;
+            border-right: 1px solid var(--c-border);
+            /* Same line the popup's header already has (table.vehicle-modal-table
+               th) — was missing here, so there was nothing separating the
+               header from the first data row, just the row's own top-adjacent
+               border which reads as a body-row divider, not a header edge. */
+            border-bottom: 1px solid var(--c-border);
+            overflow: hidden; text-overflow: ellipsis;
+        }
+        table.summary th.num, table.summary td.num { text-align: right; font-variant-numeric: tabular-nums; }
+        /* A heading carrying an info marker must not clip, or its tooltip is
+           cut off at the cell edge. Only these cells opt out of the ellipsis
+           overflow above; their labels are short enough not to need it. */
+        table.summary th:has(.info-mark),
+        table.vehicle-modal-table th:has(.info-mark) { overflow: visible; }
+        table.summary td {
+            padding: 0.35em 0.7em; color: var(--c-text);
+            border-bottom: 1px solid var(--c-border); border-right: 1px solid var(--c-border-soft);
+            overflow: hidden; text-overflow: ellipsis;
+        }
+        /* The last column's right border sits directly on the table's own
+           outer frame (border: 1px solid var(--c-border) above) instead of
+           against another cell. Two different border colours stacked in the
+           same pixel column don't blend into one soft line — the darker frame
+           colour wins by contrast and reads as a heavier edge than the
+           interior gridlines. Drop the cell's own border there; the frame
+           alone draws that edge. */
+        table.summary th:last-child, table.summary td:last-child { border-right: none; }
+        table.summary td.neg { color: var(--c-text-danger); }
+        /* .info-mark comes from theme.css */
+        table.summary td.dim-label { font-weight: 600; color: var(--c-text-heading); }
+        /* Grand Total separator: one solid line, with no lighter line adjacent
+           (that's what read as a "gap"). */
+        table.summary tbody tr.total-row td { font-weight: 700; background: var(--c-table-total-bg); border-top: 2px solid var(--c-border-strong); border-bottom: none; }
+        table.summary tbody tr:has(+ tr.total-row) td { border-bottom: none; }
+        table.summary tbody tr.spacer-row td { padding: 4px 0; border: none; background: transparent; }
+        /* Corner rounding on the cells themselves, not overflow:hidden on the
+           table — same fix as table.vehicle-modal-table below. overflow:hidden
+           clips the header cell's own square-cornered border into a rounded
+           shape rather than the border being drawn rounded to start with; where
+           the th's border-bottom (added above) and border-right meet the
+           table's own outer border in that corner, the clip leaves an
+           extra-thick pixel cluster instead of a clean curve. */
+        table.summary thead tr:first-child th:first-child { border-top-left-radius: var(--radius-md); }
+        table.summary thead tr:first-child th:last-child { border-top-right-radius: var(--radius-md); }
+        table.summary tbody tr:last-child td:first-child { border-bottom-left-radius: var(--radius-md); }
+        table.summary tbody tr:last-child td:last-child { border-bottom-right-radius: var(--radius-md); }
+        /* ── Expandable rows ──────────────────────────────────────────────
+           A row in an expandable table opens to show that group split by
+           period. Only the label cell is clickable — clicking a figure or the
+           View button must not move the table under the pointer. */
+        table.summary td.dim-label.expandable { cursor: pointer; user-select: none; }
+        table.summary td.dim-label.expandable:hover { background: var(--c-surface-alt); }
+        /* Caret width + gap must equal SUMMARY_CARET_WIDTH in the JS, which
+           reserves this space when measuring the label column. */
+        /* Fixed width and centred: + and − are different widths, so without
+           this the label would shift sideways as the row opens and closes. */
+        .expand-caret {
+            display: inline-block; width: 10px; margin-right: 4px;
+            text-align: center; font-weight: 700;
+            font-size: 0.95em; color: var(--c-text-muted);
+        }
+        /* Only the label cell marks an open row — a background across the whole
+           row would sit under the shaded figures and dull them. */
+        table.summary tr.is-expanded td.dim-label {
+            background: var(--c-surface-alt);
+            color: var(--c-text-heading);
+        }
+        /* Sub-rows: one per period within the expanded group. Lighter and
+           indented so they read as belonging to the row above rather than as
+           more rows of the table itself. The indent must equal
+           SUMMARY_SUB_INDENT in the JS. */
+        /* No background here — shaded cells set their own inline colour, and a
+           background declared on the row would sit under every unshaded cell
+           and read as a second, competing band. The label cell keeps one. */
+        table.summary tr.sub-row td {
+            color: var(--c-text);
+            border-bottom: 1px solid var(--c-border-soft);
+        }
+        table.summary tr.sub-row td.sub-label {
+            padding-left: calc(0.5em + 16px);
+            font-weight: 500; color: var(--c-text-muted);
+            background: var(--c-surface);
+        }
+        /* The last sub-row closes the group — a firmer line before the next
+           parent row, so the block reads as one unit. */
+        table.summary tr.sub-row:not(:has(+ tr.sub-row)) td { border-bottom: 1px solid var(--c-border); }
+
+        /* View column — button sized off the summary font so the row height
+           doesn't jump when the font resizer is used. */
+        table.summary td.view-cell { text-align: center; padding: 0.15em 0.3em; }
+        .btn-view {
+            border: 1px solid var(--c-primary); background: var(--c-surface); color: var(--c-primary);
+            font-weight: 600; font-size: 0.9em; line-height: 1.2;
+            padding: 0.15em 0.6em; border-radius: var(--radius-sm); cursor: pointer;
+        }
+        .btn-view:hover { background: var(--c-primary); color: var(--c-surface); }
+
+        /* Vehicle list popup */
+        .modal-backdrop-custom {
+            position: fixed; inset: 0; background: rgba(0,0,0,0.45); z-index: 1050;
+        }
+        /* Sized to the table's own content (13 columns), capped so it never
+           runs off screen — the body scrolls in both directions instead. */
+        .vehicle-modal {
+            position: fixed; top: 8vh; left: 50%; transform: translateX(-50%);
+            z-index: 1060; background: var(--c-surface); border-radius: var(--radius-lg);
+            width: max-content; max-width: 94vw; max-height: 80vh;
+            display: flex; flex-direction: column; overflow: hidden;
+            box-shadow: 0 8px 32px rgba(0,0,0,0.22);
+            /* One step smaller than the page font — this sizes the popup's
+               CHROME (title, subtitle, close button). The table inside sets its
+               own size from --vehicle-font instead, so it matches the Vehicle
+               view exactly; see table.vehicle-modal-table. */
+            font-size: calc(var(--page-font) - 1px);
+        }
+        .vehicle-modal-head {
+            display: flex; align-items: center; justify-content: space-between;
+            /* 18px sides match the body's padding below, so the title lines up
+               with the table's left edge and the close button with its right. */
+            padding: 12px 18px; border-bottom: 1px solid var(--c-border-soft);
+        }
+        /* Matches the table body's own text size (table.vehicle-modal-table is
+           1em of the page font) rather than a fraction of the page font
+           directly — was 0.95em/0.78em of the page font, which read
+           noticeably smaller than the table underneath it. */
+        .vehicle-modal-title { font-weight: 600; color: var(--c-text-heading); font-size: 1.1em; }
+        .vehicle-modal-sub { color: var(--c-text-muted); font-size: 0.95em; }
+        .vehicle-modal-close {
+            border: none; background: transparent; color: var(--c-text-muted);
+            font-size: 1.8em; line-height: 1; cursor: pointer; padding: 2px 6px;
+        }
+        .vehicle-modal-close:hover { color: var(--c-text-danger); }
+        /* Same white surround the summary tables sit in — .panel's 13px/18px
+           padding — so the table has an identical margin inside its card. */
+        /* No TOP padding on the scroll container: a sticky <th> pins to the
+           padding box, so 13px of top padding leaves a 13px gap above the
+           header that scrolling rows show through. The table's own top margin
+           gives the same visual inset without affecting where the header
+           sticks — it scrolls away, the padding would not. */
+        /* No top padding: the header pins at top:0, flush with the scroll edge,
+           so there is no gap above it for rows to scroll through and nothing to
+           mask. The head bar above already provides the visual separation.
+           A top padding here would either hold a row-revealing gap open (with
+           top:0) or need the header's `top` kept exactly in step with it. */
+        .vehicle-modal-body { overflow: auto; padding: 0 18px 13px; }
+        /* Gridlines and outer frame identical to table.summary: grey border,
+           6px radius, 1px separators between cells.
+           No `overflow: hidden` here (unlike table.summary) — it would clip a
+           sticky <th>, since the table would become the nearest overflow
+           ancestor instead of .vehicle-modal-body. The rounded corners are
+           preserved a different way: see the th/td corner rules below. */
+        /* table-layout: fixed so the colgroup widths measured in JS are honoured
+           exactly — auto layout would re-widen columns to fit the header on one
+           line, which is the wrapping we are trying to allow. */
+        table.vehicle-modal-table {
+            border-collapse: separate; border-spacing: 0; width: auto;
+            /* --vehicle-font, not 1em of the popup: this table shows the same
+               columns as the Vehicle view and its widths are measured by the
+               same function (measureVehicleColumnWidths, which measures against
+               --vehicle-font). Sizing the text off anything else would leave
+               the measured widths and the rendered text out of step. */
+            font-size: var(--vehicle-font); white-space: nowrap; table-layout: fixed;
+            border: 1px solid var(--c-border); border-radius: var(--radius-md);
+        }
+        table.vehicle-modal-table th {
+            /* Pins flush to the scroll container's top edge, which has no top
+               padding (see .vehicle-modal-body) — so it neither jumps on the
+               first scroll nor leaves a gap for rows to show through. */
+            position: sticky; top: 0; z-index: 3;
+            background: var(--c-table-header-bg); color: var(--c-table-header-text); text-align: left;
+            /* 0.6em sides, matching table.grid's header — the shared width
+               measurement (VEHICLE_COL_PADDING) is calibrated to that padding,
+               so a wider one here would leave every column slightly too tight. */
+            font-size: 0.95em; font-weight: 600; padding: 0.5em 0.6em;
+            border-right: 1px solid var(--c-border);
+            /* Drawn explicitly: with border-collapse:separate a sticky header
+               keeps no border from the row below it as that row scrolls under. */
+            border-bottom: 1px solid var(--c-border);
+            cursor: pointer; user-select: none;
+            /* Wraps like the vehicle grid's headers rather than forcing the
+               column as wide as the whole phrase. Bottom-aligned so a one-line
+               and a three-line heading still sit on the same baseline.
+               Capped at 3 lines: the widths are measured so nothing needs a 4th,
+               but the clamp keeps one unexpectedly long label from making every
+               popup header row tall. */
+            white-space: normal; overflow-wrap: break-word;
+            line-height: 1.2; vertical-align: bottom;
+        }
+        /* Three lines is the cap. Applied to an inner span rather than the cell:
+           a max-height on the <th> itself does nothing (table cells grow to
+           their content regardless), and -webkit-line-clamp would need
+           display:-webkit-box, which fights the `overflow: visible` the
+           info-mark tooltip relies on. 3 x the 1.2 line-height above. */
+        table.vehicle-modal-table th .th-label {
+            /* inline-block, not block: the info marker and sort caret sit
+               alongside the label on its last line, and a block would push them
+               onto a line of their own. */
+            display: inline-block; max-width: 100%;
+            max-height: 3.6em; overflow: hidden; vertical-align: bottom;
+        }
+        table.vehicle-modal-table th:hover { background: var(--c-table-header-hover); }
+        table.vehicle-modal-table th.num { text-align: right; }
+        table.vehicle-modal-table th .sort-caret { opacity: 0.5; margin-left: 4px; font-size: 0.85em; }
+        table.vehicle-modal-table td {
+            /* 0.6em sides to match table.grid's cells — see the th rule above. */
+            padding: 0.35em 0.6em; color: var(--c-text);
+            border-bottom: 1px solid var(--c-border); border-right: 1px solid var(--c-border-soft);
+            /* Columns are fixed-width, so a value longer than its measured
+               column (one capped at VEHICLE_COL_MAX_WIDTH) must be trimmed
+               rather than spill into the next cell — same as the vehicle grid.
+               (Last-column border-right is dropped below — see that rule for
+               why: it would otherwise sit on the table's own outer frame
+               border, a different, darker colour, and read as a thicker edge.) */
+            white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+        }
+        /* The 2px frame already draws the bottom edge — a row border under the
+           last row would sit just inside it and read as a doubled line. */
+        table.vehicle-modal-table tbody tr:last-child td { border-bottom: none; }
+        /* Corner rounding, done on the cells themselves rather than via
+           `overflow: hidden` on the table (which would break the sticky
+           header above). Only the header's radius survives scrolling, since
+           it stays pinned at the top; the body corners round the frame's
+           bottom edge, which never moves. */
+        table.vehicle-modal-table thead tr:first-child th:first-child { border-top-left-radius: 4px; }
+        table.vehicle-modal-table thead tr:first-child th:last-child { border-top-right-radius: 4px; }
+        table.vehicle-modal-table tbody tr:last-child td:first-child { border-bottom-left-radius: 4px; }
+        table.vehicle-modal-table tbody tr:last-child td:last-child { border-bottom-right-radius: 4px; }
+        /* Last column's td right border would otherwise sit directly on the
+           table's own outer frame border (a darker colour — see table.summary
+           for the same fix and why it reads as a thicker edge). The th's own
+           border-right already matches the frame colour exactly, so only td
+           needs this. */
+        table.vehicle-modal-table td:last-child { border-right: none; }
+        table.vehicle-modal-table td.num { text-align: right; font-variant-numeric: tabular-nums; }
+        table.vehicle-modal-table td.neg { color: var(--c-text-danger); }
+        table.vehicle-modal-table tbody tr:nth-child(even) { background: var(--c-surface-alt); }
+        /* .nav-btn comes from theme.css */
+
+        /* ── Ask AI panel ────────────────────────────────────────────────
+           Sized in em like the control bar above it, so the page font
+           resizer scales it with everything else. */
+        /* Width is set by matchFilterWidthToTable() from a measured right edge,
+           so border-box is required — without it the padding renders the panel
+           wider than the JS calculated and the right edge misses the slicers. */
+        #ai-panel { box-sizing: border-box; max-width: 100%; }
+        .ai-row { display: flex; align-items: center; gap: 10px; }
+        .ai-label { white-space: nowrap; }
+        .ai-input {
+            flex: 1 1 auto; min-width: 0;
+            font-size: 1em; font-family: inherit;
+            padding: 6px 10px;
+            border: 1px solid var(--c-border); border-radius: var(--radius-md);
+            background: var(--c-page-bg); color: var(--c-text);
+            box-sizing: border-box;
+        }
+        .ai-input:focus {
+            outline: none;
+            border-color: var(--c-text-heading);
+        }
+        .ai-input::placeholder { color: var(--c-text-muted); }
+        .ai-output {
+            margin-top: 12px; padding-top: 12px;
+            border-top: 1px solid var(--c-border-soft);
+            font-size: 1em; line-height: 1.55;
+            /* A long thread scrolls inside the panel rather than pushing the
+               summary tables off screen. */
+            max-height: 60vh; overflow-y: auto;
+        }
+        .ai-answer-body { color: var(--c-text); }
+        /* One question in the thread. The left rule and indent are what
+           separate it from the answer below it without a heavier box. */
+        .ai-turn-q {
+            margin-bottom: 8px; padding-left: 10px;
+            border-left: 3px solid var(--c-text-heading);
+            color: var(--c-text-heading); font-weight: 600;
+        }
+        /* Gap between one exchange and the next — not before the first. */
+        .ai-turn-q:not(:first-child) {
+            margin-top: 18px; padding-top: 14px;
+            border-top: 1px solid var(--c-border-soft);
+        }
+        .ai-thinking { display: flex; align-items: center; gap: 10px; color: var(--c-text-muted); }
+        /* The shared .css-spinner is sized for a full-panel loading state —
+           shrink it to sit inline with one line of text. */
+        .ai-thinking .css-spinner { width: 16px; height: 16px; border-width: 2px; margin: 0; }
+        .ai-error { color: var(--c-text-danger); }
+        .ai-truncated { color: var(--c-text-danger); font-weight: 600; }
+        .ai-meta {
+            margin-top: 10px; font-size: 0.85em; color: var(--c-text-muted);
+        }

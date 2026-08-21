@@ -1,3 +1,4 @@
+{% from '_navigation.html' import account_nav with context %}
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -7,25 +8,13 @@
     <link rel="icon" type="image/png" href="{{ BASE_URL }}/static/icon.png">
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css" rel="stylesheet">
+    <link href="{{ static_url('css/theme.css') }}" rel="stylesheet">
     <style>
         @font-face { font-family: 'DM Sans'; src: url('{{ BASE_URL }}/static/fonts/DMSans-Regular.ttf');  font-weight: 400; }
         @font-face { font-family: 'DM Sans'; src: url('{{ BASE_URL }}/static/fonts/DMSans-Medium.ttf');   font-weight: 500; }
         @font-face { font-family: 'DM Sans'; src: url('{{ BASE_URL }}/static/fonts/DMSans-SemiBold.ttf'); font-weight: 600; }
         @font-face { font-family: 'DM Sans'; src: url('{{ BASE_URL }}/static/fonts/DMSans-Bold.ttf');     font-weight: 700; }
         body, button, input, select, textarea { font-family: 'DM Sans', system-ui, sans-serif; font-size: 13px; }
-
-        .logout-link {
-            position: fixed;
-            top: 20px; right: 24px;
-            font-size: 0.9rem;
-            color: #6c757d !important;
-            z-index: 1040;
-            display: flex;
-            align-items: center;
-            gap: 6px;
-        }
-        .logout-link a { color: inherit; text-decoration: none; }
-        .logout-link a:hover { color: #343a40 !important; }
 
         .controls { padding: 16px 32px 0 32px; }
 
@@ -140,25 +129,17 @@
         .summary-bar { display: flex; align-items: center; gap: 24px; flex-wrap: wrap; margin-bottom: 10px; }
         .summary-item { font-size: 13px; }
         /* Shared Back / Home / nav button size across all pages */
-        .nav-btn { font-size: 1rem; padding: 0.35rem 0.7rem; }
     </style>
 </head>
 <body>
     <div id="resize-ghost"></div>
-    <div class="logout-link">
-        <span>{{ user }}</span>
-        <span>·</span>
-        <a href="{{ BASE_URL }}/logout"><i class="fas fa-sign-out-alt"></i> Logout</a>
-    </div>
+    {{ account_nav(user) }}
 
     <div class="controls">
         <div class="d-flex align-items-center gap-3 mb-3">
             <h2 class="mb-0" style="font-size:20px;font-weight:700">Stock List</h2>
             <a href="javascript:history.back()" class="btn btn-outline-secondary nav-btn">
                 <i class="fas fa-arrow-left me-1"></i>Back
-            </a>
-            <a href="{{ BASE_URL }}/home" class="btn btn-outline-secondary nav-btn">
-                <i class="fas fa-home me-1"></i>Home
             </a>
             <button id="fetchBtn" class="btn btn-primary btn-sm" onclick="fetchData(true)">
                 <i class="fas fa-sync-alt me-1"></i>Refresh Data
