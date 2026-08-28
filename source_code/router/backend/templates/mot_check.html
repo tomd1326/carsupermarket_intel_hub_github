@@ -417,8 +417,8 @@
             }
 
             // Early MOT. For the FIRST test the due date is 3 years after registration and
-            // ANY test before it counts as early (even by 1 day). For later tests the due date
-            // is 1 year after the previous test and the threshold is 60+ days. A test straight
+            // the threshold is 30+ days. For later tests the due date is 1 year after the
+            // previous test, with the same 30+ day threshold. A test straight
             // after a failure is skipped — the car had to be retested, so it is not early.
             // A failed test that is itself early still counts.
             const histDates = [];
@@ -436,7 +436,7 @@
                 const first = histDates[0];
                 if (reg && first.date) {
                     const due = new Date(reg); due.setFullYear(due.getFullYear() + 3);
-                    if ((due - first.date) / 864e5 >= 1) warned.add(first.idx);
+                    if ((due - first.date) / 864e5 >= 30) warned.add(first.idx);
                 }
             }
             for (let j = 1; j < histDates.length; j++) {
@@ -444,7 +444,7 @@
                 if (!prev || !curr) continue;
                 if (!histDates[j-1].passed) continue;  // retest after a failure
                 const due = new Date(prev); due.setFullYear(due.getFullYear() + 1);
-                if ((due - curr) / 864e5 >= 60) warned.add(histDates[j].idx);
+                if ((due - curr) / 864e5 >= 30) warned.add(histDates[j].idx);
             }
             const recentIdx = columns.indexOf('Most Recent MOT Date');
             if (recentIdx >= 0 && histDates.length > 0) {
@@ -452,7 +452,7 @@
                 const recent = parseDMY(row[recentIdx]);
                 if (lastHist.passed && lastHist.date && recent && recent > lastHist.date) {
                     const due = new Date(lastHist.date); due.setFullYear(due.getFullYear() + 1);
-                    if ((due - recent) / 864e5 >= 60) warned.add(recentIdx);
+                    if ((due - recent) / 864e5 >= 30) warned.add(recentIdx);
                 }
             }
 

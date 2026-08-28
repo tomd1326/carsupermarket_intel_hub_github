@@ -627,9 +627,9 @@ def _build_mot_comments(r: dict, cb_mileage: str = "") -> str:
             if "Mileage discrepancy" not in notes:
                 notes.append("Mileage discrepancy")
 
-    # Early MOT. The FIRST test is due 3 years after registration and ANY test before that
-    # counts (even by 1 day). Later tests are due 1 year after the previous test, with a
-    # 60+ day threshold. A test straight after a failure is excluded — the car had to be
+    # Early MOT. The FIRST test is due 3 years after registration and the threshold is
+    # 30+ days. Later tests are due 1 year after the previous test, with the same
+    # 30+ day threshold. A test straight after a failure is excluded — the car had to be
     # retested, so it is not early in any suspicious sense. A failed test that is itself
     # early still counts.
     dates = []
@@ -650,7 +650,7 @@ def _build_mot_comments(r: dict, cb_mileage: str = "") -> str:
                 first_due = datetime.date(reg_d.year + 3, reg_d.month, reg_d.day)
             except ValueError:
                 first_due = datetime.date(reg_d.year + 3, 3, 1)
-            if (first_due - dates[0][0]).days >= 1:
+            if (first_due - dates[0][0]).days >= 30:
                 notes.append("Early MOT test")
 
     for j in range(1, len(dates)):
@@ -664,7 +664,7 @@ def _build_mot_comments(r: dict, cb_mileage: str = "") -> str:
             due = datetime.date(prev_d.year + 1, prev_d.month, prev_d.day)
         except ValueError:
             due = datetime.date(prev_d.year + 1, 3, 1)
-        if (due - curr_d).days >= 60:
+        if (due - curr_d).days >= 30:
             if "Early MOT test" not in notes:
                 notes.append("Early MOT test")
             break

@@ -362,7 +362,7 @@ _sf_cache: dict = {"rows": None, "cached_at": 0.0}   # cached_at = unix epoch (w
 # A payload written by a different version is discarded and refetched, so an
 # index-based reader never sees fields laid out to an older schema. Costs one
 # refetch on the first load after deploy, then caching resumes as normal.
-_SF_CACHE_VERSION = 2
+_SF_CACHE_VERSION = 3
 _dbs_cache: dict = {"purchases": None, "vehicles": None, "expires": 0.0, "fetched_at": None, "no_rrp": None}
 _cb_cache: dict  = {"purchases": None, "vehicles": None, "expires": 0.0, "fetched_at": None, "no_rrp": None}
 _cache_lock = threading.Lock()
@@ -430,9 +430,11 @@ def _fetch_dbs_raw_values() -> list:
             _dbs_raw_values_cache["expires"] = time.monotonic() + _DBS_RAW_TTL_SECONDS
         return values
 
-# dbt run hours (UK local time) — data available 15 min after each
-_SF_SCHEDULE_HOURS_UK = [3, 7, 10, 13, 16]
-_SF_READY_OFFSET_MIN  = 15
+# dbt run hours (UK local time), cron "15 8,10,12,14,16" — runs are observed
+# finishing 08:30-16:35, but the offset is kept at 45 min as a margin for a
+# run that finishes late.
+_SF_SCHEDULE_HOURS_UK = [8, 10, 12, 14, 16]
+_SF_READY_OFFSET_MIN  = 45
 
 # Fallbacks used only if the settings lookup fails; the live values come from
 # the Buying Requirements settings page (see _sp_cache_seconds below).
@@ -485,7 +487,7 @@ def _sp_cache_seconds() -> int:
     return _cache_durations()[0]
 _S3_BUCKET         = "aa-raw-sources-uk"
 # _S3_ENV imported from core
-_SF_S3_KEY         = f"applications/pricing/uk-vehicle-list-evaluator/{_S3_ENV}/cache/buying_requirements_v24.json"
+_SF_S3_KEY         = f"applications/pricing/uk-vehicle-list-evaluator/{_S3_ENV}/cache/buying_requirements_v25.json"
 _DBS_S3_KEY        = f"applications/pricing/uk-vehicle-list-evaluator/{_S3_ENV}/cache/dbs_purchases_v17.json"
 _CB_S3_KEY         = f"applications/pricing/uk-vehicle-list-evaluator/{_S3_ENV}/cache/cb_purchases_v13.json"
 _CB_EXTRA_S3_KEY   = f"applications/pricing/uk-vehicle-list-evaluator/{_S3_ENV}/cache/cb_extra_v2.json"
@@ -753,7 +755,8 @@ def _build_sf_rows(force: bool = False) -> list:
                 GPU_M_COSTS,
                 COALESCE(MILEAGE_BAND, '') AS MILEAGE_BAND,
                 WEBSITE_URL,
-                IS_ADVERTISED
+                IS_ADVERTISED,
+                COALESCE(COLOUR, '') AS COLOUR
             FROM PROD_CARSUPERMARKET_DB.product_vehicle_journey.buying_requirements
             ORDER BY CAP_ID
         """)
@@ -766,7 +769,7 @@ def _build_sf_rows(force: bool = False) -> list:
     #  24:date_first_registered, 25:mileage, 26:autotrader_portal_link,
     #  27:invoice_posted_date, 28:vehicle_updated_at, 29:make_model, 30:cap_live_clean,
     #  31:vehicle_costs, 32:gpu_m_costs, 33:mileage_band, 34:website_url,
-    #  35:is_advertised, 36:sell_price_inc_admin_fee]
+    #  35:is_advertised, 36:sell_price_inc_admin_fee, 37:colour]
     col_map = {name.upper(): i for i, name in enumerate(col_names)}
     def _g(r, name): return r[col_map[name]] if name in col_map else None
     def _s(r, name): v = _g(r, name); return str(v) if v is not None else None
@@ -790,6 +793,7 @@ def _build_sf_rows(force: bool = False) -> list:
         _g(r, 'WEBSITE_URL'),
         (1 if _g(r, 'IS_ADVERTISED') else 0),
         _gbp(r, 'SELLING_PRICE_INC_ADMIN_FEE'),
+        _g(r, 'COLOUR'),
     ] for r in rows]
     _save_sf_cache_to_s3(result, cached_at)
 
