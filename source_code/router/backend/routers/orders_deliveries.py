@@ -23,7 +23,6 @@ import time
 import zoneinfo
 
 import boto3
-import requests
 
 from fastapi import APIRouter, Request, Depends, HTTPException
 from fastapi.responses import HTMLResponse
@@ -31,7 +30,11 @@ from fastapi.responses import HTMLResponse
 from utils.db_utils import get_database_connection, get_user_preference
 from utils.snowflake_client import SnowflakeClient
 from .core import BASE_URL, templates, _track, get_current_user, s3_bucketname, s3_bucket_region, _S3_ENV
-from .kpi import _get_gemini_api_key
+from .kpi import _cortex_complete, _CORTEX_MODEL
+from utils.email_client import send_email
+
+# Test email button (tdrayson only) sends from and to this address.
+TEST_EMAIL_ADDRESS = "tom.drayson@carsupermarket.com"
 
 logger = logging.getLogger(__name__)
 
@@ -56,6 +59,11 @@ _COLUMNS = [
     # a flat amount would overstate a waived one). Built in the model beside
     # SALE_PRICE_AFTER_DISCOUNT_INC_ADMIN_FEE. The discount is its own column.
     ("SALE_PRICE_BEFORE_DISCOUNT_INC_ADMIN_FEE", "sell_price_incl_fee"),
+    # Same price with the vehicle discount taken off. Not shown as a column —
+    # it exists so PTM % is measured on what the customer actually paid, and so
+    # it matches daily_summary__p, which builds its own price position from
+    # this column. Sell stays before discount with Discount beside it.
+    ("SALE_PRICE_AFTER_DISCOUNT_INC_ADMIN_FEE", "sell_price_after_disc_incl_fee"),
     ("PRICE_BAND", "price_band"),
     ("FINANCE_SUBSIDY", "finance_subsidy"),
     ("CHASSIS_MARGIN_AFTER_SUBSIDY", "chassis_mgn_aft_subs"),
@@ -139,17 +147,19 @@ def _fetch_start() -> datetime.date:
 
 
 # ── Caching ───────────────────────────────────────────────────────────────
-# The rows barely change within a day and the page fetches everything once,
+# The rows barely change within a run and the page fetches everything once,
 # then slices client-side — so serve a cached payload rather than hitting
 # Snowflake on every load. Mirrors the KPI SharePoint cache pattern:
 #   memory cache -> S3 cache -> Snowflake build -> stale S3 fallback.
-# sales_performance__p is a `daily`-tagged dbt model (rebuilt overnight), so a
-# payload is fresh if it was built after the most recent 06:00 UK boundary.
+# dbt rebuilds sales_performance__p five times a day, cron "15 8,10,12,14,16"
+# Europe/London, and finishes by :45 past. A payload is fresh if it was built
+# after the most recent HH:45 boundary that has already passed, so the page
+# picks up each day's runs automatically without a fixed single-refresh time.
 # A manual "Refresh" on the page passes refresh=1 to force a rebuild.
 #
 # Version the S3 key: bump _CACHE_VERSION whenever _COLUMNS changes, otherwise
 # an old cached payload (missing the new columns) is served until it expires.
-_CACHE_VERSION = 10
+_CACHE_VERSION = 11
 _S3_KEY = (f"applications/pricing/uk-vehicle-list-evaluator/shared/cache/"
            f"orders_deliveries_v{_CACHE_VERSION}.json")
 
@@ -157,12 +167,26 @@ _mem_cache: dict | None = None
 _mem_cache_at: float = 0.0
 
 
+# dbt run start hours (Europe/London); each run finishes by :45 past.
+_DBT_RUN_HOURS = (8, 10, 12, 14, 16)
+
+
+def _latest_dbt_boundary(now_uk: datetime.datetime) -> datetime.datetime:
+    """Most recent HH:45 UK time by which a dbt run has finished, at or
+    before now_uk. Falls back to the previous day's last run if none of
+    today's runs have finished yet."""
+    for hour in reversed(_DBT_RUN_HOURS):
+        boundary = now_uk.replace(hour=hour, minute=45, second=0, microsecond=0)
+        if boundary <= now_uk:
+            return boundary
+    yesterday = now_uk - datetime.timedelta(days=1)
+    return yesterday.replace(hour=_DBT_RUN_HOURS[-1], minute=45, second=0, microsecond=0)
+
+
 def _cache_is_fresh(cached_at: float) -> bool:
     uk = zoneinfo.ZoneInfo("Europe/London")
     now_uk = datetime.datetime.now(uk)
-    boundary = now_uk.replace(hour=6, minute=0, second=0, microsecond=0)
-    if boundary > now_uk:
-        boundary -= datetime.timedelta(days=1)
+    boundary = _latest_dbt_boundary(now_uk)
     return cached_at >= boundary.timestamp()
 
 
@@ -254,7 +278,7 @@ def _build_data() -> dict:
         row = {key: _val(r, sf) for sf, key in _COLUMNS}
         # Derived columns (matched to the Power Query)
         row["purchase_cap_pct"] = _ratio(row["purch_price"], row["cap_live_purchase"])
-        row["sell_pct_at"] = _ratio(row["sell_price_incl_fee"], row["at_val_order"])
+        row["sell_pct_at"] = _ratio(row["sell_price_after_disc_incl_fee"], row["at_val_order"])
         out.append(row)
 
     return {
@@ -344,7 +368,31 @@ def orders_deliveries_page(request: Request, user: str = Depends(get_current_use
     return templates.TemplateResponse("orders_deliveries.html", {
         "request": request, "user": user, "BASE_URL": BASE_URL,
         "font_summary": font_summary, "font_vehicle": font_vehicle,
+        "show_test_email": user == 'tdrayson',
     })
+
+
+@router.post("/reports/orders-deliveries/test-email")
+def orders_deliveries_test_email(request: Request, user: str = Depends(get_current_user)):
+    """Send a test email to Tom, to confirm Graph mail sending works. tdrayson only."""
+    if user != 'tdrayson':
+        raise HTTPException(status_code=403)
+    _track(request, 'test_email', '/reports/orders-deliveries')
+
+    sent_at = datetime.datetime.now(zoneinfo.ZoneInfo("Europe/London")).strftime('%Y-%m-%d %H:%M:%S')
+    try:
+        send_email(
+            to=TEST_EMAIL_ADDRESS,
+            subject=f"VLE test email - {sent_at}",
+            body_html=(
+                "<p>Test email from the Orders &amp; Deliveries page.</p>"
+                f"<p>Sent at {sent_at} (UK).</p>"
+            ),
+        )
+    except Exception as e:
+        logger.exception("Test email failed")
+        return {"status": "error", "message": str(e)[:300]}
+    return {"status": "ok", "message": f"Sent to {TEST_EMAIL_ADDRESS} at {sent_at}"}
 
 
 @router.get("/reports/orders-deliveries/data")
@@ -361,7 +409,7 @@ def orders_deliveries_data(request: Request, refresh: int = 0,
 
 # ── Ask AI ──────────────────────────────────────────────────────────────────
 # The browser does the slicing and sends a compact table of per-slice figures,
-# not the vehicle rows. Gemini is being asked to read a ranked breakdown and
+# not the vehicle rows. The model is being asked to read a ranked breakdown and
 # explain it, never to aggregate raw data itself — it is unreliable at
 # arithmetic over thousands of rows and reliable at narrating a table that
 # already has the totals worked out.
@@ -373,28 +421,30 @@ vehicles, the mean per vehicle for each period, the change against the previous
 period, and `impact` = change x volume, which is that slice's contribution to
 the overall movement in currency.
 
-Answer as a buyer would want it: what went wrong, in what part of the business,
-on what kind of vehicle, and where to go and look. Structure it as:
+Answer as a buyer would want it: what moved, why, and which supplier or sales
+type it's concentrated in. Write it as plain prose and bullets, not fixed
+headed sections — let the answer's shape follow the finding rather than
+forcing every answer through the same four boxes.
 
-1. WHAT MOVED — one line. The metric, the per-unit change, the period pair.
-2. WHY — the causal chain through the component metrics.
-   For GPU-M: chassis margin after subsidy, vehicle costs and write-downs. Say
-   which moved and by how much per unit. "GPU-M fell because chassis margin fell
-   £180/unit, while costs were flat" is the answer; "GPU-M fell because GPU-M
-   fell" is not.
-   For GPU-S: finance penetration, finance commission per financed deal, and
-   total product margin. Penetration and commission rate are different problems
-   with different fixes — always say which one moved. A GPU-S fall with flat
-   commission per financed deal is a penetration problem; a fall with flat
-   penetration is a rate or product-mix problem.
-3. WHERE — the supplier channel, then the kind of vehicle within it (fuel, price
-   band, age, mileage). Name the specific combination, not each dimension
-   separately: "B2B2C diesels over 60k miles", not "B2B2C was down and diesel was
-   down".
-4. GO AND LOOK — finish with the slicer selection that isolates the problem, as
-   a short instruction: "Select Supplier Channel = B2B2C, Fuel = Diesel to see
-   these 40 vehicles." Pick the narrowest slice that still holds enough vehicles
-   to matter.
+Cover, in whatever order and depth the data actually supports:
+- What moved: the metric, the per-unit change, the period pair.
+- Why: the causal chain through the component metrics.
+  For GPU-M: chassis margin after subsidy, vehicle costs and write-downs. Say
+  which moved and by how much per unit. "GPU-M fell because chassis margin fell
+  £180/unit, while costs were flat" is the answer; "GPU-M fell because GPU-M
+  fell" is not.
+  For GPU-S: finance penetration, finance commission per financed deal, and
+  total product margin. Penetration and commission rate are different problems
+  with different fixes — always say which one moved. A GPU-S fall with flat
+  commission per financed deal is a penetration problem; a fall with flat
+  penetration is a rate or product-mix problem.
+- Where: the supplier channel and supplier, then sales type or price band
+  within it if that sharpens the picture. Name the specific combination, not
+  each dimension separately: "B2B2C via Enterprise", not "B2B2C was down and
+  Enterprise was down".
+- Which selection on the page would isolate it, only if that adds something
+  beyond what "where" already said — do not restate the same slice as a
+  separate instruction.
 
 On figures:
 - Lead with per-unit changes — that is how the business thinks about GPU. Use
@@ -402,9 +452,8 @@ On figures:
   or when the reader needs the cash number. Do not open with total impact and do
   not quote it for every slice. Quote it at most twice in an answer; a slice's
   per-unit change and its vehicle count together already say how much it matters.
-- Do not repeat the same slice list under two headings. If WHY already named the
-  slices, WHERE should add what those vehicles have in common (age, mileage,
-  price band) rather than listing them again.
+- Do not repeat the same slice list twice. If the causal explanation already
+  named the slices, do not list them again when saying where the problem sits.
 - A per-unit swing on a handful of vehicles is not an explanation. Check the
   volume before calling something a driver, and say when a finding rests on a
   small number of vehicles.
@@ -439,9 +488,9 @@ say so and name what would need to be selected on the page to get it, rather
 than estimating."""
 
 # Turns kept when replaying a conversation: the first (which carries the data
-# table) plus the most recent ones. Each turn adds to the prompt, and the free
-# tier caps input tokens per minute, so an unbounded thread would eventually
-# fail on quota mid-conversation.
+# table) plus the most recent ones. Each turn adds to the prompt, and an
+# unbounded thread would eventually grow past what's sensible to send, so it
+# is capped here rather than trusting the browser.
 _AI_MAX_HISTORY_TURNS = 11
 
 
@@ -449,7 +498,7 @@ _AI_MAX_HISTORY_TURNS = 11
 def orders_deliveries_ask_ai(request: Request, payload: dict,
                              user: str = Depends(get_current_user)):
     """Answer a free-text question about the pre-aggregated slice table the
-    browser sends up. Restricted while the shared Gemini key is in use.
+    browser sends up, via Snowflake Cortex.
 
     `history` (optional) is the conversation so far, as
     [{"role": "user"|"model", "text": ...}, ...]. When present the question is
@@ -468,100 +517,50 @@ def orders_deliveries_ask_ai(request: Request, payload: dict,
     # Only a first turn has to carry the data — a follow-up rides on history.
     if not history and (not isinstance(context, str) or not context.strip()):
         return {"status": "error", "message": "Missing data context"}
-    # A runaway thread would quietly grow the prompt on every turn until it
-    # trips the token quota, so cap it here rather than trusting the browser.
     if len(history) > _AI_MAX_HISTORY_TURNS:
         history = history[:1] + history[-(_AI_MAX_HISTORY_TURNS - 1):]
-
-    api_key = _get_gemini_api_key()
-    if not api_key:
-        return {"status": "error", "message": "Gemini API key is not configured"}
 
     # Follow-ups replay the conversation as separate turns rather than one
     # concatenated blob, so the model can tell its own previous answers from
     # the new question. The data table is sent ONCE, on the first turn — the
     # browser omits it on follow-ups it judges answerable from the exchange so
-    # far, which is what keeps a multi-question thread inside the token quota.
-    contents = []
-    first = f"{_AI_SYSTEM_PROMPT}\n\n=== DATA ===\n{context}\n\n=== QUESTION ===\n{question.strip()}"
+    # far, which is what keeps a multi-question thread short.
+    first = f"=== DATA ===\n{context}\n\n=== QUESTION ===\n{question.strip()}"
+    messages = [{"role": "system", "content": _AI_SYSTEM_PROMPT}]
     if history:
         # history[0] carries the data table; later turns are question/answer text.
-        for i, turn in enumerate(history):
+        for turn in history:
             role = turn.get("role")
             text = turn.get("text")
             if role not in ("user", "model") or not isinstance(text, str) or not text.strip():
                 continue
-            contents.append({"role": role, "parts": [{"text": text}]})
-        contents.append({"role": "user", "parts": [{"text": question.strip()}]})
+            messages.append({"role": "assistant" if role == "model" else "user", "content": text})
+        messages.append({"role": "user", "content": question.strip()})
     else:
-        contents.append({"role": "user", "parts": [{"text": first}]})
+        messages.append({"role": "user", "content": first})
 
-    prompt_chars = sum(len(p["parts"][0]["text"]) for p in contents)
+    prompt_chars = sum(len(m["content"]) for m in messages)
     logger.info("Orders & Deliveries Ask AI: turns=%s prompt_chars=%s follow_up=%s",
-                len(contents), prompt_chars, bool(history))
+                len(messages), prompt_chars, bool(history))
 
     try:
-        resp = requests.post(
-            "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent",
-            params={"key": api_key},
-            headers={"Content-Type": "application/json"},
-            json={
-                # gemini-2.5-flash is a thinking model: its reasoning tokens are
-                # charged against maxOutputTokens BEFORE any visible text, so a
-                # 4096 cap truncated answers mid-sentence. thinkingBudget caps
-                # the reasoning separately, leaving the rest for the answer.
-                "contents": contents,
-                "generationConfig": {
-                    "maxOutputTokens": 16384,
-                    "temperature": 0.2,
-                    "thinkingConfig": {"thinkingBudget": 8192},
-                },
-            },
-            timeout=60,
-        )
-        try:
-            data = resp.json()
-        except ValueError:
-            data = {}
-
-        if not resp.ok:
-            error = data.get("error") if isinstance(data, dict) else None
-            message = error.get("message") if isinstance(error, dict) else None
-            return {"status": "error", "message": message or resp.reason or "Gemini request failed"}
-
-        candidate = data["candidates"][0]
-        usage = data.get("usageMetadata", {})
-        finish_reason = candidate.get("finishReason", "unknown")
+        data = _cortex_complete(messages, max_tokens=16384, temperature=0.2)
+        usage = data.get("usage", {})
         logger.info(
-            "Orders & Deliveries Ask AI: finishReason=%s tokens_in=%s tokens_out=%s thoughts=%s",
-            finish_reason,
-            usage.get("promptTokenCount"),
-            usage.get("candidatesTokenCount"),
-            usage.get("thoughtsTokenCount"),
+            "Orders & Deliveries Ask AI: model=%s tokens_in=%s tokens_out=%s",
+            _CORTEX_MODEL, usage.get("prompt_tokens"), usage.get("completion_tokens"),
         )
-        parts = candidate["content"]["parts"]
-        answer = "".join(part.get("text", "") for part in parts).strip()
+        answer = data["choices"][0]["messages"].strip()
         if not answer:
-            # MAX_TOKENS with no text means the whole budget went on reasoning.
-            if finish_reason == "MAX_TOKENS":
-                return {"status": "error",
-                        "message": "The model used its whole output budget on reasoning "
-                                   "and returned no answer. Try a more specific question."}
-            return {"status": "error", "message": "Gemini returned an empty answer"}
+            return {"status": "error", "message": "Cortex returned an empty answer"}
         # On a first turn, hand back the exact text the prompt was built from.
         # The browser stores it as turn 0 so a later follow-up replays the data
         # table verbatim instead of re-deriving (and possibly re-wording) it.
         return {"status": "ok", "answer": answer,
-                # The browser marks a truncated answer rather than showing it as
-                # if it were complete — a cut-off analysis reads as a finished
-                # one otherwise.
-                "truncated": finish_reason == "MAX_TOKENS",
+                "truncated": False,
                 **({} if history else {"first_turn_text": first}),
-                "tokens_in": usage.get("promptTokenCount"),
-                "tokens_out": usage.get("candidatesTokenCount")}
-    except requests.exceptions.RequestException as e:
+                "tokens_in": usage.get("prompt_tokens"),
+                "tokens_out": usage.get("completion_tokens")}
+    except Exception as e:
         logger.error("Orders & Deliveries Ask AI request failed: %s", e)
         return {"status": "error", "message": str(e)}
-    except (KeyError, IndexError, TypeError) as e:
-        logger.error("Orders & Deliveries Ask AI response parse failed: %s", e)
-        return {"status": "error", "message": "Could not read Gemini response"}

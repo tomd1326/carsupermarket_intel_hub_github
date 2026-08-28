@@ -1,11 +1,9 @@
-"""KPI dashboard: Snowflake daily summary, SharePoint sessions, Gemini AI summary."""
+"""KPI dashboard: Snowflake daily summary, SharePoint sessions, Cortex AI summary."""
 
 from fastapi import APIRouter, Request, Depends, HTTPException
 from fastapi.responses import HTMLResponse, RedirectResponse
-import os
 import json
 import time
-import requests
 import logging
 import datetime
 
@@ -13,13 +11,31 @@ import datetime
 from utils.db_utils import (get_database_connection, get_prod_pricer_connection, get_settings)
 from utils.snowflake_client import SnowflakeClient
 from utils.sharepoint_client import SharePointClient
-from utils.secrets_manager_client import get_secret
 
 from .core import (BASE_URL, templates, _track, get_current_user)
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+
+GA4_CAMPAIGN_EVENTS = [
+    "Apply-Finance_Lead",
+    "CSF-Approved_Lead",
+    "Pre-Approved_Lead",
+    "Vehicle_Enquiry_Lead",
+    "Vehicle_Reservation_Lead",
+]
+
+GA4_CAMPAIGNS = [
+    ".Vehicle Ads > CSM Audience",
+    ".Vehicle Ads > CSM Audience Experiment",
+    ".Vehicle Ads > Newcastle",
+    "{TEST} Dealer > Regional > 2 > Sheffield, Barnsley & Worksop",
+    "{TEST} Dealer > Regional > 3 > Grimsby, Scunthorpe, Hessle & Hull",
+    "{TEST} Dealer > Regional > 4 > Lincoln",
+    "Converters > Regional > 1 > Birmingham & Coventry",
+]
 
 
 def _week_monday_of(d: datetime.date) -> datetime.date:
@@ -91,7 +107,7 @@ def kpi_data(request: Request, user: str = Depends(get_current_user)):
         with SnowflakeClient() as sf:
             rows, cols = sf.execute("""
                 SELECT
-                    SNAPSHOT_DATE,
+                    DATE,
                     ORDERS,
                     ORDERS_N_MINUS_1,
                     ORDERS_TARGET,
@@ -99,8 +115,8 @@ def kpi_data(request: Request, user: str = Depends(get_current_user)):
                     SESSIONS_TARGET,
                     SESSIONS_TARGET_N_MINUS_1
                 FROM PROD_CARSUPERMARKET_DB.product_slt_kpis.daily_summary
-                WHERE SNAPSHOT_DATE >= %s AND SNAPSHOT_DATE <= %s
-                ORDER BY SNAPSHOT_DATE
+                WHERE DATE >= %s AND DATE <= %s
+                ORDER BY DATE
             """, [str(fetch_start), str(window_end)])
 
         col_map = {c.upper(): i for i, c in enumerate(cols)}
@@ -112,7 +128,7 @@ def kpi_data(request: Request, user: str = Depends(get_current_user)):
         # Index all columns by date
         by_date: dict[str, dict] = {}
         for r in rows:
-            d = _col(r, 'SNAPSHOT_DATE')
+            d = _col(r, 'DATE')
             d = d.isoformat() if isinstance(d, datetime.date) else str(d)[:10]
             by_date[d] = {
                 'orders':                   _col(r, 'ORDERS'),
@@ -213,6 +229,199 @@ def kpi_data(request: Request, user: str = Depends(get_current_user)):
         }
     except Exception as e:
         logger.error(f"KPI data failed: {e}")
+        return {"status": "error", "message": str(e)}
+
+
+@router.get("/kpi/ga4-campaign-conversion")
+def kpi_ga4_campaign_conversion(
+    request: Request,
+    event_name: str = GA4_CAMPAIGN_EVENTS[0],
+    user: str = Depends(get_current_user),
+):
+    """Conversion rate and raw event volume for one GA4 event, by campaign.
+
+    All campaigns are returned for the selected event, plus an "Aggregated"
+    series summing across every campaign before the rate is taken. Day, week
+    and month rates are ratios of summed event counts to each campaign's own
+    summed sessions (GA4_SESSIONS_BY_CAMPAIGN), not to site-wide sessions;
+    weekly and monthly values are never averages of the daily percentages.
+    Volumes are the same summed event counts before dividing by sessions.
+    """
+    if user != 'tdrayson':
+        raise HTTPException(status_code=403)
+    if event_name not in GA4_CAMPAIGN_EVENTS:
+        return {"status": "error", "message": f"Unknown event: {event_name}"}
+
+    try:
+        today = datetime.date.today()
+        first_of_this_month = today.replace(day=1)
+
+        def _shift_month(d: datetime.date, months: int) -> datetime.date:
+            month_index = d.month - 1 + months
+            return datetime.date(d.year + month_index // 12, month_index % 12 + 1, 1)
+
+        fetch_start = _shift_month(first_of_this_month, -13)
+        campaign_placeholders = ", ".join(["%s"] * len(GA4_CAMPAIGNS))
+
+        with SnowflakeClient() as sf:
+            session_rows, session_cols = sf.execute(f"""
+                SELECT DATE, SESSION_CAMPAIGN_NAME, SUM(SESSIONS) AS SESSIONS
+                FROM PROD_CARSUPERMARKET_DB.SOURCE_UX_TRACKING.GA4_SESSIONS_BY_CAMPAIGN
+                WHERE SESSION_CAMPAIGN_NAME IN ({campaign_placeholders})
+                  AND DATE >= %s AND DATE <= %s
+                GROUP BY DATE, SESSION_CAMPAIGN_NAME
+                ORDER BY DATE, SESSION_CAMPAIGN_NAME
+            """, [*GA4_CAMPAIGNS, str(fetch_start), str(today)])
+            event_rows, event_cols = sf.execute(f"""
+                SELECT DATE, SESSION_CAMPAIGN_NAME, SUM(EVENT_COUNT) AS EVENT_COUNT
+                FROM PROD_CARSUPERMARKET_DB.SOURCE_UX_TRACKING.GA4_LEAD_VOLUME_BY_CAMPAIGN
+                WHERE EVENT_NAME = %s
+                  AND SESSION_CAMPAIGN_NAME IN ({campaign_placeholders})
+                  AND DATE >= %s AND DATE <= %s
+                GROUP BY DATE, SESSION_CAMPAIGN_NAME
+                ORDER BY DATE, SESSION_CAMPAIGN_NAME
+            """, [event_name, *GA4_CAMPAIGNS, str(fetch_start), str(today)])
+
+        session_col_map = {c.upper(): i for i, c in enumerate(session_cols)}
+        event_col_map = {c.upper(): i for i, c in enumerate(event_cols)}
+
+        def _date_value(value) -> datetime.date:
+            if isinstance(value, datetime.datetime):
+                return value.date()
+            if isinstance(value, datetime.date):
+                return value
+            return datetime.date.fromisoformat(str(value)[:10])
+
+        def _number(value) -> float:
+            try:
+                return float(value) if value is not None else 0.0
+            except (TypeError, ValueError):
+                return 0.0
+
+        sessions_by_campaign = {campaign: {} for campaign in GA4_CAMPAIGNS}
+        all_dates: set[datetime.date] = set()
+        for row in session_rows:
+            campaign = str(row[session_col_map["SESSION_CAMPAIGN_NAME"]])
+            if campaign not in sessions_by_campaign:
+                continue
+            date_value = _date_value(row[session_col_map["DATE"]])
+            sessions_by_campaign[campaign][date_value] = _number(row[session_col_map["SESSIONS"]])
+            all_dates.add(date_value)
+
+        if not all_dates:
+            return {"status": "error", "message": "No GA4 session data returned"}
+
+        events_by_campaign = {campaign: {} for campaign in GA4_CAMPAIGNS}
+        for row in event_rows:
+            campaign = str(row[event_col_map["SESSION_CAMPAIGN_NAME"]])
+            if campaign not in events_by_campaign:
+                continue
+            date_value = _date_value(row[event_col_map["DATE"]])
+            events_by_campaign[campaign][date_value] = _number(row[event_col_map["EVENT_COUNT"]])
+
+        data_start = min(all_dates)
+        data_end = max(all_dates)
+
+        daily_start = max(data_start, data_end - datetime.timedelta(days=24))
+        daily_dates = []
+        date_iter = daily_start
+        while date_iter <= data_end:
+            daily_dates.append(date_iter)
+            date_iter += datetime.timedelta(days=1)
+
+        current_week_monday = _week_monday_of(data_end)
+        week_mondays = [current_week_monday - datetime.timedelta(weeks=i) for i in range(9, -1, -1)]
+        week_mondays = [monday for monday in week_mondays if monday + datetime.timedelta(days=6) >= data_start]
+        weekly_date_groups = [
+            [monday + datetime.timedelta(days=i) for i in range(7) if monday + datetime.timedelta(days=i) <= data_end]
+            for monday in week_mondays
+        ]
+
+        monthly_start = max(data_start.replace(day=1), _shift_month(data_end.replace(day=1), -13))
+        month_firsts = []
+        month_iter = monthly_start
+        while month_iter <= data_end.replace(day=1):
+            month_firsts.append(month_iter)
+            month_iter = _shift_month(month_iter, 1)
+
+        monthly_date_groups = []
+        for month_first in month_firsts:
+            next_month = _shift_month(month_first, 1)
+            month_dates = []
+            date_iter = month_first
+            while date_iter < next_month and date_iter <= data_end:
+                month_dates.append(date_iter)
+                date_iter += datetime.timedelta(days=1)
+            monthly_date_groups.append(month_dates)
+
+        month_abbrs = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+
+        # Aggregated sums events and sessions across every campaign before
+        # dividing, so it is a true pooled rate, not an average of the rows.
+        def _sessions(campaigns: list[str], date_value: datetime.date) -> float:
+            return sum(sessions_by_campaign[c].get(date_value, 0.0) for c in campaigns)
+
+        def _event_count(campaigns: list[str], date_value: datetime.date) -> float:
+            return sum(events_by_campaign[c].get(date_value, 0.0) for c in campaigns)
+
+        def _has_sessions(campaigns: list[str], date_value: datetime.date) -> bool:
+            return any(date_value in sessions_by_campaign[c] for c in campaigns)
+
+        def _rate(campaigns: list[str], dates: list[datetime.date]) -> float | None:
+            valid_dates = [d for d in dates if _has_sessions(campaigns, d)]
+            if not valid_dates:
+                return None
+            sessions = sum(_sessions(campaigns, d) for d in valid_dates)
+            if sessions <= 0:
+                return None
+            total_events = sum(_event_count(campaigns, d) for d in valid_dates)
+            return round(total_events / sessions * 100, 3)
+
+        def _volume(campaigns: list[str], dates: list[datetime.date]) -> float | None:
+            valid_dates = [d for d in dates if _has_sessions(campaigns, d)]
+            if not valid_dates:
+                return None
+            return sum(_event_count(campaigns, d) for d in valid_dates)
+
+        def _session_total(campaigns: list[str], dates: list[datetime.date]) -> float | None:
+            valid_dates = [d for d in dates if _has_sessions(campaigns, d)]
+            if not valid_dates:
+                return None
+            return sum(_sessions(campaigns, d) for d in valid_dates)
+
+        def _series(campaigns: list[str]) -> dict:
+            return {
+                "daily_rates": [_rate(campaigns, [d]) for d in daily_dates],
+                "weekly_rates": [_rate(campaigns, dates) for dates in weekly_date_groups],
+                "monthly_rates": [_rate(campaigns, dates) for dates in monthly_date_groups],
+                "daily_volumes": [_volume(campaigns, [d]) for d in daily_dates],
+                "weekly_volumes": [_volume(campaigns, dates) for dates in weekly_date_groups],
+                "monthly_volumes": [_volume(campaigns, dates) for dates in monthly_date_groups],
+                # Sessions are sent per campaign so the page can re-pool the
+                # aggregate when campaigns are filtered out — a pooled rate
+                # cannot be rebuilt from the row percentages alone.
+                "daily_sessions": [_session_total(campaigns, [d]) for d in daily_dates],
+                "weekly_sessions": [_session_total(campaigns, dates) for dates in weekly_date_groups],
+                "monthly_sessions": [_session_total(campaigns, dates) for dates in monthly_date_groups],
+            }
+
+        aggregated = {"name": "Aggregated", **_series(GA4_CAMPAIGNS)}
+        campaigns = [{"name": campaign, **_series([campaign])} for campaign in GA4_CAMPAIGNS]
+
+        return {
+            "status": "ok",
+            "event_name": event_name,
+            "events": GA4_CAMPAIGN_EVENTS,
+            "data_start": data_start.isoformat(),
+            "data_end": data_end.isoformat(),
+            "dates": [date_value.isoformat() for date_value in daily_dates],
+            "weekly_labels": [f"W{monday.isocalendar()[1]} ({monday.day}-{month_abbrs[monday.month - 1]})" for monday in week_mondays],
+            "monthly_labels": [month_abbrs[month_first.month - 1] + " " + str(month_first.year)[2:] for month_first in month_firsts],
+            "aggregated": aggregated,
+            "campaigns": campaigns,
+        }
+    except Exception as e:
+        logger.error("GA4 campaign conversion data failed for %s: %s", event_name, e)
         return {"status": "error", "message": str(e)}
 
 
@@ -368,14 +577,14 @@ def kpi_custom_data(request: Request, metric: str, agg: str = "sum", user: str =
 
         n1_col, target_col = _sibling_columns(metric)
         # All column names come from the whitelists above — safe to interpolate
-        select_cols = ["SNAPSHOT_DATE", metric] + ([n1_col] if n1_col else []) + ([target_col] if target_col else [])
+        select_cols = ["DATE", metric] + ([n1_col] if n1_col else []) + ([target_col] if target_col else [])
 
         with SnowflakeClient() as sf:
             rows, cols = sf.execute(f"""
                 SELECT {', '.join(select_cols)}
                 FROM PROD_CARSUPERMARKET_DB.product_slt_kpis.daily_summary
-                WHERE SNAPSHOT_DATE >= %s AND SNAPSHOT_DATE <= %s
-                ORDER BY SNAPSHOT_DATE
+                WHERE DATE >= %s AND DATE <= %s
+                ORDER BY DATE
             """, [str(fetch_start), str(window_end)])
 
         col_map = {c.upper(): i for i, c in enumerate(cols)}
@@ -393,7 +602,7 @@ def kpi_custom_data(request: Request, metric: str, agg: str = "sum", user: str =
 
         by_date: dict[str, dict] = {}
         for r in rows:
-            d = r[col_map['SNAPSHOT_DATE']]
+            d = r[col_map['DATE']]
             d = d.isoformat() if isinstance(d, datetime.date) else str(d)[:10]
             by_date[d] = {
                 'v':  _num(r[col_map[metric]]),
@@ -560,35 +769,25 @@ def kpi_layout_save(request: Request, payload: dict, user: str = Depends(get_cur
         return {"status": "error", "message": str(e)}
 
 
-def _get_gemini_api_key() -> str | None:
-    api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
-    if api_key:
-        return api_key
+# Model run through Snowflake Cortex (SNOWFLAKE.CORTEX.COMPLETE) rather than a
+# third-party API — this account has no Anthropic API key, only a Cortex
+# entitlement, so the model has to be one Cortex serves. claude-sonnet-5 is
+# confirmed working on this account (2026-08-24) despite eu-west-1 normally
+# being outside Anthropic's own regional availability for Claude.
+_CORTEX_MODEL = "claude-sonnet-5"
 
-    # Local-only fallback for testing until the Gemini key can be moved into AWS Secrets Manager.
-    fallback_api_key = (
-        None
-        if os.getenv("LOCAL_ENV") == "1" or not os.getenv("AWS_LAMBDA_FUNCTION_NAME")
-        else None
-    )
 
-    secret_name = os.getenv("GEMINI_SECRET_NAME")
-    if not secret_name:
-        return fallback_api_key
-
-    try:
-        secret = get_secret(secret_name)
-    except Exception as e:
-        logger.warning("Could not load Gemini secret %s: %s", secret_name, e)
-        return fallback_api_key
-
-    return (
-        secret.get("GEMINI_API_KEY")
-        or secret.get("GOOGLE_API_KEY")
-        or secret.get("api_key")
-        or secret.get("key")
-        or fallback_api_key
-    )
+def _cortex_complete(messages: list[dict], max_tokens: int, temperature: float) -> dict:
+    """Run a chat completion through Snowflake Cortex and return the parsed
+    response object (the same shape COMPLETE() returns: choices/usage)."""
+    with SnowflakeClient() as client:
+        rows, _ = client.execute(
+            "SELECT SNOWFLAKE.CORTEX.COMPLETE(%s, PARSE_JSON(%s), PARSE_JSON(%s))",
+            [_CORTEX_MODEL, json.dumps(messages),
+             json.dumps({"temperature": temperature, "max_tokens": max_tokens})],
+        )
+    result = rows[0][0]
+    return json.loads(result) if isinstance(result, str) else result
 
 
 @router.post("/kpi/ai-summary")
@@ -600,49 +799,19 @@ def kpi_ai_summary(request: Request, payload: dict, user: str = Depends(get_curr
     if not isinstance(prompt, str) or not prompt.strip():
         return {"status": "error", "message": "Missing prompt"}
 
-    api_key = _get_gemini_api_key()
-    if not api_key:
-        return {"status": "error", "message": "Gemini API key is not configured"}
-
     try:
-        resp = requests.post(
-            "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent",
-            params={"key": api_key},
-            headers={"Content-Type": "application/json"},
-            json={
-                "contents": [{"parts": [{"text": prompt}]}],
-                "generationConfig": {"maxOutputTokens": 4096, "temperature": 0.3},
-            },
-            timeout=30,
-        )
-        try:
-            data = resp.json()
-        except ValueError:
-            data = {}
-
-        if not resp.ok:
-            error = data.get("error") if isinstance(data, dict) else None
-            message = error.get("message") if isinstance(error, dict) else None
-            return {"status": "error", "message": message or resp.reason or "Gemini request failed"}
-
-        candidate = data["candidates"][0]
-        finish_reason = candidate.get("finishReason", "unknown")
-        usage = data.get("usageMetadata", {})
+        data = _cortex_complete([{"role": "user", "content": prompt}],
+                                 max_tokens=4096, temperature=0.3)
+        usage = data.get("usage", {})
         logger.info(
-            "Gemini AI summary: finishReason=%s tokens_in=%s tokens_out=%s",
-            finish_reason,
-            usage.get("promptTokenCount"),
-            usage.get("candidatesTokenCount"),
+            "Cortex AI summary: model=%s tokens_in=%s tokens_out=%s",
+            _CORTEX_MODEL, usage.get("prompt_tokens"), usage.get("completion_tokens"),
         )
-        parts = candidate["content"]["parts"]
-        summary = "".join(part.get("text", "") for part in parts).strip()
+        summary = data["choices"][0]["messages"].strip()
         return {"status": "ok", "summary": summary}
-    except requests.exceptions.RequestException as e:
+    except Exception as e:
         logger.error("KPI AI summary request failed: %s", e)
         return {"status": "error", "message": str(e)}
-    except (KeyError, IndexError, TypeError) as e:
-        logger.error("KPI AI summary response parse failed: %s", e)
-        return {"status": "error", "message": "Could not read Gemini response"}
 
 
 _kpi_sp_cache: dict = {}

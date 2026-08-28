@@ -47,7 +47,7 @@ const BASE_URL = window.BASE_URL;
             // two lines, keeping this at the fixed icon-column width.
             { key: 'at_portal_url', label: 'AT Portal', type: 'link' },
             { key: 'sell_pct_at', label: 'PTM %', type: 'pct',
-              info: 'Price To Market — selling price including admin fee as a percentage of the Autotrader market valuation' },
+              info: 'Price To Market — selling price after discount, including admin fee, as a percentage of the Autotrader market valuation. Averaged per vehicle, so it will not equal the Sell and AT Valuation columns divided together.' },
             { key: 'at_rating', label: 'AT Rating', type: 'num' },
             { key: 'finance_comm', label: 'Finance Comm', type: 'money' },
             { key: 'product_mgn', label: 'Product Mgn', type: 'money' },
@@ -214,6 +214,7 @@ const BASE_URL = window.BASE_URL;
         const SLICER_ORDER = {
             sales_type: ['Rate/Cash', '0%', 'Unknown'],
             fuel: ['Petrol', 'Diesel', 'Electric', 'Hybrid', 'Plug-In Hybrid'],
+            dis_band: ['0-14', '15-29', '30-44', '45-59', '60-89', '90+'],
         };
         // Heading reflects APPLIED lens/granularity — frozen until Apply,
         // same as everything else in the slicer bar.
@@ -426,6 +427,8 @@ const BASE_URL = window.BASE_URL;
             { key: 'units_pct',    label: 'Units %',            agg: 'pct_of_total' },
             { key: 'ack_dis',      label: 'DIS',                 agg: 'mean',
               info: 'Days In Stock — purchase date to acknowledged date' },
+            { key: 'dts',          label: 'DTS',                 agg: 'mean',
+              info: 'Days To Sell — first advertised date to acknowledged date' },
             { key: 'purch_price',  label: 'Purch',               agg: 'mean', money: true },
             { key: 'sell_price_incl_fee', label: 'Sell',       agg: 'mean', money: true,
               info: 'Selling price before discount, including the admin fee actually charged on the deal' },
@@ -437,7 +440,7 @@ const BASE_URL = window.BASE_URL;
             { key: 'gpu_m',        label: 'GPU-M',               agg: 'mean', money: true },
             { key: 'at_val_order', label: 'AT Valuation',        agg: 'mean', money: true },
             { key: 'sell_pct_at',  label: 'PTM %',               agg: 'mean',
-              info: 'Price To Market — selling price including admin fee as a percentage of the Autotrader market valuation' },
+              info: 'Price To Market — selling price after discount, including admin fee, as a percentage of the Autotrader market valuation. Averaged per vehicle, so it will not equal the Sell and AT Valuation columns divided together.' },
             { key: 'at_rating',    label: 'AT Rating',           agg: 'mean' },
             { key: 'fin_pen_pct',  label: 'Fin Pen %',           agg: 'fin_pen_pct' },
             { key: 'fin_comm_all', label: 'Fin Comm',            agg: 'fin_comm_all', money: true },
@@ -452,7 +455,7 @@ const BASE_URL = window.BASE_URL;
         // stock is bad). Finance/product-related columns (Fin Pen %, Fin Comm,
         // Fin Comm/unit, Prod mgn) and Costs are deliberately NOT shaded.
         const SHADE_DIRECTION = {
-            ack_dis: 'red',
+            ack_dis: 'red', dts: 'red',
             chassis_mgn_aft_subs: 'green', gpu_m: 'green', gpu_ms: 'green',
             at_rating: 'green',
         };
@@ -483,6 +486,7 @@ const BASE_URL = window.BASE_URL;
             const out = { units: rows.length };
             out.units_pct = totalUnits ? rows.length / totalUnits : null;
             out.ack_dis = mean(rows.map(r => r.ack_dis));
+            out.dts = mean(rows.map(r => r.dts));
             out.purch_price = mean(rows.map(r => r.purch_price));
             out.sell_price_incl_fee = mean(rows.map(r => r.sell_price_incl_fee));
             out.discount = mean(rows.map(r => r.discount));
@@ -491,25 +495,20 @@ const BASE_URL = window.BASE_URL;
             out.metal_mgn = mean(rows.map(r => r.metal_mgn));
             out.gpu_m = mean(rows.map(r => r.gpu_m));
             out.at_val_order = mean(rows.map(r => r.at_val_order));
-            // Ratio of the two averages shown alongside it (Sell / AT
-            // Valuation), NOT a mean of each vehicle's own %. An average of
-            // per-vehicle ratios can land far from what the two adjacent
-            // columns divide to — a handful of low-value vehicles with an
-            // unusual % barely move the two £ averages but swing their own
-            // average heavily. Both averages are restricted to vehicles that
-            // have BOTH figures, so the numerator and denominator are means
-            // over the same set of rows and the on-screen division is exact.
-            // Vehicles missing an AT valuation (no listing found) are excluded
-            // from both, same as they already were from at_val_order's own
-            // average.
-            {
-                const withBoth = rows.filter(r =>
-                    r.sell_price_incl_fee !== null && r.sell_price_incl_fee !== undefined &&
-                    r.at_val_order !== null && r.at_val_order !== undefined);
-                const sellOverBoth = mean(withBoth.map(r => r.sell_price_incl_fee));
-                const atValOverBoth = mean(withBoth.map(r => r.at_val_order));
-                out.sell_pct_at = atValOverBoth ? sellOverBoth / atValOverBoth : null;
-            }
+            // Mean of each vehicle's own PTM %, matching daily_summary__p,
+            // which averages sales_performance's per-vehicle
+            // autotrader_price_position. Every vehicle counts once regardless
+            // of its value.
+            //
+            // This deliberately does NOT equal the Sell and AT Valuation
+            // columns beside it divided together — two reasons. The averaging
+            // differs (a cheap car with an odd % barely moves either £ average
+            // but pulls this one), and Sell is shown before the vehicle
+            // discount while the % is measured after it, with Discount as its
+            // own column. On a discounted group the on-screen division will be
+            // visibly off; the figure that matches daily summary is the one
+            // that matters here.
+            out.sell_pct_at = mean(rows.map(r => r.sell_pct_at));
             out.at_rating = mean(rows.map(r => r.at_rating));
             out.product_mgn = mean(rows.map(r => r.product_mgn));
             out.gpu_s = mean(rows.map(r => r.gpu_s));
@@ -627,7 +626,7 @@ const BASE_URL = window.BASE_URL;
         function fmtSummaryCell(col, v) {
             if (v === null || v === undefined) return '';
             if (col.key === 'units') return Math.round(v).toLocaleString('en-GB');
-            if (col.key === 'ack_dis') return Number(v).toFixed(1);
+            if (col.key === 'ack_dis' || col.key === 'dts') return Number(v).toFixed(1);
             if (col.key === 'at_rating') return Number(v).toFixed(0);
             if (col.money) return fmtMoney(v);
             return fmtPct(v);   // units_pct, fin_pen_pct
@@ -824,6 +823,7 @@ const BASE_URL = window.BASE_URL;
             { key: '__period', heading: null /* set per-lens */ },
             { key: '__sales_type_bucket', heading: 'Sales Type', order: ['Rate/Cash', '0%', 'Unknown'], skipOwnFilter: true, expandable: true },
             { key: 'supplier_channel', heading: 'Channel', expandable: true },
+            { key: 'dis_band', heading: 'Days in Stock Band', order: SLICER_ORDER.dis_band, expandable: true },
             { key: 'fuel', heading: 'Fuel Type', order: SLICER_ORDER.fuel, expandable: true },
             { key: 'price_band', heading: 'Price Band (Rate/Cash)', order: ['<10k','10-12.5k','12.5-15k','15-20k','20-25k','25-30k','30k+','Interest Free'], expandable: true },
             { key: 'mileage_band', heading: 'Mileage Band', expandable: true },
@@ -932,14 +932,25 @@ const BASE_URL = window.BASE_URL;
         // Reset on each open so a popup always starts in Make Model order.
         let modalRows = [], modalSortKey = 'description', modalSortDir = 1;
         let modalLabel = '';   // the open popup's group label, for its CSV filename
+        let modalVrmQuery = '';  // VRM search box text; '' shows every row
 
+        // Rows the popup is actually showing. VRMs are stored without spaces but
+        // get typed with them ("WT18 XUM"), so both sides have spaces stripped
+        // before matching. Substring, not prefix, so a partial plate found on a
+        // key or a screenshot still matches.
+        function filteredModalRows() {
+            const q = modalVrmQuery.replace(/\s+/g, '').toUpperCase();
+            if (!q) return modalRows;
+            return modalRows.filter(r =>
+                String(r.vrm || '').replace(/\s+/g, '').toUpperCase().includes(q));
+        }
 
         function sortedModalRows() {
             const col = MODAL_COLS.find(c => c.key === modalSortKey);
             const numeric = col && (col.type === 'num' || col.type === 'money' || col.type === 'pct');
             // Blanks always sort to the bottom regardless of direction, so a
             // descending sort still leads with real values rather than gaps.
-            return [...modalRows].sort((a, b) => {
+            return [...filteredModalRows()].sort((a, b) => {
                 let av = cellValue(col, a), bv = cellValue(col, b);
                 const aEmpty = av === null || av === undefined || av === '';
                 const bEmpty = bv === null || bv === undefined || bv === '';
@@ -970,6 +981,18 @@ const BASE_URL = window.BASE_URL;
             }).join('');
 
             const rows = sortedModalRows();
+            // Count follows the search box: "3 of 57 vehicles" while filtering,
+            // the plain total otherwise, so the number never contradicts the
+            // rows underneath it.
+            const sub = document.querySelector('.vehicle-modal-sub');
+            if (sub) {
+                const total = modalRows.length;
+                const n = rows.length;
+                const unit = `vehicle${total === 1 ? '' : 's'}`;
+                sub.textContent = (n === total)
+                    ? `${total.toLocaleString('en-GB')} ${unit}`
+                    : `${n.toLocaleString('en-GB')} of ${total.toLocaleString('en-GB')} ${unit}`;
+            }
             const modalWidths = measureVehicleColumnWidths(rows);
             const colgroup = `<colgroup>${modalWidths.map(w => `<col style="width:${w}px">`).join('')}</colgroup>`;
             // Same red/yellow/green scale as the summary tables, computed over
@@ -994,7 +1017,9 @@ const BASE_URL = window.BASE_URL;
                     const text = escapeHtml(fmtCell(c, v));
                     return `<td class="${(numCls + negCls).trim()}" title="${text}"${shadeAttr(shaders[c.key], v, SHADE_DIRECTION[c.key])}>${text}</td>`;
                 }).join('') + '</tr>').join('')
-                : `<tr><td colspan="${MODAL_COLS.length}" style="text-align:center;color:var(--c-text-muted);padding:20px 0;">No vehicles</td></tr>`;
+                : `<tr><td colspan="${MODAL_COLS.length}" style="text-align:center;color:var(--c-text-muted);padding:20px 0;">${
+                    modalVrmQuery ? `No VRM matching &ldquo;${escapeHtml(modalVrmQuery)}&rdquo;` : 'No vehicles'
+                  }</td></tr>`;
 
             const table = document.getElementById('vehicle-modal-table');
             // Pin the table to the colgroup's own total. With table-layout:
@@ -1022,6 +1047,7 @@ const BASE_URL = window.BASE_URL;
             modalRows = rowsForSummaryGroup(dimKey, label, period);
             modalSortKey = 'description';
             modalSortDir = 1;
+            modalVrmQuery = '';   // each open starts showing the whole group
 
             const dim = SUMMARY_DIMENSIONS.find(d => d.key === dimKey);
             const heading = dim
@@ -1052,6 +1078,8 @@ const BASE_URL = window.BASE_URL;
                         <div class="vehicle-modal-sub">${modalRows.length.toLocaleString('en-GB')} vehicle${modalRows.length === 1 ? '' : 's'}</div>
                     </div>
                     <div class="d-flex align-items-center gap-2">
+                        <input type="search" class="vehicle-modal-search" id="vehicle-modal-search"
+                               placeholder="Search VRM" aria-label="Search VRM" autocomplete="off" spellcheck="false">
                         <!-- Same classes/icon as the Vehicle view's CSV button,
                              and the same columns — see downloadCsvRows(). -->
                         <button type="button" class="btn btn-csv" id="vehicle-modal-csv"><i class="fas fa-download"></i> CSV</button>
@@ -1063,6 +1091,26 @@ const BASE_URL = window.BASE_URL;
                 </div>`;
             modal.querySelector('.vehicle-modal-close').addEventListener('click', closeVehicleModal);
             modal.querySelector('#vehicle-modal-csv').addEventListener('click', downloadModalCsv);
+
+            const search = modal.querySelector('#vehicle-modal-search');
+            // 'input' rather than 'keyup' so the type-to-filter also fires on
+            // paste and on the search box's own clear (x) button.
+            search.addEventListener('input', () => {
+                modalVrmQuery = search.value;
+                renderModalTable();
+            });
+            // Escape inside the box clears the search rather than closing the
+            // popup — closing on the first Escape would throw away the group
+            // the user drilled into just to undo a search. A second Escape on
+            // an empty box falls through to vehicleModalKeydown and closes.
+            search.addEventListener('keydown', e => {
+                if (e.key === 'Escape' && search.value) {
+                    e.stopPropagation();
+                    search.value = '';
+                    modalVrmQuery = '';
+                    renderModalTable();
+                }
+            });
 
             document.body.appendChild(backdrop);
             document.body.appendChild(modal);
@@ -1603,9 +1651,13 @@ const BASE_URL = window.BASE_URL;
             { key: 'sell_price_incl_fee',  label: 'Sell Price (incl fee)', context: true },
         ];
         // Dimensions the model is allowed to slice by. Period is excluded — it
-        // is the comparison axis, not a slice. Supplier is excluded from the
-        // PAIRED breakdown only (too many values; it stays as a single).
-        const AI_DIMS = SLICERS.filter(s => s.key !== 'period');
+        // is the comparison axis, not a slice. Fuel, mileage band and age band
+        // are excluded entirely — the focus is suppliers and individual
+        // vehicles that lost money, not vehicle-spec breakdowns. Supplier is
+        // excluded from the PAIRED breakdown only (too many values; it stays
+        // as a single).
+        const AI_EXCLUDED_DIMS = new Set(['period', 'fuel', 'mileage_band', 'age_band']);
+        const AI_DIMS = SLICERS.filter(s => !AI_EXCLUDED_DIMS.has(s.key));
         const AI_PAIR_DIMS = AI_DIMS.filter(s => s.key !== 'supplier');
         // A slice needs this many vehicles in a period before its mean is
         // reported. Below it the mean is noise and the model would narrate it
@@ -1761,7 +1813,7 @@ const BASE_URL = window.BASE_URL;
             return AI_METRICS.filter(m => keys.has(m.key));
         }
 
-        // Build the whole context string sent to Gemini. The question is used
+        // Build the whole context string sent to the model. The question is used
         // to decide which metrics to report — not to filter the data.
         function buildAiContext(question) {
             const rows = filteredRows();
@@ -1777,10 +1829,15 @@ const BASE_URL = window.BASE_URL;
                 const p = periodOf(r, lensApplied, granularityApplied);
                 if (p) periodSet.add(p);
             });
-            const periods = [...periodSet].sort((a, b) =>
+            let periods = [...periodSet].sort((a, b) =>
                 granularityApplied === 'week'
                     ? isoWeekMonday(a) - isoWeekMonday(b)
                     : a.localeCompare(b));
+            // Cap to the last 4 periods plus the current one — older history
+            // was inflating the prompt (every breakdown line repeats n=/mean=
+            // for every period) without adding anything the change/impact
+            // maths (which only ever looks at the last two) actually uses.
+            periods = periods.slice(-5);
 
             const out = [];
             out.push(`Lens: ${lensApplied === 'deliveries' ? 'Delivery date (delivered vehicles)' : 'Order date (acknowledged + delivered)'}`);
@@ -1823,10 +1880,10 @@ const BASE_URL = window.BASE_URL;
         }
 
         // ── Conversation state ──────────────────────────────────────────────
-        // aiHistory is the thread as Gemini turns: [{role, text}, ...]. Turn 0
+        // aiHistory is the thread as model turns: [{role, text}, ...]. Turn 0
         // holds the whole data table, so it is sent once and every later turn
-        // rides on it — that is what keeps a long thread inside the token
-        // quota. aiContextKey records which selection the table describes; if
+        // rides on it — that is what keeps a long thread short. aiContextKey
+        // records which selection the table describes; if
         // the user changes lens/granularity/slicers the thread no longer
         // matches what is on screen and is started fresh.
         let aiHistory = [];
@@ -1964,7 +2021,7 @@ const BASE_URL = window.BASE_URL;
             } catch (e) {
                 let msg = escapeHtml(e.message);
                 if (/quota|rate.?limit|resource_exhausted/i.test(e.message)) {
-                    msg = 'The request was too large for the current Gemini quota. '
+                    msg = 'The request was too large for the model to answer. '
                         + (isFollowUp
                             ? 'Try "New question" to start a shorter thread.'
                             : 'Narrow the period selection or the slicers and try again'
@@ -2022,6 +2079,26 @@ const BASE_URL = window.BASE_URL;
         }
 
         function refreshData() { load(true); }
+
+        // Test email button — only rendered for tdrayson (see the template).
+        async function sendTestEmail() {
+            const btn = document.getElementById('test-email-btn');
+            const note = document.getElementById('test-email-note');
+            btn.disabled = true;
+            note.textContent = 'Sending...';
+            try {
+                const resp = await fetch(BASE_URL + '/reports/orders-deliveries/test-email',
+                                         { method: 'POST' });
+                const data = await resp.json();
+                note.textContent = data.status === 'ok'
+                    ? data.message
+                    : 'Failed: ' + (data.message || 'unknown error');
+            } catch (e) {
+                note.textContent = 'Failed: ' + e.message;
+            } finally {
+                btn.disabled = false;
+            }
+        }
 
         document.querySelectorAll('#lens-toggle button').forEach(b =>
             b.addEventListener('click', () => setLens(b.dataset.lens)));

@@ -29,6 +29,13 @@
             <button class="btn btn-refresh ms-2" id="refresh-btn" onclick="refreshData()" title="Reload the latest data from Snowflake">
                 <i class="fas fa-rotate-right"></i> Refresh Data
             </button>
+            {% if show_test_email %}
+            <button class="btn btn-outline-secondary ms-2" id="test-email-btn" onclick="sendTestEmail()"
+                    title="Send a test email to tom.drayson@carsupermarket.com">
+                <i class="fas fa-envelope"></i> Test Email
+            </button>
+            <span class="cache-note ms-2" id="test-email-note"></span>
+            {% endif %}
             <!-- Page font resizer — scales everything except the vehicle grid,
                  which has its own resizer next to its CSV button. -->
             <div class="d-flex align-items-center gap-1 ms-auto">
@@ -80,8 +87,8 @@
         <!-- Ask AI: free-text question answered from a pre-aggregated slice
              table built client-side (buildAiContext) — the vehicle rows
              themselves are never sent. Follows the current lens, granularity
-             and every live slicer selection. Restricted to tdrayson while the
-             shared Gemini key is in use — matches the /ask-ai backend gate. -->
+             and every live slicer selection. Restricted to tdrayson while this
+             is still being trialled — matches the /ask-ai backend gate. -->
         {% if user == 'tdrayson' %}
         <div class="panel shadow-sm mb-3" id="ai-panel">
             <div class="ai-row">

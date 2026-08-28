@@ -325,6 +325,20 @@
            noticeably smaller than the table underneath it. */
         .vehicle-modal-title { font-weight: 600; color: var(--c-text-heading); font-size: 1.1em; }
         .vehicle-modal-sub { color: var(--c-text-muted); font-size: 0.95em; }
+        /* Vertical padding matches .btn-csv's 7px so the box and the button
+           beside it are the same height. Fixed width rather than flexing: the
+           header is a space-between row, and a growing input would push the
+           title's block around as the popup width changes. */
+        .vehicle-modal-search {
+            width: 150px; box-sizing: border-box;
+            background: var(--c-surface); color: var(--c-text);
+            border: 1px solid var(--c-control-border); border-radius: var(--radius-sm);
+            font-size: 0.9em; padding: 7px 10px;
+        }
+        .vehicle-modal-search::placeholder { color: var(--c-text-muted); }
+        .vehicle-modal-search:focus {
+            outline: none; border-color: var(--c-primary);
+        }
         .vehicle-modal-close {
             border: none; background: transparent; color: var(--c-text-muted);
             font-size: 1.8em; line-height: 1; cursor: pointer; padding: 2px 6px;
