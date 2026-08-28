@@ -1927,6 +1927,7 @@ function _getModalSortValue(r, col) {
     if (col === 'status')    return _statusRank(r);
     if (col === 'location')  return (r[23] || '').toLowerCase();
     if (col === 'delivered') return r[27] || '';
+    if (col === 'colour')    return (r[37] || '').toLowerCase();
     if (col === 'dfr')       return r[24] || '';
     if (col === 'mileage')   return Number(r[25]) || 0;
     if (col === 'dis')       return Number(r[7]) || 0;
@@ -2006,6 +2007,7 @@ function _renderModalRows() {
         addTd(r[3] === 'interest_free' ? '0%' : (r[3] || '—'));
         addTd(r[18] || '—');
         addTd(status);
+        addTd(r[27] ? r[27].slice(0, 10).split('-').reverse().join('/') : '');
         const tdWebsite = document.createElement('td');
         const _websiteLocations = new Set(['READY TODAY','FORECOURT','GL COMPOUND','GL LIVE','SF COMPOUND','SF LIVE','TEMP LOAN CAR','COMPANY CAR']);
         if (r[34] && _websiteLocations.has((r[23] || '').toUpperCase())) {
@@ -2038,8 +2040,8 @@ function _renderModalRows() {
         }
         tr.appendChild(tdPortal);
         addTd(r[23] || '—');
-        addTd(r[27] ? r[27].slice(0, 10).split('-').reverse().join('/') : '');
         addTd(r[19] || '—');
+        addTd(r[37] || '—');
         addTd(r[24] ? r[24].slice(0, 10).split('-').reverse().join('/') : '—');
         addTd(r[25] != null ? Number(r[25]).toLocaleString() : '—', 'right');
         addTd(r[7]  != null ? fmtInt(r[7])  : '—', 'right');
@@ -2082,7 +2084,7 @@ function _renderModalRows() {
     visibleSpVehicles.forEach(v => {
             const tr = document.createElement('tr');
             tr.style.background = '#ddd6fe';
-            const TOTAL_COLS = 23;
+            const TOTAL_COLS = 24;
             // Use the Snowflake make/model/derivative for the modal's CAP ID so DBS/CB
             // rows match the stock rows; fall back to the spreadsheet's own text.
             const derivText = _modalCapLabel || [v.make, v.model, v.deriv].filter(Boolean).join(' ') || '—';
@@ -2099,7 +2101,7 @@ function _renderModalRows() {
                 } else if (i === 3) {
                     td.textContent = 'Not on stock';
                     td.style.color = '#6b7280';
-                } else if (i === 6) {
+                } else if (i === 7) {
                     if (v.vrm && v.mileage != null) {
                         const a = document.createElement('a');
                         a.href = `https://portal.autotrader.co.uk/managing/pricing/vrm/${v.vrm}/${Math.round(v.mileage)}`;
@@ -2111,43 +2113,43 @@ function _renderModalRows() {
                 } else if (i === 9) {
                     td.textContent = v.supplier || '—';
                     if (!v.supplier) td.style.color = '#9ca3af';
-                } else if (i === 10) {
+                } else if (i === 11) {
                     td.textContent = v.dor || '—';
                     if (!v.dor) td.style.color = '#9ca3af';
-                } else if (i === 11) {
+                } else if (i === 12) {
                     td.textContent = v.mileage != null ? Math.round(v.mileage).toLocaleString() : '—';
                     td.style.textAlign = 'right';
                     if (v.mileage == null) td.style.color = '#9ca3af';
-                } else if (i === 14) {
+                } else if (i === 15) {
                     td.textContent = v.siv != null ? fmtGBP(v.siv) : '—';
                     td.style.textAlign = 'right';
                     if (v.siv == null) td.style.color = '#9ca3af';
-                } else if (i === 15) {
+                } else if (i === 16) {
                     td.textContent = v.cap_live != null ? fmtGBP(v.cap_live) : '—';
                     td.style.textAlign = 'right';
                     if (v.cap_live == null) td.style.color = '#9ca3af';
-                } else if (i === 16) {
+                } else if (i === 17) {
                     const capPct = (v.siv != null && v.cap_live != null && v.cap_live !== 0) ? ((v.siv / v.cap_live) * 100).toFixed(1) + '%' : '—';
                     td.textContent = capPct;
                     td.style.textAlign = 'right';
                     if (capPct === '—') td.style.color = '#9ca3af';
-                } else if (i === 17) {
+                } else if (i === 18) {
                     // Sell price = RRP 0% if interest free, else RRP
                     const sellVal = (v.rrp0 != null && v.rrp0 > 0) ? v.rrp0 : v.rrp;
                     td.textContent = sellVal != null ? fmtGBP(sellVal) : '—';
                     td.style.textAlign = 'right';
                     if (sellVal == null) td.style.color = '#9ca3af';
-                } else if (i === 18) {
+                } else if (i === 19) {
                     const sellVal = (v.rrp0 != null && v.rrp0 > 0) ? v.rrp0 : v.rrp;
                     const sellFee = sellInclFee(sellVal);
                     td.textContent = sellFee != null ? fmtGBP(sellFee) : '—';
                     td.style.textAlign = 'right';
                     if (sellFee == null) td.style.color = '#9ca3af';
-                } else if (i === 19) {
+                } else if (i === 20) {
                     td.textContent = v.at_ptm != null ? fmtGBP(v.at_ptm) : '—';
                     td.style.textAlign = 'right';
                     if (v.at_ptm == null) td.style.color = '#9ca3af';
-                } else if (i === 20) {
+                } else if (i === 21) {
                     // AT PTM% = sell price incl admin fee / AT PTM
                     const sellVal = (v.rrp0 != null && v.rrp0 > 0) ? v.rrp0 : v.rrp;
                     const sellFee = sellInclFee(sellVal);
@@ -2155,7 +2157,7 @@ function _renderModalRows() {
                     td.textContent = atPct;
                     td.style.textAlign = 'right';
                     if (atPct === '—') td.style.color = '#9ca3af';
-                } else if (i === 21) {
+                } else if (i === 22) {
                     td.textContent = v.at_rating != null ? fmtInt(v.at_rating) : '—';
                     td.style.textAlign = 'right';
                     if (v.at_rating == null) td.style.color = '#9ca3af';
@@ -2196,7 +2198,7 @@ function _renderModalRows() {
         addTd('', null, true); addTd('', null, true); addTd('', null, true);
         addTd('', null, true); addTd('', null, true); addTd('', null, true);
         addTd('', null, true); addTd('', null, true); addTd('', null, true);
-        addTd('', null, true);
+        addTd('', null, true); addTd('', null, true);
         addTd(label, 'left');
         addTd(avgMile   != null ? avgMile.toLocaleString()    : '—', 'right');
         addTd(avgDIS    != null ? fmtInt(avgDIS)              : '—', 'right');

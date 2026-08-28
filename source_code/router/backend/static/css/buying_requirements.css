@@ -443,12 +443,12 @@ button.settings-cog:hover { color: var(--c-text) !important; background: #e9ecef
 #vehicle-modal-table .vehicle-row-sold td { background: #fde8d8; color: #000; }
 #vehicle-modal-table .vehicle-row-ordered td { background: #d1d5db; color: #000; }
 #vehicle-modal-table .vehicle-row-if td { background: #bfdbfe; color: #000; }
-#vehicle-modal-table th:nth-child(5),
 #vehicle-modal-table th:nth-child(6),
 #vehicle-modal-table th:nth-child(7),
-#vehicle-modal-table td:nth-child(5),
+#vehicle-modal-table th:nth-child(8),
 #vehicle-modal-table td:nth-child(6),
-#vehicle-modal-table td:nth-child(7) { text-align: center; }
+#vehicle-modal-table td:nth-child(7),
+#vehicle-modal-table td:nth-child(8) { text-align: center; }
 .apex-link {
     font-size: 11px;
     padding: 1px 6px;
@@ -465,9 +465,9 @@ button.settings-cog:hover { color: var(--c-text) !important; background: #e9ecef
     user-select: none;
 }
 
-/* Right-align DFR (10th col) through GPU-M (last col) */
-#vehicle-modal-table th:nth-child(n+10),
-#vehicle-modal-table td:nth-child(n+10) {
+/* Right-align DFR (12th col) through GPU-M (last col) */
+#vehicle-modal-table th:nth-child(n+12),
+#vehicle-modal-table td:nth-child(n+12) {
     text-align: right;
 }
 
@@ -499,8 +499,8 @@ button.settings-cog:hover { color: var(--c-text) !important; background: #e9ecef
     background: #fff !important;
     border: none !important;
 }
-/* label cell (DFR column = 10th) left-aligned */
-#vehicle-modal-avg-tfoot td:nth-child(10) {
+/* label cell (Colour column = 11th) left-aligned */
+#vehicle-modal-avg-tfoot td:nth-child(11) {
     text-align: left;
     padding-left: 0.5em;
 }
