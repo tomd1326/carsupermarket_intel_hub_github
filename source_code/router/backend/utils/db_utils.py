@@ -483,6 +483,97 @@ def remove_user(conn, username: str) -> None:
     conn.commit()
 
 
+# ── Page access ──────────────────────────────────────────────────────────────
+# Which pages each user may see. Created on first save, the same as the
+# settings and user_preferences tables, so no migration step is needed.
+# db/11_user_page_access.sql is the canonical schema.
+#
+# The '__configured__' key is not a page — see page_registry.CONFIGURED_MARKER.
+
+def _ensure_user_page_access_table(conn) -> None:
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS user_page_access (
+                username   VARCHAR(100) NOT NULL,
+                page_key   VARCHAR(64)  NOT NULL,
+                granted_at TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+                granted_by VARCHAR(100),
+                PRIMARY KEY (username, page_key)
+            )
+            """
+        )
+    conn.commit()
+
+
+def load_all_page_access(conn) -> dict:
+    """Returns {username: set(page_key)} for every user with stored rows.
+
+    A user missing from the result has never been configured and should get the
+    default pages; a user present with an empty-but-for-the-marker set has been
+    configured to see nothing. Callers must keep those two apart — see
+    core.get_user_pages.
+
+    Only a missing table is treated as "nothing configured yet". Every other
+    error is raised, deliberately: a connection failure must NOT look like an
+    unconfigured user, because the fallback for an unconfigured user is to
+    grant the default pages. Failing open on a database wobble would hand out
+    access.
+    """
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT username, page_key FROM user_page_access")
+            rows = cur.fetchall()
+    except psycopg2.errors.UndefinedTable:
+        conn.rollback()      # the failed statement poisons the transaction
+        return {}
+    out: dict = {}
+    for username, page_key in rows:
+        out.setdefault(username, set()).add(page_key)
+    return out
+
+
+def set_page_access(conn, username: str, page_keys: set, granted_by: str) -> None:
+    """Replace one user's grants. Writes the configured marker in the SAME
+    transaction as the grants — a marker without grants, or grants without a
+    marker, both reintroduce the ambiguity the marker exists to remove."""
+    from routers.page_registry import CONFIGURED_MARKER
+    _ensure_user_page_access_table(conn)
+    with conn.cursor() as cur:
+        cur.execute("DELETE FROM user_page_access WHERE username = %s", (username,))
+        rows = [(username, key, granted_by) for key in sorted(page_keys)]
+        rows.append((username, CONFIGURED_MARKER, granted_by))
+        psycopg2.extras.execute_values(
+            cur,
+            "INSERT INTO user_page_access (username, page_key, granted_by) VALUES %s",
+            rows,
+        )
+    conn.commit()
+
+
+def delete_user_and_access(conn, username: str) -> None:
+    """Delete a user and their page access in one transaction.
+
+    remove_user() commits on its own, so calling a separate clear afterwards
+    can leave grants behind if the second statement fails — and a recreated
+    username would then inherit the old access.
+    """
+    try:
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM users WHERE username = %s", (username,))
+            try:
+                cur.execute("DELETE FROM user_page_access WHERE username = %s", (username,))
+            except psycopg2.errors.UndefinedTable:
+                # No access has ever been saved, so there is nothing to clear.
+                # The user delete above is still wanted, so swallow this one
+                # rather than losing the whole transaction.
+                pass
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+
+
 @contextmanager
 def get_prod_pricer_connection():
     """Always connects to prod pricer DB — used for analytics reads (user_sessions, user_events)."""
