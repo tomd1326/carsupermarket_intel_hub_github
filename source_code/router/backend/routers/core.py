@@ -8,12 +8,15 @@ monolithic router.py import).
 import datetime
 import logging
 import os
+import time
 from zoneinfo import ZoneInfo
 
 from fastapi import Request
 from fastapi.templating import Jinja2Templates
 
-from utils.db_utils import get_database_connection, load_all_users, record_event
+from utils.db_utils import (get_database_connection, load_all_users,
+                            load_all_page_access, record_event)
+from .page_registry import ALL_PAGE_KEYS, CONFIGURED_MARKER, DEFAULT_PAGE_KEYS
 
 logger = logging.getLogger(__name__)
 
@@ -71,17 +74,87 @@ _ADMIN_FALLBACK = {
 VALID_USERS: dict = {}
 
 
+ADMIN_USERNAME = 'tdrayson'
+
+# Page access, cached per process. The app runs as several Lambda containers,
+# each with its own copy, so this is treated as having a MAXIMUM AGE rather
+# than being refreshed at login: past the TTL the next request re-reads.
+#
+# USER_PAGE_ACCESS holds what was stored, including the CONFIGURED_MARKER —
+# get_user_pages is what turns that into a usable set of pages.
+USER_PAGE_ACCESS: dict = {}
+_PERMISSIONS_LOADED_AT: float = 0.0
+PERMISSION_TTL_SECONDS = 60
+
+
 def _reload_users_from_aurora():
     """Reload all users from Aurora into VALID_USERS. Admin is always valid regardless of DB state."""
+    global _PERMISSIONS_LOADED_AT
     try:
         with get_database_connection() as conn:
             users = load_all_users(conn)
-        VALID_USERS.clear()
-        VALID_USERS.update(users)
-        logger.info("Loaded %d users from Aurora", len(users))
+            # Same connection — the permissions read costs no extra round trip.
+            # Deliberately inside the try but read AFTER users, so a permissions
+            # failure cannot stop successfully loaded users reaching VALID_USERS.
+            VALID_USERS.clear()
+            VALID_USERS.update(users)
+            logger.info("Loaded %d users from Aurora", len(users))
+            access = load_all_page_access(conn)
+        USER_PAGE_ACCESS.clear()          # replace wholesale, so removed grants disappear
+        USER_PAGE_ACCESS.update(access)
+        _PERMISSIONS_LOADED_AT = time.time()
     except Exception as e:
-        logger.warning("Could not load users from Aurora — falling back to hardcoded admin only: %s", e)
+        logger.warning("Could not load users/page access from Aurora — falling back to hardcoded admin only: %s", e)
     VALID_USERS.update(_ADMIN_FALLBACK)
+
+
+def is_admin(user: str | None) -> bool:
+    return user == ADMIN_USERNAME
+
+
+def _permissions_are_fresh() -> bool:
+    return bool(_PERMISSIONS_LOADED_AT) and (time.time() - _PERMISSIONS_LOADED_AT) < PERMISSION_TTL_SECONDS
+
+
+def get_user_pages(user: str | None) -> frozenset:
+    """Which pages this user may see.
+
+    The admin is answered before any cache or database read, so he keeps access
+    during an outage and can never be locked out.
+
+    For everyone else a stale cache is refreshed first. If that refresh fails,
+    access is DENIED rather than falling back to what was cached — otherwise a
+    database outage would silently extend access indefinitely. The timestamp is
+    left alone on failure so the next request retries.
+    """
+    if is_admin(user):
+        return ALL_PAGE_KEYS
+    if not user:
+        return frozenset()
+
+    if not _permissions_are_fresh():
+        _reload_users_from_aurora()
+        if not _permissions_are_fresh():
+            logger.warning("Page access could not be refreshed — denying %s", user)
+            return frozenset()
+
+    # A deleted account must be rejected BEFORE the unconfigured-user defaults
+    # below, or it would be handed the default pages on its way out.
+    if user not in VALID_USERS:
+        return frozenset()
+
+    stored = USER_PAGE_ACCESS.get(user)
+    if stored is None or CONFIGURED_MARKER not in stored:
+        # Never configured — today's access, so nothing changes for anyone
+        # until an admin saves their row.
+        return DEFAULT_PAGE_KEYS
+    # Configured: exactly what was saved, an empty set included. The marker is
+    # bookkeeping, never a page.
+    return frozenset(stored & ALL_PAGE_KEYS)
+
+
+def user_can(user: str | None, page_key: str) -> bool:
+    return page_key in get_user_pages(user)
 
 
 _reload_users_from_aurora()

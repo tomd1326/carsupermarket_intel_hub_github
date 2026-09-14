@@ -18,6 +18,10 @@ const BASE_URL = window.BASE_URL;
             // Make, model and derivative in one column — built by vehicleDesc()
             // (declared below; only called at render time, so order is fine).
             { key: 'description', label: 'Description', derived: r => vehicleDesc(r) },
+            // Deliberately untyped, though the value is a number: 'num' would
+            // format it as 12,345 and right-align it. It is an identifier, not
+            // a quantity, so it renders as plain text.
+            { key: 'cap_id', label: 'CAP ID' },
             { key: 'supplier', label: 'Supplier' },
             { key: 'ack_dis', label: 'DIS', type: 'num',
               info: 'Days In Stock — purchase date to acknowledged date' },
@@ -71,10 +75,14 @@ const BASE_URL = window.BASE_URL;
         // Lens config: which date field drives filtering/labels, and which
         // deal statuses are kept. Mirrors the two Power Query variants.
         const LENS = {
+            // The day key is the lens's own date column, which is already a
+            // yyyy-mm-dd string in the payload — unlike week and month, which
+            // are precomputed period columns from sales_performance__p. So a
+            // day period needs nothing new from the server.
             orders:     { dateKey: 'order_date', label: 'Order date',    statuses: ['Acknowledged', 'Delivered'],
-                          periodKeys: { week: 'order_week',     month: 'order_month' } },
+                          periodKeys: { day: 'order_date', week: 'order_week',     month: 'order_month' } },
             deliveries: { dateKey: 'delivered',  label: 'Delivery date', statuses: ['Delivered'],
-                          periodKeys: { week: 'delivered_week', month: 'delivered_month' } },
+                          periodKeys: { day: 'delivered',  week: 'delivered_week', month: 'delivered_month' } },
         };
 
         let allRows = [];
@@ -166,11 +174,19 @@ const BASE_URL = window.BASE_URL;
         }
 
         const MONTH_ABBR = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+        const DAY_ABBR = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];   // Date.getDay() order
 
         // Human display label for a period key, e.g. "W30 20-Jul" for a week
         // key or "Jul 2026" for a month key. The raw key (yyyy-Www / yyyy-MM)
         // stays the actual filtering value everywhere — this is display only.
         function periodDisplayLabel(key) {
+            // Day keys are plain dates (yyyy-mm-dd) — shown as "Mon 14-Sep".
+            // Tested before the month pattern below, which would otherwise
+            // never see them anyway, but the order keeps the intent obvious.
+            if (/^\d{4}-\d{2}-\d{2}$/.test(key)) {
+                const d = new Date(key + 'T00:00:00');
+                return `${DAY_ABBR[d.getDay()]} ${d.getDate()}-${MONTH_ABBR[d.getMonth()]}`;
+            }
             if (/^\d{4}-W\d{2}$/.test(key)) {
                 const monday = isoWeekMonday(key);
                 const weekNum = key.split('-W')[1];
@@ -220,7 +236,8 @@ const BASE_URL = window.BASE_URL;
         // same as everything else in the slicer bar.
         function slicerHeadingApplied(key) {
             if (key === 'period') {
-                const noun = granularityApplied === 'week' ? 'Week' : 'Month';
+                const noun = granularityApplied === 'day' ? 'Day'
+                           : granularityApplied === 'week' ? 'Week' : 'Month';
                 return (lensApplied === 'deliveries' ? 'Delivery ' : 'Order ') + noun;
             }
             return SLICERS.find(s => s.key === key).label;
@@ -1499,12 +1516,16 @@ const BASE_URL = window.BASE_URL;
         // the same shape — a stale selection from the other granularity would
         // just silently match nothing.
         const DEFAULT_WEEKS_SELECTED = 7;   // current + 6 complete
+        // Day: today plus the 7 days before it. Unlike weeks and months, the
+        // day range offers more days than this (the whole fetch window), so
+        // the default is a slice of it rather than all of it.
+        const DEFAULT_DAYS_SELECTED = 8;    // today + 7 previous
 
         function defaultPeriodSelection(today, granularityVal) {
             const range = periodRange(granularityVal);
-            return granularityVal === 'week'
-                ? range.slice(0, DEFAULT_WEEKS_SELECTED)
-                : range;
+            if (granularityVal === 'day')  return range.slice(0, DEFAULT_DAYS_SELECTED);
+            if (granularityVal === 'week') return range.slice(0, DEFAULT_WEEKS_SELECTED);
+            return range;
         }
 
         // Period options are anchored on the server's own fetch floor
@@ -1534,7 +1555,19 @@ const BASE_URL = window.BASE_URL;
         function periodRange(granularityVal) {
             if (!todayIso || !fetchStartIso) return [];
             const keys = [];
-            if (granularityVal === 'week') {
+            if (granularityVal === 'day') {
+                // Every day from today back to the fetch floor, newest first.
+                // No completeness question to answer here, unlike weeks: a day
+                // is either inside the fetched window or it is not, and today's
+                // own figures are in progress in exactly the way the current
+                // week's already are.
+                const floor = new Date(fetchStartIso + 'T00:00:00');
+                let d = new Date(todayIso + 'T00:00:00');
+                while (d >= floor) {
+                    keys.push(ymdLocal(d));
+                    d.setDate(d.getDate() - 1);
+                }
+            } else if (granularityVal === 'week') {
                 let monday = isoWeekMonday(isoWeekKey(todayIso));
                 // The FIRST MONDAY ON OR AFTER the fetch floor, not the Monday
                 // of the floor's own week: fetchStartIso is the 1st of a
@@ -1841,7 +1874,8 @@ const BASE_URL = window.BASE_URL;
 
             const out = [];
             out.push(`Lens: ${lensApplied === 'deliveries' ? 'Delivery date (delivered vehicles)' : 'Order date (acknowledged + delivered)'}`);
-            out.push(`Granularity: ${granularityApplied === 'week' ? 'ISO week' : 'calendar month'}`);
+            out.push(`Granularity: ${granularityApplied === 'day' ? 'calendar day'
+                                   : granularityApplied === 'week' ? 'ISO week' : 'calendar month'}`);
             out.push(`Periods (chronological, last is most recent): ${periods.join(', ')}`);
             const activeSlicers = SLICERS
                 .filter(s => s.key !== 'period' && slicerSel[s.key].size)
