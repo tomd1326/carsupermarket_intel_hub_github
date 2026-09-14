@@ -16,6 +16,17 @@
         .settings-card.page-access-card { max-width: 1600px; }
         /* Tool names are long and the columns are only a checkbox wide, so the
            headings are rotated to keep the table readable at any width. */
+        /* Headings stay put while scrolling a long user list — otherwise you
+           cannot tell which column you are ticking. They pin to the viewport,
+           so the scroll container must NOT be overflow:hidden (Bootstrap's
+           .table-responsive is overflow-x:auto, which is fine). An explicit
+           background is required or body rows show through. */
+        .pa-table thead th {
+            position: sticky;
+            top: 0;
+            z-index: 2;
+            background-color: #e9ecef;
+        }
         .pa-table th.pa-tool {
             height: 150px;
             width: 42px;
@@ -24,6 +35,9 @@
             font-weight: 600;
             font-size: 0.82rem;
         }
+        /* The shaded default columns would otherwise lose their tint to the
+           sticky background above. */
+        .pa-table thead th.pa-default { background-color: #dde3ea; }
         .pa-table th.pa-tool > div {
             writing-mode: vertical-rl;
             transform: rotate(180deg);

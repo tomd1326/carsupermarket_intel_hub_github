@@ -45,7 +45,8 @@ from fastapi import APIRouter, Request, Depends, HTTPException
 from fastapi.responses import HTMLResponse, RedirectResponse, FileResponse
 
 from utils.lambda_http import LambdaRequestsManager
-from .core import BASE_URL, templates, _track, get_current_user, s3_bucketname, s3_bucket_region, _S3_ENV
+from .core import (BASE_URL, templates, _track, get_current_user, s3_bucketname,
+                   s3_bucket_region, _S3_ENV, require_page, require_page_api)
 
 _is_local = os.getenv('LOCAL_ENV') == '1'
 
@@ -239,9 +240,7 @@ def tom_reports():
 
 
 @router.get("/reports/apex", response_class=HTMLResponse)
-def reports_page(request: Request, user: str = Depends(get_current_user)):
-    if user != 'tdrayson':
-        return RedirectResponse(url=BASE_URL + "/home", status_code=303)
+def reports_page(request: Request, user: str = Depends(require_page('apex_reports'))):
     _track(request, 'page_view', '/reports/apex')
     report_options = [
         {'type': k, 'label': v['label'], 'date_range': bool(v.get('date_range'))}
@@ -256,9 +255,7 @@ def reports_page(request: Request, user: str = Depends(get_current_user)):
 
 
 @router.get("/api/reports/tasks")
-def list_report_tasks(user: str = Depends(get_current_user)):
-    if user != 'tdrayson':
-        raise HTTPException(status_code=403)
+def list_report_tasks(user: str = Depends(require_page_api('apex_reports'))):
     entries = [_mark_failed_if_stale(e) for e in _read_index()]
     for e in entries:
         e['report_label'] = REPORTS.get(e.get('report_type'), {}).get('label', e.get('report_type'))
@@ -308,9 +305,7 @@ def _run_report_worker(task_id: str, report_type: str, started_at: str, user: st
 
 @router.post("/api/reports/{report_type}/start")
 def start_report(report_type: str, request: Request, payload: dict = None,
-                 user: str = Depends(get_current_user)):
-    if user != 'tdrayson':
-        raise HTTPException(status_code=403)
+                 user: str = Depends(require_page_api('apex_reports'))):
     _report_config(report_type)  # 404s if unknown
     payload = payload or {}
     notes = (payload.get('notes') or '').strip()[:100] or None
@@ -371,9 +366,7 @@ async def run_report_task(data: dict):
 
 
 @router.get("/api/reports/status/{task_id}")
-def report_status(task_id: str, user: str = Depends(get_current_user)):
-    if user != 'tdrayson':
-        raise HTTPException(status_code=403)
+def report_status(task_id: str, user: str = Depends(require_page_api('apex_reports'))):
     try:
         obj = _s3_client().get_object(Bucket=s3_bucketname, Key=_status_key(task_id))
         return _mark_failed_if_stale(json.loads(obj['Body'].read()))
@@ -382,9 +375,7 @@ def report_status(task_id: str, user: str = Depends(get_current_user)):
 
 
 @router.get("/api/reports/download/{task_id}")
-def download_report(task_id: str, user: str = Depends(get_current_user)):
-    if user != 'tdrayson':
-        raise HTTPException(status_code=403)
+def download_report(task_id: str, user: str = Depends(require_page_api('apex_reports'))):
     try:
         obj = _s3_client().get_object(Bucket=s3_bucketname, Key=_status_key(task_id))
         status = json.loads(obj['Body'].read())

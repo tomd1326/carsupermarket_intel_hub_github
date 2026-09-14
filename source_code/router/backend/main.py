@@ -20,6 +20,7 @@ from utils.lambda_http import LambdaRequestsManager
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import Response
 import routers
+from routers.core import PageRedirect
 
 
 app = FastAPI()
@@ -160,6 +161,16 @@ def test_execution(data: dict):
 
 
 app.include_router(routers.router)
+
+
+async def page_redirect_handler(request: Request, exc: PageRedirect):
+    """A page route denied access. Registered BEFORE the HTTPException handler
+    below, which renders error.html for anything it catches — a redirect must
+    not go through it."""
+    return RedirectResponse(url=exc.location, status_code=303)
+
+
+app.add_exception_handler(PageRedirect, page_redirect_handler)
 app.add_exception_handler(HTTPException, http_exception_handler)
 app.add_exception_handler(Exception, unhandled_exception_handler)
 app.mount("/static", StaticFiles(directory=os.path.join(os.path.dirname(__file__), "static")), name="static")

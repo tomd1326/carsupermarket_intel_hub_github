@@ -22,7 +22,8 @@ from list_processor.cap_client import CAPClient
 from utils.file_handler import read_dataframe_file, write_dataframe_file
 from utils.sharepoint_log import get_entries as get_sharepoint_log_entries
 
-from .core import (BASE_URL, _S3_ENV, templates, s3_bucketname, _track, get_current_user)
+from .core import (BASE_URL, _S3_ENV, templates, s3_bucketname, _track, get_current_user,
+                   is_admin, require_page, require_page_api)
 
 logger = logging.getLogger(__name__)
 
@@ -76,24 +77,24 @@ def _prewarm_sharepoint(enable_cars_bought: bool) -> None:
 
 
 @router.get("/buying-requirements", response_class=HTMLResponse)
-def buying_requirements(request: Request, user: str = Depends(get_current_user)):
-    if not user:
-        return RedirectResponse(url=BASE_URL + "/login", status_code=303)
+def buying_requirements(request: Request, user: str = Depends(require_page('buying_requirements'))):
     with get_database_connection() as conn:
         settings = get_settings(conn, user=user)
     _track(request, 'page_view', '/buying-requirements')
-    enable_cars_bought = user == 'tdrayson' or settings.get('enable_cars_bought', False)
-    show_sharepoint_log = user == 'tdrayson'
+    enable_cars_bought = is_admin(user) or settings.get('enable_cars_bought', False)
+    show_sharepoint_log = is_admin(user)
     _prewarm_sharepoint(enable_cars_bought)
     return templates.TemplateResponse("buying_requirements.html", {"request": request, "user": user, "BASE_URL": BASE_URL, "settings": settings, "enable_cars_bought": enable_cars_bought, "show_sharepoint_log": show_sharepoint_log})
 
 
 @router.get("/buying-requirements/sharepoint-log")
-def buying_requirements_sharepoint_log(request: Request, user: str = Depends(get_current_user)):
-    """Recent SharePoint-file log lines, newest first. tdrayson only."""
-    if not user:
-        return RedirectResponse(url=BASE_URL + "/login", status_code=303)
-    if user != 'tdrayson':
+def buying_requirements_sharepoint_log(request: Request,
+                                       user: str = Depends(require_page_api('buying_requirements'))):
+    """Recent SharePoint-file log lines, newest first. Admin only.
+
+    Keeps its own admin check ON TOP of the page permission — a diagnostic
+    affordance, not something granting the page should hand over."""
+    if not is_admin(user):
         raise HTTPException(status_code=403, detail="Forbidden")
     try:
         return {"status": "ok", "entries": get_sharepoint_log_entries()}
@@ -104,10 +105,7 @@ def buying_requirements_sharepoint_log(request: Request, user: str = Depends(get
 
 # NEW
 @router.get("/buying-requirements/test-snowflake")
-def test_snowflake(request: Request, user: str = Depends(get_current_user)):
-    if not user:
-        return RedirectResponse(url=BASE_URL + "/login", status_code=303)
-
+def test_snowflake(request: Request, user: str = Depends(require_page_api('buying_requirements'))):
     TARGET_DB = "PROD_CARSUPERMARKET_DB"
     TARGET_SCHEMA = "product_vehicle_journey"
     TARGET_TABLE_NAME = "buying_requirements"
@@ -138,10 +136,9 @@ def test_snowflake(request: Request, user: str = Depends(get_current_user)):
 
 
 @router.get("/buying-requirements/sf-data")
-def buying_requirements_sf_data(request: Request, force: bool = False, user: str = Depends(get_current_user)):
+def buying_requirements_sf_data(request: Request, force: bool = False,
+                                user: str = Depends(require_page_api('buying_requirements'))):
     """Snowflake rows — served from cache on page load, forced live on Refresh Data."""
-    if not user:
-        return RedirectResponse(url=BASE_URL + "/login", status_code=303)
     try:
         sf_rows = _get_sf_rows(force=force)
         with _cache_lock:
@@ -153,10 +150,9 @@ def buying_requirements_sf_data(request: Request, force: bool = False, user: str
 
 
 @router.get("/buying-requirements/dbs-purchases")
-def buying_requirements_dbs_purchases(request: Request, user: str = Depends(get_current_user)):
+def buying_requirements_dbs_purchases(request: Request,
+                                      user: str = Depends(require_page_api('buying_requirements'))):
     """Daily Buyers Sheet purchases — always fetches live (called by Refresh Data)."""
-    if not user:
-        return RedirectResponse(url=BASE_URL + "/login", status_code=303)
     try:
         purchases = _get_dbs_purchases(force=True)
         out = {f"{k[0]}|{k[1]}": v for k, v in purchases.items()}
@@ -172,10 +168,9 @@ def buying_requirements_dbs_purchases(request: Request, user: str = Depends(get_
 
 
 @router.get("/buying-requirements/dbs-purchases-cached")
-def buying_requirements_dbs_purchases_cached(request: Request, user: str = Depends(get_current_user)):
+def buying_requirements_dbs_purchases_cached(request: Request,
+                                             user: str = Depends(require_page_api('buying_requirements'))):
     """DBS purchases from cache only — never triggers a live SharePoint fetch."""
-    if not user:
-        return RedirectResponse(url=BASE_URL + "/login", status_code=303)
     try:
         result = _get_dbs_purchases_cached()
         if result is None:
@@ -196,10 +191,9 @@ def buying_requirements_dbs_purchases_cached(request: Request, user: str = Depen
 
 
 @router.get("/buying-requirements/cb-purchases")
-def buying_requirements_cb_purchases(request: Request, user: str = Depends(get_current_user)):
+def buying_requirements_cb_purchases(request: Request,
+                                     user: str = Depends(require_page_api('buying_requirements'))):
     """Cars Bought not on Apex — always fetches live (called by Refresh Data)."""
-    if not user:
-        return RedirectResponse(url=BASE_URL + "/login", status_code=303)
     try:
         purchases = _get_cb_purchases(force=True)
         out = {f"{k[0]}|{k[1]}": v for k, v in purchases.items()}
@@ -215,10 +209,9 @@ def buying_requirements_cb_purchases(request: Request, user: str = Depends(get_c
 
 
 @router.get("/buying-requirements/cb-purchases-cached")
-def buying_requirements_cb_purchases_cached(request: Request, user: str = Depends(get_current_user)):
+def buying_requirements_cb_purchases_cached(request: Request,
+                                            user: str = Depends(require_page_api('buying_requirements'))):
     """Cars Bought not on Apex from cache only — never triggers a live fetch."""
-    if not user:
-        return RedirectResponse(url=BASE_URL + "/login", status_code=303)
     try:
         result = _get_cb_purchases_cached()
         if result is None:
@@ -237,10 +230,9 @@ def buying_requirements_cb_purchases_cached(request: Request, user: str = Depend
 
 
 @router.get("/buying-requirements/data")
-def buying_requirements_data(request: Request, user: str = Depends(get_current_user)):
+def buying_requirements_data(request: Request,
+                             user: str = Depends(require_page_api('buying_requirements'))):
     """Combined endpoint (kept for compatibility). Merges SF + SP in one call."""
-    if not user:
-        return RedirectResponse(url=BASE_URL + "/login", status_code=303)
     try:
         sf_rows   = _get_sf_rows()
         purchases = _get_dbs_purchases()
@@ -1497,10 +1489,7 @@ def _sse(message: str, kind: str = "log") -> str:
 
 
 @router.get("/buying-requirements/stream-snowflake")
-def stream_snowflake(request: Request, user: str = Depends(get_current_user)):
-    if not user:
-        return RedirectResponse(url=BASE_URL + "/login", status_code=303)
-
+def stream_snowflake(request: Request, user: str = Depends(require_page_api('buying_requirements'))):
     def generate():
         try:
             yield _sse("Connecting to Snowflake...")
@@ -1526,10 +1515,7 @@ def stream_snowflake(request: Request, user: str = Depends(get_current_user)):
 
 
 @router.get("/buying-requirements/stream-dbs")
-def stream_dbs(request: Request, user: str = Depends(get_current_user)):
-    if not user:
-        return RedirectResponse(url=BASE_URL + "/login", status_code=303)
-
+def stream_dbs(request: Request, user: str = Depends(require_page_api('buying_requirements'))):
     def generate():
         try:
             yield _sse("Authenticating with SharePoint...")
@@ -1577,11 +1563,10 @@ def task_buying_requirements_download(
     max_days_sales: int = 90,
     max_dts: int = 45,
     min_gpu_m: int = 0,
-    user: str = Depends(get_current_user),
+    # Lives in this file but is reached from the Supplier Stock Evaluator page,
+    # so it follows that page's permission, not Buying Requirements'.
+    user: str = Depends(require_page_api('tasks')),
 ):
-    if not user:
-        return RedirectResponse(url=BASE_URL + "/login", status_code=303)
-
     # ── 1. Fetch task info ────────────────────────────────────────────────────
     with get_database_connection() as conn:
         with conn.cursor() as cursor:

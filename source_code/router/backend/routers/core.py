@@ -11,7 +11,7 @@ import os
 import time
 from zoneinfo import ZoneInfo
 
-from fastapi import Request
+from fastapi import HTTPException, Request
 from fastapi.templating import Jinja2Templates
 
 from utils.db_utils import (get_database_connection, load_all_users,
@@ -155,6 +155,58 @@ def get_user_pages(user: str | None) -> frozenset:
 
 def user_can(user: str | None, page_key: str) -> bool:
     return page_key in get_user_pages(user)
+
+
+class PageRedirect(Exception):
+    """Send the browser somewhere else instead of rendering a page.
+
+    NOT an HTTPException: exceptions.http_exception_handler catches every
+    HTTPException and renders error.html unconditionally — it never looks at a
+    Location header — so raising HTTPException(303) would show "Error 303"
+    rather than redirecting. main.py registers a handler for this class ahead
+    of the HTTPException one.
+    """
+
+    def __init__(self, location: str):
+        self.location = location
+        super().__init__(location)
+
+
+def require_page(page_key: str):
+    """Dependency for HTML page routes. Returns the username, or redirects —
+    to /login when signed out, to /home when signed in without access.
+
+    A dependency cannot `return` a RedirectResponse the way the old inline
+    checks did, so denial is raised and handled in main.py.
+    """
+    def _dependency(request: Request) -> str:
+        user = get_current_user(request)
+        if not user:
+            raise PageRedirect(BASE_URL + "/login")
+        if not user_can(user, page_key):
+            logger.info("Access denied: %s -> %s", user, page_key)
+            raise PageRedirect(BASE_URL + "/home")
+        return user
+    return _dependency
+
+
+def require_page_api(page_key: str):
+    """Dependency for data/download endpoints. 401 when signed out, 403 when
+    signed in without access — matching what the endpoints already returned.
+
+    Every endpoint gets its page's permission, including the four default
+    tools: a URL can be requested directly, so being reachable only from a
+    page the user has passed is not a control.
+    """
+    def _dependency(request: Request) -> str:
+        user = get_current_user(request)
+        if not user:
+            raise HTTPException(status_code=401)
+        if not user_can(user, page_key):
+            logger.info("Access denied (api): %s -> %s", user, page_key)
+            raise HTTPException(status_code=403)
+        return user
+    return _dependency
 
 
 _reload_users_from_aurora()

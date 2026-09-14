@@ -99,44 +99,17 @@
     <div class="home-container">
         <img src="{{ BASE_URL }}/static/icon.png" alt="CarSupermarket" class="brand-logo">
         <h2 class="home-title mb-5">CarSupermarket.com Buying Tools</h2>
+        {# Tiles come from the page registry, filtered to what this user may
+           see — the same list the access checks use, so a tile can never be
+           shown for a page that would then refuse to open. Add a page in
+           routers/page_registry.py and it appears here automatically. #}
         <div class="menu-grid">
-            <a href="{{ BASE_URL }}/buying-requirements" class="btn menu-btn">
-                Buying Requirements
+            {% for page in pages %}
+            <a href="{{ BASE_URL }}{{ page.path }}" class="btn menu-btn">
+                {{ page.label }}
             </a>
-            <a href="{{ BASE_URL }}/tasks" class="btn menu-btn">
-                Supplier Stock Evaluator
-            </a>
-            <a href="{{ BASE_URL }}/mot-check" class="btn menu-btn">
-                MOT Check
-            </a>
-            <a href="{{ BASE_URL }}/reports/orders-deliveries" class="btn menu-btn">
-                Orders &amp; Deliveries Report
-            </a>
-            {% if user == 'tdrayson' %}
-            <a href="{{ BASE_URL }}/kpi" class="btn menu-btn">
-                KPI Dashboard
-            </a>
-            <a href="{{ BASE_URL }}/weekly-business-review" class="btn menu-btn">
-                Weekly Business Review
-            </a>
-            <a href="{{ BASE_URL }}/google-ads-campaigns" class="btn menu-btn">
-                Google Ads Campaigns
-            </a>
-            <a href="{{ BASE_URL }}/stock-list" class="btn menu-btn">
-                Stock List
-            </a>
-            <a href="{{ BASE_URL }}/cap-lookup" class="btn menu-btn">
-                CAP ID Lookup
-            </a>
-            <a href="{{ BASE_URL }}/assess-vehicle" class="btn menu-btn">
-                Assess Vehicle
-            </a>
-            <a href="{{ BASE_URL }}/subsidy-rates" class="btn menu-btn">
-                Subsidy Rate Calculator
-            </a>
-            <a href="{{ BASE_URL }}/reports/apex" class="btn menu-btn">
-                Apex Reports
-            </a>
+            {% endfor %}
+            {% if is_admin %}
             <a href="{{ BASE_URL }}/settings-page" class="btn menu-btn-settings">
                 <i class="fas fa-cog"></i> Settings
             </a>
