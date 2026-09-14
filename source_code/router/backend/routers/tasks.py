@@ -27,7 +27,7 @@ from utils.secrets_manager_client import get_secret
 from utils.file_handler import read_dataframe_file, write_dataframe_file
 
 from .core import (BASE_URL, _S3_ENV, templates, s3_bucketname, s3_bucket_region, _track,
-                   get_current_user, _uk_now)
+                   get_current_user, _uk_now, is_admin, require_page, require_page_api)
 
 logger = logging.getLogger(__name__)
 
@@ -35,7 +35,7 @@ router = APIRouter()
 
 
 @router.get("/api/tasks-json")
-def tasks_json(page: int = 1, page_size: int = 25, user: str = Depends(get_current_user)):
+def tasks_json(page: int = 1, page_size: int = 25, user: str = Depends(require_page_api('tasks'))):
     """Returns task list as JSON for in-place table updates."""
     if not user:
         raise HTTPException(status_code=401)
@@ -65,10 +65,7 @@ def tasks_json(page: int = 1, page_size: int = 25, user: str = Depends(get_curre
     total_pages = (total_tasks + page_size - 1) // page_size
     return {"tasks": tasks, "has_pending": has_pending, "total_pages": total_pages, "current_page": page}
 @router.get("/tasks", response_class=HTMLResponse, name="read_tasks")
-def read_tasks(request: Request, page: Optional[int] = 1, page_size: Optional[int] = 25, user: str = Depends(get_current_user)):
-    if not user:
-        return RedirectResponse(url=BASE_URL + "/login", status_code=303)
-
+def read_tasks(request: Request, page: Optional[int] = 1, page_size: Optional[int] = 25, user: str = Depends(require_page('tasks'))):
     at_least_one_pending = False
     offset = (page - 1) * page_size
     with get_database_connection() as conn:
@@ -117,7 +114,7 @@ def read_tasks(request: Request, page: Optional[int] = 1, page_size: Optional[in
 
 
 @router.post("/upload-task")
-async def upload_task(request: Request, fileBase64: str = Form(...), supplier_id: str = Form(...), filename: str = Form(...), cap_workers: int = Form(20), cap_rate_limit: int = Form(100), user: str = Depends(get_current_user)):
+async def upload_task(request: Request, fileBase64: str = Form(...), supplier_id: str = Form(...), filename: str = Form(...), cap_workers: int = Form(20), cap_rate_limit: int = Form(100), user: str = Depends(require_page_api('tasks'))):
     if not user:
         return RedirectResponse(url=BASE_URL + "/login", status_code=303)
 
@@ -187,9 +184,7 @@ async def upload_task(request: Request, fileBase64: str = Form(...), supplier_id
 
 
 @router.get("/download/{task_id}", response_class=FileResponse)
-def download_task_file(task_id: str, user: str = Depends(get_current_user)):
-    if not user:
-        return RedirectResponse(url=BASE_URL + "/login", status_code=303)
+def download_task_file(task_id: str, user: str = Depends(require_page_api('tasks'))):
     # Get task info from the db
     with get_database_connection() as conn:
         with conn.cursor() as cursor:
@@ -241,7 +236,7 @@ def download_task_file(task_id: str, user: str = Depends(get_current_user)):
     )
 
 @router.get("/download-error-log/{task_id}")
-def download_error_log(task_id: str, user: str = Depends(get_current_user)):
+def download_error_log(task_id: str, user: str = Depends(require_page_api('tasks'))):
     if user != 'tdrayson':
         raise HTTPException(status_code=403)
     with get_database_connection() as conn:
@@ -266,7 +261,7 @@ def download_error_log(task_id: str, user: str = Depends(get_current_user)):
 
 
 @router.get("/error-log/{task_id}")
-def view_error_log(task_id: str, user: str = Depends(get_current_user)):
+def view_error_log(task_id: str, user: str = Depends(require_page_api('tasks'))):
     """Returns the task's API error log as JSON rows for the popup table."""
     if user != 'tdrayson':
         raise HTTPException(status_code=403)
@@ -289,11 +284,9 @@ def view_error_log(task_id: str, user: str = Depends(get_current_user)):
 
 
 @router.get("/delete-task/{task_id}")
-def delete_task(task_id: str, user: str = Depends(get_current_user)):
-    # Login only, no ownership check — pending tasks are shared, so any logged-in
-    # user may delete another's. Agreed deliberately, not an oversight.
-    if not user:
-        raise HTTPException(status_code=401)
+def delete_task(task_id: str, user: str = Depends(require_page_api('tasks'))):
+    # No ownership check — pending tasks are shared, so anyone with the
+    # Supplier Stock Evaluator may delete another's. Agreed deliberately.
     with get_database_connection() as conn:
         with conn.cursor() as cursor:
             cursor.execute("DELETE FROM tasks WHERE task_id = %s AND status = 'pending'", (task_id,))
@@ -302,7 +295,7 @@ def delete_task(task_id: str, user: str = Depends(get_current_user)):
 
 
 @router.get("/tasks/{task_id}/vehicles-json")
-def task_vehicles_json(task_id: str, user: str = Depends(get_current_user)):
+def task_vehicles_json(task_id: str, user: str = Depends(require_page_api('tasks'))):
     """Return the uploaded CSV's per-vehicle rows (VRM, CAP ID, Make, Model,
     Variant, Mileage) for the View popup. Currently used by Motability tasks so
     each vehicle can link out to the mfldirect search filtered by CAP ID."""
@@ -388,7 +381,7 @@ def task_vehicles_json(task_id: str, user: str = Depends(get_current_user)):
     return {"supplier_name": supplier_name, "count": len(rows), "rows": rows}
 
 @router.get("/trigger-elaborate-task")
-async def trigger_elaborate_task(request: Request, user: str = Depends(get_current_user)):
+async def trigger_elaborate_task(request: Request, user: str = Depends(require_page_api('tasks'))):
 
     if not user:
         return RedirectResponse(url=BASE_URL + "/login", status_code=303)

@@ -12,7 +12,8 @@ from utils.db_utils import (get_database_connection, get_prod_pricer_connection,
 from utils.snowflake_client import SnowflakeClient
 from utils.sharepoint_client import SharePointClient
 
-from .core import (BASE_URL, templates, _track, get_current_user)
+from .core import (BASE_URL, templates, _track, get_current_user, is_admin,
+                   require_page, require_page_api)
 
 logger = logging.getLogger(__name__)
 
@@ -63,9 +64,7 @@ def _prev_iso_week_monday(monday: datetime.date) -> datetime.date:
 
 
 @router.get("/kpi", response_class=HTMLResponse)
-def kpi_page(request: Request, user: str = Depends(get_current_user)):
-    if user != 'tdrayson':
-        return RedirectResponse(url=BASE_URL + "/home", status_code=303)
+def kpi_page(request: Request, user: str = Depends(require_page('kpi'))):
     _track(request, 'page_view', '/kpi')
     with get_database_connection() as conn:
         settings = get_settings(conn, user=user)
@@ -73,18 +72,14 @@ def kpi_page(request: Request, user: str = Depends(get_current_user)):
 
 
 @router.get("/google-ads-campaigns", response_class=HTMLResponse)
-def google_ads_campaigns_page(request: Request, user: str = Depends(get_current_user)):
-    if user != 'tdrayson':
-        return RedirectResponse(url=BASE_URL + "/home", status_code=303)
+def google_ads_campaigns_page(request: Request, user: str = Depends(require_page('google_ads_campaigns'))):
     _track(request, 'page_view', '/google-ads-campaigns')
     return templates.TemplateResponse("google_ads_campaigns.html", {"request": request, "user": user, "BASE_URL": BASE_URL})
 
 
 @router.get("/kpi/data")
-def kpi_data(request: Request, user: str = Depends(get_current_user)):
+def kpi_data(request: Request, user: str = Depends(require_page_api('kpi'))):
     """Return daily_summary KPI data: daily window + 13 months of monthly totals."""
-    if user != 'tdrayson':
-        raise HTTPException(status_code=403)
     try:
         import calendar
         today = datetime.date.today()
@@ -252,7 +247,9 @@ def kpi_data(request: Request, user: str = Depends(get_current_user)):
 def kpi_ga4_campaign_conversion(
     request: Request,
     event_name: str = GA4_CAMPAIGN_EVENTS[0],
-    user: str = Depends(get_current_user),
+    # Called by the Google Ads Campaigns page, not the KPI dashboard — mapped
+    # to its actual caller so granting only that page leaves a working page.
+    user: str = Depends(require_page_api('google_ads_campaigns')),
 ):
     """Conversion rate and raw event volume for one GA4 event, by campaign.
 
@@ -275,8 +272,6 @@ def kpi_ga4_campaign_conversion(
     per session, which can exceed 100% because one session can fire several
     events — it is not a share of converting sessions.
     """
-    if user != 'tdrayson':
-        raise HTTPException(status_code=403)
     if event_name != GA4_ALL_EVENTS and event_name not in GA4_CAMPAIGN_EVENTS:
         return {"status": "error", "message": f"Unknown event: {event_name}"}
 
@@ -548,9 +543,7 @@ KPI_DEFAULT_LAYOUT = {
 
 
 @router.get("/kpi/metrics")
-def kpi_metrics(request: Request, user: str = Depends(get_current_user)):
-    if user != 'tdrayson':
-        raise HTTPException(status_code=403)
+def kpi_metrics(request: Request, user: str = Depends(require_page_api('kpi'))):
     live_cols = _get_daily_summary_columns()
     return {
         "status": "ok",
@@ -569,10 +562,8 @@ def kpi_metrics(request: Request, user: str = Depends(get_current_user)):
 
 
 @router.get("/kpi/custom-data")
-def kpi_custom_data(request: Request, metric: str, agg: str = "sum", user: str = Depends(get_current_user)):
+def kpi_custom_data(request: Request, metric: str, agg: str = "sum", user: str = Depends(require_page_api('kpi'))):
     """Daily/weekly/monthly series for one whitelisted daily_summary column."""
-    if user != 'tdrayson':
-        raise HTTPException(status_code=403)
     metric = metric.upper()
     if metric not in KPI_METRIC_COLUMNS:
         return {"status": "error", "message": f"Unknown metric: {metric}"}
@@ -761,9 +752,7 @@ def _validate_layout(layout: dict) -> str | None:
 
 
 @router.get("/kpi/layout")
-def kpi_layout_get(request: Request, user: str = Depends(get_current_user)):
-    if user != 'tdrayson':
-        raise HTTPException(status_code=403)
+def kpi_layout_get(request: Request, user: str = Depends(require_page_api('kpi'))):
     try:
         # Layout always lives in the PROD cluster so local/dev edits and prod
         # serve the same dashboard
@@ -781,9 +770,7 @@ def kpi_layout_get(request: Request, user: str = Depends(get_current_user)):
 
 
 @router.post("/kpi/layout")
-def kpi_layout_save(request: Request, payload: dict, user: str = Depends(get_current_user)):
-    if user != 'tdrayson':
-        raise HTTPException(status_code=403)
+def kpi_layout_save(request: Request, payload: dict, user: str = Depends(require_page_api('kpi'))):
     layout = (payload or {}).get("layout")
     err = _validate_layout(layout or {})
     if err:
@@ -827,9 +814,7 @@ def _cortex_complete(messages: list[dict], max_tokens: int, temperature: float) 
 
 
 @router.post("/kpi/ai-summary")
-def kpi_ai_summary(request: Request, payload: dict, user: str = Depends(get_current_user)):
-    if user != 'tdrayson':
-        raise HTTPException(status_code=403)
+def kpi_ai_summary(request: Request, payload: dict, user: str = Depends(require_page_api('kpi'))):
 
     prompt = (payload or {}).get("prompt")
     if not isinstance(prompt, str) or not prompt.strip():
@@ -1066,9 +1051,7 @@ def _build_kpi_sharepoint_data() -> dict:
 
 
 @router.get("/kpi/sharepoint")
-def kpi_sharepoint(request: Request, user: str = Depends(get_current_user)):
-    if user != 'tdrayson':
-        raise HTTPException(status_code=403)
+def kpi_sharepoint(request: Request, user: str = Depends(require_page_api('kpi'))):
     try:
         return _get_sharepoint_data()
     except Exception as e:
@@ -1077,18 +1060,14 @@ def kpi_sharepoint(request: Request, user: str = Depends(get_current_user)):
 
 
 @router.get("/weekly-business-review", response_class=HTMLResponse)
-def weekly_business_review_page(request: Request, user: str = Depends(get_current_user)):
-    if user != 'tdrayson':
-        return RedirectResponse(url=BASE_URL + "/home", status_code=303)
+def weekly_business_review_page(request: Request, user: str = Depends(require_page('weekly_business_review'))):
     _track(request, 'page_view', '/weekly-business-review')
     return templates.TemplateResponse("weekly_business_review.html", {"request": request, "user": user, "BASE_URL": BASE_URL})
 
 
 @router.get("/weekly-business-review/data")
-def weekly_business_review_data(request: Request, user: str = Depends(get_current_user)):
+def weekly_business_review_data(request: Request, user: str = Depends(require_page_api('weekly_business_review'))):
     """Return monthly Net Deliveries B2C (b2c_units): last 3 complete months, current month, next 3 months."""
-    if user != 'tdrayson':
-        raise HTTPException(status_code=403)
     try:
         today = datetime.date.today()
         first_of_this_month = today.replace(day=1)

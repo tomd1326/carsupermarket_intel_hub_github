@@ -12,7 +12,8 @@ from zoneinfo import ZoneInfo
 
 from utils.s3_tools import download_file
 
-from .core import (BASE_URL, templates, s3_bucketname, _track, get_current_user, _uk_now)
+from .core import (BASE_URL, templates, s3_bucketname, _track, get_current_user, _uk_now,
+                   require_page, require_page_api)
 
 logger = logging.getLogger(__name__)
 
@@ -27,17 +28,13 @@ _CAP_LOOKUP_COLUMNS = [
     "VRM", "CAP ID", "Manufacturer", "Model", "Derivative", "Registration Date", "Note",
 ]
 @router.get("/cap-lookup", response_class=HTMLResponse)
-def cap_lookup_page(request: Request, user: str = Depends(get_current_user)):
-    if user != 'tdrayson':
-        return RedirectResponse(url=BASE_URL + "/home", status_code=303)
+def cap_lookup_page(request: Request, user: str = Depends(require_page('cap_lookup'))):
     _track(request, 'page_view', '/cap-lookup')
     return templates.TemplateResponse("cap_lookup.html", {"request": request, "user": user, "BASE_URL": BASE_URL})
 
 
 @router.get("/cap-lookup/progress")
-def cap_lookup_progress(request: Request, user: str = Depends(get_current_user)):
-    if not user:
-        raise HTTPException(status_code=403)
+def cap_lookup_progress(request: Request, user: str = Depends(require_page_api('cap_lookup'))):
     sid = request.session.get('session_id', '')
     with _cap_lookup_lock:
         p = _cap_lookup_progress.get(sid, {"pct": 0, "done": 0, "total": 0, "eta_s": None})
@@ -45,10 +42,7 @@ def cap_lookup_progress(request: Request, user: str = Depends(get_current_user))
 
 
 @router.post("/cap-lookup/process")
-def cap_lookup_process(request: Request, payload: dict, user: str = Depends(get_current_user)):
-    if user != 'tdrayson':
-        raise HTTPException(status_code=403)
-
+def cap_lookup_process(request: Request, payload: dict, user: str = Depends(require_page_api('cap_lookup'))):
     from list_processor.cap_client import CAPClient
     from list_processor.structs import VehicleRow
     from concurrent.futures import ThreadPoolExecutor, as_completed

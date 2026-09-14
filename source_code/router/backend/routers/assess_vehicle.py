@@ -19,7 +19,8 @@ from utils.vehicle_store import (
     has_confirmed_spec,
 )
 
-from .core import (BASE_URL, templates, _track, get_current_user, _uk_now)
+from .core import (BASE_URL, templates, _track, get_current_user, _uk_now,
+                   require_page, require_page_api)
 from .buying_requirements import (
     _get_sf_rows, _get_dbs_purchases_cached, _get_cb_purchases_cached,
     _get_dbs_purchases, _get_cb_purchases, _get_cb_extra,
@@ -287,9 +288,7 @@ def _recent_list(days: int = _RECENT_DAYS, page: int = 1,
 
 
 @router.get("/assess-vehicle", response_class=HTMLResponse)
-def assess_vehicle_page(request: Request, user: str = Depends(get_current_user)):
-    if user != 'tdrayson':
-        return RedirectResponse(url=BASE_URL + "/home", status_code=303)
+def assess_vehicle_page(request: Request, user: str = Depends(require_page('assess_vehicle'))):
     _track(request, 'page_view', '/assess-vehicle')
     _warm_for_lookup()
     return templates.TemplateResponse(
@@ -300,7 +299,7 @@ def assess_vehicle_page(request: Request, user: str = Depends(get_current_user))
 
 @router.get("/assess-vehicle/vehicle/{vrm}", response_class=HTMLResponse)
 def assess_vehicle_detail_page(request: Request, vrm: str, mileage: int,
-                               user: str = Depends(get_current_user)):
+                               user: str = Depends(require_page('assess_vehicle'))):
     """
     Full page for one vehicle, replacing what used to be a popup.
 
@@ -309,8 +308,6 @@ def assess_vehicle_detail_page(request: Request, vrm: str, mileage: int,
     data from /assess-vehicle/lookup/{vrm}, which reads the store rather than
     calling the APIs.
     """
-    if user != 'tdrayson':
-        return RedirectResponse(url=BASE_URL + "/home", status_code=303)
     key = vrm.strip().upper().replace(' ', '')
     _track(request, 'page_view', '/assess-vehicle/vehicle', {'vrm': key})
     return templates.TemplateResponse(
@@ -370,15 +367,13 @@ def _warm_for_lookup() -> None:
 
 
 @router.get("/assess-vehicle/lookup/{vrm}")
-def assess_vehicle_cached(vrm: str, mileage: int, user: str = Depends(get_current_user)):
+def assess_vehicle_cached(vrm: str, mileage: int, user: str = Depends(require_page_api('assess_vehicle'))):
     """
     Rebuild a popup for a vehicle already in the store — no API calls.
 
     Used when opening a row in the recent list, whether that vehicle was last
     checked by a supplier list run or a manual lookup.
     """
-    if user != 'tdrayson':
-        raise HTTPException(status_code=403)
     key = vrm.strip().upper().replace(' ', '')
     stored = _stored_lookup(key, mileage)
     if not stored:
@@ -844,7 +839,7 @@ def _build_market(vrm: str, cap_id, retail_valuation, user: str) -> dict:
 
 @router.get("/assess-vehicle/market/{vrm}")
 def assess_vehicle_market(vrm: str, cap_id: int = None, retail_valuation: float = None,
-                          user: str = Depends(get_current_user)):
+                          user: str = Depends(require_page_api('assess_vehicle'))):
     """
     Presence and buying requirements for a vehicle — the SharePoint half.
 
@@ -853,16 +848,12 @@ def assess_vehicle_market(vrm: str, cap_id: int = None, retail_valuation: float 
     are warmed when the page opens (see _warm_for_lookup), so in normal use
     this returns from cache.
     """
-    if user != 'tdrayson':
-        raise HTTPException(status_code=403)
     key = vrm.strip().upper().replace(' ', '')
     return _build_market(key, cap_id, retail_valuation, user)
 
 
 @router.post("/assess-vehicle/lookup")
-def assess_vehicle_lookup(request: Request, payload: dict, user: str = Depends(get_current_user)):
-    if user != 'tdrayson':
-        raise HTTPException(status_code=403)
+def assess_vehicle_lookup(request: Request, payload: dict, user: str = Depends(require_page_api('assess_vehicle'))):
 
     vrm = str(payload.get('vrm') or '').strip().upper().replace(' ', '')
     if not vrm:
@@ -962,10 +953,8 @@ def assess_vehicle_lookup(request: Request, payload: dict, user: str = Depends(g
 
 
 @router.post("/assess-vehicle/reassess-mileage")
-def assess_vehicle_reassess_mileage(payload: dict, user: str = Depends(get_current_user)):
+def assess_vehicle_reassess_mileage(payload: dict, user: str = Depends(require_page_api('assess_vehicle'))):
     """Save a same-bucket mileage correction, or request a fresh valuation."""
-    if user != 'tdrayson':
-        raise HTTPException(status_code=403)
     vrm = str(payload.get('vrm') or '').strip().upper().replace(' ', '')
     try:
         previous_mileage = int(float(str(payload.get('previous_mileage') or 0)))
@@ -1000,7 +989,7 @@ _IMAGE_HEIGHT = 448
 
 @router.get("/assess-vehicle/image/{cap_id}")
 def assess_vehicle_image(cap_id: int, date: str = None,
-                         user: str = Depends(get_current_user)):
+                         user: str = Depends(require_page_api('assess_vehicle'))):
     """
     CAP model image for a CAP id, streamed through the app.
 
@@ -1018,8 +1007,6 @@ def assess_vehicle_image(cap_id: int, date: str = None,
     404s when there is no image, which is what the <img> onerror in the page
     hides itself on. Cached for a day — CAP model images do not change.
     """
-    if user != 'tdrayson':
-        raise HTTPException(status_code=403)
 
     from fastapi.responses import Response
     from list_processor.cap_client import CAPClient
@@ -1074,7 +1061,7 @@ def assess_vehicle_image(cap_id: int, date: str = None,
 
 
 @router.get("/assess-vehicle/features/{vrm}")
-def assess_vehicle_features(vrm: str, mileage: int, user: str = Depends(get_current_user)):
+def assess_vehicle_features(vrm: str, mileage: int, user: str = Depends(require_page_api('assess_vehicle'))):
     """
     The optional extras that can be fitted to this vehicle, plus whatever spec
     has already been chosen for it.
@@ -1087,8 +1074,6 @@ def assess_vehicle_features(vrm: str, mileage: int, user: str = Depends(get_curr
     and re-tick extras Autotrader already knows about. A manual save always
     wins after that: this only fills a genuinely empty selection.
     """
-    if user != 'tdrayson':
-        raise HTTPException(status_code=403)
 
     import requests
     from list_processor.autotrader_client import (
@@ -1138,7 +1123,7 @@ def assess_vehicle_features(vrm: str, mileage: int, user: str = Depends(get_curr
 
 @router.post("/assess-vehicle/features/{vrm}")
 def assess_vehicle_save_features(vrm: str, payload: dict,
-                                 user: str = Depends(get_current_user)):
+                                 user: str = Depends(require_page_api('assess_vehicle'))):
     """
     Save the chosen spec and re-value with it.
 
@@ -1151,8 +1136,6 @@ def assess_vehicle_save_features(vrm: str, payload: dict,
     not just the date, so a fresh call is the only way to get a figure that
     reflects the new spec.
     """
-    if user != 'tdrayson':
-        raise HTTPException(status_code=403)
 
     import requests
     from list_processor.autotrader_client import AutoTraderClient, _unwrap_vehicles_result
@@ -1241,15 +1224,13 @@ def _spec_check_payload(row: dict) -> dict:
 
 
 @router.get("/assess-vehicle/spec-check/{vrm}")
-def assess_vehicle_spec_check(vrm: str, user: str = Depends(get_current_user)):
+def assess_vehicle_spec_check(vrm: str, user: str = Depends(require_page_api('assess_vehicle'))):
     """
     The stored HPI Spec Check for this VRM, if one has ever been run.
 
     Reads the store only — never calls HPI. Returns found=false when there is
     nothing stored, which is what puts the "Run Spec Check" button on the page.
     """
-    if user != 'tdrayson':
-        raise HTTPException(status_code=403)
 
     key = vrm.strip().upper().replace(' ', '')
     try:
@@ -1266,7 +1247,7 @@ def assess_vehicle_spec_check(vrm: str, user: str = Depends(get_current_user)):
 
 
 @router.post("/assess-vehicle/spec-check/{vrm}")
-def assess_vehicle_run_spec_check(vrm: str, user: str = Depends(get_current_user)):
+def assess_vehicle_run_spec_check(vrm: str, user: str = Depends(require_page_api('assess_vehicle'))):
     """
     Run an HPI Spec Check for this VRM. BILLABLE — one HPI check per call.
 
@@ -1277,8 +1258,6 @@ def assess_vehicle_run_spec_check(vrm: str, user: str = Depends(get_current_user
     bill twice. Factory options never change, so there is no refresh case: if a
     result needs replacing, the row has to be deleted deliberately.
     """
-    if user != 'tdrayson':
-        raise HTTPException(status_code=403)
 
     from list_processor.spec_check_client import SpecCheckClient, SpecCheckError
 
@@ -1326,10 +1305,8 @@ def assess_vehicle_run_spec_check(vrm: str, user: str = Depends(get_current_user
 
 @router.get("/assess-vehicle/history")
 def assess_vehicle_history(page: int = 1,
-                           user: str = Depends(get_current_user)):
+                           user: str = Depends(require_page_api('assess_vehicle'))):
     """Every vehicle checked in the window — supplier lists and manual checks."""
-    if user != 'tdrayson':
-        raise HTTPException(status_code=403)
     # Keep the window sane — an arbitrary value would scan the whole table.
     page = max(1, int(page))
     history, total = _recent_list(days=_RECENT_DAYS, page=page)
