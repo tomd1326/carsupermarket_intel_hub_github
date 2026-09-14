@@ -1,0 +1,974 @@
+{% from '_navigation.html' import account_nav with context %}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Google Ads Campaigns</title>
+    <link rel="icon" type="image/png" href="{{ BASE_URL }}/static/icon.png">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css" rel="stylesheet">
+    <link href="{{ static_url('css/theme.css') }}" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+    <style>
+        @font-face { font-family: 'DM Sans'; src: url('{{ BASE_URL }}/static/fonts/DMSans-Regular.ttf');  font-weight: 400; }
+        @font-face { font-family: 'DM Sans'; src: url('{{ BASE_URL }}/static/fonts/DMSans-Bold.ttf');     font-weight: 700; }
+        body, button, input, select, textarea { font-family: 'DM Sans', system-ui, sans-serif; font-size: 14px; }
+        body { background: #f1f5f9; }
+
+        .top-bar {
+            background: #fff;
+            border-bottom: 1px solid #e2e8f0;
+            padding: 12px 28px;
+            display: flex;
+            align-items: center;
+            gap: 16px;
+            position: sticky;
+            top: 0;
+            z-index: 100;
+        }
+        .top-bar h1 { font-size: 1.1rem; font-weight: 700; margin: 0; color: #0f172a; }
+        .page-content { padding: 24px 32px; }
+
+        .charts-row {
+            display: grid;
+            grid-template-columns: 30.5fr 30.5fr 39fr;
+            gap: 16px;
+            align-items: start;
+        }
+
+        .chart-card {
+            background: #fff;
+            border: 1px solid #e2e8f0;
+            border-radius: 10px;
+            padding: 18px 20px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.06);
+        }
+        .chart-card h2 { font-size: 0.88rem; font-weight: 700; color: #0f172a; margin-bottom: 8px; }
+
+        .btn-load {
+            background: #7ed321; border: none; color: #0d3d5f; font-weight: 700;
+            border-radius: 6px; padding: 7px 20px; font-size: 0.9rem;
+            display: inline-flex; align-items: center; gap: 7px;
+        }
+        .btn-load:hover { background: #6cba18; color: #0d3d5f; }
+        .btn-load:disabled { opacity: 0.6; cursor: not-allowed; }
+        .status-text { font-size: 0.82rem; color: #64748b; }
+
+        .btn-apply {
+            background: #0d3d6e; border: none; color: #fff; font-weight: 700;
+            border-radius: 6px; padding: 7px 16px; font-size: 0.9rem;
+            display: inline-flex; align-items: center; gap: 7px;
+        }
+        .btn-apply:hover { background: #0a2f56; color: #fff; }
+        .btn-apply:disabled { opacity: 0.6; cursor: not-allowed; }
+
+        .category-header {
+            display: flex; align-items: center; gap: 10px;
+            padding: 9px 16px; margin-bottom: 0;
+            background: #e2e8f0; border-radius: 8px;
+            user-select: none;
+            font-size: 0.82rem; font-weight: 700; color: #0f172a;
+            border: 1px solid #cbd5e1;
+        }
+        /* Only this button collapses the section. The rest of the bar holds the
+           filters, where a click used to collapse it by accident. */
+        .category-toggle {
+            display: flex; align-items: center; gap: 10px;
+            margin: -9px 0 -9px -16px; padding: 9px 12px 9px 16px;
+            background: none; border: none; border-radius: 8px 0 0 8px;
+            font: inherit; color: inherit; cursor: pointer;
+        }
+        .category-toggle:hover { background: #d1d9e2; }
+        .category-toggle .chevron { font-size: 0.7rem; color: #64748b; transition: transform 0.2s; }
+        .category-header.open .chevron { transform: rotate(90deg); }
+        .category-body { display: none; margin-top: 12px; }
+        .category-body.open { display: block; }
+        .category-section { margin-bottom: 12px; }
+
+        .chart-row + .chart-row { margin-top: 16px; }
+
+        /* First filter sits right after the section title; the rest follow it. */
+        .ga4-filter {
+            display: flex; align-items: center; gap: 8px;
+            font-weight: 400; color: #475569;
+        }
+        .ga4-filter:first-of-type { margin-left: 18px; }
+        .ga4-filter label { margin: 0; font-size: 0.78rem; font-weight: 700; }
+        .ga4-filter select {
+            min-width: 180px; padding: 4px 8px; border: 1px solid #cbd5e1;
+            border-radius: 6px; background: #fff; color: #0f172a; font-size: 0.8rem;
+        }
+        .ga4-filter-apply { padding: 4px 12px; font-size: 0.78rem; }
+
+        /* Campaign multi-select: a button that opens a checkbox list. */
+        .ga4-multi { position: relative; }
+        .ga4-multi-toggle {
+            min-width: 180px; padding: 4px 8px; border: 1px solid #cbd5e1;
+            border-radius: 6px; background: #fff; color: #0f172a; font-size: 0.8rem;
+            text-align: left; cursor: pointer; display: flex; align-items: center;
+            justify-content: space-between; gap: 8px; font-weight: 400;
+        }
+        .ga4-multi-toggle:after { content: '\25be'; color: #64748b; }
+        .ga4-multi-panel {
+            display: none; position: absolute; top: calc(100% + 4px); left: 0; z-index: 40;
+            min-width: 320px; max-height: 320px; overflow-y: auto;
+            background: #fff; border: 1px solid #cbd5e1; border-radius: 8px;
+            box-shadow: 0 8px 20px rgba(15,23,42,0.12); padding: 6px;
+        }
+        .ga4-multi-panel.open { display: block; }
+        .ga4-multi-panel label {
+            display: flex; align-items: flex-start; gap: 8px; padding: 5px 8px;
+            border-radius: 6px; font-size: 0.78rem; font-weight: 400; cursor: pointer;
+            overflow-wrap: anywhere;
+        }
+        .ga4-multi-panel label:hover { background: #f1f5f9; }
+        .ga4-multi-panel input { margin: 2px 0 0; flex: none; }
+        .ga4-multi-actions {
+            display: flex; gap: 8px; padding: 6px 8px; border-bottom: 1px solid #e2e8f0;
+            margin-bottom: 4px;
+        }
+        .ga4-multi-actions button {
+            background: none; border: none; padding: 0; cursor: pointer;
+            color: #0d3d6e; font-size: 0.75rem; font-weight: 700; text-decoration: underline;
+        }
+        .ga4-campaign-title {
+            margin: 0 0 8px; padding: 7px 12px; border-left: 4px solid #0d3d6e;
+            background: #f8fafc; color: #0f172a; font-size: 0.86rem; font-weight: 700;
+            overflow-wrap: anywhere;
+        }
+        .ga4-aggregated-title {
+            border-left-color: #e53e3e; background: #fef2f2; font-size: 0.92rem;
+        }
+        .ga4-status { margin: 0 0 10px; color: #64748b; font-size: 0.8rem; }
+        .ga4-chart-wrap { position: relative; height: 260px; }
+        /* The stacked aggregated charts carry a campaign legend under the plot,
+           so they need the extra height or the plot area is squeezed. */
+        .ga4-chart-wrap.ga4-chart-legended { height: 330px; }
+
+        /* While a new event loads, hide the old event's lines so the charts are
+           not mistaken for current data. The cards keep their size, so the page
+           does not jump when the new data arrives. */
+        .ga4-loading .ga4-chart-wrap canvas { visibility: hidden; }
+        .ga4-loading .ga4-chart-wrap:after {
+            content: 'Loading...';
+            position: absolute; inset: 0;
+            display: flex; align-items: center; justify-content: center;
+            color: #94a3b8; font-size: 0.8rem;
+        }
+        .ga4-loading .ga4-campaign-title { opacity: 0.45; }
+
+        /* Day-window scroller: sits under each day chart. Every copy drives the
+           one shared window, so they all move together. */
+        .ga4-day-scroller {
+            display: flex; align-items: center; gap: 6px;
+            margin-top: 10px; padding-top: 10px;
+            border-top: 1px solid #e2e8f0;
+        }
+        /* The track is the whole history; the thumb's WIDTH is the visible
+           window's share of it, so the bar shows how much is on screen as well
+           as where. A native range input cannot do this — its thumb is a fixed
+           size regardless of the window. */
+        .ga4-day-track {
+            flex: 1; min-width: 0; position: relative; height: 16px;
+            background: #f1f5f9; border: 1px solid #e2e8f0; border-radius: 8px;
+            cursor: pointer; touch-action: none;
+        }
+        .ga4-day-thumb {
+            position: absolute; top: -1px; bottom: -1px;
+            background: #0d3d6e; border-radius: 8px; cursor: grab;
+            min-width: 18px;
+        }
+        .ga4-day-thumb:hover { background: #0a2f56; }
+        .ga4-day-track.dragging { cursor: grabbing; }
+        .ga4-day-track.dragging .ga4-day-thumb { cursor: grabbing; background: #0a2f56; }
+        .ga4-day-step, .ga4-day-latest {
+            border: 1px solid #cbd5e1; background: #fff; color: #334155;
+            border-radius: 6px; padding: 2px 8px; font-size: 0.72rem; line-height: 1.5;
+        }
+        .ga4-day-step:hover:not(:disabled), .ga4-day-latest:hover:not(:disabled) { background: #f1f5f9; }
+        .ga4-day-step:disabled { opacity: 0.4; cursor: not-allowed; }
+        .ga4-day-latest { font-weight: 700; white-space: nowrap; }
+        .ga4-loading .ga4-day-scroller { opacity: 0.45; pointer-events: none; }
+    </style>
+</head>
+<body>
+    {{ account_nav(user) }}
+    <div class="top-bar">
+        <h1>Google Ads Campaigns</h1>
+        <button class="btn btn-load" id="loadBtn" onclick="loadGa4Campaigns()">
+            <i class="fas fa-sync-alt" id="loadIcon"></i> Load Data
+        </button>
+        <span class="status-text" id="statusText"></span>
+    </div>
+
+    <div class="page-content">
+        <div class="category-section" id="ga4CampaignSection">
+            <div class="category-header open" id="ga4CampaignHeader">
+                <button type="button" class="category-toggle" onclick="toggleGa4Section()"
+                        title="Show or hide the charts">
+                    <i class="fas fa-chevron-right chevron"></i>
+                    <span>GA4 events by campaign</span>
+                </button>
+                <div class="ga4-filter">
+                    <label for="ga4EventSelect">Event</label>
+                    <select id="ga4EventSelect">
+                        <option value="All events">All events</option>
+                        <option value="Apply-Finance_Lead">Apply-Finance_Lead</option>
+                        <option value="CSF-Approved_Lead">CSF-Approved_Lead</option>
+                        <option value="Pre-Approved_Lead">Pre-Approved_Lead</option>
+                        <option value="Vehicle_Enquiry_Lead">Vehicle_Enquiry_Lead</option>
+                        <option value="Vehicle_Reservation_Lead">Vehicle_Reservation_Lead</option>
+                    </select>
+                    <button type="button" class="btn btn-apply ga4-filter-apply" onclick="loadGa4Campaigns()">Apply</button>
+                </div>
+                <div class="ga4-filter">
+                    <label for="ga4ViewSelect">View</label>
+                    <select id="ga4ViewSelect">
+                        <option value="sessions">Session volume</option>
+                        <option value="volume">Event volume</option>
+                        <option value="rate" selected>Conversion %</option>
+                    </select>
+                    <button type="button" class="btn btn-apply ga4-filter-apply" onclick="setGa4View(document.getElementById('ga4ViewSelect').value)">Apply</button>
+                </div>
+                <div class="ga4-filter ga4-multi">
+                    <label>Campaigns</label>
+                    <button type="button" class="ga4-multi-toggle" id="ga4CampaignToggle"
+                            onclick="toggleGa4CampaignPanel()">All campaigns</button>
+                    <div class="ga4-multi-panel" id="ga4CampaignPanel">
+                        <div class="ga4-multi-actions">
+                            <button type="button" onclick="setAllGa4Campaigns(true)">Select all</button>
+                            <button type="button" onclick="setAllGa4Campaigns(false)">Clear all</button>
+                        </div>
+                        <div id="ga4CampaignChecks"></div>
+                    </div>
+                    <button type="button" class="btn btn-apply ga4-filter-apply" onclick="applyGa4CampaignFilter()">Apply</button>
+                </div>
+            </div>
+            <div class="category-body open" id="ga4CampaignBody">
+                <p class="ga4-status" id="ga4Status">Event count divided by the campaign's own sessions.</p>
+                <div id="ga4CampaignRows"></div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+    const BASE_URL = "{{ BASE_URL }}";
+    const DAY_NAMES = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+
+    // Disable animations globally for all charts
+    Chart.defaults.animation = false;
+
+    let ga4RequestNumber = 0;
+    let ga4LastData = null;
+    let ga4View = 'rate';
+    // null = show every campaign; otherwise the set of campaign names to show.
+    let ga4SelectedCampaigns = null;
+    let ga4Charts = {};        // rowId -> [Chart, Chart, Chart]
+    // Day charts show a window of ga4DayWindowDays ending at ga4DayOffset
+    // (an index into the full dates array). null = pin to the latest day.
+    let ga4DayWindowDays = 25;
+    let ga4DayOffset = null;
+
+    document.addEventListener('DOMContentLoaded', loadGa4Campaigns);
+
+    // The endpoint names the all-events option; fall back to the literal in case
+    // an older response has no label.
+    function ga4IsAllEvents(eventName) {
+        const label = (ga4LastData && ga4LastData.all_events_label) || 'All events';
+        return eventName === label;
+    }
+
+    function escHtml(s) {
+        return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    }
+
+    function dateLabel(d) {
+        const dt = new Date(d + 'T00:00:00');
+        const dd = String(dt.getDate()).padStart(2, '0');
+        const mm = String(dt.getMonth() + 1).padStart(2, '0');
+        return DAY_NAMES[dt.getDay()] + ' ' + dd + '/' + mm;
+    }
+
+    function resizeAllCharts() {
+        Object.values(ga4Charts).flat().forEach(c => c && c.resize());
+    }
+
+    function toggleGa4Section() {
+        const header = document.getElementById('ga4CampaignHeader');
+        const body = document.getElementById('ga4CampaignBody');
+        const isOpen = body.classList.contains('open');
+        header.classList.toggle('open', !isOpen);
+        body.classList.toggle('open', !isOpen);
+        if (!isOpen) setTimeout(resizeAllCharts, 10);
+    }
+
+    async function fetchGa4Campaigns(eventName) {
+        const query = eventName ? `?event_name=${encodeURIComponent(eventName)}` : '';
+        return fetch(`${BASE_URL}/kpi/ga4-campaign-conversion${query}`).then(r => r.json());
+    }
+
+    async function loadGa4Campaigns() {
+        const select = document.getElementById('ga4EventSelect');
+        const status = document.getElementById('ga4Status');
+        const btn = document.getElementById('loadBtn');
+        const icon = document.getElementById('loadIcon');
+        const eventName = select.value;
+        const requestNumber = ++ga4RequestNumber;
+        select.disabled = true;
+        btn.disabled = true;
+        icon.classList.add('fa-spin');
+        document.getElementById('ga4CampaignRows').classList.add('ga4-loading');
+        status.textContent = `Loading ${eventName}...`;
+        try {
+            const data = await fetchGa4Campaigns(eventName);
+            if (requestNumber !== ga4RequestNumber) return;
+            if (data.status !== 'ok') throw new Error(data.message || 'load failed');
+            select.value = data.event_name;
+            ga4LastData = data;
+            if (data.daily_window_days) ga4DayWindowDays = data.daily_window_days;
+            renderGa4Campaigns(data);
+            document.getElementById('statusText').textContent = 'Loaded';
+        } catch (err) {
+            if (requestNumber === ga4RequestNumber) {
+                status.textContent = 'GA4 load failed: ' + err.message;
+                document.getElementById('statusText').textContent = 'Failed';
+            }
+        } finally {
+            if (requestNumber === ga4RequestNumber) {
+                select.disabled = false;
+                btn.disabled = false;
+                icon.classList.remove('fa-spin');
+                document.getElementById('ga4CampaignRows').classList.remove('ga4-loading');
+            }
+        }
+    }
+
+    function setGa4View(view) {
+        ga4View = view;
+        if (ga4LastData) renderGa4Campaigns(ga4LastData);
+    }
+
+    function toggleGa4CampaignPanel() {
+        document.getElementById('ga4CampaignPanel').classList.toggle('open');
+    }
+
+    // Close the panel when clicking anywhere outside it.
+    document.addEventListener('click', e => {
+        const wrap = document.getElementById('ga4CampaignPanel');
+        if (wrap && wrap.classList.contains('open') && !e.target.closest('.ga4-multi')) {
+            wrap.classList.remove('open');
+        }
+    });
+
+    function populateGa4CampaignChecks(campaigns) {
+        const box = document.getElementById('ga4CampaignChecks');
+        if (box.dataset.filled === '1') return;
+        box.innerHTML = campaigns.map(name => `
+            <label><input type="checkbox" value="${escHtml(name)}" checked> ${escHtml(name)}</label>
+        `).join('');
+        box.dataset.filled = '1';
+    }
+
+    function setAllGa4Campaigns(checked) {
+        document.querySelectorAll('#ga4CampaignChecks input').forEach(cb => { cb.checked = checked; });
+    }
+
+    function applyGa4CampaignFilter() {
+        const boxes = [...document.querySelectorAll('#ga4CampaignChecks input')];
+        const chosen = boxes.filter(cb => cb.checked).map(cb => cb.value);
+        ga4SelectedCampaigns = chosen.length === boxes.length ? null : new Set(chosen);
+        document.getElementById('ga4CampaignPanel').classList.remove('open');
+        updateGa4CampaignToggleLabel(boxes.length, chosen.length);
+        if (ga4LastData) renderGa4Campaigns(ga4LastData);
+    }
+
+    function updateGa4CampaignToggleLabel(total, chosen) {
+        const toggle = document.getElementById('ga4CampaignToggle');
+        toggle.textContent = chosen === total ? 'All campaigns'
+            : chosen === 0 ? 'No campaigns'
+            : `${chosen} of ${total} campaigns`;
+    }
+
+    const GA4_VIEW_CONFIG = {
+        // Sessions are a property of the campaign, not of an event, so this view
+        // shows the same numbers whichever event is selected.
+        sessions: {
+            keys: { month: 'monthly_sessions', week: 'weekly_sessions', day: 'daily_sessions' },
+            titlePrefix: 'Sessions',
+            suffix: '',
+            chartType: 'bar',
+            minYMax: 1,
+            sharedScale: false,
+            wholeNumbers: true,
+            tooltip: (label, value) => `${label}: ${Number(value).toLocaleString()}`,
+            tickLabel: (value) => Number(value).toLocaleString(),
+        },
+        rate: {
+            keys: { month: 'monthly_rates', week: 'weekly_rates', day: 'daily_rates' },
+            titlePrefix: 'Conversion rate',
+            suffix: '%',
+            chartType: 'line',
+            minYMax: 0.01,
+            sharedScale: true,
+            tooltip: (label, value) => `${label}: ${Number(value).toFixed(3)}%`,
+            tickLabel: (value, unit) => _roundTick(value, unit) + '%',
+        },
+        volume: {
+            keys: { month: 'monthly_volumes', week: 'weekly_volumes', day: 'daily_volumes' },
+            titlePrefix: 'Event volume',
+            suffix: '',
+            chartType: 'bar',
+            minYMax: 1,
+            sharedScale: false,
+            wholeNumbers: true,
+            tooltip: (label, value) => `${label}: ${Number(value).toLocaleString()}`,
+            tickLabel: (value) => Number(value).toLocaleString(),
+        },
+    };
+
+    // ── Day-chart window ──────────────────────────────────────────────────────
+    // The endpoint sends every day. These slice out the visible window; the
+    // y-scale is still computed from the whole series (see ga4SeriesRanges), so
+    // scrolling moves the window without the axis jumping under it.
+
+    function ga4DayCount() {
+        return ga4LastData ? ga4LastData.dates.length : 0;
+    }
+
+    // Highest valid offset = the index of the last day.
+    function ga4DayMaxOffset() {
+        return Math.max(0, ga4DayCount() - 1);
+    }
+
+    // Lowest valid offset: the earliest end index that still has a full window
+    // behind it. Scrolling further left would shrink the window instead of
+    // moving it.
+    function ga4DayMinOffset() {
+        return Math.min(ga4DayWindowDays - 1, ga4DayMaxOffset());
+    }
+
+    // Resolved end index of the window; null offset means pin to the latest day.
+    function ga4DayEndIndex() {
+        if (ga4DayOffset === null) return ga4DayMaxOffset();
+        return Math.min(Math.max(ga4DayOffset, ga4DayMinOffset()), ga4DayMaxOffset());
+    }
+
+    function ga4DaySlice(arr) {
+        const end = ga4DayEndIndex();
+        return (arr || []).slice(Math.max(0, end - ga4DayWindowDays + 1), end + 1);
+    }
+
+    function setGa4DayOffset(offset) {
+        // Pin back to null at the latest day, so a later reload follows new data.
+        ga4DayOffset = offset >= ga4DayMaxOffset()
+            ? null
+            : Math.max(offset, ga4DayMinOffset());
+        if (ga4LastData) renderGa4Campaigns(ga4LastData);
+    }
+
+    // Dragging changes the offset many times a second. A full renderGa4Campaigns
+    // destroys and rebuilds every chart on the page, which is far too much work
+    // per frame, so a drag updates only the day charts' data in place.
+    function slideGa4DayOffset(offset) {
+        const previous = ga4DayEndIndex();
+        ga4DayOffset = offset >= ga4DayMaxOffset()
+            ? null
+            : Math.max(offset, ga4DayMinOffset());
+        if (ga4DayEndIndex() === previous) return;
+        updateGa4DayCharts();
+        updateGa4DayScroller();
+    }
+
+    // Repoint the existing day charts at the new window without rebuilding them.
+    function updateGa4DayCharts() {
+        if (!ga4LastData) return;
+        const viewConfig = GA4_VIEW_CONFIG[ga4View];
+        const dayKey = viewConfig.keys.day;
+        const labels = ga4DaySlice(ga4LastData.dates).map(dateLabel);
+
+        Object.entries(ga4Charts).forEach(([rowId, charts]) => {
+            const chart = charts[2];   // [month, week, day]
+            if (!chart) return;
+            chart.data.labels = labels;
+            // Each dataset keeps the series it was built from: a stacked chart
+            // has one per campaign, every other chart has a single series.
+            chart.data.datasets.forEach(dataset => {
+                const source = ga4DaySeriesFor(rowId, dataset.label);
+                if (source) dataset.data = ga4DaySlice(source[dayKey]);
+            });
+            chart.update('none');
+            const title = document.getElementById(`${rowId}-day-title`);
+            if (title) title.textContent = `${ga4TitlePrefix()} - ${ga4DayTitleSuffix()}`;
+        });
+    }
+
+    // Finds the series behind one day-chart dataset. On a stacked chart the
+    // dataset label is the campaign name; otherwise it is the row's own series.
+    function ga4DaySeriesFor(rowId, datasetLabel) {
+        const byName = ga4LastData.campaigns.find(c => c.name === datasetLabel);
+        if (byName) return byName;
+        if (rowId === 'ga4-aggregated') return ga4CurrentAggregated();
+        return null;
+    }
+
+    function stepGa4DayWindow(direction) {
+        setGa4DayOffset(ga4DayEndIndex() + direction * ga4DayWindowDays);
+    }
+
+    // Every day chart carries its own copy of the scroller, but they all drive
+    // the one shared window, so each is updated to the same position.
+    function updateGa4DayScroller() {
+        const count = ga4DayCount();
+        const scrollers = document.querySelectorAll('[data-day-scroller]');
+        // Nothing to scroll when everything already fits on one screen.
+        if (!count || count <= ga4DayWindowDays) {
+            scrollers.forEach(s => { s.style.display = 'none'; });
+            return;
+        }
+
+        const end = ga4DayEndIndex();
+        const start = Math.max(0, end - ga4DayWindowDays + 1);
+        // The thumb spans the visible days as a fraction of the whole history,
+        // so its width shows how much of the history is on screen.
+        const left = (start / count) * 100;
+        const width = (ga4DayWindowDays / count) * 100;
+        scrollers.forEach(scroller => {
+            scroller.style.display = '';
+            const thumb = scroller.querySelector('[data-day-thumb]');
+            thumb.style.left = left + '%';
+            thumb.style.width = width + '%';
+            scroller.querySelector('[data-day-prev]').disabled = start <= 0;
+            scroller.querySelector('[data-day-next]').disabled = end >= ga4DayMaxOffset();
+        });
+    }
+
+    // ── Dragging the day-window thumb ─────────────────────────────────────────
+    // Pointer events (not mouse) so the drag keeps working when the pointer
+    // leaves the track, and capture means we still get the release.
+    let ga4DragState = null;
+
+    function ga4TrackToOffset(track, clientX, grabOffsetPx) {
+        const rect = track.getBoundingClientRect();
+        const count = ga4DayCount();
+        const thumbWidth = rect.width * (ga4DayWindowDays / count);
+        // Position of the thumb's left edge, in track pixels.
+        const leftPx = clientX - rect.left - grabOffsetPx;
+        const usable = Math.max(1, rect.width - thumbWidth);
+        const fraction = Math.min(Math.max(leftPx / usable, 0), 1);
+        // Fraction maps onto the range of valid START days, then to an end index.
+        const startDay = Math.round(fraction * Math.max(0, count - ga4DayWindowDays));
+        return startDay + ga4DayWindowDays - 1;
+    }
+
+    function ga4OnTrackPointerDown(event) {
+        const track = event.target.closest('[data-day-track]');
+        if (!track || !ga4DayCount()) return;
+        const thumb = track.querySelector('[data-day-thumb]');
+        const thumbRect = thumb.getBoundingClientRect();
+        // Grabbing the thumb keeps the point under the cursor; clicking the bare
+        // track jumps so the thumb centres on the click.
+        const onThumb = event.target === thumb;
+        const grabOffsetPx = onThumb
+            ? event.clientX - thumbRect.left
+            : thumbRect.width / 2;
+
+        ga4DragState = { track, grabOffsetPx };
+        track.classList.add('dragging');
+        track.setPointerCapture(event.pointerId);
+        slideGa4DayOffset(ga4TrackToOffset(track, event.clientX, grabOffsetPx));
+        event.preventDefault();
+    }
+
+    function ga4OnTrackPointerMove(event) {
+        if (!ga4DragState) return;
+        slideGa4DayOffset(
+            ga4TrackToOffset(ga4DragState.track, event.clientX, ga4DragState.grabOffsetPx));
+        event.preventDefault();
+    }
+
+    function ga4OnTrackPointerUp() {
+        if (!ga4DragState) return;
+        ga4DragState.track.classList.remove('dragging');
+        ga4DragState = null;
+    }
+
+    // Bound once on the document: the tracks are rebuilt on every render, so
+    // per-element listeners would have to be rebound each time.
+    document.addEventListener('pointerdown', ga4OnTrackPointerDown);
+    document.addEventListener('pointermove', ga4OnTrackPointerMove);
+    document.addEventListener('pointerup', ga4OnTrackPointerUp);
+    document.addEventListener('pointercancel', ga4OnTrackPointerUp);
+
+    // Chart heading. With every event summed the rate is events per session,
+    // not a share of sessions, so it is not called a conversion rate.
+    function ga4TitlePrefix() {
+        const viewConfig = GA4_VIEW_CONFIG[ga4View];
+        if (ga4View === 'rate' && ga4LastData && ga4IsAllEvents(ga4LastData.event_name)) {
+            return 'Lead events per session';
+        }
+        return viewConfig.titlePrefix;
+    }
+
+    // Date range for the day chart heading, e.g. "day (Mon 18/08 - Thu 11/09)".
+    function ga4DayTitleSuffix() {
+        if (!ga4LastData || !ga4LastData.dates.length) return 'day';
+        const end = ga4DayEndIndex();
+        const start = Math.max(0, end - ga4DayWindowDays + 1);
+        return `day (${dateLabel(ga4LastData.dates[start])} - ${dateLabel(ga4LastData.dates[end])})`;
+    }
+
+    // Rate is the same kind of number in all three periods, so month/week/day share
+    // one scale. Volume totals differ by period (a month is ~4.3x a week), so each
+    // period keeps its own scale or the day chart would flatten to nothing.
+    function ga4SeriesRanges(series, viewConfig) {
+        const periods = ['month', 'week', 'day'];
+        // Bars scale from the max, lines from the mean — see zeroBasedRange.
+        const fromMax = viewConfig.chartType === 'bar';
+        const ranges = periods.map(period =>
+            zeroBasedRange(series[viewConfig.keys[period]], viewConfig.minYMax, viewConfig.wholeNumbers, fromMax));
+        if (!viewConfig.sharedScale) return ranges;
+        const shared = ranges.reduce((a, b) => (b.yMax > a.yMax ? b : a));
+        return periods.map(() => shared);
+    }
+
+    // Campaign colours for the stacked volume bars. Index order follows the
+    // campaign order from the endpoint, so a campaign keeps its colour across
+    // the three charts and across a filter change.
+    const GA4_CAMPAIGN_COLOURS = [
+        '#0d3d6e', '#7ed321', '#e53e3e', '#f59e0b',
+        '#8b5cf6', '#06b6d4', '#ec4899', '#64748b',
+    ];
+
+    function ga4CampaignColour(index) {
+        return GA4_CAMPAIGN_COLOURS[index % GA4_CAMPAIGN_COLOURS.length];
+    }
+
+    function ga4LineDataset(label, data) {
+        return {
+            label,
+            data,
+            fill: false,
+            borderColor: '#0d3d6e',
+            borderWidth: 2.5,
+            pointRadius: point => point.dataset.data[point.dataIndex] !== null ? 3 : 0,
+            pointBackgroundColor: '#0d3d6e',
+            pointBorderColor: '#fff',
+            pointBorderWidth: 1.5,
+            tension: 0,
+            spanGaps: false,
+        };
+    }
+
+    function ga4BarDataset(label, data, colour) {
+        return {
+            label,
+            data,
+            backgroundColor: colour,
+            borderWidth: 0,
+            // Bars butt up against each other so a stack reads as one column.
+            categoryPercentage: 0.9,
+            barPercentage: 0.98,
+        };
+    }
+
+    // datasets is already built by the caller: one line, one bar series, or
+    // several stacked bar series (one per campaign).
+    function buildGa4Chart(canvasId, labels, datasets, range, viewConfig, opts = {}) {
+        const { stacked = false, showLegend = false } = opts;
+        const ctx = document.getElementById(canvasId).getContext('2d');
+        return new Chart(ctx, {
+            type: viewConfig.chartType || 'line',
+            data: { labels, datasets },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                interaction: { mode: 'index', intersect: false },
+                plugins: {
+                    legend: showLegend ? {
+                        display: true,
+                        position: 'bottom',
+                        labels: { boxWidth: 10, boxHeight: 10, font: { size: 10 }, padding: 8 },
+                    } : { display: false },
+                    tooltip: {
+                        callbacks: {
+                            label: context => context.parsed.y === null
+                                ? null
+                                : viewConfig.tooltip(context.dataset.label, context.parsed.y),
+                            // With a stack, the individual campaign values do not
+                            // tell you the column's total, so state it.
+                            footer: items => {
+                                if (!stacked || items.length < 2) return;
+                                const total = items.reduce((sum, item) => sum + (item.parsed.y || 0), 0);
+                                return `Total: ${Number(total).toLocaleString()}`;
+                            }
+                        }
+                    }
+                },
+                scales: {
+                    x: {
+                        stacked,
+                        grid: { color: 'rgba(0,0,0,0.06)' },
+                        ticks: { font: { size: 10 }, maxRotation: 45, minRotation: 30 }
+                    },
+                    y: {
+                        stacked,
+                        min: range.yMin,
+                        max: range.yMax,
+                        grid: { color: 'rgba(0,0,0,0.06)' },
+                        ticks: {
+                            font: { size: 10 },
+                            stepSize: range.unit,
+                            callback: value => viewConfig.tickLabel(value, range.unit)
+                        }
+                    }
+                }
+            }
+        });
+    }
+
+    function ga4RowHtml(rowId, index, title, isAggregated) {
+        return `
+            <div class="chart-row">
+                <h3 class="ga4-campaign-title${isAggregated ? ' ga4-aggregated-title' : ''}">${escHtml(title)}</h3>
+                <div class="charts-row">
+                    <div class="chart-card">
+                        <h2 id="${rowId}-month-title"></h2>
+                        <div class="ga4-chart-wrap"><canvas id="${rowId}-month"></canvas></div>
+                    </div>
+                    <div class="chart-card">
+                        <h2 id="${rowId}-week-title"></h2>
+                        <div class="ga4-chart-wrap"><canvas id="${rowId}-week"></canvas></div>
+                    </div>
+                    <div class="chart-card">
+                        <h2 id="${rowId}-day-title"></h2>
+                        <div class="ga4-chart-wrap"><canvas id="${rowId}-day"></canvas></div>
+                        <div class="ga4-day-scroller" data-day-scroller style="display:none;">
+                            <button type="button" class="ga4-day-step" data-day-prev
+                                    onclick="stepGa4DayWindow(-1)" title="Earlier">
+                                <i class="fas fa-chevron-left"></i>
+                            </button>
+                            <div class="ga4-day-track" data-day-track>
+                                <div class="ga4-day-thumb" data-day-thumb></div>
+                            </div>
+                            <button type="button" class="ga4-day-step" data-day-next
+                                    onclick="stepGa4DayWindow(1)" title="Later">
+                                <i class="fas fa-chevron-right"></i>
+                            </button>
+                            <button type="button" class="ga4-day-latest"
+                                    onclick="setGa4DayOffset(ga4DayMaxOffset())">Latest</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        `;
+    }
+
+    // Rebuild the aggregate from a subset of campaigns: sum events and sessions
+    // per period, then divide. Averaging the campaigns' own percentages would let
+    // a tiny campaign count as much as the biggest one.
+    function ga4Repool(campaigns) {
+        const sumAt = (key, i) => campaigns.reduce((total, c) => {
+            const v = c[key][i];
+            return v === null || v === undefined ? total : total + v;
+        }, 0);
+        const anyAt = (key, i) => campaigns.some(c => c[key][i] !== null && c[key][i] !== undefined);
+
+        const series = { name: 'Aggregated' };
+        for (const [vol, sess, rate] of [
+            ['daily_volumes', 'daily_sessions', 'daily_rates'],
+            ['weekly_volumes', 'weekly_sessions', 'weekly_rates'],
+            ['monthly_volumes', 'monthly_sessions', 'monthly_rates'],
+        ]) {
+            const n = campaigns[0][vol].length;
+            series[vol] = [];
+            series[rate] = [];
+            // Sessions are kept, not just used as the divisor: the Session
+            // volume view plots them, and a further re-pool would need them.
+            series[sess] = [];
+            for (let i = 0; i < n; i++) {
+                if (!anyAt(vol, i)) {
+                    series[vol].push(null);
+                    series[rate].push(null);
+                    series[sess].push(null);
+                    continue;
+                }
+                const events = sumAt(vol, i);
+                const sessions = sumAt(sess, i);
+                series[vol].push(events);
+                series[sess].push(sessions);
+                series[rate].push(sessions > 0 ? Math.round(events / sessions * 100 * 1000) / 1000 : null);
+            }
+        }
+        return series;
+    }
+
+    // Campaigns currently on screen, in the endpoint's order.
+    function ga4ShownCampaigns() {
+        if (!ga4LastData) return [];
+        return ga4SelectedCampaigns
+            ? ga4LastData.campaigns.filter(c => ga4SelectedCampaigns.has(c.name))
+            : ga4LastData.campaigns;
+    }
+
+    // The aggregate as shown: the endpoint's own when everything is selected,
+    // otherwise re-pooled from the visible campaigns.
+    function ga4CurrentAggregated() {
+        const shown = ga4ShownCampaigns();
+        if (!shown.length) return null;
+        return shown.length === ga4LastData.campaigns.length
+            ? ga4LastData.aggregated
+            : ga4Repool(shown);
+    }
+
+    function renderGa4Campaigns(data) {
+        Object.keys(ga4Charts).forEach(key => {
+            ga4Charts[key].forEach(chart => chart && chart.destroy());
+            delete ga4Charts[key];
+        });
+
+        const viewConfig = GA4_VIEW_CONFIG[ga4View];
+        const rows = document.getElementById('ga4CampaignRows');
+
+        populateGa4CampaignChecks(data.campaigns.map(c => c.name));
+
+        const shown = ga4ShownCampaigns();
+
+        if (!shown.length) {
+            rows.innerHTML = '<p class="ga4-status">No campaigns selected.</p>';
+            document.getElementById('ga4Status').textContent =
+                `${data.event_name}: no campaigns selected.`;
+            return;
+        }
+
+        // Aggregated must match the campaigns on screen, so re-pool it whenever a
+        // filter is active. Rates are summed events over summed sessions, never an
+        // average of the row percentages.
+        const aggregated = ga4CurrentAggregated();
+
+        rows.innerHTML =
+            ga4RowHtml('ga4-aggregated', 'aggregated', aggregated.name, true) +
+            shown.map((c, index) => ga4RowHtml(`ga4-campaign-${index}`, index, c.name, false)).join('');
+
+        const dailyLabels = ga4DaySlice(data.dates).map(dateLabel);
+
+        // The aggregated row in the bar views splits by campaign, so the stack
+        // adds up to the aggregate total. A rate cannot be stacked that way —
+        // percentages of different session counts do not add up — so the
+        // conversion view stays a single line.
+        const splitByCampaign = viewConfig.chartType === 'bar' && shown.length > 1;
+
+        const renderSeries = (rowId, series, isAggregated) => {
+            // Ranges come from the full day series so the y-axis stays put as the
+            // window scrolls; only the plotted slice is windowed.
+            const [monthRange, weekRange, dayRange] = ga4SeriesRanges(series, viewConfig);
+            const stacked = !!isAggregated && splitByCampaign;
+
+            // For a stack, each campaign contributes a dataset. The colour comes
+            // from the campaign's position in the full list, so filtering others
+            // out does not recolour the ones that remain.
+            const datasetsFor = (periodKey, sliceDays) => {
+                const cut = arr => sliceDays ? ga4DaySlice(arr) : arr;
+                if (!stacked) {
+                    const values = cut(series[periodKey]);
+                    return [viewConfig.chartType === 'bar'
+                        ? ga4BarDataset(series.name, values, '#0d3d6e')
+                        : ga4LineDataset(series.name, values)];
+                }
+                return shown.map(campaign => ga4BarDataset(
+                    campaign.name,
+                    cut(campaign[periodKey]),
+                    ga4CampaignColour(data.campaigns.findIndex(c => c.name === campaign.name)),
+                ));
+            };
+
+            const titlePrefix = ga4TitlePrefix();
+            document.getElementById(`${rowId}-month-title`).textContent = `${titlePrefix} - month`;
+            document.getElementById(`${rowId}-week-title`).textContent = `${titlePrefix} - week`;
+            document.getElementById(`${rowId}-day-title`).textContent = `${titlePrefix} - ${ga4DayTitleSuffix()}`;
+            const opts = { stacked, showLegend: stacked };
+            ['month', 'week', 'day'].forEach(period => {
+                const canvas = document.getElementById(`${rowId}-${period}`);
+                canvas.parentElement.classList.toggle('ga4-chart-legended', stacked);
+            });
+            ga4Charts[rowId] = [
+                buildGa4Chart(`${rowId}-month`, data.monthly_labels, datasetsFor(viewConfig.keys.month), monthRange, viewConfig, opts),
+                buildGa4Chart(`${rowId}-week`, data.weekly_labels, datasetsFor(viewConfig.keys.week), weekRange, viewConfig, opts),
+                buildGa4Chart(`${rowId}-day`, dailyLabels, datasetsFor(viewConfig.keys.day, true), dayRange, viewConfig, opts),
+            ];
+        };
+
+        renderSeries('ga4-aggregated', aggregated, true);
+        shown.forEach((c, index) => renderSeries(`ga4-campaign-${index}`, c));
+        updateGa4DayScroller();
+
+        const scope = shown.length === data.campaigns.length
+            ? 'all campaigns' : `${shown.length} of ${data.campaigns.length} campaigns`;
+        let basis;
+        if (ga4View === 'sessions') {
+            // Sessions belong to the campaign, not to an event, so this view is
+            // the same whichever event is selected — say so, since the Event
+            // filter is sitting right above it looking like it applies.
+            basis = 'Sessions per campaign, the same for every event';
+        } else if (ga4View === 'volume') {
+            basis = ga4IsAllEvents(data.event_name)
+                ? `${data.event_name}: all events summed`
+                : `${data.event_name}: event count`;
+        } else if (ga4IsAllEvents(data.event_name)) {
+            // With every event summed, one session can fire several events, so
+            // the rate counts events per session and can pass 100%. Say so
+            // rather than letting it read as a share of sessions.
+            basis = `${data.event_name}: all events summed / each campaign's sessions, `
+                  + 'so a session counted once can fire several events';
+        } else {
+            basis = `${data.event_name}: event count / each campaign's sessions`;
+        }
+        document.getElementById('ga4Status').textContent =
+            `${basis} (${scope}). Data ${data.data_start} to ${data.data_end}.`;
+    }
+
+    // ── Y-range helpers ───────────────────────────────────────────────────────
+    const _cleanVals = arr => (arr || []).filter(v => v !== null && v !== undefined && !isNaN(v));
+    const _mean = a => a.reduce((x, y) => x + y, 0) / a.length;
+
+    function _roundTick(value, unit) {
+        const decimals = Math.max(0, -Math.floor(Math.log10(unit)) + 2);
+        return Number(value.toFixed(decimals));
+    }
+
+    function _niceUnit(span) {
+        const rawStep = span / 8;
+        const pow = Math.pow(10, Math.floor(Math.log10(rawStep)));
+        return [1, 2, 5, 10].map(m => m * pow).find(u => u >= rawStep) || 10 * pow;
+    }
+
+    // Zero-based y-range.
+    //
+    // A line sits mid-chart (yMax = 2 x mean), which leaves room above and below
+    // for the shape of the line to read. Bars are drawn from zero, so that rule
+    // wastes the top half of the chart whenever the data is fairly flat: with a
+    // mean of 10.7 and a max of 17, 2 x mean puts the tallest column at 80% of
+    // the axis and the typical one near half. Bars therefore scale from the max
+    // with a little headroom, so the tallest column nearly fills the plot.
+    //
+    // max * 1.05 keeps the largest point off the top edge, and minYMax stops an
+    // all-zero series reaching _niceUnit(0), which returns 0 and produces an
+    // unrenderable range.
+    function zeroBasedRange(values, minYMax = 1, wholeNumbers = false, fromMax = false) {
+        const vals = _cleanVals(values);
+        const span = vals.length
+            ? (fromMax
+                ? Math.max(minYMax, Math.max(...vals) * 1.05)
+                : Math.max(minYMax, _mean(vals) * 2, Math.max(...vals) * 1.05))
+            : minYMax;
+        let unit = _niceUnit(span);
+        if (wholeNumbers) unit = Math.max(1, Math.round(unit));
+        const yMax = Math.max(unit, Math.ceil(span / unit) * unit);
+        // Re-round to the unit's own precision: ceil(span/unit)*unit leaves
+        // floating-point noise (0.35000000000000003) on fractional units.
+        const decimals = Math.max(0, -Math.floor(Math.log10(unit)) + 2);
+        return { yMin: 0, yMax: Number(yMax.toFixed(decimals)), unit };
+    }
+    </script>
+</body>
+</html>
