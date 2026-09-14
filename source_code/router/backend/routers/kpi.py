@@ -27,6 +27,14 @@ GA4_CAMPAIGN_EVENTS = [
     "Vehicle_Reservation_Lead",
 ]
 
+# Selecting this instead of a single event sums every event in
+# GA4_CAMPAIGN_EVENTS. Sessions are NOT summed with them — see the query below.
+GA4_ALL_EVENTS = "All events"
+
+# How many days the page shows in a day chart at once. All days are sent; the
+# page scrolls this window through them.
+GA4_DAILY_WINDOW_DAYS = 25
+
 GA4_CAMPAIGNS = [
     ".Vehicle Ads > CSM Audience",
     ".Vehicle Ads > CSM Audience Experiment",
@@ -62,6 +70,14 @@ def kpi_page(request: Request, user: str = Depends(get_current_user)):
     with get_database_connection() as conn:
         settings = get_settings(conn, user=user)
     return templates.TemplateResponse("kpi.html", {"request": request, "user": user, "BASE_URL": BASE_URL, "kpi_ai_summary": settings.get("kpi_ai_summary", False)})
+
+
+@router.get("/google-ads-campaigns", response_class=HTMLResponse)
+def google_ads_campaigns_page(request: Request, user: str = Depends(get_current_user)):
+    if user != 'tdrayson':
+        return RedirectResponse(url=BASE_URL + "/home", status_code=303)
+    _track(request, 'page_view', '/google-ads-campaigns')
+    return templates.TemplateResponse("google_ads_campaigns.html", {"request": request, "user": user, "BASE_URL": BASE_URL})
 
 
 @router.get("/kpi/data")
@@ -243,13 +259,25 @@ def kpi_ga4_campaign_conversion(
     All campaigns are returned for the selected event, plus an "Aggregated"
     series summing across every campaign before the rate is taken. Day, week
     and month rates are ratios of summed event counts to each campaign's own
-    summed sessions (GA4_SESSIONS_BY_CAMPAIGN), not to site-wide sessions;
-    weekly and monthly values are never averages of the daily percentages.
-    Volumes are the same summed event counts before dividing by sessions.
+    summed sessions, not to site-wide sessions; weekly and monthly values are
+    never averages of the daily percentages. Volumes are the same summed event
+    counts before dividing by sessions.
+
+    Reads COMPUTE_UX_TRACKING.GA4_CAMPAIGN_METRICS, which already holds one row
+    per date, campaign and event with that campaign's sessions on the same row,
+    zero-filled for days with sessions but no events. Sessions repeat across the
+    event rows for a date and campaign, so the EVENT_NAME filter below is what
+    stops the session totals multiplying by the number of events.
+
+    With GA4_ALL_EVENTS the event counts are summed over every event while the
+    sessions for that date and campaign are counted ONCE (MAX, not SUM, since
+    the value repeats on each event's row). The resulting rate is lead events
+    per session, which can exceed 100% because one session can fire several
+    events — it is not a share of converting sessions.
     """
     if user != 'tdrayson':
         raise HTTPException(status_code=403)
-    if event_name not in GA4_CAMPAIGN_EVENTS:
+    if event_name != GA4_ALL_EVENTS and event_name not in GA4_CAMPAIGN_EVENTS:
         return {"status": "error", "message": f"Unknown event: {event_name}"}
 
     try:
@@ -263,27 +291,37 @@ def kpi_ga4_campaign_conversion(
         fetch_start = _shift_month(first_of_this_month, -13)
         campaign_placeholders = ", ".join(["%s"] * len(GA4_CAMPAIGNS))
 
-        with SnowflakeClient() as sf:
-            session_rows, session_cols = sf.execute(f"""
-                SELECT DATE, SESSION_CAMPAIGN_NAME, SUM(SESSIONS) AS SESSIONS
-                FROM PROD_CARSUPERMARKET_DB.SOURCE_UX_TRACKING.GA4_SESSIONS_BY_CAMPAIGN
-                WHERE SESSION_CAMPAIGN_NAME IN ({campaign_placeholders})
-                  AND DATE >= %s AND DATE <= %s
-                GROUP BY DATE, SESSION_CAMPAIGN_NAME
-                ORDER BY DATE, SESSION_CAMPAIGN_NAME
-            """, [*GA4_CAMPAIGNS, str(fetch_start), str(today)])
-            event_rows, event_cols = sf.execute(f"""
-                SELECT DATE, SESSION_CAMPAIGN_NAME, SUM(EVENT_COUNT) AS EVENT_COUNT
-                FROM PROD_CARSUPERMARKET_DB.SOURCE_UX_TRACKING.GA4_LEAD_VOLUME_BY_CAMPAIGN
-                WHERE EVENT_NAME = %s
-                  AND SESSION_CAMPAIGN_NAME IN ({campaign_placeholders})
-                  AND DATE >= %s AND DATE <= %s
-                GROUP BY DATE, SESSION_CAMPAIGN_NAME
-                ORDER BY DATE, SESSION_CAMPAIGN_NAME
-            """, [event_name, *GA4_CAMPAIGNS, str(fetch_start), str(today)])
+        event_placeholders = ", ".join(["%s"] * len(GA4_CAMPAIGN_EVENTS))
 
-        session_col_map = {c.upper(): i for i, c in enumerate(session_cols)}
-        event_col_map = {c.upper(): i for i, c in enumerate(event_cols)}
+        if event_name == GA4_ALL_EVENTS:
+            # Sessions repeat identically on each event's row for a date and
+            # campaign, so MAX takes that one value while the events are summed.
+            # SUM(SESSIONS) here would multiply sessions by the event count.
+            sql = f"""
+                SELECT DT, CAMPAIGN_NAME, MAX(SESSIONS) AS SESSIONS, SUM(EVENT_COUNT) AS EVENT_COUNT
+                FROM PROD_CARSUPERMARKET_DB.COMPUTE_UX_TRACKING.GA4_CAMPAIGN_METRICS
+                WHERE EVENT_NAME IN ({event_placeholders})
+                  AND CAMPAIGN_NAME IN ({campaign_placeholders})
+                  AND DT >= %s AND DT <= %s
+                GROUP BY DT, CAMPAIGN_NAME
+                ORDER BY DT, CAMPAIGN_NAME
+            """
+            params = [*GA4_CAMPAIGN_EVENTS, *GA4_CAMPAIGNS, str(fetch_start), str(today)]
+        else:
+            sql = f"""
+                SELECT DT, CAMPAIGN_NAME, SESSIONS, EVENT_COUNT
+                FROM PROD_CARSUPERMARKET_DB.COMPUTE_UX_TRACKING.GA4_CAMPAIGN_METRICS
+                WHERE EVENT_NAME = %s
+                  AND CAMPAIGN_NAME IN ({campaign_placeholders})
+                  AND DT >= %s AND DT <= %s
+                ORDER BY DT, CAMPAIGN_NAME
+            """
+            params = [event_name, *GA4_CAMPAIGNS, str(fetch_start), str(today)]
+
+        with SnowflakeClient() as sf:
+            metric_rows, metric_cols = sf.execute(sql, params)
+
+        col_map = {c.upper(): i for i, c in enumerate(metric_cols)}
 
         def _date_value(value) -> datetime.date:
             if isinstance(value, datetime.datetime):
@@ -299,32 +337,28 @@ def kpi_ga4_campaign_conversion(
                 return 0.0
 
         sessions_by_campaign = {campaign: {} for campaign in GA4_CAMPAIGNS}
+        events_by_campaign = {campaign: {} for campaign in GA4_CAMPAIGNS}
         all_dates: set[datetime.date] = set()
-        for row in session_rows:
-            campaign = str(row[session_col_map["SESSION_CAMPAIGN_NAME"]])
+        for row in metric_rows:
+            campaign = str(row[col_map["CAMPAIGN_NAME"]])
             if campaign not in sessions_by_campaign:
                 continue
-            date_value = _date_value(row[session_col_map["DATE"]])
-            sessions_by_campaign[campaign][date_value] = _number(row[session_col_map["SESSIONS"]])
+            date_value = _date_value(row[col_map["DT"]])
+            sessions_by_campaign[campaign][date_value] = _number(row[col_map["SESSIONS"]])
+            events_by_campaign[campaign][date_value] = _number(row[col_map["EVENT_COUNT"]])
             all_dates.add(date_value)
 
         if not all_dates:
             return {"status": "error", "message": "No GA4 session data returned"}
 
-        events_by_campaign = {campaign: {} for campaign in GA4_CAMPAIGNS}
-        for row in event_rows:
-            campaign = str(row[event_col_map["SESSION_CAMPAIGN_NAME"]])
-            if campaign not in events_by_campaign:
-                continue
-            date_value = _date_value(row[event_col_map["DATE"]])
-            events_by_campaign[campaign][date_value] = _number(row[event_col_map["EVENT_COUNT"]])
-
         data_start = min(all_dates)
         data_end = max(all_dates)
 
-        daily_start = max(data_start, data_end - datetime.timedelta(days=24))
+        # Every day is sent, not just the most recent window, so the page can
+        # scroll the day charts back through the history without another fetch.
+        # The page shows DAILY_WINDOW_DAYS of them at a time.
         daily_dates = []
-        date_iter = daily_start
+        date_iter = data_start
         while date_iter <= data_end:
             daily_dates.append(date_iter)
             date_iter += datetime.timedelta(days=1)
@@ -411,10 +445,12 @@ def kpi_ga4_campaign_conversion(
         return {
             "status": "ok",
             "event_name": event_name,
-            "events": GA4_CAMPAIGN_EVENTS,
+            "events": [GA4_ALL_EVENTS, *GA4_CAMPAIGN_EVENTS],
+            "all_events_label": GA4_ALL_EVENTS,
             "data_start": data_start.isoformat(),
             "data_end": data_end.isoformat(),
             "dates": [date_value.isoformat() for date_value in daily_dates],
+            "daily_window_days": GA4_DAILY_WINDOW_DAYS,
             "weekly_labels": [f"W{monday.isocalendar()[1]} ({monday.day}-{month_abbrs[monday.month - 1]})" for monday in week_mondays],
             "monthly_labels": [month_abbrs[month_first.month - 1] + " " + str(month_first.year)[2:] for month_first in month_firsts],
             "aggregated": aggregated,
