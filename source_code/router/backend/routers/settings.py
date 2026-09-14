@@ -9,11 +9,14 @@ import logging
 
 from utils.db_utils import (get_database_connection, get_settings, save_settings,
                             save_settings_partial, get_last_login_per_user,
-                            get_active_sessions_all_envs, upsert_user, remove_user,
-                            ALWAYS_ENABLED_USERS)
+                            get_active_sessions_all_envs, upsert_user,
+                            load_all_page_access, set_page_access,
+                            delete_user_and_access, ALWAYS_ENABLED_USERS)
 
 from . import core
-from .core import (BASE_URL, templates, VALID_USERS, _active_sessions, get_current_user)
+from .core import (BASE_URL, templates, VALID_USERS, _active_sessions, get_current_user,
+                   ADMIN_USERNAME)
+from .page_registry import (PAGES, ALL_PAGE_KEYS, CONFIGURED_MARKER, DEFAULT_PAGE_KEYS)
 
 logger = logging.getLogger(__name__)
 
@@ -224,10 +227,83 @@ def force_relogin(request: Request, user: str = Depends(get_current_user)):
     return RedirectResponse(url=BASE_URL + "/settings-page?relogin=1", status_code=303)
 
 
+_REDIRECT_TARGETS = {
+    "users":       "/settings/users",
+    "page_access": "/settings/page-access",
+}
+
+
 def _user_redirect(redirect_to: str, **params):
-    base = BASE_URL + ("/settings/users" if redirect_to == "users" else "/settings-page")
+    base = BASE_URL + _REDIRECT_TARGETS.get(redirect_to, "/settings-page")
     qs = "&".join(f"{k}={v}" for k, v in params.items())
     return RedirectResponse(url=f"{base}?{qs}", status_code=303)
+
+
+@router.get("/settings/page-access", response_class=HTMLResponse)
+def page_access_page(request: Request, user: str = Depends(get_current_user)):
+    """Grid of users against pages. Reads only — nothing is written until a row
+    is saved, so the table need not exist yet."""
+    if user != ADMIN_USERNAME:
+        return RedirectResponse(url=BASE_URL + "/home", status_code=303)
+
+    try:
+        with get_database_connection() as conn:
+            stored = load_all_page_access(conn)
+    except Exception as e:
+        logger.warning("Page access: could not load grants: %s", e)
+        stored = {}
+
+    # What each box shows. A user who has never been saved (no marker) is shown
+    # the defaults, so the grid opens displaying today's real access and the
+    # first save simply records it. Once saved, exactly what was stored.
+    users = sorted(u for u in VALID_USERS if u != ADMIN_USERNAME)
+    access = {}
+    for u in users:
+        rows = stored.get(u)
+        if rows is None or CONFIGURED_MARKER not in rows:
+            access[u] = set(DEFAULT_PAGE_KEYS)
+        else:
+            access[u] = rows & ALL_PAGE_KEYS
+
+    return templates.TemplateResponse("page_access.html", {
+        "request": request, "user": user, "BASE_URL": BASE_URL,
+        "pages": PAGES, "users": users, "access": access,
+        "admin_user": ADMIN_USERNAME,
+        "sections": SETTINGS_SECTIONS, "active_section": "page_access",
+    })
+
+
+@router.post("/settings/page-access")
+def save_page_access(
+    request: Request,
+    target_user: str = Form(...),
+    page_keys: list[str] = Form(default=[]),
+    user: str = Depends(get_current_user)
+):
+    if user != ADMIN_USERNAME:
+        raise HTTPException(status_code=403)
+    if target_user == ADMIN_USERNAME:
+        raise HTTPException(status_code=400, detail="Cannot change admin access")
+    if target_user not in VALID_USERS:
+        return _user_redirect("page_access", accesserr="User+not+found")
+
+    # Anything not a real page is rejected rather than ignored — this is also
+    # what stops CONFIGURED_MARKER being submitted as if it were a page.
+    keys = set(page_keys)
+    unknown = keys - ALL_PAGE_KEYS
+    if unknown:
+        logger.warning("Page access: rejected unknown keys %s for %s", sorted(unknown), target_user)
+        return _user_redirect("page_access", accesserr="Unknown+page")
+
+    with get_database_connection() as conn:
+        set_page_access(conn, target_user, keys, granted_by=user)
+
+    # Update this process's cache so the grid reflects the save immediately.
+    # Other containers pick it up on their own TTL — see core.PERMISSION_TTL_SECONDS.
+    core.USER_PAGE_ACCESS[target_user] = keys | {CONFIGURED_MARKER}
+
+    logger.info("Page access for %s set to %s by %s", target_user, sorted(keys) or 'none', user)
+    return _user_redirect("page_access", accessok=target_user)
 
 
 @router.post("/settings/delete-user")
@@ -243,9 +319,13 @@ def delete_user(
         raise HTTPException(status_code=400, detail="Cannot delete admin")
     if target_user not in VALID_USERS:
         return _user_redirect(redirect_to, pwderr="User+not+found")
-    del VALID_USERS[target_user]
+    # One transaction for the account and its page access — a separate clear
+    # could fail after the account was gone, leaving grants for a recreated
+    # username to inherit.
     with get_database_connection() as conn:
-        remove_user(conn, target_user)
+        delete_user_and_access(conn, target_user)
+    del VALID_USERS[target_user]
+    core.USER_PAGE_ACCESS.pop(target_user, None)
     logger.info("User %s deleted by admin", target_user)
     return _user_redirect(redirect_to, userdeleted=target_user)
 

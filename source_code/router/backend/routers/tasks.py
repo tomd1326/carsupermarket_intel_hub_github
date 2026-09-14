@@ -187,7 +187,9 @@ async def upload_task(request: Request, fileBase64: str = Form(...), supplier_id
 
 
 @router.get("/download/{task_id}", response_class=FileResponse)
-def download_task_file(task_id: str):
+def download_task_file(task_id: str, user: str = Depends(get_current_user)):
+    if not user:
+        return RedirectResponse(url=BASE_URL + "/login", status_code=303)
     # Get task info from the db
     with get_database_connection() as conn:
         with conn.cursor() as cursor:
@@ -288,6 +290,10 @@ def view_error_log(task_id: str, user: str = Depends(get_current_user)):
 
 @router.get("/delete-task/{task_id}")
 def delete_task(task_id: str, user: str = Depends(get_current_user)):
+    # Login only, no ownership check — pending tasks are shared, so any logged-in
+    # user may delete another's. Agreed deliberately, not an oversight.
+    if not user:
+        raise HTTPException(status_code=401)
     with get_database_connection() as conn:
         with conn.cursor() as cursor:
             cursor.execute("DELETE FROM tasks WHERE task_id = %s AND status = 'pending'", (task_id,))

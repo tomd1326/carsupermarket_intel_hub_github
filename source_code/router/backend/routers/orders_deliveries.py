@@ -25,7 +25,7 @@ import zoneinfo
 import boto3
 
 from fastapi import APIRouter, Request, Depends, HTTPException
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, RedirectResponse
 
 from utils.db_utils import get_database_connection, get_user_preference
 from utils.snowflake_client import SnowflakeClient
@@ -48,6 +48,7 @@ _COLUMNS = [
     ("VRM", "vrm"),
     ("CAP_MAKE_MODEL", "make_model"),
     ("DERIVATIVE", "derivative"),
+    ("CAP_ID", "cap_id"),
     ("SUPPLIER_NAME", "supplier"),
     ("SUPPLIER_CHANNEL", "supplier_channel"),
     ("ACKNOWLEDGED_DAYS_IN_STOCK", "ack_dis"),
@@ -159,7 +160,7 @@ def _fetch_start() -> datetime.date:
 #
 # Version the S3 key: bump _CACHE_VERSION whenever _COLUMNS changes, otherwise
 # an old cached payload (missing the new columns) is served until it expires.
-_CACHE_VERSION = 11
+_CACHE_VERSION = 12
 _S3_KEY = (f"applications/pricing/uk-vehicle-list-evaluator/shared/cache/"
            f"orders_deliveries_v{_CACHE_VERSION}.json")
 
@@ -355,6 +356,8 @@ def _saved_font(conn, user: str, pref_key: str, default: int = _FONT_DEFAULT) ->
 
 @router.get("/reports/orders-deliveries", response_class=HTMLResponse)
 def orders_deliveries_page(request: Request, user: str = Depends(get_current_user)):
+    if not user:
+        return RedirectResponse(url=BASE_URL + "/login", status_code=303)
     _track(request, 'page_view', '/reports/orders-deliveries')
     try:
         with get_database_connection() as conn:
@@ -400,6 +403,8 @@ def orders_deliveries_data(request: Request, refresh: int = 0,
                            user: str = Depends(get_current_user)):
     """Cached deal rows. `refresh=1` forces a rebuild from Snowflake (the
     page's manual Refresh button)."""
+    if not user:
+        raise HTTPException(status_code=401)
     try:
         return _get_data(force_refresh=bool(refresh))
     except Exception as e:
@@ -479,6 +484,21 @@ margin after subsidy is the vehicle's own margin before costs.
 Be concise — aim for under 250 words unless the question asks for more. No
 preamble, no restating the question, no summary paragraph at the end. Prefer
 short bullets over long sentences.
+
+Write in plain, direct language. Say exactly what happened in ordinary words:
+"GPU-M fell £180 a unit", not "GPU-M softened" or "a deterioration in GPU-M".
+Specifically:
+- Never soften a fall. Use fell, dropped, down. Not softened, eased, came under
+  pressure, headwind, deteriorated.
+- Never describe a number as a miss, a beat, a drag or a tailwind. Say it was
+  below or above the previous period, and by how much.
+- Never use the words slice, dimension, metric, cohort, segment or bucket in
+  the answer. Those describe how the data is arranged, not what happened in the
+  business. Name the actual thing instead: "Enterprise B2B2C", "the 12 cars
+  bought from Motability", "0% deals".
+- No jargon for ordinary things. Say "the cars sold were more expensive", not
+  "an adverse mix effect"; "only 4 cars", not "a small sample".
+Short everyday words over analyst vocabulary, every time.
 
 Follow-up questions continue this conversation. The data table above is the
 only data you get for the whole thread, so answer follow-ups from it and from

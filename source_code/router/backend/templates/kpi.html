@@ -123,61 +123,6 @@
 
         .chart-row + .chart-row { margin-top: 16px; }
 
-        /* First filter sits right after the section title; the rest follow it. */
-        .ga4-filter {
-            display: flex; align-items: center; gap: 8px;
-            font-weight: 400; color: #475569;
-        }
-        .ga4-filter:first-of-type { margin-left: 18px; }
-        .ga4-filter label { margin: 0; font-size: 0.78rem; font-weight: 700; }
-        .ga4-filter select {
-            min-width: 180px; padding: 4px 8px; border: 1px solid #cbd5e1;
-            border-radius: 6px; background: #fff; color: #0f172a; font-size: 0.8rem;
-        }
-        .ga4-filter-apply { padding: 4px 12px; font-size: 0.78rem; }
-
-        /* Campaign multi-select: a button that opens a checkbox list. */
-        .ga4-multi { position: relative; }
-        .ga4-multi-toggle {
-            min-width: 180px; padding: 4px 8px; border: 1px solid #cbd5e1;
-            border-radius: 6px; background: #fff; color: #0f172a; font-size: 0.8rem;
-            text-align: left; cursor: pointer; display: flex; align-items: center;
-            justify-content: space-between; gap: 8px; font-weight: 400;
-        }
-        .ga4-multi-toggle:after { content: '\25be'; color: #64748b; }
-        .ga4-multi-panel {
-            display: none; position: absolute; top: calc(100% + 4px); left: 0; z-index: 40;
-            min-width: 320px; max-height: 320px; overflow-y: auto;
-            background: #fff; border: 1px solid #cbd5e1; border-radius: 8px;
-            box-shadow: 0 8px 20px rgba(15,23,42,0.12); padding: 6px;
-        }
-        .ga4-multi-panel.open { display: block; }
-        .ga4-multi-panel label {
-            display: flex; align-items: flex-start; gap: 8px; padding: 5px 8px;
-            border-radius: 6px; font-size: 0.78rem; font-weight: 400; cursor: pointer;
-            overflow-wrap: anywhere;
-        }
-        .ga4-multi-panel label:hover { background: #f1f5f9; }
-        .ga4-multi-panel input { margin: 2px 0 0; flex: none; }
-        .ga4-multi-actions {
-            display: flex; gap: 8px; padding: 6px 8px; border-bottom: 1px solid #e2e8f0;
-            margin-bottom: 4px;
-        }
-        .ga4-multi-actions button {
-            background: none; border: none; padding: 0; cursor: pointer;
-            color: #0d3d6e; font-size: 0.75rem; font-weight: 700; text-decoration: underline;
-        }
-        .ga4-campaign-title {
-            margin: 0 0 8px; padding: 7px 12px; border-left: 4px solid #0d3d6e;
-            background: #f8fafc; color: #0f172a; font-size: 0.86rem; font-weight: 700;
-            overflow-wrap: anywhere;
-        }
-        .ga4-aggregated-title {
-            border-left-color: #e53e3e; background: #fef2f2; font-size: 0.92rem;
-        }
-        .ga4-status { margin: 0 0 10px; color: #64748b; font-size: 0.8rem; }
-        .ga4-chart-wrap { position: relative; height: 260px; }
-
         /* ── Edit mode ──────────────────────────────────────────────────────── */
         .row-toolbar {
             display: none;
@@ -252,49 +197,6 @@
 
     <div class="page-content">
         <div id="sectionsContainer"></div>
-
-        <div class="category-section" id="ga4CampaignSection">
-            <div class="category-header open" id="ga4CampaignHeader" onclick="toggleGa4Section()">
-                <i class="fas fa-chevron-right chevron"></i>
-                <span>GA4 events by campaign</span>
-                <div class="ga4-filter" onclick="event.stopPropagation()">
-                    <label for="ga4EventSelect">Event</label>
-                    <select id="ga4EventSelect">
-                        <option value="Apply-Finance_Lead">Apply-Finance_Lead</option>
-                        <option value="CSF-Approved_Lead">CSF-Approved_Lead</option>
-                        <option value="Pre-Approved_Lead">Pre-Approved_Lead</option>
-                        <option value="Vehicle_Enquiry_Lead">Vehicle_Enquiry_Lead</option>
-                        <option value="Vehicle_Reservation_Lead">Vehicle_Reservation_Lead</option>
-                    </select>
-                    <button type="button" class="btn btn-apply ga4-filter-apply" onclick="loadGa4Campaigns()">Apply</button>
-                </div>
-                <div class="ga4-filter" onclick="event.stopPropagation()">
-                    <label for="ga4ViewSelect">View</label>
-                    <select id="ga4ViewSelect">
-                        <option value="rate">Conversion %</option>
-                        <option value="volume">Event volume</option>
-                    </select>
-                    <button type="button" class="btn btn-apply ga4-filter-apply" onclick="setGa4View(document.getElementById('ga4ViewSelect').value)">Apply</button>
-                </div>
-                <div class="ga4-filter ga4-multi" onclick="event.stopPropagation()">
-                    <label>Campaigns</label>
-                    <button type="button" class="ga4-multi-toggle" id="ga4CampaignToggle"
-                            onclick="toggleGa4CampaignPanel()">All campaigns</button>
-                    <div class="ga4-multi-panel" id="ga4CampaignPanel">
-                        <div class="ga4-multi-actions">
-                            <button type="button" onclick="setAllGa4Campaigns(true)">Select all</button>
-                            <button type="button" onclick="setAllGa4Campaigns(false)">Clear all</button>
-                        </div>
-                        <div id="ga4CampaignChecks"></div>
-                    </div>
-                    <button type="button" class="btn btn-apply ga4-filter-apply" onclick="applyGa4CampaignFilter()">Apply</button>
-                </div>
-            </div>
-            <div class="category-body open" id="ga4CampaignBody">
-                <p class="ga4-status" id="ga4Status">Event count divided by the campaign's own sessions.</p>
-                <div id="ga4CampaignRows"></div>
-            </div>
-        </div>
     </div>
 
     <!-- Built-in chart rows: moved into their sections by renderLayout() -->
@@ -474,11 +376,6 @@
     const customRowEls = {};   // rowId -> element
     const customRowData = {};  // rowId -> last /kpi/custom-data response
     const BUILTIN_TITLES = { sessions: 'Sessions', orders: 'Apex Orders' };
-    let ga4RequestNumber = 0;
-    let ga4LastData = null;
-    let ga4View = 'rate';
-    // null = show every campaign; otherwise the set of campaign names to show.
-    let ga4SelectedCampaigns = null;
     let layoutLoaded = false;
 
     function sectionDomId(name) {
@@ -848,285 +745,6 @@
         return DAY_NAMES[dt.getDay()] + ' ' + dd + '/' + mm;
     }
 
-    function toggleGa4Section() {
-        const header = document.getElementById('ga4CampaignHeader');
-        const body = document.getElementById('ga4CampaignBody');
-        const isOpen = body.classList.contains('open');
-        header.classList.toggle('open', !isOpen);
-        body.classList.toggle('open', !isOpen);
-        if (!isOpen) setTimeout(resizeAllCharts, 10);
-    }
-
-    async function fetchGa4Campaigns(eventName) {
-        const query = eventName ? `?event_name=${encodeURIComponent(eventName)}` : '';
-        return fetch(`${BASE_URL}/kpi/ga4-campaign-conversion${query}`).then(r => r.json());
-    }
-
-    async function loadGa4Campaigns() {
-        const select = document.getElementById('ga4EventSelect');
-        const status = document.getElementById('ga4Status');
-        const eventName = select.value;
-        const requestNumber = ++ga4RequestNumber;
-        select.disabled = true;
-        status.textContent = `Loading ${eventName}...`;
-        try {
-            const data = await fetchGa4Campaigns(eventName);
-            if (requestNumber !== ga4RequestNumber) return;
-            if (data.status !== 'ok') throw new Error(data.message || 'load failed');
-            select.value = data.event_name;
-            ga4LastData = data;
-            renderGa4Campaigns(data);
-        } catch (err) {
-            if (requestNumber === ga4RequestNumber) status.textContent = 'GA4 load failed: ' + err.message;
-        } finally {
-            if (requestNumber === ga4RequestNumber) select.disabled = false;
-        }
-    }
-
-    function setGa4View(view) {
-        ga4View = view;
-        if (ga4LastData) renderGa4Campaigns(ga4LastData);
-    }
-
-    function toggleGa4CampaignPanel() {
-        document.getElementById('ga4CampaignPanel').classList.toggle('open');
-    }
-
-    // Close the panel when clicking anywhere outside it.
-    document.addEventListener('click', e => {
-        const wrap = document.getElementById('ga4CampaignPanel');
-        if (wrap && wrap.classList.contains('open') && !e.target.closest('.ga4-multi')) {
-            wrap.classList.remove('open');
-        }
-    });
-
-    function populateGa4CampaignChecks(campaigns) {
-        const box = document.getElementById('ga4CampaignChecks');
-        if (box.dataset.filled === '1') return;
-        box.innerHTML = campaigns.map(name => `
-            <label><input type="checkbox" value="${escHtml(name)}" checked> ${escHtml(name)}</label>
-        `).join('');
-        box.dataset.filled = '1';
-    }
-
-    function setAllGa4Campaigns(checked) {
-        document.querySelectorAll('#ga4CampaignChecks input').forEach(cb => { cb.checked = checked; });
-    }
-
-    function applyGa4CampaignFilter() {
-        const boxes = [...document.querySelectorAll('#ga4CampaignChecks input')];
-        const chosen = boxes.filter(cb => cb.checked).map(cb => cb.value);
-        ga4SelectedCampaigns = chosen.length === boxes.length ? null : new Set(chosen);
-        document.getElementById('ga4CampaignPanel').classList.remove('open');
-        updateGa4CampaignToggleLabel(boxes.length, chosen.length);
-        if (ga4LastData) renderGa4Campaigns(ga4LastData);
-    }
-
-    function updateGa4CampaignToggleLabel(total, chosen) {
-        const toggle = document.getElementById('ga4CampaignToggle');
-        toggle.textContent = chosen === total ? 'All campaigns'
-            : chosen === 0 ? 'No campaigns'
-            : `${chosen} of ${total} campaigns`;
-    }
-
-    const GA4_VIEW_CONFIG = {
-        rate: {
-            keys: { month: 'monthly_rates', week: 'weekly_rates', day: 'daily_rates' },
-            titlePrefix: 'Conversion rate',
-            suffix: '%',
-            minYMax: 0.01,
-            sharedScale: true,
-            tooltip: (label, value) => `${label}: ${Number(value).toFixed(3)}%`,
-            tickLabel: (value, unit) => _roundTick(value, unit) + '%',
-        },
-        volume: {
-            keys: { month: 'monthly_volumes', week: 'weekly_volumes', day: 'daily_volumes' },
-            titlePrefix: 'Event volume',
-            suffix: '',
-            minYMax: 1,
-            sharedScale: false,
-            wholeNumbers: true,
-            tooltip: (label, value) => `${label}: ${Number(value).toLocaleString()}`,
-            tickLabel: (value) => Number(value).toLocaleString(),
-        },
-    };
-
-    // Rate is the same kind of number in all three periods, so month/week/day share
-    // one scale. Volume totals differ by period (a month is ~4.3x a week), so each
-    // period keeps its own scale or the day chart would flatten to nothing.
-    function ga4SeriesRanges(series, viewConfig) {
-        const periods = ['month', 'week', 'day'];
-        const ranges = periods.map(period =>
-            zeroBasedRange(series[viewConfig.keys[period]], viewConfig.minYMax, viewConfig.wholeNumbers));
-        if (!viewConfig.sharedScale) return ranges;
-        const shared = ranges.reduce((a, b) => (b.yMax > a.yMax ? b : a));
-        return periods.map(() => shared);
-    }
-
-    function buildGa4RateChart(canvasId, labels, data, eventName, range, viewConfig) {
-        const ctx = document.getElementById(canvasId).getContext('2d');
-        return new Chart(ctx, {
-            type: 'line',
-            data: {
-                labels,
-                datasets: [{
-                    label: eventName,
-                    data,
-                    fill: false,
-                    borderColor: '#0d3d6e',
-                    borderWidth: 2.5,
-                    pointRadius: point => point.dataset.data[point.dataIndex] !== null ? 3 : 0,
-                    pointBackgroundColor: '#0d3d6e',
-                    pointBorderColor: '#fff',
-                    pointBorderWidth: 1.5,
-                    tension: 0,
-                    spanGaps: false,
-                }]
-            },
-            options: {
-                responsive: true,
-                maintainAspectRatio: false,
-                interaction: { mode: 'index', intersect: false },
-                plugins: {
-                    legend: { display: false },
-                    tooltip: {
-                        callbacks: {
-                            label: context => context.parsed.y === null
-                                ? null
-                                : viewConfig.tooltip(eventName, context.parsed.y)
-                        }
-                    }
-                },
-                scales: {
-                    x: {
-                        grid: { color: 'rgba(0,0,0,0.06)' },
-                        ticks: { font: { size: 10 }, maxRotation: 45, minRotation: 30 }
-                    },
-                    y: {
-                        min: range.yMin,
-                        max: range.yMax,
-                        grid: { color: 'rgba(0,0,0,0.06)' },
-                        ticks: {
-                            font: { size: 10 },
-                            stepSize: range.unit,
-                            callback: value => viewConfig.tickLabel(value, range.unit)
-                        }
-                    }
-                }
-            }
-        });
-    }
-
-    function ga4RowHtml(rowId, index, title, isAggregated) {
-        return `
-            <div class="chart-row">
-                <h3 class="ga4-campaign-title${isAggregated ? ' ga4-aggregated-title' : ''}">${escHtml(title)}</h3>
-                <div class="charts-row">
-                    <div class="chart-card">
-                        <h2 id="${rowId}-month-title"></h2>
-                        <div class="ga4-chart-wrap"><canvas id="${rowId}-month"></canvas></div>
-                    </div>
-                    <div class="chart-card">
-                        <h2 id="${rowId}-week-title"></h2>
-                        <div class="ga4-chart-wrap"><canvas id="${rowId}-week"></canvas></div>
-                    </div>
-                    <div class="chart-card">
-                        <h2 id="${rowId}-day-title"></h2>
-                        <div class="ga4-chart-wrap"><canvas id="${rowId}-day"></canvas></div>
-                    </div>
-                </div>
-            </div>
-        `;
-    }
-
-    // Rebuild the aggregate from a subset of campaigns: sum events and sessions
-    // per period, then divide. Averaging the campaigns' own percentages would let
-    // a tiny campaign count as much as the biggest one.
-    function ga4Repool(campaigns) {
-        const sumAt = (key, i) => campaigns.reduce((total, c) => {
-            const v = c[key][i];
-            return v === null || v === undefined ? total : total + v;
-        }, 0);
-        const anyAt = (key, i) => campaigns.some(c => c[key][i] !== null && c[key][i] !== undefined);
-
-        const series = { name: 'Aggregated' };
-        for (const [period, vol, sess, rate] of [
-            ['daily', 'daily_volumes', 'daily_sessions', 'daily_rates'],
-            ['weekly', 'weekly_volumes', 'weekly_sessions', 'weekly_rates'],
-            ['monthly', 'monthly_volumes', 'monthly_sessions', 'monthly_rates'],
-        ]) {
-            const n = campaigns[0][vol].length;
-            series[vol] = [];
-            series[rate] = [];
-            for (let i = 0; i < n; i++) {
-                if (!anyAt(vol, i)) { series[vol].push(null); series[rate].push(null); continue; }
-                const events = sumAt(vol, i);
-                const sessions = sumAt(sess, i);
-                series[vol].push(events);
-                series[rate].push(sessions > 0 ? Math.round(events / sessions * 100 * 1000) / 1000 : null);
-            }
-        }
-        return series;
-    }
-
-    function renderGa4Campaigns(data) {
-        Object.keys(rowCharts)
-            .filter(key => key.startsWith('ga4-'))
-            .forEach(key => {
-                rowCharts[key].forEach(chart => chart && chart.destroy());
-                delete rowCharts[key];
-            });
-
-        const viewConfig = GA4_VIEW_CONFIG[ga4View];
-        const rows = document.getElementById('ga4CampaignRows');
-
-        populateGa4CampaignChecks(data.campaigns.map(c => c.name));
-
-        const shown = ga4SelectedCampaigns
-            ? data.campaigns.filter(c => ga4SelectedCampaigns.has(c.name))
-            : data.campaigns;
-
-        if (!shown.length) {
-            rows.innerHTML = '<p class="ga4-status">No campaigns selected.</p>';
-            document.getElementById('ga4Status').textContent =
-                `${data.event_name}: no campaigns selected.`;
-            return;
-        }
-
-        // Aggregated must match the campaigns on screen, so re-pool it whenever a
-        // filter is active. Rates are summed events over summed sessions, never an
-        // average of the row percentages.
-        const aggregated = shown.length === data.campaigns.length
-            ? data.aggregated
-            : ga4Repool(shown);
-
-        rows.innerHTML =
-            ga4RowHtml('ga4-aggregated', 'aggregated', aggregated.name, true) +
-            shown.map((c, index) => ga4RowHtml(`ga4-campaign-${index}`, index, c.name, false)).join('');
-
-        const dailyLabels = data.dates.map(dateLabel);
-
-        const renderSeries = (rowId, series) => {
-            const [monthRange, weekRange, dayRange] = ga4SeriesRanges(series, viewConfig);
-            document.getElementById(`${rowId}-month-title`).textContent = `${viewConfig.titlePrefix} - month`;
-            document.getElementById(`${rowId}-week-title`).textContent = `${viewConfig.titlePrefix} - week`;
-            document.getElementById(`${rowId}-day-title`).textContent = `${viewConfig.titlePrefix} - day`;
-            rowCharts[rowId] = [
-                buildGa4RateChart(`${rowId}-month`, data.monthly_labels, series[viewConfig.keys.month], series.name, monthRange, viewConfig),
-                buildGa4RateChart(`${rowId}-week`, data.weekly_labels, series[viewConfig.keys.week], series.name, weekRange, viewConfig),
-                buildGa4RateChart(`${rowId}-day`, dailyLabels, series[viewConfig.keys.day], series.name, dayRange, viewConfig),
-            ];
-        };
-
-        renderSeries('ga4-aggregated', aggregated);
-        shown.forEach((c, index) => renderSeries(`ga4-campaign-${index}`, c));
-
-        const scope = shown.length === data.campaigns.length
-            ? 'all campaigns' : `${shown.length} of ${data.campaigns.length} campaigns`;
-        document.getElementById('ga4Status').textContent =
-            `${data.event_name}: event count / each campaign's sessions (${scope}). Data ${data.data_start} to ${data.data_end}.`;
-    }
-
     async function loadCustomRow(row) {
         try {
             const d = await fetch(`${BASE_URL}/kpi/custom-data?metric=${encodeURIComponent(row.metric)}&agg=${encodeURIComponent(row.agg)}`)
@@ -1178,9 +796,6 @@
 
         const snfPromise = fetch(BASE_URL + '/kpi/data').then(r => r.json());
         const spPromise  = fetch(BASE_URL + '/kpi/sharepoint').then(r => r.json());
-        const ga4Event = document.getElementById('ga4EventSelect').value;
-        const ga4Promise = fetchGa4Campaigns(ga4Event)
-            .catch(err => ({ status: 'error', message: String(err) }));
         const customRows = layout.rows.filter(r => r.type === 'custom');
         const customPromises = customRows.map(row =>
             fetch(`${BASE_URL}/kpi/custom-data?metric=${encodeURIComponent(row.metric)}&agg=${encodeURIComponent(row.agg)}`)
@@ -1188,8 +803,8 @@
                 .catch(err => ({ status: 'error', message: String(err) }))
         );
 
-        Promise.all([snfPromise, spPromise, Promise.all(customPromises), ga4Promise])
-            .then(([snf, sp, customResults, ga4]) => {
+        Promise.all([snfPromise, spPromise, Promise.all(customPromises)])
+            .then(([snf, sp, customResults]) => {
                 btn.disabled = false;
                 icon.classList.remove('fa-spin');
 
@@ -1230,16 +845,9 @@
                     else customErrors.push(`${customRows[i].metric}: ${d.message}`);
                 });
 
-                if (ga4.status === 'ok'
-                    && document.getElementById('ga4EventSelect').value === ga4.event_name) {
-                    ga4LastData = ga4;
-                    renderGa4Campaigns(ga4);
-                }
-
                 const notes = [];
                 if (sp.stale) notes.push('SharePoint unavailable — sessions from ' + (sp.stale_date || 'older cache'));
                 if (customErrors.length) notes.push('errors: ' + customErrors.join(' | '));
-                if (ga4.status !== 'ok') notes.push('GA4: ' + ga4.message);
                 status.textContent = notes.length ? 'Loaded (' + notes.join('; ') + ')' : 'Loaded';
             })
             .catch(err => {
