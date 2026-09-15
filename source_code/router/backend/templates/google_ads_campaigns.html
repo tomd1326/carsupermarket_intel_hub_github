@@ -190,6 +190,72 @@
         .ga4-day-step:disabled { opacity: 0.4; cursor: not-allowed; }
         .ga4-day-latest { font-weight: 700; white-space: nowrap; }
         .ga4-loading .ga4-day-scroller { opacity: 0.45; pointer-events: none; }
+
+        /* Target button, sitting at the right of the campaign title bar. */
+        /* Title text shrinks to its content so the button sits immediately to
+           its right rather than at the far edge of the row. justify-content
+           keeps the pair left-aligned once the text no longer fills the width. */
+        .ga4-campaign-title {
+            display: flex; align-items: center; gap: 10px; justify-content: flex-start;
+        }
+        .ga4-campaign-title .ga4-title-text { flex: 0 1 auto; min-width: 0; }
+        .ga4-target-btn {
+            flex: none; border: 1px solid #cbd5e1; background: #fff; color: #0d3d6e;
+            border-radius: 6px; padding: 3px 10px; font-size: 0.74rem; font-weight: 700;
+            cursor: pointer; white-space: nowrap;
+        }
+        .ga4-target-btn:hover { background: #f1f5f9; }
+        .ga4-target-btn.has-target { border-color: #e53e3e; color: #e53e3e; }
+
+        /* ── Target modal ───────────────────────────────────────────────────── */
+        .modal-overlay {
+            position: fixed; inset: 0; background: rgba(15, 23, 42, 0.45);
+            display: none; align-items: flex-start; justify-content: center;
+            padding-top: 10vh; z-index: 200;
+        }
+        .modal-overlay.open { display: flex; }
+        .modal-box {
+            background: #fff; border-radius: 12px; padding: 22px 24px;
+            width: 420px; max-width: 92vw;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.25);
+        }
+        .modal-box h2 { font-size: 1rem; font-weight: 700; color: #0f172a; margin-bottom: 4px; }
+        .modal-sub {
+            font-size: 0.78rem; color: #64748b; margin-bottom: 16px;
+            overflow-wrap: anywhere;
+        }
+        .modal-field { margin-bottom: 14px; }
+        .modal-field label { display: block; font-size: 0.8rem; font-weight: 700; color: #334155; margin-bottom: 4px; }
+        .modal-input-wrap { display: flex; align-items: center; gap: 6px; }
+        .modal-field input {
+            flex: 1; padding: 6px 10px; border: 1px solid #cbd5e1;
+            border-radius: 6px; font-size: 0.9rem;
+        }
+        .modal-suffix { font-weight: 700; color: #475569; }
+        /* Read-only: the All events figure is the components added up, shown so
+           the derived rate makes sense but not typeable. */
+        .modal-field input.readonly {
+            background: #f1f5f9; color: #64748b; cursor: not-allowed;
+        }
+        .modal-derived {
+            background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px;
+            padding: 10px 12px; margin-bottom: 14px;
+            font-size: 0.8rem; color: #334155;
+        }
+        .modal-derived strong { font-size: 1rem; color: #0f172a; }
+        .modal-note {
+            font-size: 0.74rem; color: #64748b; line-height: 1.5;
+            border-top: 1px solid #e2e8f0; padding-top: 10px; margin-bottom: 14px;
+        }
+        .modal-error { font-size: 0.78rem; color: #e53e3e; margin-bottom: 10px; display: none; }
+        .modal-error.show { display: block; }
+        .modal-actions { display: flex; gap: 8px; justify-content: flex-end; align-items: center; }
+        .modal-actions .spacer { flex: 1; }
+        .btn-cancel {
+            background: none; border: 1px solid #cbd5e1; color: #334155;
+            border-radius: 6px; padding: 6px 14px; font-size: 0.85rem; font-weight: 700;
+        }
+        .btn-cancel:hover { background: #f1f5f9; }
     </style>
 </head>
 <body>
@@ -220,7 +286,7 @@
                         <option value="Vehicle_Enquiry_Lead">Vehicle_Enquiry_Lead</option>
                         <option value="Vehicle_Reservation_Lead">Vehicle_Reservation_Lead</option>
                     </select>
-                    <button type="button" class="btn btn-apply ga4-filter-apply" onclick="loadGa4Campaigns()">Apply</button>
+                    <button type="button" class="btn btn-apply ga4-filter-apply" onclick="applyGa4Event()">Apply</button>
                 </div>
                 <div class="ga4-filter">
                     <label for="ga4ViewSelect">View</label>
@@ -230,6 +296,15 @@
                         <option value="rate" selected>Conversion %</option>
                     </select>
                     <button type="button" class="btn btn-apply ga4-filter-apply" onclick="setGa4View(document.getElementById('ga4ViewSelect').value)">Apply</button>
+                </div>
+                <div class="ga4-filter" id="ga4ChartTypeFilter">
+                    <label for="ga4ChartTypeSelect">Chart</label>
+                    <select id="ga4ChartTypeSelect">
+                        <option value="bar">Columns</option>
+                        <option value="line" selected>Line</option>
+                    </select>
+                    <button type="button" class="btn btn-apply ga4-filter-apply"
+                            onclick="setGa4ChartType(document.getElementById('ga4ChartTypeSelect').value)">Apply</button>
                 </div>
                 <div class="ga4-filter ga4-multi">
                     <label>Campaigns</label>
@@ -252,9 +327,52 @@
         </div>
     </div>
 
+    <div class="modal-overlay" id="targetModal">
+        <div class="modal-box">
+            <h2 id="targetModalTitle">Add Target</h2>
+            <p class="modal-sub" id="targetModalCampaign"></p>
+
+            <div class="modal-error" id="targetModalError"></div>
+
+            <div class="modal-field" id="targetSessionsField">
+                <label for="targetSessionsInput">Sessions target (per day)</label>
+                <div class="modal-input-wrap">
+                    <input type="number" id="targetSessionsInput" min="0" step="any"
+                           oninput="updateTargetDerived()">
+                </div>
+            </div>
+
+            <div class="modal-field" id="targetEventsField">
+                <label for="targetEventsInput" id="targetEventsLabel">Events target (per day)</label>
+                <div class="modal-input-wrap">
+                    <input type="number" id="targetEventsInput" min="0" step="any"
+                           oninput="updateTargetDerived()">
+                </div>
+            </div>
+
+            <div class="modal-derived" id="targetDerived">
+                Conversion target: <strong id="targetDerivedValue">-</strong>
+            </div>
+
+            <p class="modal-note" id="targetModalNote"></p>
+
+            <div class="modal-actions">
+                <div class="spacer"></div>
+                <button type="button" class="btn btn-cancel" onclick="closeTargetModal()">Cancel</button>
+                <button type="button" class="btn btn-apply" id="targetSaveBtn" onclick="saveTarget()">Save</button>
+            </div>
+        </div>
+    </div>
+
     <script>
     const BASE_URL = "{{ BASE_URL }}";
     const DAY_NAMES = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+    // Same shading colours as the KPI page, so the two read as one system.
+    const BG_GREEN = 'rgba(147, 196, 125, 0.30)';
+    const BG_RED   = 'rgba(224, 102, 102, 0.30)';
+    // Dataset label for target lines. Used to tell them apart from campaign
+    // series when scrolling the day window and when totalling a stacked tooltip.
+    const TARGET_LABEL = 'Target';
 
     // Disable animations globally for all charts
     Chart.defaults.animation = false;
@@ -262,6 +380,10 @@
     let ga4RequestNumber = 0;
     let ga4LastData = null;
     let ga4View = 'rate';
+    // Columns or line, for the two count views only. Conversion % is always a
+    // line, so this is ignored there. Must match the selected option in the
+    // Chart dropdown, or the control and the first render disagree.
+    let ga4ChartType = 'line';
     // null = show every campaign; otherwise the set of campaign names to show.
     let ga4SelectedCampaigns = null;
     let ga4Charts = {};        // rowId -> [Chart, Chart, Chart]
@@ -270,7 +392,12 @@
     let ga4DayWindowDays = 25;
     let ga4DayOffset = null;
 
-    document.addEventListener('DOMContentLoaded', loadGa4Campaigns);
+    // The default view is Conversion %, so the toggle starts hidden — without
+    // this it would show until the view was changed for the first time.
+    document.addEventListener('DOMContentLoaded', () => {
+        updateGa4ChartTypeVisibility();
+        loadGa4Campaigns();
+    });
 
     // The endpoint names the all-events option; fall back to the literal in case
     // an older response has no label.
@@ -344,9 +471,169 @@
         }
     }
 
+    // Switch the Event filter without going back to the server. Every event's
+    // series arrives in one response, so this is a local swap — it used to be a
+    // fresh Snowflake query per event for data that was already loaded.
+    //
+    // Falls back to a real fetch if the payload has no by_event (an older
+    // response, or one that failed to build).
+    function applyGa4Event() {
+        const eventName = document.getElementById('ga4EventSelect').value;
+        if (!ga4LastData || !ga4LastData.by_event || !ga4LastData.by_event[eventName]) {
+            loadGa4Campaigns();
+            return;
+        }
+        const payload = ga4LastData.by_event[eventName];
+        ga4LastData.event_name = eventName;
+        ga4LastData.aggregated = payload.aggregated;
+        ga4LastData.campaigns = payload.campaigns;
+        renderGa4Campaigns(ga4LastData);
+        document.getElementById('statusText').textContent = 'Loaded';
+    }
+
     function setGa4View(view) {
         ga4View = view;
+        updateGa4ChartTypeVisibility();
         if (ga4LastData) renderGa4Campaigns(ga4LastData);
+    }
+
+    function setGa4ChartType(chartType) {
+        ga4ChartType = chartType;
+        if (ga4LastData) renderGa4Campaigns(ga4LastData);
+    }
+
+    // Counts can be drawn either way; a percentage cannot be stacked into
+    // columns, so the toggle is hidden rather than left showing a choice that
+    // does nothing.
+    function ga4ChartTypeApplies() {
+        return ga4View !== 'rate';
+    }
+
+    function updateGa4ChartTypeVisibility() {
+        const filter = document.getElementById('ga4ChartTypeFilter');
+        if (filter) filter.style.display = ga4ChartTypeApplies() ? '' : 'none';
+    }
+
+    // The conversion view is a ratio, so it is always a line. The two count
+    // views follow the toggle.
+    function ga4EffectiveChartType() {
+        return ga4ChartTypeApplies() ? ga4ChartType : 'line';
+    }
+
+    // ── Targets ───────────────────────────────────────────────────────────────
+    // The endpoint sends only the two STORED metrics, per campaign. Everything
+    // else is worked out here, from the campaigns currently on screen:
+    //
+    //   aggregate    = summed across those campaigns
+    //   conversion % = summed events / summed sessions
+    //
+    // Both must be derived on BOTH aggregate paths — ga4CurrentAggregated()
+    // returns the endpoint's own aggregate when every campaign is selected and
+    // only re-pools for a subset, so deriving in one place leaves the other
+    // without a target.
+
+    const GA4_TARGET_PERIODS = ['daily', 'weekly', 'monthly'];
+
+    function ga4EmptyTargets(series) {
+        // Shape a missing target store the same as a present one, so callers
+        // never branch on undefined.
+        const lengths = {
+            daily: (series.daily_rates || []).length,
+            weekly: (series.weekly_rates || []).length,
+            monthly: (series.monthly_rates || []).length,
+        };
+        const blank = {};
+        GA4_TARGET_PERIODS.forEach(period => {
+            blank[period] = new Array(lengths[period]).fill(null);
+            blank[period + '_covered'] = new Array(lengths[period]).fill(0);
+        });
+        return { sessions: blank, events: { ...blank } };
+    }
+
+    // Sum one stored metric across campaigns, carrying coverage with it. A
+    // period is null unless EVERY shown campaign has a target for it — a total
+    // covering six of eight campaigns sitting against an actual covering all
+    // eight reads as a miss that is not one.
+    function ga4SumTargets(campaigns, metric) {
+        const out = {};
+        GA4_TARGET_PERIODS.forEach(period => {
+            const arrays = campaigns.map(c => (c.targets && c.targets[metric]) || null);
+            const length = arrays.reduce((n, a) => Math.max(n, a ? a[period].length : 0), 0);
+            const values = [];
+            const covered = [];
+            for (let i = 0; i < length; i++) {
+                let total = 0;
+                let complete = true;
+                let anyCovered = 0;
+                for (const arr of arrays) {
+                    const v = arr ? arr[period][i] : null;
+                    if (v === null || v === undefined) { complete = false; continue; }
+                    total += v;
+                    anyCovered += arr[period + '_covered'][i];
+                }
+                values.push(complete ? total : null);
+                covered.push(complete ? anyCovered : 0);
+            }
+            out[period] = values;
+            out[period + '_covered'] = covered;
+        });
+        return out;
+    }
+
+    function ga4AggregateTargets(campaigns) {
+        if (!campaigns.length) return null;
+        return {
+            sessions: ga4SumTargets(campaigns, 'sessions'),
+            events: ga4SumTargets(campaigns, 'events'),
+        };
+    }
+
+    // The target series for the view on screen, as three period arrays.
+    //
+    // Nothing partial is ever drawn. A target only appears when it is complete
+    // for what is on screen:
+    //
+    //   sessions    - every shown campaign has a sessions target
+    //   events      - every shown campaign has an events target
+    //   conversion  - every shown campaign has BOTH, covering the same dates
+    //
+    // ga4SumTargets has already nulled any period where a campaign was missing
+    // that metric, so an incomplete side arrives here as null. The conversion
+    // branch then needs both sides non-null, or it would divide a complete total
+    // by an incomplete one and present the result as a real target.
+    function ga4TargetSeries(targets) {
+        if (!targets) return null;
+        const out = {};
+        GA4_TARGET_PERIODS.forEach(period => {
+            if (ga4View === 'sessions') {
+                out[period] = targets.sessions[period];
+            } else if (ga4View === 'volume') {
+                out[period] = targets.events[period];
+            } else {
+                const sessions = targets.sessions[period];
+                const events = targets.events[period];
+                const sessionsCovered = targets.sessions[period + '_covered'] || [];
+                const eventsCovered = targets.events[period + '_covered'] || [];
+                out[period] = (sessions || []).map((s, i) => {
+                    const e = (events || [])[i];
+                    // Either side missing or incomplete -> no conversion target.
+                    if (s === null || s === undefined || e === null || e === undefined) return null;
+                    if (!s) return null;
+                    // Both sides must cover the same dates, and actually cover
+                    // some, or the ratio is built from halves that do not line up.
+                    if (!sessionsCovered[i] || !eventsCovered[i]) return null;
+                    if (sessionsCovered[i] !== eventsCovered[i]) return null;
+                    return Math.round(e / s * 100 * 1000) / 1000;
+                });
+            }
+        });
+        return out;
+    }
+
+    function ga4HasAnyTarget(series) {
+        if (!series) return false;
+        return GA4_TARGET_PERIODS.some(period =>
+            (series[period] || []).some(v => v !== null && v !== undefined));
     }
 
     function toggleGa4CampaignPanel() {
@@ -361,13 +648,42 @@
         }
     });
 
+    // Rebuilt whenever the campaign set changes, not once and never again: a
+    // different event can carry a different set of campaigns, and the old
+    // build-once guard left the list showing the first event's campaigns
+    // forever.
+    //
+    // Keyed on the names rather than a flag so a plain re-render (changing view,
+    // chart type, or saving a target) does not rebuild the list and lose which
+    // boxes are ticked.
     function populateGa4CampaignChecks(campaigns) {
         const box = document.getElementById('ga4CampaignChecks');
-        if (box.dataset.filled === '1') return;
-        box.innerHTML = campaigns.map(name => `
-            <label><input type="checkbox" value="${escHtml(name)}" checked> ${escHtml(name)}</label>
-        `).join('');
-        box.dataset.filled = '1';
+        // Newline-separated: campaign names can contain most punctuation, but
+        // not a line break, so this cannot collide.
+        const key = campaigns.join('\n');
+        if (box.dataset.names === key) return;
+
+        // Carry the current ticks across the rebuild. A campaign that is new to
+        // this event starts ticked, matching the "all campaigns" default.
+        const previous = new Map(
+            [...box.querySelectorAll('input')].map(cb => [cb.value, cb.checked]));
+        box.innerHTML = campaigns.map(name => {
+            const ticked = previous.has(name) ? previous.get(name) : true;
+            return `<label><input type="checkbox" value="${escHtml(name)}"${ticked ? ' checked' : ''}> ${escHtml(name)}</label>`;
+        }).join('');
+        box.dataset.names = key;
+
+        // Keep the filter and its label in step with the rebuilt list, so a
+        // campaign that has gone is not left in ga4SelectedCampaigns holding
+        // back a filter the user can no longer see.
+        if (ga4SelectedCampaigns) {
+            const stillThere = campaigns.filter(name => ga4SelectedCampaigns.has(name));
+            ga4SelectedCampaigns = stillThere.length === campaigns.length
+                ? null : new Set(stillThere);
+        }
+        const tickedCount = campaigns.filter(
+            name => previous.has(name) ? previous.get(name) : true).length;
+        updateGa4CampaignToggleLabel(campaigns.length, tickedCount);
     }
 
     function setAllGa4Campaigns(checked) {
@@ -491,12 +807,21 @@
             const chart = charts[2];   // [month, week, day]
             if (!chart) return;
             chart.data.labels = labels;
-            // Each dataset keeps the series it was built from: a stacked chart
-            // has one per campaign, every other chart has a single series.
+            // The target is not one of the campaign series, so it is sliced from
+            // its own array. Without this it would be looked up by label, miss,
+            // and on the aggregate row fall through to the actual series — the
+            // target line would be overwritten with actual values.
+            const targetSlice = chart.$ga4DayTarget ? ga4DaySlice(chart.$ga4DayTarget) : null;
             chart.data.datasets.forEach(dataset => {
+                if (dataset.label === TARGET_LABEL) {
+                    if (targetSlice) dataset.data = targetSlice;
+                    return;
+                }
                 const source = ga4DaySeriesFor(rowId, dataset.label);
                 if (source) dataset.data = ga4DaySlice(source[dayKey]);
             });
+            // The shading reads this, so it has to move with the line.
+            if (targetSlice) chart.$ga4Target = targetSlice;
             chart.update('none');
             const title = document.getElementById(`${rowId}-day-title`);
             if (title) title.textContent = `${ga4TitlePrefix()} - ${ga4DayTitleSuffix()}`;
@@ -621,15 +946,62 @@
     // Rate is the same kind of number in all three periods, so month/week/day share
     // one scale. Volume totals differ by period (a month is ~4.3x a week), so each
     // period keeps its own scale or the day chart would flatten to nothing.
+    // Snap a yMax onto a round number so the axis ticks stay readable.
+    function ga4SnapRange(yMax, minYMax, wholeNumbers) {
+        const span = Math.max(minYMax, yMax);
+        let unit = _niceUnit(span);
+        if (wholeNumbers) unit = Math.max(1, Math.round(unit));
+        const snapped = Math.max(unit, Math.ceil(span / unit) * unit);
+        const decimals = Math.max(0, -Math.floor(Math.log10(unit)) + 2);
+        return { yMin: 0, yMax: Number(snapped.toFixed(decimals)), unit };
+    }
+
+    // Y-ranges for a row's month/week/day charts.
+    //
+    // Each chart scales from its OWN periods: 2 x the mean of the months, of the
+    // weeks, and of the days, so each chart's average sits vertically centred.
+    //
+    // Deriving week and month by multiplying the daily max up was tried and does
+    // not work — it assumes a steady daily rate, and these campaigns fluctuate
+    // enough that a quiet fortnight was magnified thirtyfold into the month axis.
+    //
+    // The newest column is left out of every average: the current week and month
+    // are only part elapsed, so their totals are low and would drag the scale
+    // down until the completed columns ran off the top. The day series drops its
+    // last day for the same reason (GA4 counts it while it is still filling).
+    //
+    // Rates are exempt: month, week and day are the same kind of number there,
+    // so those share one scale across all three (sharedScale below).
     function ga4SeriesRanges(series, viewConfig) {
         const periods = ['month', 'week', 'day'];
-        // Bars scale from the max, lines from the mean — see zeroBasedRange.
-        const fromMax = viewConfig.chartType === 'bar';
-        const ranges = periods.map(period =>
-            zeroBasedRange(series[viewConfig.keys[period]], viewConfig.minYMax, viewConfig.wholeNumbers, fromMax));
-        if (!viewConfig.sharedScale) return ranges;
-        const shared = ranges.reduce((a, b) => (b.yMax > a.yMax ? b : a));
-        return periods.map(() => shared);
+
+        if (viewConfig.sharedScale) {
+            const ranges = periods.map(period =>
+                zeroBasedRange(series[viewConfig.keys[period]], viewConfig.minYMax, viewConfig.wholeNumbers, false));
+            const shared = ranges.reduce((a, b) => (b.yMax > a.yMax ? b : a));
+            return periods.map(() => shared);
+        }
+
+        // Drop the newest column, then scale from what is left. Falls back to the
+        // full set when that leaves nothing, so a campaign with a single column
+        // still gets a real scale.
+        //
+        // 2 x mean centres the average, but on its own it clips: daily counts
+        // spike well above twice their mean, and those days were being cut off
+        // flat at the top of the chart. So the taller of "average centred" and
+        // "the highest point fits, with 5% headroom" wins — centred while the
+        // data is even, tall enough to contain it when it is not.
+        const scaleFor = (values) => {
+            const all = _cleanVals(values);
+            const complete = all.length > 1 ? all.slice(0, -1) : all;
+            const base = complete.length ? complete : all;
+            const yMax = base.length
+                ? Math.max(viewConfig.minYMax, _mean(base) * 2, Math.max(...base) * 1.05)
+                : viewConfig.minYMax;
+            return ga4SnapRange(yMax, viewConfig.minYMax, viewConfig.wholeNumbers);
+        };
+
+        return periods.map(period => scaleFor(series[viewConfig.keys[period]]));
     }
 
     // Campaign colours for the stacked volume bars. Index order follows the
@@ -660,6 +1032,85 @@
         };
     }
 
+    // Copied from the KPI page (kpi.html makeBgPlugin) so the two pages shade
+    // identically. Green above the target, red below; whole chart green where
+    // there is no target at all.
+    //
+    // Only values > 0 count as a target, which is the KPI behaviour kept as-is:
+    // a zero target renders as no line and a green chart. It stays a stored
+    // target everywhere else — the popup still prefills it and the button still
+    // reads Edit Target.
+    function makeBgPlugin(targetArr, yMin, yMax) {
+        return {
+            id: 'bgShading',
+            beforeDatasetsDraw(chart) {
+                const { ctx, chartArea: { left, right, top, bottom }, scales: { x, y } } = chart;
+                // Read the target off the plugin's own state, not the closure:
+                // scrolling the day window replaces it in place, and a closure
+                // would keep shading the window the chart was built with.
+                const arr = chart.$ga4Target || targetArr;
+                const n = arr.length;
+                if (!n) return;
+
+                const anyTarget = arr.some(t => t !== null && t !== undefined && t > 0);
+                if (!anyTarget) {
+                    ctx.save();
+                    ctx.fillStyle = BG_GREEN;
+                    ctx.fillRect(left, top, right - left, bottom - top);
+                    ctx.restore();
+                    return;
+                }
+
+                const points = arr.map((t, i) => {
+                    const px = x.getPixelForValue(i);
+                    const hasTarget = t !== null && t !== undefined && t > 0;
+                    const tpx = hasTarget
+                        ? Math.min(Math.max(y.getPixelForValue(t), top), bottom)
+                        : top;   // gaps in the target read as above-target
+                    return { px, tpx, hasTarget };
+                });
+
+                ctx.save();
+
+                ctx.beginPath();
+                ctx.moveTo(points[0].px, bottom);
+                points.forEach(p => ctx.lineTo(p.px, p.tpx));
+                ctx.lineTo(points[n - 1].px, bottom);
+                ctx.closePath();
+                ctx.fillStyle = BG_RED;
+                ctx.fill();
+
+                ctx.beginPath();
+                ctx.moveTo(points[0].px, top);
+                points.forEach(p => ctx.lineTo(p.px, p.tpx));
+                ctx.lineTo(points[n - 1].px, top);
+                ctx.closePath();
+                ctx.fillStyle = BG_GREEN;
+                ctx.fill();
+
+                ctx.restore();
+            }
+        };
+    }
+
+    // stacked:false so the target plots at its own value rather than riding on
+    // top of the campaign bars; type:'line' so it stays a line on a bar chart.
+    function ga4TargetDataset(data) {
+        return {
+            label: TARGET_LABEL,
+            data,
+            type: 'line',
+            fill: false,
+            borderColor: '#e53e3e',
+            borderWidth: 1.5,
+            pointRadius: 0,
+            tension: 0,
+            spanGaps: true,
+            stack: '_target',
+            order: 0,
+        };
+    }
+
     function ga4BarDataset(label, data, colour) {
         return {
             label,
@@ -675,11 +1126,19 @@
     // datasets is already built by the caller: one line, one bar series, or
     // several stacked bar series (one per campaign).
     function buildGa4Chart(canvasId, labels, datasets, range, viewConfig, opts = {}) {
-        const { stacked = false, showLegend = false } = opts;
+        const { stacked = false, showLegend = false, target = null, chartType = null } = opts;
         const ctx = document.getElementById(canvasId).getContext('2d');
-        return new Chart(ctx, {
-            type: viewConfig.chartType || 'line',
-            data: { labels, datasets },
+        const resolvedType = chartType || viewConfig.chartType || 'line';
+        const allDatasets = target ? [...datasets, ga4TargetDataset(target)] : datasets;
+        // Shading goes with the line view only. Behind stacked multi-colour
+        // campaign bars it reads as muddy, so columns get the target line alone.
+        const plugins = (target && resolvedType === 'line')
+            ? [makeBgPlugin(target, range.yMin, range.yMax)]
+            : [];
+        const chart = new Chart(ctx, {
+            type: resolvedType,
+            data: { labels, datasets: allDatasets },
+            plugins,
             options: {
                 responsive: true,
                 maintainAspectRatio: false,
@@ -694,12 +1153,17 @@
                         callbacks: {
                             label: context => context.parsed.y === null
                                 ? null
-                                : viewConfig.tooltip(context.dataset.label, context.parsed.y),
+                                : (context.dataset.label === TARGET_LABEL
+                                    ? `Target: ${viewConfig.tooltip('', context.parsed.y).replace(/^: /, '')}`
+                                    : viewConfig.tooltip(context.dataset.label, context.parsed.y)),
                             // With a stack, the individual campaign values do not
-                            // tell you the column's total, so state it.
+                            // tell you the column's total, so state it. The target
+                            // is not part of the actual, so it is left out of it.
                             footer: items => {
-                                if (!stacked || items.length < 2) return;
-                                const total = items.reduce((sum, item) => sum + (item.parsed.y || 0), 0);
+                                if (!stacked) return;
+                                const actual = items.filter(item => item.dataset.label !== TARGET_LABEL);
+                                if (actual.length < 2) return;
+                                const total = actual.reduce((sum, item) => sum + (item.parsed.y || 0), 0);
                                 return `Total: ${Number(total).toLocaleString()}`;
                             }
                         }
@@ -725,12 +1189,27 @@
                 }
             }
         });
+        // The shading plugin reads this rather than its closure, so scrolling the
+        // day window can repoint it without rebuilding the chart.
+        chart.$ga4Target = target;
+        return chart;
     }
 
-    function ga4RowHtml(rowId, index, title, isAggregated) {
+    // No button on the Aggregated row: its target is summed from the campaigns
+    // on screen, so there is no key to write to. Every other row has one, All
+    // events included — the sessions target has no event in its key, so it can
+    // be set from there; only the events figure is read-only in that mode.
+    function ga4RowHtml(rowId, index, title, isAggregated, targetState) {
+        const button = isAggregated ? '' : `
+                    <button type="button" class="ga4-target-btn${targetState.has ? ' has-target' : ''}"
+                            onclick="openTargetModal('${escHtml(title).replace(/'/g, "\\'")}')">
+                        ${targetState.has ? 'Edit Target' : 'Add Target'}
+                    </button>`;
         return `
             <div class="chart-row">
-                <h3 class="ga4-campaign-title${isAggregated ? ' ga4-aggregated-title' : ''}">${escHtml(title)}</h3>
+                <h3 class="ga4-campaign-title${isAggregated ? ' ga4-aggregated-title' : ''}">
+                    <span class="ga4-title-text">${escHtml(title)}</span>${button}
+                </h3>
                 <div class="charts-row">
                     <div class="chart-card">
                         <h2 id="${rowId}-month-title"></h2>
@@ -774,7 +1253,9 @@
         }, 0);
         const anyAt = (key, i) => campaigns.some(c => c[key][i] !== null && c[key][i] !== undefined);
 
-        const series = { name: 'Aggregated' };
+        // Targets are summed from the same campaigns, so the target moves with
+        // the filter instead of going stale against a smaller total.
+        const series = { name: 'Aggregated Total', targetStore: ga4AggregateTargets(campaigns) };
         for (const [vol, sess, rate] of [
             ['daily_volumes', 'daily_sessions', 'daily_rates'],
             ['weekly_volumes', 'weekly_sessions', 'weekly_rates'],
@@ -801,6 +1282,227 @@
             }
         }
         return series;
+    }
+
+    // ── Target popup ──────────────────────────────────────────────────────────
+    // Editing state is read from its own endpoint, not from the chart arrays: a
+    // target saved today-forward is invisible to a read bounded by the charts'
+    // last data date, which is often yesterday. Reading it separately means the
+    // prefilled value is right even when nothing is drawn yet.
+
+    let targetModalState = null;
+
+    function ga4TargetEventName() {
+        return ga4LastData ? ga4LastData.event_name : null;
+    }
+
+    // Both figures are shown and editable whichever view you came from: they are
+    // the two things stored, and the conversion rate is just one divided by the
+    // other, so there is no view where only half of the pair makes sense.
+    //
+    // The popup never opens in All events mode — the button is not rendered
+    // there, because that target is the individual events added up.
+    // The per-day events target this campaign already has in All events mode:
+    // the individual events added up, which is what the chart plots. Read off
+    // the loaded data rather than the target endpoint, which has no key for it.
+    function ga4AllEventsDailyTarget(campaign) {
+        const series = (ga4LastData.campaigns || []).find(c => c.name === campaign);
+        const daily = series && series.targets && series.targets.events
+            ? series.targets.events.daily : null;
+        if (!daily) return null;
+        const value = daily.find(v => v !== null && v !== undefined);
+        return value === undefined ? null : value;
+    }
+
+    async function openTargetModal(campaign) {
+        const eventName = ga4TargetEventName();
+        const isAllEvents = ga4IsAllEvents(eventName);
+        targetModalState = { campaign, eventName, isAllEvents, view: ga4View, existing: null };
+
+        document.getElementById('targetModalCampaign').textContent = campaign;
+        document.getElementById('targetModalError').classList.remove('show');
+        document.getElementById('targetSessionsInput').value = '';
+        document.getElementById('targetEventsInput').value = '';
+
+        // Sessions has no event in its key, so it is editable on every view.
+        // The events figure in All events mode is the components summed — shown
+        // so the derived rate makes sense, but not typeable.
+        const eventsInput = document.getElementById('targetEventsInput');
+        eventsInput.disabled = isAllEvents;
+        eventsInput.classList.toggle('readonly', isAllEvents);
+        document.getElementById('targetEventsLabel').textContent = isAllEvents
+            ? 'Events target (per day) - all events added up'
+            : `${eventName} target (per day)`;
+
+        // One figure applies to every date on the charts, past and future alike.
+        const note = isAllEvents
+            ? 'Applies to every date shown. The events target is the individual events '
+              + 'added up, so it is set on each event rather than here. '
+              + 'Clear the sessions box and Save to remove it.'
+            : 'Applies to every date shown, past and future. '
+              + 'Clear a box and Save to remove that target. '
+              + 'The sessions target is shared by every event.';
+        document.getElementById('targetModalNote').textContent = note;
+        document.getElementById('targetModalTitle').textContent = 'Target';
+        document.getElementById('targetModal').classList.add('open');
+
+        if (isAllEvents) {
+            const summed = ga4AllEventsDailyTarget(campaign);
+            if (summed !== null) eventsInput.value = summed;
+        }
+        updateTargetDerived();
+
+        // All events is not a stored key, so the events side is not asked for.
+        const query = `?campaign=${encodeURIComponent(campaign)}`
+                    + (isAllEvents ? '' : `&event_name=${encodeURIComponent(eventName)}`);
+        try {
+            const resp = await fetch(`${BASE_URL}/kpi/chart-target${query}`).then(r => r.json());
+            // Ignore a late reply if the popup has been closed or reopened since.
+            if (!targetModalState || targetModalState.campaign !== campaign) return;
+            if (resp.status !== 'ok') throw new Error(resp.message || 'load failed');
+
+            const sessions = resp.targets.sessions;
+            const events = isAllEvents ? null : resp.targets.events;
+            if (sessions) document.getElementById('targetSessionsInput').value = sessions.value;
+            if (events) eventsInput.value = events.value;
+            // Kept so Save can tell a box you blanked from one that was never set.
+            targetModalState.existing = { sessions, events };
+
+            document.getElementById('targetModalTitle').textContent =
+                (sessions || events) ? 'Edit Target' : 'Add Target';
+
+            updateTargetDerived();
+        } catch (err) {
+            if (targetModalState && targetModalState.campaign === campaign) {
+                showTargetError('Could not load the current target: ' + err.message);
+            }
+        }
+    }
+
+    function closeTargetModal() {
+        targetModalState = null;
+        document.getElementById('targetModal').classList.remove('open');
+    }
+
+    function showTargetError(message) {
+        const box = document.getElementById('targetModalError');
+        box.textContent = message;
+        box.classList.add('show');
+    }
+
+    // The conversion target is never entered — it is the two figures divided, so
+    // it cannot contradict them. Shown on every view, since both figures are
+    // always on screen now.
+    function updateTargetDerived() {
+        const sessions = parseFloat(document.getElementById('targetSessionsInput').value);
+        const events = parseFloat(document.getElementById('targetEventsInput').value);
+        const box = document.getElementById('targetDerivedValue');
+        box.textContent = (isNaN(sessions) || isNaN(events) || !sessions)
+            ? '-'
+            : (Math.round(events / sessions * 100 * 1000) / 1000) + '%';
+    }
+
+    // A filled box saves that target; a box you blanked that previously held a
+    // value removes it. Both figures are handled in one Save, so there is no
+    // separate Remove button to get out of step with what is on screen.
+    async function saveTarget() {
+        if (!targetModalState) return;
+        const { campaign, eventName, isAllEvents, existing } = targetModalState;
+
+        // In All events mode the events box is read-only and has no stored key,
+        // so only sessions is written.
+        const metrics = isAllEvents ? ['sessions'] : ['sessions', 'events'];
+        const reads = metrics.map(metric => {
+            const input = document.getElementById(
+                metric === 'sessions' ? 'targetSessionsInput' : 'targetEventsInput');
+            const raw = input.value.trim();
+            const had = !!(existing && existing[metric]);
+            if (raw === '') return { metric, action: had ? 'delete' : 'none' };
+            const value = parseFloat(raw);
+            if (isNaN(value)) return { metric, action: 'invalid' };
+            return { metric, action: 'save', value };
+        });
+
+        if (reads.some(r => r.action === 'invalid')) {
+            showTargetError('Targets must be numbers.');
+            return;
+        }
+        const saves = reads.filter(r => r.action === 'save');
+        const deletes = reads.filter(r => r.action === 'delete');
+        if (!saves.length && !deletes.length) {
+            showTargetError('Enter a figure first.');
+            return;
+        }
+
+        const button = document.getElementById('targetSaveBtn');
+        button.disabled = true;
+        try {
+            let last = null;
+            // Saves go together in one request so the pair cannot half-apply.
+            if (saves.length) {
+                last = await fetch(`${BASE_URL}/kpi/chart-target`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        campaign,
+                        event_name: eventName,
+                        targets: saves.map(({ metric, value }) => ({ metric, value })),
+                    }),
+                }).then(r => r.json());
+                if (last.status !== 'ok') throw new Error(last.message || 'save failed');
+            }
+            for (const { metric } of deletes) {
+                const resp = await fetch(`${BASE_URL}/kpi/chart-target`, {
+                    method: 'DELETE',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ campaign, metric, event_name: eventName }),
+                }).then(r => r.json());
+                if (resp.status !== 'ok') throw new Error(resp.message || 'remove failed');
+                last = last || resp;
+            }
+            closeTargetModal();
+            await refreshTargetsAfterWrite(last || {});
+        } catch (err) {
+            showTargetError('Save failed: ' + err.message);
+        } finally {
+            button.disabled = false;
+        }
+    }
+
+    // Fetch the targets alone and redraw. Saving a target changes nothing in
+    // GA4, so reloading the whole dataset would re-query Snowflake just to move
+    // a red line. The targets endpoint rolls up against the range already
+    // loaded, so the arrays line up with the columns they are drawn over.
+    //
+    // Every campaign's targets are replaced, not just the edited one: the
+    // sessions target is shared across events, and the aggregate is summed from
+    // whichever campaigns are on screen.
+    async function refreshTargetsAfterWrite() {
+        if (!ga4LastData) return;
+        const status = document.getElementById('statusText');
+        try {
+            const query = `?event_name=${encodeURIComponent(ga4LastData.event_name)}`
+                        + `&data_start=${ga4LastData.data_start}`
+                        + `&data_end=${ga4LastData.data_end}`;
+            const resp = await fetch(`${BASE_URL}/kpi/ga4-targets${query}`).then(r => r.json());
+            if (resp.status !== 'ok') throw new Error(resp.message || 'load failed');
+            const byName = new Map(resp.campaigns.map(c => [c.name, c.targets]));
+            const patch = list => list.forEach(campaign => {
+                if (byName.has(campaign.name)) campaign.targets = byName.get(campaign.name);
+            });
+            patch(ga4LastData.campaigns);
+            // The stored copy of the event being shown has to move too, or
+            // switching away and back would bring the old targets with it. A
+            // sessions change affects every event, so the rest are dropped and
+            // refetched on the next real load rather than left half-updated.
+            const stored = ga4LastData.by_event && ga4LastData.by_event[ga4LastData.event_name];
+            if (stored) patch(stored.campaigns);
+            renderGa4Campaigns(ga4LastData);
+            status.textContent = 'Target saved';
+        } catch (err) {
+            // The write itself succeeded; only the redraw failed.
+            status.textContent = 'Target saved - reload to see it: ' + err.message;
+        }
     }
 
     // Campaigns currently on screen, in the endpoint's order.
@@ -846,17 +1548,28 @@
         // average of the row percentages.
         const aggregated = ga4CurrentAggregated();
 
+        // Targets on both aggregate paths: ga4CurrentAggregated() returns the
+        // endpoint's own aggregate when every campaign is selected and only
+        // re-pools for a subset, so deriving in one place alone would leave the
+        // other without a target.
+        aggregated.targetStore = ga4AggregateTargets(shown);
+        shown.forEach(campaign => { campaign.targetStore = campaign.targets || ga4EmptyTargets(campaign); });
+
+        const targetStateFor = series => ({ has: ga4HasAnyTarget(ga4TargetSeries(series.targetStore)) });
+
         rows.innerHTML =
-            ga4RowHtml('ga4-aggregated', 'aggregated', aggregated.name, true) +
-            shown.map((c, index) => ga4RowHtml(`ga4-campaign-${index}`, index, c.name, false)).join('');
+            ga4RowHtml('ga4-aggregated', 'aggregated', aggregated.name, true, targetStateFor(aggregated)) +
+            shown.map((c, index) => ga4RowHtml(`ga4-campaign-${index}`, index, c.name, false, targetStateFor(c))).join('');
 
         const dailyLabels = ga4DaySlice(data.dates).map(dateLabel);
 
-        // The aggregated row in the bar views splits by campaign, so the stack
-        // adds up to the aggregate total. A rate cannot be stacked that way —
-        // percentages of different session counts do not add up — so the
-        // conversion view stays a single line.
-        const splitByCampaign = viewConfig.chartType === 'bar' && shown.length > 1;
+        // The aggregated row splits by campaign only as COLUMNS, where the stack
+        // adds up to the aggregate total. As lines it stays one total line —
+        // several lines on one chart is a different thing to a total, and a rate
+        // cannot be split that way at all, since percentages of different
+        // session counts do not add up.
+        const chartType = ga4EffectiveChartType();
+        const splitByCampaign = chartType === 'bar' && shown.length > 1;
 
         const renderSeries = (rowId, series, isAggregated) => {
             // Ranges come from the full day series so the y-axis stays put as the
@@ -871,7 +1584,7 @@
                 const cut = arr => sliceDays ? ga4DaySlice(arr) : arr;
                 if (!stacked) {
                     const values = cut(series[periodKey]);
-                    return [viewConfig.chartType === 'bar'
+                    return [chartType === 'bar'
                         ? ga4BarDataset(series.name, values, '#0d3d6e')
                         : ga4LineDataset(series.name, values)];
                 }
@@ -882,20 +1595,27 @@
                 ));
             };
 
+            const targets = ga4TargetSeries(series.targetStore);
+
             const titlePrefix = ga4TitlePrefix();
             document.getElementById(`${rowId}-month-title`).textContent = `${titlePrefix} - month`;
             document.getElementById(`${rowId}-week-title`).textContent = `${titlePrefix} - week`;
             document.getElementById(`${rowId}-day-title`).textContent = `${titlePrefix} - ${ga4DayTitleSuffix()}`;
-            const opts = { stacked, showLegend: stacked };
+            const opts = { stacked, showLegend: stacked, chartType };
             ['month', 'week', 'day'].forEach(period => {
                 const canvas = document.getElementById(`${rowId}-${period}`);
                 canvas.parentElement.classList.toggle('ga4-chart-legended', stacked);
             });
             ga4Charts[rowId] = [
-                buildGa4Chart(`${rowId}-month`, data.monthly_labels, datasetsFor(viewConfig.keys.month), monthRange, viewConfig, opts),
-                buildGa4Chart(`${rowId}-week`, data.weekly_labels, datasetsFor(viewConfig.keys.week), weekRange, viewConfig, opts),
-                buildGa4Chart(`${rowId}-day`, dailyLabels, datasetsFor(viewConfig.keys.day, true), dayRange, viewConfig, opts),
+                buildGa4Chart(`${rowId}-month`, data.monthly_labels, datasetsFor(viewConfig.keys.month), monthRange, viewConfig,
+                    { ...opts, target: targets ? targets.monthly : null }),
+                buildGa4Chart(`${rowId}-week`, data.weekly_labels, datasetsFor(viewConfig.keys.week), weekRange, viewConfig,
+                    { ...opts, target: targets ? targets.weekly : null }),
+                buildGa4Chart(`${rowId}-day`, dailyLabels, datasetsFor(viewConfig.keys.day, true), dayRange, viewConfig,
+                    { ...opts, target: targets ? ga4DaySlice(targets.daily) : null }),
             ];
+            // Kept whole so the day window can re-slice it while scrolling.
+            if (targets) ga4Charts[rowId][2].$ga4DayTarget = targets.daily;
         };
 
         renderSeries('ga4-aggregated', aggregated, true);
@@ -923,8 +1643,17 @@
         } else {
             basis = `${data.event_name}: event count / each campaign's sessions`;
         }
+        // The aggregate target is hidden unless every campaign on screen has one,
+        // so say which are missing — otherwise the line is just absent with no
+        // explanation.
+        let targetNote = '';
+        const untargeted = shown.filter(c => !ga4HasAnyTarget(ga4TargetSeries(c.targetStore)));
+        if (untargeted.length && untargeted.length < shown.length) {
+            targetNote = ` No total target: ${untargeted.map(c => c.name).join(', ')} `
+                       + `${untargeted.length === 1 ? 'has' : 'have'} no target set.`;
+        }
         document.getElementById('ga4Status').textContent =
-            `${basis} (${scope}). Data ${data.data_start} to ${data.data_end}.`;
+            `${basis} (${scope}). Data ${data.data_start} to ${data.data_end}.${targetNote}`;
     }
 
     // ── Y-range helpers ───────────────────────────────────────────────────────
