@@ -18,7 +18,8 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from utils.db_utils import (get_database_connection, get_subsidy_schedules,
                             save_subsidy_schedule, delete_subsidy_schedule)
 
-from .core import BASE_URL, templates, _track, get_current_user
+from .core import (BASE_URL, templates, _track, get_current_user,
+                   require_page, require_page_api)
 
 logger = logging.getLogger(__name__)
 
@@ -104,10 +105,7 @@ def _load_all() -> list:
 
 
 @router.get("/subsidy-rates", response_class=HTMLResponse)
-def subsidy_rates_page(request: Request, user: str = Depends(get_current_user)):
-    if not user:
-        return RedirectResponse(url=BASE_URL + "/login", status_code=303)
-
+def subsidy_rates_page(request: Request, user: str = Depends(require_page('subsidy_rates'))):
     try:
         schedules = _load_all()
         load_error = None
@@ -175,10 +173,7 @@ def _parse_payload(payload: dict) -> tuple:
 
 
 @router.post("/api/subsidy-rates")
-async def save_rates(request: Request, user: str = Depends(get_current_user)):
-    if not user:
-        return JSONResponse({"status": "error", "message": "not authenticated"}, status_code=401)
-
+async def save_rates(request: Request, user: str = Depends(require_page_api('subsidy_rates'))):
     try:
         payload = await request.json()
     except Exception:
@@ -208,9 +203,7 @@ async def save_rates(request: Request, user: str = Depends(get_current_user)):
 
 
 @router.delete("/api/subsidy-rates/{schedule_id}")
-def remove_rates(schedule_id: int, user: str = Depends(get_current_user)):
-    if not user:
-        return JSONResponse({"status": "error", "message": "not authenticated"}, status_code=401)
+def remove_rates(schedule_id: int, user: str = Depends(require_page_api('subsidy_rates'))):
     try:
         with get_database_connection() as conn:
             delete_subsidy_schedule(conn, schedule_id)

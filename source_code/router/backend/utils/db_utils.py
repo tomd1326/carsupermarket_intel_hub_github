@@ -1,3 +1,4 @@
+import datetime
 import json
 import logging
 import os
@@ -730,6 +731,173 @@ def delete_subsidy_schedule(conn, schedule_id: int) -> None:
         with conn.cursor() as cur:
             cur.execute("DELETE FROM subsidy_rate_schedules WHERE id = %s", (schedule_id,))
         conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+
+
+# ── Chart targets ─────────────────────────────────────────────────────────────
+# Per-date targets for the Google Ads Campaigns charts. db/12_chart_targets.sql
+# is the canonical schema; the table is created on first save, the same as the
+# settings and user_preferences tables, so no migration step is needed.
+#
+# Two metrics are stored per campaign (sessions and events). The conversion rate,
+# the aggregate across campaigns and the All-events total are all derived at read
+# time — see the schema file for why.
+
+def _ensure_chart_targets_table(conn) -> None:
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS chart_targets (
+                chart_key    VARCHAR(200)  NOT NULL,
+                target_date  DATE          NOT NULL,
+                target_value NUMERIC(14,4) NOT NULL,
+                created_by   VARCHAR(100),
+                updated_at   TIMESTAMPTZ   NOT NULL DEFAULT NOW(),
+                PRIMARY KEY (chart_key, target_date)
+            )
+            """
+        )
+    conn.commit()
+
+
+def get_chart_targets(conn, chart_keys: list, start, end) -> dict:
+    """Returns {chart_key: {date: float}} for the given keys over start..end.
+
+    Tolerates the table not existing yet and returns nothing, so the page works
+    before anyone has saved a target. Only a missing table is swallowed — every
+    other error is raised, since silently returning no targets on a connection
+    failure would look exactly like "no targets set" and hide the fault.
+    """
+    if not chart_keys:
+        return {}
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT chart_key, target_date, target_value
+                FROM chart_targets
+                WHERE chart_key = ANY(%s) AND target_date BETWEEN %s AND %s
+                """,
+                (list(chart_keys), start, end),
+            )
+            rows = cur.fetchall()
+    except psycopg2.errors.UndefinedTable:
+        conn.rollback()      # the failed statement poisons the transaction
+        return {}
+    out: dict = {}
+    for chart_key, target_date, target_value in rows:
+        out.setdefault(chart_key, {})[target_date] = float(target_value)
+    return out
+
+
+def get_chart_target_ranges(conn, chart_keys: list) -> dict:
+    """Returns {chart_key: {'value', 'start', 'end'}} for the CURRENT target.
+
+    The editor cannot read its state from the chart arrays: a target saved from
+    today forward is invisible to a read bounded by the charts' last data date,
+    which is often yesterday. This reads the stored target independently of what
+    the charts show, so Add/Edit and the popup prefill are correct.
+
+    "Current" is the latest run of dates still in force — the value on the last
+    stored date, with the first and last dates holding that same value.
+    """
+    if not chart_keys:
+        return {}
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                -- The current target is the value on the latest stored date,
+                -- and the span of dates still holding that same value.
+                -- Save writes one contiguous block from today to the horizon,
+                -- so this does not need to reason about gaps: an earlier run at
+                -- a different value simply stops the MIN at the changeover.
+                WITH latest AS (
+                    SELECT DISTINCT ON (chart_key) chart_key, target_value, target_date
+                    FROM chart_targets
+                    WHERE chart_key = ANY(%s)
+                    ORDER BY chart_key, target_date DESC
+                )
+                SELECT l.chart_key, l.target_value,
+                       MIN(c.target_date), MAX(c.target_date)
+                FROM latest l
+                JOIN chart_targets c
+                  ON c.chart_key = l.chart_key
+                 AND c.target_value = l.target_value
+                GROUP BY l.chart_key, l.target_value
+                """,
+                (list(chart_keys),),
+            )
+            rows = cur.fetchall()
+    except psycopg2.errors.UndefinedTable:
+        conn.rollback()
+        return {}
+    return {
+        chart_key: {'value': float(value), 'start': start, 'end': end}
+        for chart_key, value, start, end in rows
+    }
+
+
+def save_chart_targets(conn, writes: list, start, end, user: str = None) -> None:
+    """Write one or more targets across start..end in a SINGLE transaction.
+
+    writes is [(chart_key, value), ...]. The conversion popup saves a sessions
+    target and an events target together, and they must not half-apply: one
+    committed without the other leaves a derived conversion rate that was never
+    entered.
+    """
+    if not writes:
+        return
+    _ensure_chart_targets_table(conn)
+    try:
+        days = (end - start).days + 1
+        rows = [
+            (chart_key, start + datetime.timedelta(days=offset), value, user)
+            for chart_key, value in writes
+            for offset in range(days)
+        ]
+        with conn.cursor() as cur:
+            psycopg2.extras.execute_values(
+                cur,
+                "INSERT INTO chart_targets (chart_key, target_date, target_value, created_by) VALUES %s "
+                "ON CONFLICT (chart_key, target_date) DO UPDATE "
+                "SET target_value = EXCLUDED.target_value, "
+                "    created_by   = EXCLUDED.created_by, "
+                "    updated_at   = NOW()",
+                rows,
+                page_size=1000,
+            )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+
+
+def delete_chart_target(conn, chart_key: str, from_date) -> int:
+    """Remove a target from from_date onward, leaving earlier dates in place.
+
+    Mirrors save_chart_targets, which writes today forward: past days keep the
+    target they were judged against at the time, so old charts still show what
+    was being aimed at then.
+
+    Returns the number of rows removed. A missing table means there was nothing
+    to remove, which is not an error — but any other failure is raised rather
+    than reported to the user as a successful removal.
+    """
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "DELETE FROM chart_targets WHERE chart_key = %s AND target_date >= %s",
+                (chart_key, from_date),
+            )
+            removed = cur.rowcount
+        conn.commit()
+        return removed
+    except psycopg2.errors.UndefinedTable:
+        conn.rollback()
+        return 0
     except Exception:
         conn.rollback()
         raise

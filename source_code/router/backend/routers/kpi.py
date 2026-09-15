@@ -2,17 +2,21 @@
 
 from fastapi import APIRouter, Request, Depends, HTTPException
 from fastapi.responses import HTMLResponse, RedirectResponse
+import calendar
 import json
 import time
 import logging
 import datetime
 
 
-from utils.db_utils import (get_database_connection, get_prod_pricer_connection, get_settings)
+from utils.db_utils import (get_database_connection, get_prod_pricer_connection, get_settings,
+                            get_chart_targets, get_chart_target_ranges, save_chart_targets,
+                            delete_chart_target)
 from utils.snowflake_client import SnowflakeClient
 from utils.sharepoint_client import SharePointClient
 
-from .core import (BASE_URL, templates, _track, get_current_user)
+from .core import (BASE_URL, templates, _track, get_current_user, is_admin,
+                   require_page, require_page_api, _uk_now)
 
 logger = logging.getLogger(__name__)
 
@@ -46,6 +50,403 @@ GA4_CAMPAIGNS = [
 ]
 
 
+# ── Chart targets (Google Ads Campaigns page) ────────────────────────────────
+# Two metrics are stored per campaign: sessions and events. The conversion rate,
+# the aggregate across campaigns and the All-events total are all DERIVED, never
+# stored — see db/12_chart_targets.sql for why.
+#
+# Targets are written from today to TARGET_HORIZON_YEARS ahead, so one figure
+# keeps applying to days that have not arrived yet.
+
+TARGET_HORIZON_YEARS = 2
+# How far back a saved target reaches. The charts show up to 13 months of
+# history, and GA4 data typically ends a day or two before today — so a target
+# written from today forward would land entirely on dates no chart draws, and
+# nothing would appear until the data caught up. Covering history as well means
+# the figure you enter is simply "the target", against past days and future
+# ones alike.
+TARGET_HISTORY_YEARS = 3
+
+
+def _target_key(metric: str, campaign: str, event_name: str = None) -> str:
+    """sessions is shared across every event, so its key carries no event."""
+    if metric == 'sessions':
+        return f"ga4:sessions:{campaign}"
+    return f"ga4:events:{event_name}:{campaign}"
+
+
+def _shift_years(d: datetime.date, years: int) -> datetime.date:
+    """29 Feb has no anniversary in a common year, so it lands on 28 Feb."""
+    try:
+        return d.replace(year=d.year + years)
+    except ValueError:
+        return d.replace(month=2, day=28, year=d.year + years)
+
+
+def _target_write_range() -> tuple[datetime.date, datetime.date]:
+    """The full span a saved target covers: history back, horizon forward.
+
+    Deliberately wider than the charts on both sides, so a target is drawn
+    everywhere the page can look without needing to know the data's own dates.
+    """
+    today = _uk_now().date()
+    return _shift_years(today, -TARGET_HISTORY_YEARS), _shift_years(today, TARGET_HORIZON_YEARS)
+
+
+def _full_week_length(_monday: datetime.date) -> int:
+    return 7
+
+
+def _full_month_length(first_of_month: datetime.date) -> int:
+    return calendar.monthrange(first_of_month.year, first_of_month.month)[1]
+
+
+def _roll_up_targets(by_date: dict, daily_dates: list, weekly_groups: list, monthly_groups: list) -> dict:
+    """Roll one key's per-date targets up to the chart's own periods.
+
+    A period's target is the average daily target across the dates that have
+    one, times the period's FULL length — not the sum of the dates present.
+
+    That matters for the current week and month, which are only part elapsed,
+    and for the last period of the data where GA4 has not caught up. Summing
+    only the dates present would show three days' worth of target on a week
+    three days in, so the target line would dive at the right-hand end and read
+    as the target collapsing rather than the period being unfinished.
+
+    Scaling by the average also leaves the conversion view correct: the rate is
+    summed events over summed sessions, and multiplying both sides by the same
+    period length cancels out.
+
+    `covered` carries how many dates in each period actually had a target, so
+    the page can still tell a fully-targeted period from a barely-targeted one
+    and refuse to build a rate from mismatched halves.
+
+    A period with no targeted date at all is None, never 0: a zero would draw a
+    target along the bottom and paint the chart red.
+    """
+    def _period(dates, full_length):
+        values = [by_date[d] for d in dates if d in by_date]
+        if not values:
+            return None, 0
+        # Round to the same 4dp the column stores, so a scaled-up average does
+        # not carry floating-point noise into the chart.
+        return round(sum(values) / len(values) * full_length, 4), len(values)
+
+    daily, daily_covered = zip(*[_period([d], 1) for d in daily_dates]) if daily_dates else ((), ())
+    weekly, weekly_covered = (
+        zip(*[_period(g, _full_week_length(g[0])) for g in weekly_groups if g])
+        if any(weekly_groups) else ((), ())
+    )
+    monthly, monthly_covered = (
+        zip(*[_period(g, _full_month_length(g[0])) for g in monthly_groups if g])
+        if any(monthly_groups) else ((), ())
+    )
+    return {
+        "daily": list(daily),
+        "weekly": list(weekly),
+        "monthly": list(monthly),
+        "daily_covered": list(daily_covered),
+        "weekly_covered": list(weekly_covered),
+        "monthly_covered": list(monthly_covered),
+    }
+
+
+def _ga4_date_groups(data_start: datetime.date, data_end: datetime.date) -> tuple[list, list, list]:
+    """The day, week and month groups the GA4 charts are drawn against.
+
+    Shared by the chart endpoint and the targets-only endpoint so both roll up
+    against exactly the same periods — a target computed against different
+    groups would not line up with the columns it is drawn over.
+    """
+    daily_dates = []
+    date_iter = data_start
+    while date_iter <= data_end:
+        daily_dates.append(date_iter)
+        date_iter += datetime.timedelta(days=1)
+
+    current_week_monday = _week_monday_of(data_end)
+    week_mondays = [current_week_monday - datetime.timedelta(weeks=i) for i in range(13, -1, -1)]
+    week_mondays = [monday for monday in week_mondays
+                    if monday + datetime.timedelta(days=6) >= data_start]
+    weekly_date_groups = [
+        [monday + datetime.timedelta(days=i) for i in range(7)
+         if data_start <= monday + datetime.timedelta(days=i) <= data_end]
+        for monday in week_mondays
+    ]
+
+    monthly_start = max(data_start.replace(day=1), _shift_month_start(data_end.replace(day=1), -13))
+    month_firsts = []
+    month_iter = monthly_start
+    while month_iter <= data_end.replace(day=1):
+        month_firsts.append(month_iter)
+        month_iter = _shift_month_start(month_iter, 1)
+
+    monthly_date_groups = []
+    for month_first in month_firsts:
+        next_month = _shift_month_start(month_first, 1)
+        month_dates = []
+        date_iter = max(month_first, data_start)
+        while date_iter < next_month and date_iter <= data_end:
+            month_dates.append(date_iter)
+            date_iter += datetime.timedelta(days=1)
+        monthly_date_groups.append(month_dates)
+
+    return daily_dates, weekly_date_groups, monthly_date_groups
+
+
+def _shift_month_start(d: datetime.date, months: int) -> datetime.date:
+    month_index = d.month - 1 + months
+    return datetime.date(d.year + month_index // 12, month_index % 12 + 1, 1)
+
+
+def _campaign_targets(conn, event_name: str, daily_dates: list,
+                      weekly_groups: list, monthly_groups: list) -> dict:
+    """Per-campaign session and event targets, rolled up to the chart periods.
+
+    Only the two STORED metrics are returned. The aggregate, the conversion rate
+    and the All-events total are derived in the page from whichever campaigns
+    are on screen.
+    """
+    target_keys = {}
+    for campaign in GA4_CAMPAIGNS:
+        target_keys[(campaign, 'sessions')] = _target_key('sessions', campaign)
+        if event_name != GA4_ALL_EVENTS:
+            target_keys[(campaign, 'events')] = _target_key('events', campaign, event_name)
+        else:
+            for component in GA4_CAMPAIGN_EVENTS:
+                target_keys[(campaign, f'events:{component}')] = _target_key('events', campaign, component)
+
+    data_start, data_end = daily_dates[0], daily_dates[-1]
+    stored = get_chart_targets(conn, list(target_keys.values()), data_start, data_end)
+
+    out = {}
+    for campaign in GA4_CAMPAIGNS:
+        sessions_by_date = stored.get(target_keys[(campaign, 'sessions')], {})
+        if event_name != GA4_ALL_EVENTS:
+            events_by_date = stored.get(target_keys[(campaign, 'events')], {})
+        else:
+            # Sum the component events per date, but ONLY for dates where every
+            # component has a target. Adding up whichever events happen to be set
+            # would present two events out of five as a complete All-events
+            # target, which reads as a real figure to compare against while
+            # actually being a fraction of one.
+            #
+            # Sessions are NOT summed — one value per campaign per date, matching
+            # the actual's MAX(SESSIONS).
+            component_maps = [
+                stored.get(target_keys[(campaign, f'events:{component}')], {})
+                for component in GA4_CAMPAIGN_EVENTS
+            ]
+            events_by_date = {}
+            if all(component_maps):
+                complete_dates = set(component_maps[0])
+                for component_map in component_maps[1:]:
+                    complete_dates &= set(component_map)
+                for d in complete_dates:
+                    events_by_date[d] = sum(component_map[d] for component_map in component_maps)
+        out[campaign] = {
+            "sessions": _roll_up_targets(sessions_by_date, daily_dates, weekly_groups, monthly_groups),
+            "events": _roll_up_targets(events_by_date, daily_dates, weekly_groups, monthly_groups),
+        }
+    return out
+
+
+@router.get("/kpi/ga4-targets")
+def kpi_ga4_targets(
+    event_name: str,
+    data_start: str,
+    data_end: str,
+    user: str = Depends(require_page_api('google_ads_campaigns')),
+):
+    """Targets alone, rolled up against the loaded charts' own date range.
+
+    Saving a target changes nothing in GA4, so the page uses this instead of
+    reloading the chart data — that was re-querying Snowflake on every save
+    just to redraw a red line.
+    """
+    if event_name != GA4_ALL_EVENTS and event_name not in GA4_CAMPAIGN_EVENTS:
+        return {"status": "error", "message": f"Unknown event: {event_name}"}
+    try:
+        start = datetime.date.fromisoformat(data_start)
+        end = datetime.date.fromisoformat(data_end)
+    except ValueError:
+        return {"status": "error", "message": "Dates must be YYYY-MM-DD"}
+    if start > end:
+        return {"status": "error", "message": "data_start is after data_end"}
+    # The page only ever sends back the range the chart endpoint gave it; this
+    # caps a hand-crafted request rather than letting it build years of groups.
+    if (end - start).days > 800:
+        return {"status": "error", "message": "Date range is too wide"}
+
+    daily_dates, weekly_groups, monthly_groups = _ga4_date_groups(start, end)
+    try:
+        with get_database_connection() as conn:
+            targets = _campaign_targets(conn, event_name, daily_dates, weekly_groups, monthly_groups)
+    except Exception as e:
+        logger.error("Reading GA4 targets failed: %s", e)
+        return {"status": "error", "message": str(e)}
+
+    return {"status": "ok", "event_name": event_name,
+            "campaigns": [{"name": c, "targets": t} for c, t in targets.items()]}
+
+
+def _validate_target_request(campaign: str, metric: str, event_name: str) -> str | None:
+    """Returns an error message, or None when the request is valid."""
+    if campaign not in GA4_CAMPAIGNS:
+        return f"Unknown campaign: {campaign}"
+    if metric not in ('sessions', 'events'):
+        return f"Unknown metric: {metric}"
+    if metric == 'events':
+        # GA4_ALL_EVENTS is a valid selection on the page but is NOT a stored
+        # key — its target is the component events summed. The popup edits those
+        # components, so a write naming it is a bug in the caller.
+        if event_name == GA4_ALL_EVENTS:
+            return "All events has no target of its own — set a target on each event"
+        if event_name not in GA4_CAMPAIGN_EVENTS:
+            return f"Unknown event: {event_name}"
+    return None
+
+
+def _target_value_or_error(raw) -> tuple[float | None, str | None]:
+    """Zero is a valid target (0% is a real aim) and stays distinct from missing."""
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return None, "Target must be a number"
+    if value != value or value in (float('inf'), float('-inf')):
+        return None, "Target must be a number"
+    if value < 0:
+        return None, "Target cannot be negative"
+    # NUMERIC(14,4): ten digits before the point.
+    if value >= 10 ** 10:
+        return None, "Target is too large"
+    return value, None
+
+
+@router.post("/kpi/chart-target")
+async def kpi_save_chart_target(
+    request: Request,
+    user: str = Depends(require_page_api('google_ads_campaigns')),
+):
+    """Save one or more targets for a campaign in a single transaction.
+
+    The conversion popup edits sessions AND events together: saving them
+    separately could commit one and fail the other, leaving a derived conversion
+    rate nobody entered.
+
+    Body: {"campaign": str, "event_name": str|null,
+           "targets": [{"metric": "sessions"|"events", "value": number}, ...]}
+    """
+    body = await request.json()
+    campaign = body.get('campaign')
+    event_name = body.get('event_name')
+    entries = body.get('targets') or []
+    if not entries:
+        return {"status": "error", "message": "No targets given"}
+
+    writes = []
+    for entry in entries:
+        metric = entry.get('metric')
+        error = _validate_target_request(campaign, metric, event_name)
+        if error:
+            return {"status": "error", "message": error}
+        value, error = _target_value_or_error(entry.get('value'))
+        if error:
+            return {"status": "error", "message": error}
+        writes.append((_target_key(metric, campaign, event_name), value))
+
+    start, end = _target_write_range()
+    try:
+        with get_database_connection() as conn:
+            save_chart_targets(conn, writes, start, end, user)
+    except Exception as e:
+        logger.error("Saving chart target failed for %s: %s", campaign, e)
+        return {"status": "error", "message": f"Save failed: {e}"}
+
+    return {
+        "status": "ok",
+        "effective_start": start.isoformat(),
+        "effective_end": end.isoformat(),
+        "saved": [{"metric": entry.get('metric'), "value": value}
+                  for entry, (_, value) in zip(entries, writes)],
+    }
+
+
+@router.delete("/kpi/chart-target")
+async def kpi_delete_chart_target(
+    request: Request,
+    user: str = Depends(require_page_api('google_ads_campaigns')),
+):
+    """Remove a target across the same span a save writes.
+
+    Mirrors the save range: a save covers history as well as the future, so a
+    remove that only cleared today onward would leave the old dates behind and
+    the line would still be drawn over the past.
+
+    Only the named metric is removed — clearing the shared sessions target from
+    one event's popup would change every other event's conversion target.
+    """
+    body = await request.json()
+    campaign = body.get('campaign')
+    metric = body.get('metric')
+    event_name = body.get('event_name')
+
+    error = _validate_target_request(campaign, metric, event_name)
+    if error:
+        return {"status": "error", "message": error}
+
+    start, _ = _target_write_range()
+    try:
+        with get_database_connection() as conn:
+            # from_date is the start of the same span a save writes, so the
+            # whole target goes rather than just its future half.
+            removed = delete_chart_target(conn, _target_key(metric, campaign, event_name), start)
+    except Exception as e:
+        # Never report a database failure as a successful removal.
+        logger.error("Removing chart target failed for %s: %s", campaign, e)
+        return {"status": "error", "message": f"Remove failed: {e}"}
+
+    return {"status": "ok", "removed": removed, "effective_start": start.isoformat()}
+
+
+@router.get("/kpi/chart-target")
+def kpi_get_chart_target(
+    campaign: str,
+    event_name: str = None,
+    user: str = Depends(require_page_api('google_ads_campaigns')),
+):
+    """Current stored targets for one campaign, for the popup to prefill.
+
+    Read separately from the chart data on purpose: a target saved today-forward
+    is invisible to a read bounded by the charts' last data date, which is often
+    yesterday. Reading it here means Add/Edit state and the prefilled value are
+    right even when nothing is drawn yet.
+    """
+    if campaign not in GA4_CAMPAIGNS:
+        return {"status": "error", "message": f"Unknown campaign: {campaign}"}
+
+    keys = {'sessions': _target_key('sessions', campaign)}
+    if event_name and event_name != GA4_ALL_EVENTS and event_name in GA4_CAMPAIGN_EVENTS:
+        keys['events'] = _target_key('events', campaign, event_name)
+
+    try:
+        with get_database_connection() as conn:
+            stored = get_chart_target_ranges(conn, list(keys.values()))
+    except Exception as e:
+        logger.error("Reading chart target failed for %s: %s", campaign, e)
+        return {"status": "error", "message": str(e)}
+
+    out = {}
+    for metric, key in keys.items():
+        row = stored.get(key)
+        out[metric] = None if not row else {
+            "value": row['value'],
+            "start": row['start'].isoformat(),
+            "end": row['end'].isoformat(),
+        }
+    return {"status": "ok", "campaign": campaign, "event_name": event_name, "targets": out}
+
+
 def _week_monday_of(d: datetime.date) -> datetime.date:
     return d - datetime.timedelta(days=d.weekday())
 
@@ -63,9 +464,7 @@ def _prev_iso_week_monday(monday: datetime.date) -> datetime.date:
 
 
 @router.get("/kpi", response_class=HTMLResponse)
-def kpi_page(request: Request, user: str = Depends(get_current_user)):
-    if user != 'tdrayson':
-        return RedirectResponse(url=BASE_URL + "/home", status_code=303)
+def kpi_page(request: Request, user: str = Depends(require_page('kpi'))):
     _track(request, 'page_view', '/kpi')
     with get_database_connection() as conn:
         settings = get_settings(conn, user=user)
@@ -73,18 +472,14 @@ def kpi_page(request: Request, user: str = Depends(get_current_user)):
 
 
 @router.get("/google-ads-campaigns", response_class=HTMLResponse)
-def google_ads_campaigns_page(request: Request, user: str = Depends(get_current_user)):
-    if user != 'tdrayson':
-        return RedirectResponse(url=BASE_URL + "/home", status_code=303)
+def google_ads_campaigns_page(request: Request, user: str = Depends(require_page('google_ads_campaigns'))):
     _track(request, 'page_view', '/google-ads-campaigns')
     return templates.TemplateResponse("google_ads_campaigns.html", {"request": request, "user": user, "BASE_URL": BASE_URL})
 
 
 @router.get("/kpi/data")
-def kpi_data(request: Request, user: str = Depends(get_current_user)):
+def kpi_data(request: Request, user: str = Depends(require_page_api('kpi'))):
     """Return daily_summary KPI data: daily window + 13 months of monthly totals."""
-    if user != 'tdrayson':
-        raise HTTPException(status_code=403)
     try:
         import calendar
         today = datetime.date.today()
@@ -252,11 +647,13 @@ def kpi_data(request: Request, user: str = Depends(get_current_user)):
 def kpi_ga4_campaign_conversion(
     request: Request,
     event_name: str = GA4_CAMPAIGN_EVENTS[0],
-    user: str = Depends(get_current_user),
+    # Called by the Google Ads Campaigns page, not the KPI dashboard — mapped
+    # to its actual caller so granting only that page leaves a working page.
+    user: str = Depends(require_page_api('google_ads_campaigns')),
 ):
     """Conversion rate and raw event volume for one GA4 event, by campaign.
 
-    All campaigns are returned for the selected event, plus an "Aggregated"
+    All campaigns are returned for the selected event, plus an "Aggregated Total"
     series summing across every campaign before the rate is taken. Day, week
     and month rates are ratios of summed event counts to each campaign's own
     summed sessions, not to site-wide sessions; weekly and monthly values are
@@ -275,8 +672,6 @@ def kpi_ga4_campaign_conversion(
     per session, which can exceed 100% because one session can fire several
     events — it is not a share of converting sessions.
     """
-    if user != 'tdrayson':
-        raise HTTPException(status_code=403)
     if event_name != GA4_ALL_EVENTS and event_name not in GA4_CAMPAIGN_EVENTS:
         return {"status": "error", "message": f"Unknown event: {event_name}"}
 
@@ -290,33 +685,22 @@ def kpi_ga4_campaign_conversion(
 
         fetch_start = _shift_month(first_of_this_month, -13)
         campaign_placeholders = ", ".join(["%s"] * len(GA4_CAMPAIGNS))
-
         event_placeholders = ", ".join(["%s"] * len(GA4_CAMPAIGN_EVENTS))
 
-        if event_name == GA4_ALL_EVENTS:
-            # Sessions repeat identically on each event's row for a date and
-            # campaign, so MAX takes that one value while the events are summed.
-            # SUM(SESSIONS) here would multiply sessions by the event count.
-            sql = f"""
-                SELECT DT, CAMPAIGN_NAME, MAX(SESSIONS) AS SESSIONS, SUM(EVENT_COUNT) AS EVENT_COUNT
-                FROM PROD_CARSUPERMARKET_DB.COMPUTE_UX_TRACKING.GA4_CAMPAIGN_METRICS
-                WHERE EVENT_NAME IN ({event_placeholders})
-                  AND CAMPAIGN_NAME IN ({campaign_placeholders})
-                  AND DT >= %s AND DT <= %s
-                GROUP BY DT, CAMPAIGN_NAME
-                ORDER BY DT, CAMPAIGN_NAME
-            """
-            params = [*GA4_CAMPAIGN_EVENTS, *GA4_CAMPAIGNS, str(fetch_start), str(today)]
-        else:
-            sql = f"""
-                SELECT DT, CAMPAIGN_NAME, SESSIONS, EVENT_COUNT
-                FROM PROD_CARSUPERMARKET_DB.COMPUTE_UX_TRACKING.GA4_CAMPAIGN_METRICS
-                WHERE EVENT_NAME = %s
-                  AND CAMPAIGN_NAME IN ({campaign_placeholders})
-                  AND DT >= %s AND DT <= %s
-                ORDER BY DT, CAMPAIGN_NAME
-            """
-            params = [event_name, *GA4_CAMPAIGNS, str(fetch_start), str(today)]
+        # Every event in ONE query, with EVENT_NAME kept as a column. Switching
+        # events on the page used to re-run this per event, which is a fresh
+        # Snowflake connection each time for data that is the same underneath —
+        # the rows for all five events come back together for barely more cost
+        # than one, and sessions are identical across them anyway.
+        sql = f"""
+            SELECT DT, CAMPAIGN_NAME, EVENT_NAME, SESSIONS, EVENT_COUNT
+            FROM PROD_CARSUPERMARKET_DB.COMPUTE_UX_TRACKING.GA4_CAMPAIGN_METRICS
+            WHERE EVENT_NAME IN ({event_placeholders})
+              AND CAMPAIGN_NAME IN ({campaign_placeholders})
+              AND DT >= %s AND DT <= %s
+            ORDER BY DT, CAMPAIGN_NAME
+        """
+        params = [*GA4_CAMPAIGN_EVENTS, *GA4_CAMPAIGNS, str(fetch_start), str(today)]
 
         with SnowflakeClient() as sf:
             metric_rows, metric_cols = sf.execute(sql, params)
@@ -336,17 +720,36 @@ def kpi_ga4_campaign_conversion(
             except (TypeError, ValueError):
                 return 0.0
 
+        # Sessions belong to the campaign and date, not to an event — the same
+        # value repeats on every event's row, so it is stored once rather than
+        # per event. Events are kept per event name.
         sessions_by_campaign = {campaign: {} for campaign in GA4_CAMPAIGNS}
-        events_by_campaign = {campaign: {} for campaign in GA4_CAMPAIGNS}
+        events_by_event = {
+            event: {campaign: {} for campaign in GA4_CAMPAIGNS}
+            for event in GA4_CAMPAIGN_EVENTS
+        }
         all_dates: set[datetime.date] = set()
         for row in metric_rows:
             campaign = str(row[col_map["CAMPAIGN_NAME"]])
             if campaign not in sessions_by_campaign:
                 continue
+            row_event = str(row[col_map["EVENT_NAME"]])
+            if row_event not in events_by_event:
+                continue
             date_value = _date_value(row[col_map["DT"]])
             sessions_by_campaign[campaign][date_value] = _number(row[col_map["SESSIONS"]])
-            events_by_campaign[campaign][date_value] = _number(row[col_map["EVENT_COUNT"]])
+            events_by_event[row_event][campaign][date_value] = _number(row[col_map["EVENT_COUNT"]])
             all_dates.add(date_value)
+
+        # All events: the counts summed across every event, per campaign and
+        # date. Sessions are NOT summed with them — they are counted once, which
+        # is why the rate here is events per session and can exceed 100%.
+        all_events_by_campaign = {campaign: {} for campaign in GA4_CAMPAIGNS}
+        for per_campaign in events_by_event.values():
+            for campaign, by_date in per_campaign.items():
+                target = all_events_by_campaign[campaign]
+                for date_value, value in by_date.items():
+                    target[date_value] = target.get(date_value, 0.0) + value
 
         if not all_dates:
             return {"status": "error", "message": "No GA4 session data returned"}
@@ -364,7 +767,10 @@ def kpi_ga4_campaign_conversion(
             date_iter += datetime.timedelta(days=1)
 
         current_week_monday = _week_monday_of(data_end)
-        week_mondays = [current_week_monday - datetime.timedelta(weeks=i) for i in range(9, -1, -1)]
+        # 14 weeks to match the 14 months below: both are the base the page
+        # averages to set its y-scale, and a longer base is steadier. Weeks with
+        # no data yet are dropped by the filter on the next line.
+        week_mondays = [current_week_monday - datetime.timedelta(weeks=i) for i in range(13, -1, -1)]
         week_mondays = [monday for monday in week_mondays if monday + datetime.timedelta(days=6) >= data_start]
         weekly_date_groups = [
             [monday + datetime.timedelta(days=i) for i in range(7) if monday + datetime.timedelta(days=i) <= data_end]
@@ -395,27 +801,27 @@ def kpi_ga4_campaign_conversion(
         def _sessions(campaigns: list[str], date_value: datetime.date) -> float:
             return sum(sessions_by_campaign[c].get(date_value, 0.0) for c in campaigns)
 
-        def _event_count(campaigns: list[str], date_value: datetime.date) -> float:
-            return sum(events_by_campaign[c].get(date_value, 0.0) for c in campaigns)
-
         def _has_sessions(campaigns: list[str], date_value: datetime.date) -> bool:
             return any(date_value in sessions_by_campaign[c] for c in campaigns)
 
-        def _rate(campaigns: list[str], dates: list[datetime.date]) -> float | None:
+        def _event_count(events_map: dict, campaigns: list[str], date_value: datetime.date) -> float:
+            return sum(events_map[c].get(date_value, 0.0) for c in campaigns)
+
+        def _rate(events_map: dict, campaigns: list[str], dates: list[datetime.date]) -> float | None:
             valid_dates = [d for d in dates if _has_sessions(campaigns, d)]
             if not valid_dates:
                 return None
             sessions = sum(_sessions(campaigns, d) for d in valid_dates)
             if sessions <= 0:
                 return None
-            total_events = sum(_event_count(campaigns, d) for d in valid_dates)
+            total_events = sum(_event_count(events_map, campaigns, d) for d in valid_dates)
             return round(total_events / sessions * 100, 3)
 
-        def _volume(campaigns: list[str], dates: list[datetime.date]) -> float | None:
+        def _volume(events_map: dict, campaigns: list[str], dates: list[datetime.date]) -> float | None:
             valid_dates = [d for d in dates if _has_sessions(campaigns, d)]
             if not valid_dates:
                 return None
-            return sum(_event_count(campaigns, d) for d in valid_dates)
+            return sum(_event_count(events_map, campaigns, d) for d in valid_dates)
 
         def _session_total(campaigns: list[str], dates: list[datetime.date]) -> float | None:
             valid_dates = [d for d in dates if _has_sessions(campaigns, d)]
@@ -423,14 +829,14 @@ def kpi_ga4_campaign_conversion(
                 return None
             return sum(_sessions(campaigns, d) for d in valid_dates)
 
-        def _series(campaigns: list[str]) -> dict:
+        def _series(events_map: dict, campaigns: list[str]) -> dict:
             return {
-                "daily_rates": [_rate(campaigns, [d]) for d in daily_dates],
-                "weekly_rates": [_rate(campaigns, dates) for dates in weekly_date_groups],
-                "monthly_rates": [_rate(campaigns, dates) for dates in monthly_date_groups],
-                "daily_volumes": [_volume(campaigns, [d]) for d in daily_dates],
-                "weekly_volumes": [_volume(campaigns, dates) for dates in weekly_date_groups],
-                "monthly_volumes": [_volume(campaigns, dates) for dates in monthly_date_groups],
+                "daily_rates": [_rate(events_map, campaigns, [d]) for d in daily_dates],
+                "weekly_rates": [_rate(events_map, campaigns, dates) for dates in weekly_date_groups],
+                "monthly_rates": [_rate(events_map, campaigns, dates) for dates in monthly_date_groups],
+                "daily_volumes": [_volume(events_map, campaigns, [d]) for d in daily_dates],
+                "weekly_volumes": [_volume(events_map, campaigns, dates) for dates in weekly_date_groups],
+                "monthly_volumes": [_volume(events_map, campaigns, dates) for dates in monthly_date_groups],
                 # Sessions are sent per campaign so the page can re-pool the
                 # aggregate when campaigns are filtered out — a pooled rate
                 # cannot be rebuilt from the row percentages alone.
@@ -439,8 +845,47 @@ def kpi_ga4_campaign_conversion(
                 "monthly_sessions": [_session_total(campaigns, dates) for dates in monthly_date_groups],
             }
 
-        aggregated = {"name": "Aggregated", **_series(GA4_CAMPAIGNS)}
-        campaigns = [{"name": campaign, **_series([campaign])} for campaign in GA4_CAMPAIGNS]
+        # ── Targets ───────────────────────────────────────────────────────────
+        # Only the two STORED metrics are sent, per campaign. The aggregate, the
+        # conversion rate and the All-events total are derived in the page, from
+        # whichever campaigns are on screen — sending a pre-summed aggregate here
+        # would go stale the moment a campaign is unticked.
+        #
+        # Reading fails soft: a target store that is unreachable (or a table that
+        # does not exist yet) must not take the whole chart page down with it.
+        # Shared with /kpi/ga4-targets so both roll up identically. Reading fails
+        # soft: an unreachable target store (or a table that does not exist yet)
+        # must not take the whole chart page down with it.
+        # One read covers every event, since the same session keys are needed for
+        # all of them and All events reads each component anyway.
+        targets_by_event = {}
+        try:
+            with get_database_connection() as conn:
+                for event in (GA4_ALL_EVENTS, *GA4_CAMPAIGN_EVENTS):
+                    targets_by_event[event] = _campaign_targets(
+                        conn, event, daily_dates, weekly_date_groups, monthly_date_groups)
+        except Exception as e:
+            logger.warning("Chart targets unavailable, charts will show none: %s", e)
+            targets_by_event = {}
+
+        def _event_payload(events_map: dict, event: str) -> dict:
+            stored = targets_by_event.get(event, {})
+            return {
+                "aggregated": {"name": "Aggregated Total", **_series(events_map, GA4_CAMPAIGNS)},
+                "campaigns": [{"name": campaign, **_series(events_map, [campaign]),
+                               "targets": stored.get(campaign)}
+                              for campaign in GA4_CAMPAIGNS],
+            }
+
+        # Every event is built and sent together, so switching events on the page
+        # is a local lookup rather than another Snowflake round trip.
+        by_event = {GA4_ALL_EVENTS: _event_payload(all_events_by_campaign, GA4_ALL_EVENTS)}
+        for event in GA4_CAMPAIGN_EVENTS:
+            by_event[event] = _event_payload(events_by_event[event], event)
+
+        selected = by_event[event_name]
+        aggregated = selected["aggregated"]
+        campaigns = selected["campaigns"]
 
         return {
             "status": "ok",
@@ -455,6 +900,11 @@ def kpi_ga4_campaign_conversion(
             "monthly_labels": [month_abbrs[month_first.month - 1] + " " + str(month_first.year)[2:] for month_first in month_firsts],
             "aggregated": aggregated,
             "campaigns": campaigns,
+            # Every event's series, so switching the Event filter is a local
+            # lookup rather than another Snowflake query. The selected event is
+            # also returned above under aggregated/campaigns, unchanged, so an
+            # older page that does not know about this keeps working.
+            "by_event": by_event,
         }
     except Exception as e:
         logger.error("GA4 campaign conversion data failed for %s: %s", event_name, e)
@@ -548,9 +998,7 @@ KPI_DEFAULT_LAYOUT = {
 
 
 @router.get("/kpi/metrics")
-def kpi_metrics(request: Request, user: str = Depends(get_current_user)):
-    if user != 'tdrayson':
-        raise HTTPException(status_code=403)
+def kpi_metrics(request: Request, user: str = Depends(require_page_api('kpi'))):
     live_cols = _get_daily_summary_columns()
     return {
         "status": "ok",
@@ -569,10 +1017,8 @@ def kpi_metrics(request: Request, user: str = Depends(get_current_user)):
 
 
 @router.get("/kpi/custom-data")
-def kpi_custom_data(request: Request, metric: str, agg: str = "sum", user: str = Depends(get_current_user)):
+def kpi_custom_data(request: Request, metric: str, agg: str = "sum", user: str = Depends(require_page_api('kpi'))):
     """Daily/weekly/monthly series for one whitelisted daily_summary column."""
-    if user != 'tdrayson':
-        raise HTTPException(status_code=403)
     metric = metric.upper()
     if metric not in KPI_METRIC_COLUMNS:
         return {"status": "error", "message": f"Unknown metric: {metric}"}
@@ -761,9 +1207,7 @@ def _validate_layout(layout: dict) -> str | None:
 
 
 @router.get("/kpi/layout")
-def kpi_layout_get(request: Request, user: str = Depends(get_current_user)):
-    if user != 'tdrayson':
-        raise HTTPException(status_code=403)
+def kpi_layout_get(request: Request, user: str = Depends(require_page_api('kpi'))):
     try:
         # Layout always lives in the PROD cluster so local/dev edits and prod
         # serve the same dashboard
@@ -781,9 +1225,7 @@ def kpi_layout_get(request: Request, user: str = Depends(get_current_user)):
 
 
 @router.post("/kpi/layout")
-def kpi_layout_save(request: Request, payload: dict, user: str = Depends(get_current_user)):
-    if user != 'tdrayson':
-        raise HTTPException(status_code=403)
+def kpi_layout_save(request: Request, payload: dict, user: str = Depends(require_page_api('kpi'))):
     layout = (payload or {}).get("layout")
     err = _validate_layout(layout or {})
     if err:
@@ -827,9 +1269,7 @@ def _cortex_complete(messages: list[dict], max_tokens: int, temperature: float) 
 
 
 @router.post("/kpi/ai-summary")
-def kpi_ai_summary(request: Request, payload: dict, user: str = Depends(get_current_user)):
-    if user != 'tdrayson':
-        raise HTTPException(status_code=403)
+def kpi_ai_summary(request: Request, payload: dict, user: str = Depends(require_page_api('kpi'))):
 
     prompt = (payload or {}).get("prompt")
     if not isinstance(prompt, str) or not prompt.strip():
@@ -1066,9 +1506,7 @@ def _build_kpi_sharepoint_data() -> dict:
 
 
 @router.get("/kpi/sharepoint")
-def kpi_sharepoint(request: Request, user: str = Depends(get_current_user)):
-    if user != 'tdrayson':
-        raise HTTPException(status_code=403)
+def kpi_sharepoint(request: Request, user: str = Depends(require_page_api('kpi'))):
     try:
         return _get_sharepoint_data()
     except Exception as e:
@@ -1077,18 +1515,14 @@ def kpi_sharepoint(request: Request, user: str = Depends(get_current_user)):
 
 
 @router.get("/weekly-business-review", response_class=HTMLResponse)
-def weekly_business_review_page(request: Request, user: str = Depends(get_current_user)):
-    if user != 'tdrayson':
-        return RedirectResponse(url=BASE_URL + "/home", status_code=303)
+def weekly_business_review_page(request: Request, user: str = Depends(require_page('weekly_business_review'))):
     _track(request, 'page_view', '/weekly-business-review')
     return templates.TemplateResponse("weekly_business_review.html", {"request": request, "user": user, "BASE_URL": BASE_URL})
 
 
 @router.get("/weekly-business-review/data")
-def weekly_business_review_data(request: Request, user: str = Depends(get_current_user)):
+def weekly_business_review_data(request: Request, user: str = Depends(require_page_api('weekly_business_review'))):
     """Return monthly Net Deliveries B2C (b2c_units): last 3 complete months, current month, next 3 months."""
-    if user != 'tdrayson':
-        raise HTTPException(status_code=403)
     try:
         today = datetime.date.today()
         first_of_this_month = today.replace(day=1)

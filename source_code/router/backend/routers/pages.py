@@ -8,7 +8,9 @@ import logging
 
 
 
-from .core import (BASE_URL, templates, _track, get_current_user)
+from .core import (BASE_URL, templates, _track, get_current_user, require_page,
+                   get_user_pages, is_admin)
+from .page_registry import PAGES
 
 logger = logging.getLogger(__name__)
 
@@ -68,13 +70,19 @@ def home(request: Request, user: str = Depends(get_current_user)):
             ex.submit(_apis)
     threading.Thread(target=_warm_caches, daemon=True).start()
     _track(request, 'page_view', '/home')
-    return templates.TemplateResponse("home.html", {"request": request, "user": user, "BASE_URL": BASE_URL})
+    # Only the pages this user may open. /home itself is deliberately not in the
+    # registry — everyone who is logged in needs to land somewhere, including a
+    # user granted nothing at all.
+    allowed = get_user_pages(user)
+    return templates.TemplateResponse("home.html", {
+        "request": request, "user": user, "BASE_URL": BASE_URL,
+        "pages": [p for p in PAGES if p.key in allowed],
+        "is_admin": is_admin(user),
+    })
 
 
 # NEW
 @router.get("/stock-list", response_class=HTMLResponse)
-def stock_list(request: Request, user: str = Depends(get_current_user)):
-    if user != 'tdrayson':
-        return RedirectResponse(url=BASE_URL + "/home", status_code=303)
+def stock_list(request: Request, user: str = Depends(require_page('stock_list'))):
     _track(request, 'page_view', '/stock-list')
     return templates.TemplateResponse("stock_list.html", {"request": request, "user": user, "BASE_URL": BASE_URL})

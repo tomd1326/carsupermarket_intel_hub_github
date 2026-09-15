@@ -29,7 +29,8 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 
 from utils.db_utils import get_database_connection, get_user_preference
 from utils.snowflake_client import SnowflakeClient
-from .core import BASE_URL, templates, _track, get_current_user, s3_bucketname, s3_bucket_region, _S3_ENV
+from .core import (BASE_URL, templates, _track, get_current_user, s3_bucketname,
+                   s3_bucket_region, _S3_ENV, is_admin, require_page, require_page_api)
 from .kpi import _cortex_complete, _CORTEX_MODEL
 from utils.email_client import send_email
 
@@ -355,9 +356,7 @@ def _saved_font(conn, user: str, pref_key: str, default: int = _FONT_DEFAULT) ->
 
 
 @router.get("/reports/orders-deliveries", response_class=HTMLResponse)
-def orders_deliveries_page(request: Request, user: str = Depends(get_current_user)):
-    if not user:
-        return RedirectResponse(url=BASE_URL + "/login", status_code=303)
+def orders_deliveries_page(request: Request, user: str = Depends(require_page('orders_deliveries'))):
     _track(request, 'page_view', '/reports/orders-deliveries')
     try:
         with get_database_connection() as conn:
@@ -371,14 +370,18 @@ def orders_deliveries_page(request: Request, user: str = Depends(get_current_use
     return templates.TemplateResponse("orders_deliveries.html", {
         "request": request, "user": user, "BASE_URL": BASE_URL,
         "font_summary": font_summary, "font_vehicle": font_vehicle,
-        "show_test_email": user == 'tdrayson',
+        "show_test_email": is_admin(user),
     })
 
 
 @router.post("/reports/orders-deliveries/test-email")
-def orders_deliveries_test_email(request: Request, user: str = Depends(get_current_user)):
-    """Send a test email to Tom, to confirm Graph mail sending works. tdrayson only."""
-    if user != 'tdrayson':
+def orders_deliveries_test_email(request: Request,
+                                 user: str = Depends(require_page_api('orders_deliveries'))):
+    """Send a test email to Tom, to confirm Graph mail sending works. Admin only.
+
+    Keeps its own admin check ON TOP of the page permission — a diagnostic
+    button, not something granting the page should hand over."""
+    if not is_admin(user):
         raise HTTPException(status_code=403)
     _track(request, 'test_email', '/reports/orders-deliveries')
 
@@ -400,11 +403,9 @@ def orders_deliveries_test_email(request: Request, user: str = Depends(get_curre
 
 @router.get("/reports/orders-deliveries/data")
 def orders_deliveries_data(request: Request, refresh: int = 0,
-                           user: str = Depends(get_current_user)):
+                           user: str = Depends(require_page_api('orders_deliveries'))):
     """Cached deal rows. `refresh=1` forces a rebuild from Snowflake (the
     page's manual Refresh button)."""
-    if not user:
-        raise HTTPException(status_code=401)
     try:
         return _get_data(force_refresh=bool(refresh))
     except Exception as e:
@@ -516,7 +517,7 @@ _AI_MAX_HISTORY_TURNS = 11
 
 @router.post("/reports/orders-deliveries/ask-ai")
 def orders_deliveries_ask_ai(request: Request, payload: dict,
-                             user: str = Depends(get_current_user)):
+                             user: str = Depends(require_page_api('orders_deliveries'))):
     """Answer a free-text question about the pre-aggregated slice table the
     browser sends up, via Snowflake Cortex.
 
