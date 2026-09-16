@@ -40,6 +40,7 @@ PAGES: tuple[Page, ...] = (
     Page('stock_list',          '/stock-list',                 'Stock List',               False),
     Page('cap_lookup',          '/cap-lookup',                 'CAP ID Lookup',            False),
     Page('assess_vehicle',      '/assess-vehicle',             'Assess Vehicle',           False),
+    Page('keeper_change',       '/keeper-change-check',        'Keeper Change Check',      False),
     # Hidden from the home tiles today but reachable by URL, because its route
     # only checks that you are logged in. Enforcement closes that.
     Page('subsidy_rates',       '/subsidy-rates',              'Subsidy Rate Calculator',  False),

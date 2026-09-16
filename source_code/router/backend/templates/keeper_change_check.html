@@ -1,0 +1,524 @@
+{% from '_navigation.html' import account_nav with context %}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Keeper Change Check</title>
+    <link rel="icon" type="image/png" href="{{ BASE_URL }}/static/icon.png">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css" rel="stylesheet">
+    <link href="{{ static_url('css/theme.css') }}" rel="stylesheet">
+    <style>
+        @font-face { font-family: 'DM Sans'; src: url('{{ BASE_URL }}/static/fonts/DMSans-Regular.ttf');  font-weight: 400; }
+        @font-face { font-family: 'DM Sans'; src: url('{{ BASE_URL }}/static/fonts/DMSans-Medium.ttf');   font-weight: 500; }
+        @font-face { font-family: 'DM Sans'; src: url('{{ BASE_URL }}/static/fonts/DMSans-SemiBold.ttf'); font-weight: 600; }
+        @font-face { font-family: 'DM Sans'; src: url('{{ BASE_URL }}/static/fonts/DMSans-Bold.ttf');     font-weight: 700; }
+        body, button, input, select, textarea { font-family: 'DM Sans', system-ui, sans-serif; }
+        body { background-color: #003c57; min-height: 100vh; }
+
+        .page-wrap { min-height: 100vh; padding: 48px 32px 64px; }
+        .brand-logo { width: 48px; height: 48px; border-radius: 10px; }
+        .page-title { color: #ffffff; font-weight: 600; font-size: 1.5rem; letter-spacing: -0.2px; }
+        .card { border: none; border-radius: 12px; box-shadow: 0 4px 24px rgba(0,0,0,0.18); }
+        .card-body { padding: 24px 28px; }
+
+        textarea { resize: vertical; font-size: 0.68rem; font-family: 'DM Sans', monospace; }
+        .btn-process {
+            background-color: #7ed321;
+            border: none;
+            color: #0d3d5f;
+            font-weight: 700;
+            font-size: 1rem;
+            padding: 11px 0;
+            border-radius: 8px;
+            width: 100%;
+            transition: background 0.15s;
+        }
+        .btn-process:hover { background-color: #6cba18; color: #0d3d5f; }
+        .btn-process:disabled { opacity: 0.6; cursor: not-allowed; }
+
+        .progress { height: 8px; border-radius: 6px; }
+        .progress-bar { background-color: #7ed321; }
+
+        .history-empty { color: #adb5bd; font-size: 0.88rem; }
+        .history-loading { color: #adb5bd; font-size: 0.88rem; }
+        .history-scroll { height: 260px; overflow-y: auto; overflow-x: auto; }
+        .history-table { font-size: 0.82rem; width: 100%; }
+        .history-table th { white-space: nowrap; background-color: #f0f4f8; font-weight: 600; padding: 7px 10px; position: sticky; top: 0; z-index: 1; }
+        .history-table td { white-space: nowrap; padding: 7px 10px; border-top: 1px solid #dee2e6; vertical-align: middle; }
+
+        .status-badge {
+            display: inline-block;
+            font-size: 0.72rem;
+            font-weight: 700;
+            padding: 2px 7px;
+            border-radius: 4px;
+            text-transform: uppercase;
+        }
+        .badge-ok         { background-color: #d4edda; color: #155724; }
+        .badge-none       { background-color: #e2e3e5; color: #383d41; }
+        .badge-bad        { background-color: #f8d7da; color: #721c24; }
+
+        .result-table { font-size: 0.8rem; width: 100%; }
+        .result-table th {
+            white-space: normal;
+            overflow-wrap: break-word;
+            line-height: 1.2;
+            vertical-align: bottom;
+            background-color: #f0f4f8;
+            position: sticky;
+            top: 0;
+            z-index: 1;
+            border-right: 1px solid #b0bac5;
+        }
+        .result-table td { white-space: nowrap; border-right: 1px solid #c8d0da; }
+        .result-table td:last-child,
+        .result-table th:last-child { border-right: none; }
+        .result-scroll { height: 352px; min-height: 352px; overflow-y: auto; overflow-x: auto; }
+
+        .results-title { font-weight: 700; }
+        .results-timestamp { font-size: 1rem; color: #212529; font-weight: 600; margin-left: 8px; }
+
+        .file-hint { font-size: 0.75rem; color: #6c757d; }
+
+        @keyframes kcRowFlash {
+            0%   { background-color: #9ecbf7; }
+            100% { background-color: #dbeeff; }
+        }
+        .history-table tbody tr.new-row {
+            background-color: #dbeeff;
+            animation: kcRowFlash 0.8s ease-out 1;
+        }
+    </style>
+</head>
+<body>
+    {{ account_nav(user) }}
+
+    <div class="page-wrap">
+        <div class="d-flex align-items-center gap-3 mb-4">
+            <img src="{{ BASE_URL }}/static/icon.png" alt="" class="brand-logo">
+            <h1 class="page-title mb-0">Keeper Change Check</h1>
+            <a href="javascript:history.back()" class="btn btn-outline-secondary nav-btn">
+                <i class="fas fa-arrow-left me-1"></i>Back
+            </a>
+        </div>
+
+        <div class="row g-4 align-items-stretch">
+
+            <!-- Left: input + progress -->
+            <div class="col-12 col-lg-4 col-xl-3 d-flex flex-column">
+                <div class="card" id="vrmCard" style="flex:1;min-height:0;display:flex;">
+                    <div class="card-body d-flex flex-column" style="flex:1;min-height:0;">
+                        <label class="form-label fw-bold small text-muted mb-1">Import CSV</label>
+                        <input type="file" id="csvFile" accept=".csv,text/csv" class="form-control form-control-sm mb-1">
+                        <div class="file-hint mb-3" id="fileHint">Finds the VRM column automatically.</div>
+
+                        <label class="form-label fw-bold small text-muted mb-1">VRMs (one per line)</label>
+                        <textarea id="vrmInput" class="form-control mb-2" style="flex:1;min-height:0;"></textarea>
+                        <div class="text-muted small mb-3" id="vrmCount" style="display:none;">
+                            <i class="fas fa-car me-1"></i><span id="countVal">0</span> vehicles
+                        </div>
+                        <button class="btn btn-process" id="processBtn" onclick="startProcessing()">
+                            Run Keeper Change Check
+                        </button>
+                    </div>
+                </div>
+
+                <div class="card" id="progressCard" style="visibility:hidden;margin-top:16px;">
+                    <div class="card-body">
+                        <div class="d-flex justify-content-between mb-1">
+                            <span class="small text-muted">Processing...</span>
+                            <span class="small text-muted" id="progressLabel">0%</span>
+                        </div>
+                        <div class="progress mb-2">
+                            <div class="progress-bar" id="progressBar" style="width:0%"></div>
+                        </div>
+                        <div class="d-flex justify-content-between small text-muted mb-3">
+                            <span id="progressRows">0 / 0</span>
+                            <span id="progressEta">Calculating...</span>
+                        </div>
+                        <div class="alert alert-danger py-2 px-3 mb-3" id="runError" style="display:none;font-size:0.82rem;"></div>
+                        <button class="btn btn-success w-100 fw-bold" id="quickDownloadBtn" style="visibility:hidden;font-size:1rem;padding:10px 0;" onclick="quickDownload()">
+                            <i class="fas fa-download me-2"></i>Download XLSX
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Right: results + history -->
+            <div class="col-12 col-lg-8 col-xl-9">
+
+                <div class="card mb-3" id="resultsCard">
+                    <div class="card-body">
+                        <div class="d-flex justify-content-between align-items-center mb-2">
+                            <h6 class="mb-0 results-title">
+                                Results
+                                <span class="results-timestamp" id="resultsTimestamp"></span>
+                            </h6>
+                            <button class="btn btn-sm btn-success fw-bold" id="resultsDownloadBtn" disabled onclick="quickDownload()">
+                                <i class="fas fa-download me-1"></i>Download XLSX
+                            </button>
+                        </div>
+                        <div id="resultsSummary" style="font-size:0.88rem;height:34px;overflow:hidden;"></div>
+                        <div class="result-scroll">
+                            <table class="table table-sm table-hover result-table mb-0">
+                                <thead><tr id="resultsHeader"></tr></thead>
+                                <tbody id="resultsBody"></tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="card" id="historyCard">
+                    <div class="card-body" style="padding-bottom:12px;">
+                        <h6 class="fw-bold mb-3">Previous Runs <span class="text-muted fw-normal" style="font-size:0.8rem;">(Download only)</span></h6>
+                        <div class="history-scroll">
+                            <p class="history-loading mb-0" id="historyLoading"><i class="fas fa-spinner fa-spin me-1"></i>Loading...</p>
+                            <table class="history-table" id="historyTable" style="display:none;">
+                                <thead>
+                                    <tr>
+                                        <th>Date &amp; Time</th>
+                                        <th>User</th>
+                                        <th>Vehicles</th>
+                                        <th></th>
+                                    </tr>
+                                </thead>
+                                <tbody id="historyBody"></tbody>
+                            </table>
+                            <p class="history-empty mb-0" id="historyEmpty" style="display:none;">No previous runs found.</p>
+                        </div>
+                    </div>
+                </div>
+
+            </div>
+        </div>
+    </div>
+
+    <script>
+        window.BASE_URL = "{{ BASE_URL }}";
+        window.CURRENT_USER = "{{ user }}";
+        window.MAX_VRMS = {{ max_vrms }};
+        let _currentFilename = null;
+        let _pollInterval = null;
+
+        const vrmInput = document.getElementById('vrmInput');
+        vrmInput.addEventListener('input', updateCount);
+
+        function updateCount() {
+            const n = parseVrms().length;
+            document.getElementById('countVal').textContent = n;
+            document.getElementById('vrmCount').style.display = n > 0 ? '' : 'none';
+        }
+
+        function parseVrms() {
+            return vrmInput.value.split('\n')
+                .map(v => v.trim().replace(/\s+/g, '').toUpperCase())
+                .filter(v => v.length > 0);
+        }
+
+        function nowTimestamp() {
+            const d = new Date();
+            const pad = n => String(n).padStart(2, '0');
+            return `${pad(d.getDate())}/${pad(d.getMonth()+1)}/${d.getFullYear()} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+        }
+
+        // ── CSV import ────────────────────────────────────────────────────────
+        // Proper CSV parsing, not a split on commas and newlines: these files come
+        // out of Excel and SharePoint, where a quoted field containing a comma or
+        // a line break is normal and would otherwise shift every column.
+        function parseCsv(text) {
+            const rows = [];
+            let row = [], field = '', inQuotes = false;
+            for (let i = 0; i < text.length; i++) {
+                const c = text[i];
+                if (inQuotes) {
+                    if (c === '"') {
+                        if (text[i + 1] === '"') { field += '"'; i++; }
+                        else inQuotes = false;
+                    } else field += c;
+                } else if (c === '"') {
+                    inQuotes = true;
+                } else if (c === ',') {
+                    row.push(field); field = '';
+                } else if (c === '\n') {
+                    row.push(field); rows.push(row); row = []; field = '';
+                } else if (c !== '\r') {
+                    field += c;
+                }
+            }
+            if (field.length > 0 || row.length > 0) { row.push(field); rows.push(row); }
+            return rows.filter(r => r.some(cell => cell.trim() !== ''));
+        }
+
+        // Exact header names first, substring only as a fallback. The old script
+        // matched on substrings alone, which picks "Registration Date" ahead of
+        // "Registration" whenever the date column comes first.
+        const VRM_EXACT = ['vrm', 'registration', 'reg', 'vehicle_reg', 'car_reg',
+                           'vehicle reg', 'car reg', 'reg no', 'registration no'];
+        const VRM_PARTS = ['vrm', 'registration', 'reg'];
+
+        function findVrmColumn(header) {
+            const norm = header.map(h => h.replace(/^﻿/, '').trim().toLowerCase());
+            for (const name of VRM_EXACT) {
+                const i = norm.indexOf(name);
+                if (i >= 0) return { index: i, exact: true };
+            }
+            const matches = [];
+            norm.forEach((h, i) => {
+                if (VRM_PARTS.some(p => h.includes(p))) matches.push(i);
+            });
+            if (matches.length === 1) return { index: matches[0], exact: false };
+            if (matches.length > 1) return { ambiguous: matches.map(i => header[i]) };
+            return null;
+        }
+
+        document.getElementById('csvFile').addEventListener('change', function (e) {
+            const file = e.target.files[0];
+            const hint = document.getElementById('fileHint');
+            if (!file) return;
+
+            const reader = new FileReader();
+            reader.onload = function () {
+                // Strip a BOM, or the first header arrives as "﻿VRM" and never matches.
+                const rows = parseCsv(String(reader.result).replace(/^﻿/, ''));
+                if (!rows.length) {
+                    hint.innerHTML = '<span class="text-danger">That file is empty.</span>';
+                    return;
+                }
+
+                const header = rows[0];
+                const found = findVrmColumn(header);
+                let values, source;
+
+                if (found && found.ambiguous) {
+                    hint.innerHTML = `<span class="text-danger">Several columns could be the VRM (${found.ambiguous.join(', ')}). Rename one to "VRM" and try again.</span>`;
+                    return;
+                } else if (found) {
+                    values = rows.slice(1).map(r => (r[found.index] || '').trim());
+                    source = `"${header[found.index].trim()}" column`;
+                } else if (header.length === 1) {
+                    // One column and no recognisable header — every line is a VRM,
+                    // including the first.
+                    values = rows.map(r => (r[0] || '').trim());
+                    source = 'single column';
+                } else {
+                    hint.innerHTML = '<span class="text-danger">No VRM column found. Name a column "VRM" and try again.</span>';
+                    return;
+                }
+
+                const vrms = values.map(v => v.replace(/\s+/g, '').toUpperCase())
+                                   .filter(v => v && v !== '0');
+                if (!vrms.length) {
+                    hint.innerHTML = '<span class="text-danger">No registrations found in that file.</span>';
+                    return;
+                }
+
+                vrmInput.value = vrms.join('\n');
+                updateCount();
+                hint.innerHTML = `<span class="text-success">Loaded ${vrms.length} from the ${source}.</span>`;
+            };
+            reader.onerror = function () {
+                hint.innerHTML = '<span class="text-danger">Could not read that file.</span>';
+            };
+            reader.readAsText(file);
+        });
+
+        // ── running ───────────────────────────────────────────────────────────
+        function showError(message) {
+            const box = document.getElementById('runError');
+            box.textContent = message;
+            box.style.display = '';
+            document.getElementById('processBtn').disabled = false;
+        }
+
+        function clearError() {
+            document.getElementById('runError').style.display = 'none';
+        }
+
+        function startProcessing() {
+            const vrms = parseVrms();
+            if (!vrms.length) { alert('Enter at least one VRM, or import a CSV.'); return; }
+            if (vrms.length > window.MAX_VRMS) {
+                const batches = Math.ceil(vrms.length / window.MAX_VRMS);
+                alert(`That is ${vrms.length.toLocaleString()} vehicles. The limit is ${window.MAX_VRMS.toLocaleString()} per run.\n\nSplit the file into ${batches} batches of up to ${window.MAX_VRMS.toLocaleString()} and run them one after another. Each run keeps its own XLSX in Previous Runs.`);
+                return;
+            }
+            // At the Autotrader rate limit a big list takes real time, and the
+            // page has to stay open to follow it.
+            if (vrms.length > 1000) {
+                const mins = Math.max(1, Math.ceil(vrms.length / 60 / 60));
+                if (!confirm(`${vrms.length.toLocaleString()} vehicles will take roughly ${mins} minute${mins !== 1 ? 's' : ''}. Keep this page open until it finishes. Start now?`)) {
+                    return;
+                }
+            }
+
+            if (_pollInterval) { clearInterval(_pollInterval); _pollInterval = null; }
+            clearError();
+            document.getElementById('processBtn').disabled = true;
+            document.getElementById('quickDownloadBtn').style.visibility = 'hidden';
+            document.getElementById('resultsDownloadBtn').disabled = true;
+            _currentFilename = null;
+            document.getElementById('progressCard').style.visibility = 'visible';
+            setProgress(0, 0, vrms.length, null);
+
+            fetch(BASE_URL + '/keeper-change-check/process', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({vrms})
+            })
+            .then(r => {
+                if (!r.ok) return r.json().then(e => { throw new Error(e.detail || 'Could not start the run'); });
+                return r.json();
+            })
+            .then(queued => {
+                setProgress(0, 0, queued.total, null);
+                pollUntilDone(queued.run_id);
+            })
+            .catch(err => showError(err.message));
+        }
+
+        function pollUntilDone(runId) {
+            _pollInterval = setInterval(() => {
+                fetch(BASE_URL + '/keeper-change-check/progress/' + encodeURIComponent(runId))
+                    .then(r => {
+                        if (!r.ok) {
+                            return r.json()
+                                .catch(() => ({}))
+                                .then(e => { throw new Error(e.detail || `Lost contact with the run (HTTP ${r.status})`); });
+                        }
+                        return r.json();
+                    })
+                    .then(p => {
+                        if (p.total > 0) setProgress(p.pct, p.done, p.total, p.eta_s);
+                        if (!p.complete) return;
+
+                        clearInterval(_pollInterval);
+                        _pollInterval = null;
+                        document.getElementById('processBtn').disabled = false;
+
+                        if (p.error) { showError(p.error); return; }
+
+                        setProgress(100, p.total, p.total, 0);
+                        _currentFilename = p.filename;
+                        document.getElementById('quickDownloadBtn').style.visibility = 'visible';
+                        document.getElementById('resultsDownloadBtn').disabled = false;
+                        // Rows come straight from the completed run — there is no
+                        // separate results file to fetch.
+                        renderResults(p.columns || [], p.rows || [], nowTimestamp(), p);
+                        loadHistory();
+                    })
+                    .catch(err => {
+                        clearInterval(_pollInterval);
+                        _pollInterval = null;
+                        showError(err.message);
+                    });
+            }, 1000);
+        }
+
+        function setProgress(pct, done, total, eta_s) {
+            document.getElementById('progressBar').style.width = pct + '%';
+            document.getElementById('progressLabel').textContent = Math.round(pct) + '%';
+            document.getElementById('progressRows').textContent = done + ' / ' + total;
+            if (eta_s !== null && eta_s !== undefined) {
+                const m = Math.floor(eta_s / 60), s = Math.round(eta_s % 60);
+                document.getElementById('progressEta').textContent = m > 0 ? m + 'm ' + s + 's' : s + 's';
+            } else {
+                document.getElementById('progressEta').textContent = done === total ? 'Done' : 'Calculating...';
+            }
+        }
+
+        // ── results ───────────────────────────────────────────────────────────
+        function renderResults(columns, rows, ts, state) {
+            const header = document.getElementById('resultsHeader');
+            const body   = document.getElementById('resultsBody');
+            const statusIdx = columns.indexOf('Status');
+            state = state || {};
+
+            header.innerHTML = columns.map(c => `<th>${c}</th>`).join('');
+            body.innerHTML = rows.map(row => {
+                const cells = row.map((cell, i) => {
+                    if (i === statusIdx) {
+                        const cls = cell === 'OK' ? 'badge-ok'
+                                  : cell === 'NO_HISTORY' ? 'badge-none' : 'badge-bad';
+                        const label = cell === 'NO_HISTORY' ? 'NO HISTORY'
+                                    : cell === 'NOT_FOUND' ? 'NOT FOUND' : cell;
+                        return `<td><span class="status-badge ${cls}">${label}</span></td>`;
+                    }
+                    return `<td>${cell ?? ''}</td>`;
+                }).join('');
+                return `<tr>${cells}</tr>`;
+            }).join('');
+
+            // Counts come from the server, over every row. A large run only
+            // sends a preview, so counting here would report the preview alone.
+            const counts = state.counts || (statusIdx >= 0 ? {
+                OK:         rows.filter(r => r[statusIdx] === 'OK').length,
+                NO_HISTORY: rows.filter(r => r[statusIdx] === 'NO_HISTORY').length,
+                NOT_FOUND:  rows.filter(r => r[statusIdx] === 'NOT_FOUND').length,
+                ERROR:      rows.filter(r => r[statusIdx] === 'ERROR').length,
+            } : {OK:0, NO_HISTORY:0, NOT_FOUND:0, ERROR:0});
+
+            const n = v => (v || 0).toLocaleString();
+            const chip = (bg, color, icon, label) =>
+                `<span style="background:${bg};color:${color};font-weight:600;padding:5px 12px;border-radius:6px;display:inline-block;"><i class="fas fa-${icon} me-1"></i>${label}</span>`;
+
+            const parts = [chip('#d1e7dd', '#155724', 'check-circle', `${n(counts.OK)} with keeper history`)];
+            if (counts.NO_HISTORY > 0) parts.push(chip('#e2e3e5', '#41464b', 'car', `${n(counts.NO_HISTORY)} no history`));
+            if (counts.NOT_FOUND > 0)  parts.push(chip('#e2e3e5', '#41464b', 'question-circle', `${n(counts.NOT_FOUND)} not found`));
+            if (counts.ERROR > 0)      parts.push(chip('#f8d7da', '#842029', 'exclamation-circle', `${n(counts.ERROR)} failed - re-run these`));
+            if (state.rows_truncated) {
+                parts.push(chip('#fff3cd', '#664d03', 'table',
+                    `showing first ${n(rows.length)} of ${n(state.rows_total)} - download for all`));
+            }
+            document.getElementById('resultsSummary').innerHTML = `<div class="d-flex gap-2 flex-wrap">${parts.join('')}</div>`;
+
+            document.getElementById('resultsTimestamp').textContent = ts || '';
+        }
+
+        function quickDownload() {
+            if (!_currentFilename) return;
+            window.location.href = BASE_URL + '/keeper-change-check/download/' + encodeURIComponent(_currentFilename);
+        }
+
+        // ── history ───────────────────────────────────────────────────────────
+        function _historyRow(item, isNew) {
+            return `<tr class="${isNew ? 'new-row' : ''}">
+                <td>${item.ts}</td>
+                <td>${item.processed_by ?? '—'}</td>
+                <td>${item.vrm_count ?? '—'}</td>
+                <td>
+                    <a href="${BASE_URL}/keeper-change-check/download/${encodeURIComponent(item.filename)}" class="btn btn-sm btn-outline-secondary">
+                        <i class="fas fa-download me-1"></i>XLSX
+                    </a>
+                </td>
+            </tr>`;
+        }
+
+        function loadHistory() {
+            document.getElementById('historyLoading').style.display = '';
+            document.getElementById('historyEmpty').style.display = 'none';
+            document.getElementById('historyTable').style.display = 'none';
+
+            fetch(BASE_URL + '/keeper-change-check/history')
+                .then(r => r.json())
+                .then(items => {
+                    document.getElementById('historyLoading').style.display = 'none';
+                    const table = document.getElementById('historyTable');
+                    const empty = document.getElementById('historyEmpty');
+                    if (!items.length) { table.style.display = 'none'; empty.style.display = ''; return; }
+                    document.getElementById('historyBody').innerHTML =
+                        items.map((item, i) => _historyRow(item, i === 0 && _currentFilename === item.filename)).join('');
+                    table.style.display = '';
+                    empty.style.display = 'none';
+                })
+                .catch(() => {
+                    document.getElementById('historyLoading').style.display = 'none';
+                    document.getElementById('historyEmpty').style.display = '';
+                });
+        }
+
+        loadHistory();
+    </script>
+</body>
+</html>

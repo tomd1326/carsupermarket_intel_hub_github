@@ -2,6 +2,7 @@ import datetime
 import io
 import logging
 import os
+import time
 from concurrent.futures import ThreadPoolExecutor
 from threading import Lock
 import threading
@@ -35,6 +36,23 @@ def _unwrap_vehicles_result(payload: dict) -> dict:
     if isinstance(results, list) and results and isinstance(results[0], dict):
         return results[0]
     return payload or {}
+
+
+def keeper_change_dates(payload: dict) -> list:
+    """
+    The vehicle's keeper change dates, newest first.
+
+    Autotrader returns one entry per keeper change under
+    history.keeperChanges[].dateOfLastKeeper. Empty values are dropped and the
+    rest sorted descending, so [0] is the most recent change and [1] the one
+    before it. Dates are ISO (YYYY-MM-DD), which sorts correctly as a string.
+    """
+    history = (_unwrap_vehicles_result(payload) or {}).get('history') or {}
+    dates = [
+        (kc or {}).get('dateOfLastKeeper')
+        for kc in (history.get('keeperChanges') or [])
+    ]
+    return sorted([d for d in dates if d], reverse=True)
 
 
 def _factory_fitted_features(features: list) -> tuple[list, list]:
@@ -181,6 +199,19 @@ class AutoTraderClient(metaclass=Singleton):
         self._abort = False
         self._error_log: list = []
 
+        # Keeper-change history cache: vrm -> (payload, fetched_at_epoch).
+        # See send_vehicles_history_request for why this is not the shared
+        # @cache decorator.
+        self._history_cache: dict = {}
+        self._history_lock = threading.Lock()
+
+        # Shared 429 backoff for the history calls. One deadline for every
+        # worker thread, so a 429 slows the whole run rather than each thread
+        # finding the limit for itself.
+        self._history_backoff_until = 0.0
+        self._history_backoff_step = 0.0
+        self._history_backoff_lock = threading.Lock()
+
     def get_access_token(self, session) -> str:
         with self.auth_lock:
             if self.token_expiration_time is None or self.token_expiration_time < datetime.datetime.now():
@@ -258,6 +289,154 @@ class AutoTraderClient(metaclass=Singleton):
                             logger.error("[AT] Aborting: %d rate limit (429) responses received", self._rate_limit_hits)
                 logger.debug(f"Vehicles API error for VRM {vrm}: Status code {vehicles_response.status_code}", extra={'extra_vrm': vrm})
                 return None
+
+    def send_vehicles_history_request(self, session, headers, vrm):
+        """
+        The vehicle's keeper-change history, as (payload, status_code).
+
+        A separate call from send_vehicles_post_request on purpose. That one asks
+        for valuations, metrics and features and never passes `history`; adding
+        `history=true` to it would change every supplier evaluator run. This one
+        asks for the history and nothing else, so the response stays small.
+
+        Returns the HTTP status alongside the payload rather than None on
+        failure, because the caller has to tell the failures apart: a 404 is a
+        real answer about the vehicle and must never be retried, while a 429 or a
+        5xx is worth one retry. Collapsing them into None — as the older methods
+        on this client do — makes that impossible.
+
+        Not cached by the shared @cache decorator: it cannot express "expire 24
+        hours after the fetch" (MemoryCache ignores `ex` entirely, and the Redis
+        path re-sets the expiry on every read, so a VRM that keeps being asked
+        for never ages out). _history_cached / _history_store below do that.
+        """
+        params = {
+            'advertiserId': self.advertiser_id,
+            'registration': vrm,
+            'history': 'true',
+        }
+
+        # Wait out any backoff a 429 has imposed. The rate limiter keeps us to
+        # 60/sec, but Autotrader can still push back (a burst from a concurrent
+        # supplier evaluator run shares the same quota), and hammering through
+        # that just earns more 429s.
+        self._await_history_backoff()
+
+        with self.limiter:
+            with self._counter_lock:
+                self._vehicles_requests += 1
+            try:
+                response = session.get(
+                    self.vehicles_api_url, params=params, headers=headers,
+                    timeout=self._HISTORY_TIMEOUT,
+                )
+            except requests.RequestException as e:
+                with self._counter_lock:
+                    self._vehicles_errors += 1
+                    self._error_log.append({
+                        'timestamp': datetime.datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S'),
+                        'api': 'AT Vehicles History',
+                        'vrm': vrm,
+                        'mileage': None,
+                        'cap_id': None,
+                        'status_code': None,
+                        'error_type': 'TIMEOUT' if isinstance(e, requests.Timeout) else 'EXCEPTION',
+                        'detail': str(e)[:200],
+                    })
+                logger.debug("Vehicles history request failed for VRM %s: %s", vrm, e)
+                return None, None
+
+        if response.status_code == 200:
+            return response.json(), 200
+
+        with self._counter_lock:
+            self._vehicles_errors += 1
+            sc = response.status_code
+            error_type = 'NOT_FOUND' if sc == 404 else ('RATE_LIMITED' if sc == 429 else f'HTTP_{sc}')
+            self._error_log.append({
+                'timestamp': datetime.datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S'),
+                'api': 'AT Vehicles History',
+                'vrm': vrm,
+                'mileage': None,
+                'cap_id': None,
+                'status_code': sc,
+                'error_type': error_type,
+                'detail': response.text[:200],
+            })
+            if sc == 429:
+                self._rate_limit_hits += 1
+        if response.status_code == 429:
+            self._note_history_429(response.headers.get('Retry-After'))
+        logger.debug("Vehicles history error for VRM %s: status %s", vrm, response.status_code)
+        return None, response.status_code
+
+    def _await_history_backoff(self) -> None:
+        """Block while a 429 backoff is in force.
+
+        Every worker thread waits on the same deadline, so one 429 slows the
+        whole run rather than each thread discovering the limit separately.
+        """
+        while True:
+            with self._history_backoff_lock:
+                until = self._history_backoff_until
+            remaining = until - time.time()
+            if remaining <= 0:
+                return
+            time.sleep(min(remaining, 1.0))
+
+    def _note_history_429(self, retry_after=None) -> None:
+        """Start (or extend) the backoff after a 429.
+
+        Honours Retry-After when Autotrader sends one; otherwise doubles from
+        _HISTORY_BACKOFF_START up to _HISTORY_BACKOFF_MAX. The window is only
+        ever pushed further out, never pulled in, so overlapping 429s from
+        different threads cannot shorten it.
+        """
+        with self._history_backoff_lock:
+            wait = None
+            if retry_after:
+                try:
+                    wait = float(retry_after)
+                except (TypeError, ValueError):
+                    wait = None
+            if wait is None:
+                self._history_backoff_step = min(
+                    max(self._history_backoff_step * 2, self._HISTORY_BACKOFF_START),
+                    self._HISTORY_BACKOFF_MAX,
+                )
+                wait = self._history_backoff_step
+            else:
+                wait = min(wait, self._HISTORY_BACKOFF_MAX)
+            self._history_backoff_until = max(self._history_backoff_until, time.time() + wait)
+        logger.warning("[AT history] 429 received - backing off %.1fs", wait)
+
+    def reset_history_backoff(self) -> None:
+        """Clear the backoff. Called at the start of each chunk so a slow patch
+        does not permanently hobble a long run."""
+        with self._history_backoff_lock:
+            self._history_backoff_until = 0.0
+            self._history_backoff_step = 0.0
+
+    def _history_cached(self, vrm: str):
+        """A stored history payload for this VRM, or None if there is none under
+        24 hours old. Keeper changes move rarely, so a day-old answer is fine and
+        saves a call when the same VRM turns up on two lists."""
+        with self._history_lock:
+            entry = self._history_cache.get(vrm)
+        if not entry:
+            return None
+        payload, fetched_at = entry
+        # Age is measured from the fetch, never refreshed on read — that is the
+        # whole reason this is not the shared @cache decorator.
+        if time.time() - fetched_at > self._HISTORY_CACHE_SECONDS:
+            return None
+        return payload
+
+    def _history_store(self, vrm: str, payload: dict) -> None:
+        """Store a SUCCESSFUL history payload. Failures are never stored — a
+        cached failure would be served to every retry, which defeats the retry."""
+        with self._history_lock:
+            self._history_cache[vrm] = (payload, time.time())
 
     @cache(ignore_args=['session', 'headers'], ex=60*60*24)
     def send_valuations_post_request(self, session, headers, vrm, derivative_id, first_registration_date, mileage, factory_fitted_features):
@@ -374,6 +553,14 @@ class AutoTraderClient(metaclass=Singleton):
                          extra={'extra_vrm': vrm})
 
     _AT_RATE_LIMIT_ABORT = 10  # abort if this many 429s received
+
+    # Keeper Change Check. The timeout is per request, so one stuck call cannot
+    # hold a worker thread for the whole run; see the batch sizing in
+    # routers/keeper_change.py, which is set against it.
+    _HISTORY_TIMEOUT = (5, 20)          # (connect, read) seconds
+    _HISTORY_CACHE_SECONDS = 60 * 60 * 24
+    _HISTORY_BACKOFF_START = 2.0        # first 429 pause, doubling thereafter
+    _HISTORY_BACKOFF_MAX = 30.0         # cap, so a chunk cannot stall on backoff alone
 
     def process_row(self, row: dict, session, column_mapper: BaseColumnsMapper) -> dict:
         if self._abort:

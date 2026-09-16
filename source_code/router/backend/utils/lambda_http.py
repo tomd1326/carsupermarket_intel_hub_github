@@ -67,13 +67,18 @@ class LambdaRequestsManager(metaclass=Singleton):
             "isBase64Encoded": False
         }
 
-        logger.info(f"Simulating HTTP request: {event}")
-        print(f"Simulating HTTP request: {event}")
+        # Log the route only, never the event itself. The event embeds the posted
+        # body and the headers, and both these lines reach CloudWatch under
+        # Lambda — anything secret in a dispatched payload (e.g. the worker
+        # credential on /keeper-change-check/run) would be written out in clear
+        # on every call. The full event is available locally for debugging.
+        logger.info(f"Simulating HTTP request: {method} {path}")
+        if os.getenv('LOCAL_ENV') == '1':
+            logger.debug(f"Simulated event: {event}")
 
         # If we are locally testing the Lambda function, we can invoke it directly
         if os.getenv('LOCAL_ENV') == '1' or aws_context is None:
             logger.info('Running locally')
-            print('Running locally')
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
             resp = self.mangum_handler(event, aws_context)
@@ -85,8 +90,7 @@ class LambdaRequestsManager(metaclass=Singleton):
         if asynchronous:
             invocation_type = 'Event'
 
-        logger.info(f"Invoking ({invocation_type}) Lambda function {aws_context.function_name} with event: {event}")
-        print(f"Invoking ({invocation_type}) Lambda function {aws_context.function_name} with event: {event}")
+        logger.info(f"Invoking ({invocation_type}) Lambda function {aws_context.function_name}: {method} {path}")
 
         # Invoke the Lambda function directly
         response = self.lambda_client.invoke(

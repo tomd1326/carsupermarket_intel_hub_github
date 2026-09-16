@@ -11,6 +11,22 @@ templates = Jinja2Templates(directory=os.path.join(os.path.dirname(__file__), "t
 
 BASE_URL = os.getenv("BASE_URL", "")
 
+# error.html uses static_url, the same as every other template. This is a second
+# Jinja2Templates instance to the one in routers/core.py, and globals are per
+# instance — without this registration the error page itself raises
+# "'static_url' is undefined" while rendering, so the real error is replaced by
+# a Jinja traceback. Imported lazily to avoid a circular import: core imports
+# page_registry, and main imports both.
+def _register_globals():
+    try:
+        from routers.core import static_url
+        templates.env.globals['static_url'] = static_url
+    except Exception:  # pragma: no cover - fall back to an unversioned path
+        templates.env.globals['static_url'] = lambda path: f"{BASE_URL}/static/{path.lstrip('/')}"
+
+
+_register_globals()
+
 
 _STATUS_TITLES = {
     400: "Bad Request",
