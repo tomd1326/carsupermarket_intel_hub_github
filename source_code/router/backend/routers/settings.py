@@ -10,7 +10,8 @@ import logging
 from utils.db_utils import (get_database_connection, get_settings, save_settings,
                             save_settings_partial, get_last_login_per_user,
                             get_active_sessions_all_envs, upsert_user,
-                            load_all_page_access, set_page_access,
+                            load_user_details, update_user_details,
+                            load_all_page_access, set_page_access_many,
                             delete_user_and_access, ALWAYS_ENABLED_USERS)
 
 from . import core
@@ -203,15 +204,18 @@ def users_page(request: Request, user: str = Depends(get_current_user)):
     non_admin_users = sorted(u for u in VALID_USERS if u != 'tdrayson')
     last_logins = {}
     db_active_sessions = []
+    user_details = {}
     try:
         with get_database_connection() as conn:
             last_logins = get_last_login_per_user(conn)
             db_active_sessions = get_active_sessions_all_envs(conn)
+            user_details = load_user_details(conn)
     except Exception as e:
         logger.warning("Failed to load user activity data: %s", e)
     return templates.TemplateResponse("users.html", {
         "request": request, "user": user, "BASE_URL": BASE_URL,
         "active_sessions": sessions, "non_admin_users": non_admin_users,
+        "all_users": sorted(VALID_USERS), "user_details": user_details,
         "last_logins": last_logins, "db_active_sessions": db_active_sessions,
         "sections": SETTINGS_SECTIONS, "active_section": "users",
     })
@@ -276,34 +280,81 @@ def page_access_page(request: Request, user: str = Depends(get_current_user)):
 @router.post("/settings/page-access")
 def save_page_access(
     request: Request,
-    target_user: str = Form(...),
-    page_keys: list[str] = Form(default=[]),
+    users: list[str] = Form(default=[]),
+    access: list[str] = Form(default=[]),
     user: str = Depends(get_current_user)
 ):
+    """Save the whole grid in one go. `users` lists every row on the page (so a
+    row with every box unticked is still saved); `access` holds one
+    "username:page_key" value per ticked box."""
     if user != ADMIN_USERNAME:
         raise HTTPException(status_code=403)
-    if target_user == ADMIN_USERNAME:
+    if ADMIN_USERNAME in users:
         raise HTTPException(status_code=400, detail="Cannot change admin access")
-    if target_user not in VALID_USERS:
+    missing = [u for u in users if u not in VALID_USERS]
+    if missing:
         return _user_redirect("page_access", accesserr="User+not+found")
+
+    submitted = {u: set() for u in users}
+    for item in access:
+        u, _, key = item.rpartition(':')
+        if u not in submitted:
+            return _user_redirect("page_access", accesserr="User+not+found")
+        submitted[u].add(key)
 
     # Anything not a real page is rejected rather than ignored — this is also
     # what stops CONFIGURED_MARKER being submitted as if it were a page.
-    keys = set(page_keys)
-    unknown = keys - ALL_PAGE_KEYS
-    if unknown:
-        logger.warning("Page access: rejected unknown keys %s for %s", sorted(unknown), target_user)
-        return _user_redirect("page_access", accesserr="Unknown+page")
+    for u, keys in submitted.items():
+        unknown = keys - ALL_PAGE_KEYS
+        if unknown:
+            logger.warning("Page access: rejected unknown keys %s for %s", sorted(unknown), u)
+            return _user_redirect("page_access", accesserr="Unknown+page")
 
     with get_database_connection() as conn:
-        set_page_access(conn, target_user, keys, granted_by=user)
+        stored = load_all_page_access(conn)
+        # Only write rows that changed, so granted_at/granted_by keep showing
+        # when each person's access was last really changed. A user never
+        # saved before counts as having the defaults, the same as the grid shows.
+        changed = {}
+        for u, keys in submitted.items():
+            rows = stored.get(u)
+            if rows is None or CONFIGURED_MARKER not in rows:
+                current = set(DEFAULT_PAGE_KEYS)
+            else:
+                current = rows & ALL_PAGE_KEYS
+            if keys != current:
+                changed[u] = keys
+        set_page_access_many(conn, changed, granted_by=user)
 
     # Update this process's cache so the grid reflects the save immediately.
     # Other containers pick it up on their own TTL — see core.PERMISSION_TTL_SECONDS.
-    core.USER_PAGE_ACCESS[target_user] = keys | {CONFIGURED_MARKER}
+    for u, keys in changed.items():
+        core.USER_PAGE_ACCESS[u] = keys | {CONFIGURED_MARKER}
+        logger.info("Page access for %s set to %s by %s", u, sorted(keys) or 'none', user)
 
-    logger.info("Page access for %s set to %s by %s", target_user, sorted(keys) or 'none', user)
-    return _user_redirect("page_access", accessok=target_user)
+    return _user_redirect("page_access", accessok=len(changed))
+
+
+@router.post("/settings/user-details")
+async def save_user_details(request: Request, user: str = Depends(get_current_user)):
+    """Save first name, last name and email for every user on the page at once.
+    Fields arrive as first_name__<username>, last_name__<username>, email__<username>."""
+    if user != ADMIN_USERNAME:
+        raise HTTPException(status_code=403)
+    form = await request.form()
+    details = {}
+    for u in VALID_USERS:
+        if f"email__{u}" not in form:
+            continue
+        details[u] = {
+            'first_name': str(form.get(f"first_name__{u}", "")).strip(),
+            'last_name':  str(form.get(f"last_name__{u}", "")).strip(),
+            'email':      str(form.get(f"email__{u}", "")).strip(),
+        }
+    with get_database_connection() as conn:
+        update_user_details(conn, details)
+    logger.info("User details saved for %d users by %s", len(details), user)
+    return _user_redirect("users", detailsok=1)
 
 
 @router.post("/settings/delete-user")
@@ -335,6 +386,9 @@ def add_user(
     request: Request,
     new_username: str = Form(...),
     new_password: str = Form(...),
+    new_first_name: str = Form(default=""),
+    new_last_name: str = Form(default=""),
+    new_email: str = Form(default=""),
     redirect_to: str = Form("settings"),
     user: str = Depends(get_current_user)
 ):
@@ -351,6 +405,11 @@ def add_user(
     VALID_USERS[username] = pwd_hash
     with get_database_connection() as conn:
         upsert_user(conn, username, pwd_hash)
+        update_user_details(conn, {username: {
+            'first_name': new_first_name.strip(),
+            'last_name':  new_last_name.strip(),
+            'email':      new_email.strip(),
+        }})
     logger.info("User %s created by admin", username)
     return _user_redirect(redirect_to, useradded=username)
 
