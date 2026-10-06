@@ -478,6 +478,49 @@ def upsert_user(conn, username: str, pwd_hash: str) -> None:
     conn.commit()
 
 
+def _ensure_user_detail_columns(conn) -> None:
+    """Name and email columns, added on first use. db/13_user_details.sql is
+    the same change for running by hand."""
+    with conn.cursor() as cur:
+        cur.execute(
+            "ALTER TABLE users "
+            "ADD COLUMN IF NOT EXISTS first_name VARCHAR(100), "
+            "ADD COLUMN IF NOT EXISTS last_name  VARCHAR(100), "
+            "ADD COLUMN IF NOT EXISTS email      VARCHAR(255)"
+        )
+    conn.commit()
+
+
+def load_user_details(conn) -> dict:
+    """Returns {username: {'first_name', 'last_name', 'email'}} for all users.
+    Missing values come back as empty strings."""
+    _ensure_user_detail_columns(conn)
+    with conn.cursor() as cur:
+        cur.execute("SELECT username, first_name, last_name, email FROM users")
+        return {
+            row[0]: {'first_name': row[1] or '', 'last_name': row[2] or '', 'email': row[3] or ''}
+            for row in cur.fetchall()
+        }
+
+
+def update_user_details(conn, details: dict) -> None:
+    """Save name and email for several users in one transaction.
+    details is {username: {'first_name', 'last_name', 'email'}}; empty strings
+    are stored as NULL."""
+    _ensure_user_detail_columns(conn)
+    try:
+        with conn.cursor() as cur:
+            for username, d in details.items():
+                cur.execute(
+                    "UPDATE users SET first_name = %s, last_name = %s, email = %s WHERE username = %s",
+                    (d['first_name'] or None, d['last_name'] or None, d['email'] or None, username),
+                )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+
+
 def remove_user(conn, username: str) -> None:
     with conn.cursor() as cur:
         cur.execute("DELETE FROM users WHERE username = %s", (username,))
@@ -534,22 +577,33 @@ def load_all_page_access(conn) -> dict:
     return out
 
 
-def set_page_access(conn, username: str, page_keys: set, granted_by: str) -> None:
-    """Replace one user's grants. Writes the configured marker in the SAME
-    transaction as the grants — a marker without grants, or grants without a
-    marker, both reintroduce the ambiguity the marker exists to remove."""
+def set_page_access_many(conn, access: dict, granted_by: str) -> None:
+    """Replace the grants for several users in one transaction.
+    access is {username: set(page_key)}. Either every user is saved or none is.
+
+    Writes each user's configured marker in the SAME transaction as their
+    grants — a marker without grants, or grants without a marker, both
+    reintroduce the ambiguity the marker exists to remove."""
     from routers.page_registry import CONFIGURED_MARKER
+    if not access:
+        return
     _ensure_user_page_access_table(conn)
-    with conn.cursor() as cur:
-        cur.execute("DELETE FROM user_page_access WHERE username = %s", (username,))
-        rows = [(username, key, granted_by) for key in sorted(page_keys)]
-        rows.append((username, CONFIGURED_MARKER, granted_by))
-        psycopg2.extras.execute_values(
-            cur,
-            "INSERT INTO user_page_access (username, page_key, granted_by) VALUES %s",
-            rows,
-        )
-    conn.commit()
+    try:
+        with conn.cursor() as cur:
+            rows = []
+            for username, page_keys in access.items():
+                cur.execute("DELETE FROM user_page_access WHERE username = %s", (username,))
+                rows.extend((username, key, granted_by) for key in sorted(page_keys))
+                rows.append((username, CONFIGURED_MARKER, granted_by))
+            psycopg2.extras.execute_values(
+                cur,
+                "INSERT INTO user_page_access (username, page_key, granted_by) VALUES %s",
+                rows,
+            )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
 
 
 def delete_user_and_access(conn, username: str) -> None:
