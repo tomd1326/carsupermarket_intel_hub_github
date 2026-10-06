@@ -10,10 +10,15 @@
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css" rel="stylesheet">
     <link href="{{ static_url('css/theme.css') }}" rel="stylesheet">
     {% include '_settings_head.html' %}
+    <style>
+        /* Wider than the shared .settings-card: the name, email and password
+           boxes need about 1040px beside the 210px nav. Scoped to this page only. */
+        .settings-card.users-card { max-width: 1360px; }
+    </style>
 </head>
 <body class="bg-light">
     {{ account_nav(user) }}
-    <div class="settings-card">
+    <div class="settings-card users-card">
         <div class="d-flex align-items-center gap-3 mb-4">
             <a href="{{ BASE_URL }}/settings-page" class="btn btn-outline-secondary nav-btn">
                 <i class="fas fa-arrow-left me-1"></i>Back
@@ -40,28 +45,46 @@
             {% if request.query_params.get('pwderr') %}
             <div class="alert alert-danger mb-0 rounded-0 border-0 py-2 px-3">{{ request.query_params.get('pwderr') }}</div>
             {% endif %}
-            <div class="card-body p-0">
+            {% if request.query_params.get('detailsok') %}
+            <div class="alert alert-success mb-0 rounded-0 border-0 py-2 px-3">Names and emails saved.</div>
+            {% endif %}
+            {# The name and email boxes on every row belong to this one form via
+               their form attribute — a <form> cannot wrap table rows, and each
+               row already holds its own password and delete forms. #}
+            <form id="details-form" method="post" action="{{ BASE_URL }}/settings/user-details"></form>
+            <div class="card-body p-0 table-responsive">
                 <table class="table table-sm mb-0">
                     <thead class="table-light">
                         <tr>
                             <th>Username</th>
-                            <th>Last Login</th>
+                            <th>First Name</th>
+                            <th>Last Name</th>
+                            <th>Email</th>
+                            <th class="text-nowrap">Last Login</th>
                             <th>New Password</th>
                             <th></th>
                         </tr>
                     </thead>
                     <tbody>
-                        {% for u in non_admin_users %}
+                        {% for u in all_users %}
+                        {% set d = user_details.get(u, {}) %}
                         <tr>
-                            <td class="align-middle">{{ u }}</td>
-                            <td class="align-middle text-muted small">
+                            <td class="align-middle text-nowrap">{{ u }}{% if u == 'tdrayson' %} <span class="text-muted small">(admin)</span>{% endif %}</td>
+                            <td><input type="text" form="details-form" name="first_name__{{ u }}" value="{{ d.first_name or '' }}" class="form-control form-control-sm" style="width:120px;" autocomplete="off"></td>
+                            <td><input type="text" form="details-form" name="last_name__{{ u }}" value="{{ d.last_name or '' }}" class="form-control form-control-sm" style="width:120px;" autocomplete="off"></td>
+                            <td><input type="email" form="details-form" name="email__{{ u }}" value="{{ d.email or '' }}" class="form-control form-control-sm" style="width:220px;" autocomplete="off"></td>
+                            <td class="align-middle text-muted small text-nowrap">
                                 {{ last_logins[u] if last_logins.get(u) else 'Never' }}
                             </td>
+                            {% if u == 'tdrayson' %}
+                            <td></td>
+                            <td></td>
+                            {% else %}
                             <td>
                                 <form method="post" action="{{ BASE_URL }}/settings/set-password" class="d-flex gap-2">
                                     <input type="hidden" name="target_user" value="{{ u }}">
                                     <input type="hidden" name="redirect_to" value="users">
-                                    <input type="password" name="new_password" class="form-control form-control-sm" placeholder="New password" style="width:200px;">
+                                    <input type="password" name="new_password" class="form-control form-control-sm" placeholder="New password" style="width:160px;">
                                     <button type="submit" class="btn btn-sm btn-outline-primary">Set</button>
                                 </form>
                             </td>
@@ -72,14 +95,23 @@
                                     <button type="submit" class="btn btn-sm btn-outline-danger">Delete</button>
                                 </form>
                             </td>
+                            {% endif %}
                         </tr>
                         {% endfor %}
+                        <tr>
+                            <td colspan="7" class="text-end">
+                                <button type="submit" form="details-form" class="btn btn-sm btn-primary">Save Names &amp; Emails</button>
+                            </td>
+                        </tr>
                         <tr class="table-light">
-                            <td colspan="4">
-                                <form method="post" action="{{ BASE_URL }}/settings/add-user" class="d-flex gap-2 align-items-center">
+                            <td colspan="7">
+                                <form method="post" action="{{ BASE_URL }}/settings/add-user" class="d-flex gap-2 align-items-center flex-wrap">
                                     <input type="hidden" name="redirect_to" value="users">
-                                    <input type="text" name="new_username" class="form-control form-control-sm" placeholder="Username" style="width:160px;" autocomplete="off">
-                                    <input type="password" name="new_password" class="form-control form-control-sm" placeholder="Password" style="width:200px;">
+                                    <input type="text" name="new_username" class="form-control form-control-sm" placeholder="Username" style="width:140px;" autocomplete="off">
+                                    <input type="text" name="new_first_name" class="form-control form-control-sm" placeholder="First name" style="width:120px;" autocomplete="off">
+                                    <input type="text" name="new_last_name" class="form-control form-control-sm" placeholder="Last name" style="width:120px;" autocomplete="off">
+                                    <input type="email" name="new_email" class="form-control form-control-sm" placeholder="Email" style="width:220px;" autocomplete="off">
+                                    <input type="password" name="new_password" class="form-control form-control-sm" placeholder="Password" style="width:160px;">
                                     <button type="submit" class="btn btn-sm btn-success">Add User</button>
                                 </form>
                             </td>

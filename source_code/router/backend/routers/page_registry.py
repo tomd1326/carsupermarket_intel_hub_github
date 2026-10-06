@@ -26,14 +26,14 @@ class Page:
 
 # Order here is the order of the home tiles and of the grid's columns.
 PAGES: tuple[Page, ...] = (
-    # The four everyone can reach today. Any user with no saved configuration
-    # gets exactly these, so nobody's access changes when this ships.
+    # Pages with True are the defaults: any user with no saved configuration
+    # gets exactly these. MOT Check stopped being a default on 2026-10-06.
     Page('buying_requirements', '/buying-requirements',        'Buying Requirements',      True),
     Page('tasks',               '/tasks',                      'Supplier Stock Evaluator', True),
-    Page('mot_check',           '/mot-check',                  'MOT Check',                True),
+    Page('mot_check',           '/mot-check',                  'MOT Check',                False),
     Page('orders_deliveries',   '/reports/orders-deliveries',  'Orders & Deliveries Report', True),
-    # Admin-only today. Pre-ticked for nobody but the admin, so they stay that
-    # way until someone is deliberately granted one.
+    # Not given by default. Pre-ticked for nobody but the admin, so they stay
+    # that way until someone is deliberately granted one.
     Page('kpi',                 '/kpi',                        'KPI Dashboard',            False),
     Page('weekly_business_review', '/weekly-business-review',  'Weekly Business Review',   False),
     Page('google_ads_campaigns', '/google-ads-campaigns',      'Google Ads Campaigns',     False),
