@@ -9,9 +9,11 @@ import logging
 import datetime
 
 
-from utils.db_utils import (get_database_connection, get_prod_pricer_connection, get_settings,
+from utils.db_utils import (get_database_connection, get_prod_pricer_connection,
                             get_chart_targets, get_chart_target_ranges, save_chart_targets,
-                            delete_chart_target)
+                            delete_chart_target, upsert_chart_target_dates,
+                            get_chart_target_summary, get_ga4_campaign_ids,
+                            add_ga4_campaign, remove_ga4_campaign)
 from utils.snowflake_client import SnowflakeClient
 from utils.sharepoint_client import SharePointClient
 
@@ -39,15 +41,11 @@ GA4_ALL_EVENTS = "All events"
 # page scrolls this window through them.
 GA4_DAILY_WINDOW_DAYS = 25
 
-GA4_CAMPAIGNS = [
-    ".Vehicle Ads > CSM Audience",
-    ".Vehicle Ads > CSM Audience Experiment",
-    ".Vehicle Ads > Newcastle",
-    "{TEST} Dealer > Regional > 2 > Sheffield, Barnsley & Worksop",
-    "{TEST} Dealer > Regional > 3 > Grimsby, Scunthorpe, Hessle & Hull",
-    "{TEST} Dealer > Regional > 4 > Lincoln",
-    "Converters > Regional > 1 > Birmingham & Coventry",
-]
+GA4_CAMPAIGN_METRICS_TABLE = "PROD_CARSUPERMARKET_DB.COMPUTE_UX_TRACKING.GA4_CAMPAIGN_METRICS"
+
+# The campaigns shown are chosen on the page (Settings) and stored by GA4
+# campaign ID in Aurora — see db/14_ga4_campaigns.sql. IDs rather than names,
+# because campaigns get renamed; the page shows each one's current name.
 
 
 # ── Chart targets (Google Ads Campaigns page) ────────────────────────────────
@@ -69,7 +67,8 @@ TARGET_HISTORY_YEARS = 3
 
 
 def _target_key(metric: str, campaign: str, event_name: str = None) -> str:
-    """sessions is shared across every event, so its key carries no event."""
+    """campaign is the GA4 campaign ID. sessions is shared across every event,
+    so its key carries no event."""
     if metric == 'sessions':
         return f"ga4:sessions:{campaign}"
     return f"ga4:events:{event_name}:{campaign}"
@@ -199,16 +198,17 @@ def _shift_month_start(d: datetime.date, months: int) -> datetime.date:
     return datetime.date(d.year + month_index // 12, month_index % 12 + 1, 1)
 
 
-def _campaign_targets(conn, event_name: str, daily_dates: list,
+def _campaign_targets(conn, event_name: str, campaign_ids: list, daily_dates: list,
                       weekly_groups: list, monthly_groups: list) -> dict:
-    """Per-campaign session and event targets, rolled up to the chart periods.
+    """Per-campaign session and event targets, rolled up to the chart periods,
+    keyed by campaign ID.
 
     Only the two STORED metrics are returned. The aggregate, the conversion rate
     and the All-events total are derived in the page from whichever campaigns
     are on screen.
     """
     target_keys = {}
-    for campaign in GA4_CAMPAIGNS:
+    for campaign in campaign_ids:
         target_keys[(campaign, 'sessions')] = _target_key('sessions', campaign)
         if event_name != GA4_ALL_EVENTS:
             target_keys[(campaign, 'events')] = _target_key('events', campaign, event_name)
@@ -220,7 +220,7 @@ def _campaign_targets(conn, event_name: str, daily_dates: list,
     stored = get_chart_targets(conn, list(target_keys.values()), data_start, data_end)
 
     out = {}
-    for campaign in GA4_CAMPAIGNS:
+    for campaign in campaign_ids:
         sessions_by_date = stored.get(target_keys[(campaign, 'sessions')], {})
         if event_name != GA4_ALL_EVENTS:
             events_by_date = stored.get(target_keys[(campaign, 'events')], {})
@@ -281,18 +281,24 @@ def kpi_ga4_targets(
     daily_dates, weekly_groups, monthly_groups = _ga4_date_groups(start, end)
     try:
         with get_database_connection() as conn:
-            targets = _campaign_targets(conn, event_name, daily_dates, weekly_groups, monthly_groups)
+            campaign_ids = get_ga4_campaign_ids(conn)
+            targets = _campaign_targets(conn, event_name, campaign_ids,
+                                        daily_dates, weekly_groups, monthly_groups)
     except Exception as e:
         logger.error("Reading GA4 targets failed: %s", e)
         return {"status": "error", "message": str(e)}
 
     return {"status": "ok", "event_name": event_name,
-            "campaigns": [{"name": c, "targets": t} for c, t in targets.items()]}
+            "campaigns": [{"id": c, "targets": t} for c, t in targets.items()]}
 
 
-def _validate_target_request(campaign: str, metric: str, event_name: str) -> str | None:
-    """Returns an error message, or None when the request is valid."""
-    if campaign not in GA4_CAMPAIGNS:
+def _validate_target_request(campaign: str, metric: str, event_name: str,
+                             campaign_ids: list) -> str | None:
+    """Returns an error message, or None when the request is valid.
+
+    campaign is a GA4 campaign ID and must be one of the campaigns added in
+    Settings."""
+    if campaign not in campaign_ids:
         return f"Unknown campaign: {campaign}"
     if metric not in ('sessions', 'events'):
         return f"Unknown metric: {metric}"
@@ -344,20 +350,20 @@ async def kpi_save_chart_target(
     if not entries:
         return {"status": "error", "message": "No targets given"}
 
-    writes = []
-    for entry in entries:
-        metric = entry.get('metric')
-        error = _validate_target_request(campaign, metric, event_name)
-        if error:
-            return {"status": "error", "message": error}
-        value, error = _target_value_or_error(entry.get('value'))
-        if error:
-            return {"status": "error", "message": error}
-        writes.append((_target_key(metric, campaign, event_name), value))
-
     start, end = _target_write_range()
     try:
         with get_database_connection() as conn:
+            campaign_ids = get_ga4_campaign_ids(conn)
+            writes = []
+            for entry in entries:
+                metric = entry.get('metric')
+                error = _validate_target_request(campaign, metric, event_name, campaign_ids)
+                if error:
+                    return {"status": "error", "message": error}
+                value, error = _target_value_or_error(entry.get('value'))
+                if error:
+                    return {"status": "error", "message": error}
+                writes.append((_target_key(metric, campaign, event_name), value))
             save_chart_targets(conn, writes, start, end, user)
     except Exception as e:
         logger.error("Saving chart target failed for %s: %s", campaign, e)
@@ -391,13 +397,12 @@ async def kpi_delete_chart_target(
     metric = body.get('metric')
     event_name = body.get('event_name')
 
-    error = _validate_target_request(campaign, metric, event_name)
-    if error:
-        return {"status": "error", "message": error}
-
     start, _ = _target_write_range()
     try:
         with get_database_connection() as conn:
+            error = _validate_target_request(campaign, metric, event_name, get_ga4_campaign_ids(conn))
+            if error:
+                return {"status": "error", "message": error}
             # from_date is the start of the same span a save writes, so the
             # whole target goes rather than just its future half.
             removed = delete_chart_target(conn, _target_key(metric, campaign, event_name), start)
@@ -422,15 +427,14 @@ def kpi_get_chart_target(
     yesterday. Reading it here means Add/Edit state and the prefilled value are
     right even when nothing is drawn yet.
     """
-    if campaign not in GA4_CAMPAIGNS:
-        return {"status": "error", "message": f"Unknown campaign: {campaign}"}
-
     keys = {'sessions': _target_key('sessions', campaign)}
     if event_name and event_name != GA4_ALL_EVENTS and event_name in GA4_CAMPAIGN_EVENTS:
         keys['events'] = _target_key('events', campaign, event_name)
 
     try:
         with get_database_connection() as conn:
+            if campaign not in get_ga4_campaign_ids(conn):
+                return {"status": "error", "message": f"Unknown campaign: {campaign}"}
             stored = get_chart_target_ranges(conn, list(keys.values()))
     except Exception as e:
         logger.error("Reading chart target failed for %s: %s", campaign, e)
@@ -466,9 +470,8 @@ def _prev_iso_week_monday(monday: datetime.date) -> datetime.date:
 @router.get("/kpi", response_class=HTMLResponse)
 def kpi_page(request: Request, user: str = Depends(require_page('kpi'))):
     _track(request, 'page_view', '/kpi')
-    with get_database_connection() as conn:
-        settings = get_settings(conn, user=user)
-    return templates.TemplateResponse("kpi.html", {"request": request, "user": user, "BASE_URL": BASE_URL, "kpi_ai_summary": settings.get("kpi_ai_summary", False)})
+    return templates.TemplateResponse("kpi.html", {"request": request, "user": user, "BASE_URL": BASE_URL,
+                                                   "kpi_is_admin": is_admin(user)})
 
 
 @router.get("/google-ads-campaigns", response_class=HTMLResponse)
@@ -477,170 +480,109 @@ def google_ads_campaigns_page(request: Request, user: str = Depends(require_page
     return templates.TemplateResponse("google_ads_campaigns.html", {"request": request, "user": user, "BASE_URL": BASE_URL})
 
 
-@router.get("/kpi/data")
-def kpi_data(request: Request, user: str = Depends(require_page_api('kpi'))):
-    """Return daily_summary KPI data: daily window + 13 months of monthly totals."""
+# ── Google Ads Campaigns: Settings (which campaigns the page shows) ──────────
+
+@router.get("/kpi/ga4-campaigns")
+def kpi_ga4_campaigns_list(user: str = Depends(require_page_api('google_ads_campaigns'))):
+    """Every campaign in the GA4 data, for the Settings popup to pick from.
+
+    One row per campaign ID with its current name (the name on its latest
+    date), the last date it had sessions, and whether it is active. Active
+    means it has sessions on the latest date loaded in the table — GA4 runs a
+    day or two behind, so comparing with yesterday would show everything as
+    inactive until the data caught up.
+
+    Rows are only written for days a campaign had sessions, and each such day
+    repeats once per event, so one event is enough to read every campaign-day.
+    """
+    sql = f"""
+        WITH latest AS (
+            SELECT MAX(DT) AS max_dt
+            FROM {GA4_CAMPAIGN_METRICS_TABLE}
+        )
+        SELECT
+            CAMPAIGN_ID
+            , MAX_BY(CAMPAIGN_NAME, DT) AS CAMPAIGN_NAME
+            , MAX(DT) AS LAST_DT
+            , MAX(DT) = (SELECT max_dt FROM latest) AS IS_ACTIVE
+        FROM {GA4_CAMPAIGN_METRICS_TABLE}
+        WHERE EVENT_NAME = %s
+        GROUP BY CAMPAIGN_ID
+        ORDER BY IS_ACTIVE DESC, CAMPAIGN_NAME
+    """
     try:
-        import calendar
-        today = datetime.date.today()
-
-        # ── Date windows ──────────────────────────────────────────────────────
-        window_start = today - datetime.timedelta(days=24)
-        daily_end    = today + datetime.timedelta(days=10)
-        # Extend fetch to end of next month so monthly/weekly target sums are complete
-        _nm = (today.replace(day=1) + datetime.timedelta(days=32)).replace(day=1)
-        window_end = (_nm + datetime.timedelta(days=32)).replace(day=1) - datetime.timedelta(days=1)
-
-        first_of_this_month = today.replace(day=1)
-        monthly_end = first_of_this_month - datetime.timedelta(days=1)
-        monthly_start_dt = (first_of_this_month - datetime.timedelta(days=1)).replace(day=1)
-        for _ in range(12):
-            monthly_start_dt = (monthly_start_dt - datetime.timedelta(days=1)).replace(day=1)
-
-        days_since_monday = today.weekday()
-        last_sunday = today - datetime.timedelta(days=days_since_monday + 1)
-        weekly_end = last_sunday
-
-        # Week mondays (9 complete weeks + current) and their N-1 equivalents —
-        # computed before the query so the fetch window covers the N-1 weeks
-        week_mondays = []
-        w = _week_monday_of(weekly_end)
-        for _ in range(9):
-            week_mondays.append(w)
-            w -= datetime.timedelta(weeks=1)
-        week_mondays = list(reversed(week_mondays))
-        current_week_monday = _week_monday_of(today)
-        week_mondays.append(current_week_monday)
-        prev_week_mondays = [_prev_iso_week_monday(m) for m in week_mondays]
-
-        fetch_start = min(window_start, monthly_start_dt, prev_week_mondays[0])
-
+        with get_database_connection() as conn:
+            chosen = get_ga4_campaign_ids(conn)
         with SnowflakeClient() as sf:
-            rows, cols = sf.execute("""
-                SELECT
-                    DATE,
-                    ORDERS,
-                    ORDERS_N_MINUS_1,
-                    ORDERS_TARGET,
-                    ORDERS_TARGET_N_MINUS_1,
-                    SESSIONS_TARGET,
-                    SESSIONS_TARGET_N_MINUS_1
-                FROM PROD_CARSUPERMARKET_DB.product_slt_kpis.daily_summary
-                WHERE DATE >= %s AND DATE <= %s
-                ORDER BY DATE
-            """, [str(fetch_start), str(window_end)])
-
-        col_map = {c.upper(): i for i, c in enumerate(cols)}
-
-        def _col(r, name):
-            i = col_map.get(name)
-            return r[i] if i is not None else None
-
-        # Index all columns by date
-        by_date: dict[str, dict] = {}
-        for r in rows:
-            d = _col(r, 'DATE')
-            d = d.isoformat() if isinstance(d, datetime.date) else str(d)[:10]
-            by_date[d] = {
-                'orders':                   _col(r, 'ORDERS'),
-                'orders_n1':                _col(r, 'ORDERS_N_MINUS_1'),
-                'orders_target':            _col(r, 'ORDERS_TARGET'),
-                'orders_target_n1':         _col(r, 'ORDERS_TARGET_N_MINUS_1'),
-                'sessions_target':          _col(r, 'SESSIONS_TARGET'),
-                'sessions_target_n1':       _col(r, 'SESSIONS_TARGET_N_MINUS_1'),
-            }
-
-        def _int(val):
-            try:
-                return int(val) if val is not None else None
-            except (TypeError, ValueError):
-                return None
-
-        def _int0(val):
-            v = _int(val)
-            return v if v is not None else 0
-
-        month_abbrs = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']
-
-        def _sum_month(ym: str, field: str) -> int:
-            y, mo = int(ym[:4]), int(ym[5:7])
-            days_in = calendar.monthrange(y, mo)[1]
-            return sum(_int0(by_date.get(datetime.date(y, mo, day).isoformat(), {}).get(field)) for day in range(1, days_in + 1))
-
-        def _sum_week(monday: datetime.date, field: str) -> int:
-            return sum(_int0(by_date.get((monday + datetime.timedelta(days=i)).isoformat(), {}).get(field)) for i in range(7))
-
-        # ── Daily arrays ──────────────────────────────────────────────────────
-        dates = []
-        d_iter = window_start
-        while d_iter <= daily_end:
-            dates.append(d_iter.isoformat())
-            d_iter += datetime.timedelta(days=1)
-
-        orders            = [_int(by_date.get(d, {}).get('orders'))            for d in dates]
-        orders_ly         = [_int(by_date.get(d, {}).get('orders_n1'))         for d in dates]
-        orders_target     = [_int(by_date.get(d, {}).get('orders_target'))     for d in dates]
-        sessions_target   = [_int(by_date.get(d, {}).get('sessions_target'))   for d in dates]
-
-        known = [v for v in orders if v is not None]
-        average = round(sum(known) / len(known), 1) if known else None
-
-        # ── Monthly arrays ────────────────────────────────────────────────────
-        months = []
-        m_iter = monthly_start_dt
-        while m_iter <= monthly_end:
-            months.append(m_iter.strftime('%Y-%m'))
-            days_in = calendar.monthrange(m_iter.year, m_iter.month)[1]
-            m_iter = (m_iter.replace(day=days_in) + datetime.timedelta(days=1)).replace(day=1)
-        months.append(first_of_this_month.strftime('%Y-%m'))
-
-        current_ym = first_of_this_month.strftime('%Y-%m')
-        monthly_orders            = [None if m == current_ym else _sum_month(m, 'orders')            for m in months]
-        monthly_orders_ly         = [_sum_month(m, 'orders_n1')                                       for m in months]
-        monthly_orders_target     = [_sum_month(m, 'orders_target')      for m in months]
-        monthly_sessions_target   = [_sum_month(m, 'sessions_target')    for m in months]
-        monthly_labels            = [month_abbrs[int(m[5:7]) - 1] + ' ' + m[2:4]                     for m in months]
-        monthly_days              = [calendar.monthrange(int(m[:4]), int(m[5:7]))[1]                  for m in months]
-
-        # ── Weekly arrays ─────────────────────────────────────────────────────
-        # N-1 weeks use the same ISO week NUMBER of the previous year (Mon-Sun),
-        # summed from the raw daily values — not the N_MINUS_1 column, which is
-        # a same-calendar-date shift
-        weekly_labels             = [f"W{m.isocalendar()[1]} ({m.day}-{month_abbrs[m.month-1]})" for m in week_mondays]
-        weekly_n1_labels          = [f"W{pm.isocalendar()[1]} ({pm.day}-{month_abbrs[pm.month-1]})" for pm in prev_week_mondays]
-        weekly_orders             = [None if m == current_week_monday else _sum_week(m, 'orders') for m in week_mondays]
-        weekly_orders_ly          = [_sum_week(pm, 'orders') for pm in prev_week_mondays]
-        weekly_orders_target      = [_sum_week(m, 'orders_target')       for m in week_mondays]
-        weekly_sessions_target    = [_sum_week(m, 'sessions_target')     for m in week_mondays]
-
-        return {
-            "status": "ok",
-            "today": today.isoformat(),
-            # daily
-            "dates": dates,
-            "orders": orders,
-            "orders_ly": orders_ly,
-            "orders_target": orders_target,
-            "sessions_target": sessions_target,
-            "average": average,
-            # monthly
-            "monthly_labels": monthly_labels,
-            "monthly_days": monthly_days,
-            "monthly_orders": monthly_orders,
-            "monthly_orders_ly": monthly_orders_ly,
-            "monthly_orders_target": monthly_orders_target,
-            "monthly_sessions_target": monthly_sessions_target,
-            # weekly
-            "weekly_labels": weekly_labels,
-            "weekly_n1_labels": weekly_n1_labels,
-            "weekly_orders": weekly_orders,
-            "weekly_orders_ly": weekly_orders_ly,
-            "weekly_orders_target": weekly_orders_target,
-            "weekly_sessions_target": weekly_sessions_target,
-        }
+            rows, cols = sf.execute(sql, [GA4_CAMPAIGN_EVENTS[0]])
     except Exception as e:
-        logger.error(f"KPI data failed: {e}")
+        logger.error("Listing GA4 campaigns failed: %s", e)
         return {"status": "error", "message": str(e)}
+
+    col_map = {c.upper(): i for i, c in enumerate(cols)}
+    chosen_set = set(chosen)
+    campaigns = []
+    for row in rows:
+        last_dt = row[col_map["LAST_DT"]]
+        campaigns.append({
+            "id": str(row[col_map["CAMPAIGN_ID"]]),
+            "name": str(row[col_map["CAMPAIGN_NAME"]] or ''),
+            "last_date": last_dt.isoformat() if hasattr(last_dt, 'isoformat') else str(last_dt),
+            "active": bool(row[col_map["IS_ACTIVE"]]),
+            "added": str(row[col_map["CAMPAIGN_ID"]]) in chosen_set,
+        })
+    # The chosen list keeps the order the campaigns were added in, which is
+    # the order the charts page shows them.
+    return {"status": "ok", "chosen": chosen, "campaigns": campaigns}
+
+
+def _campaign_id_or_error(raw) -> tuple[str | None, str | None]:
+    campaign_id = str(raw or '').strip()
+    if not campaign_id:
+        return None, "No campaign given"
+    if campaign_id == '(not set)':
+        return None, "Campaigns with no ID cannot be added"
+    if len(campaign_id) > 50:
+        return None, "Campaign ID is too long"
+    return campaign_id, None
+
+
+@router.post("/kpi/ga4-campaigns")
+async def kpi_ga4_campaigns_add(
+    request: Request,
+    user: str = Depends(require_page_api('google_ads_campaigns')),
+):
+    body = await request.json()
+    campaign_id, error = _campaign_id_or_error(body.get('campaign_id'))
+    if error:
+        return {"status": "error", "message": error}
+    try:
+        with get_database_connection() as conn:
+            add_ga4_campaign(conn, campaign_id, user)
+    except Exception as e:
+        logger.error("Adding GA4 campaign %s failed: %s", campaign_id, e)
+        return {"status": "error", "message": f"Add failed: {e}"}
+    return {"status": "ok", "campaign_id": campaign_id}
+
+
+@router.delete("/kpi/ga4-campaigns")
+async def kpi_ga4_campaigns_remove(
+    request: Request,
+    user: str = Depends(require_page_api('google_ads_campaigns')),
+):
+    """Takes the campaign off the page. Its targets are left in chart_targets,
+    so they come back if it is added again."""
+    body = await request.json()
+    campaign_id, error = _campaign_id_or_error(body.get('campaign_id'))
+    if error:
+        return {"status": "error", "message": error}
+    try:
+        with get_database_connection() as conn:
+            removed = remove_ga4_campaign(conn, campaign_id)
+    except Exception as e:
+        logger.error("Removing GA4 campaign %s failed: %s", campaign_id, e)
+        return {"status": "error", "message": f"Remove failed: {e}"}
+    return {"status": "ok", "removed": removed}
 
 
 @router.get("/kpi/ga4-campaign-conversion")
@@ -675,6 +617,18 @@ def kpi_ga4_campaign_conversion(
     if event_name != GA4_ALL_EVENTS and event_name not in GA4_CAMPAIGN_EVENTS:
         return {"status": "error", "message": f"Unknown event: {event_name}"}
 
+    # The chosen campaigns come first: without them there is nothing to query.
+    # Unlike the targets below, this does not fail soft — a page drawn with no
+    # campaigns because Aurora was unreachable would look like none were added.
+    try:
+        with get_database_connection() as conn:
+            campaign_ids = get_ga4_campaign_ids(conn)
+    except Exception as e:
+        logger.error("Reading chosen GA4 campaigns failed: %s", e)
+        return {"status": "error", "message": f"Could not read the campaign list: {e}"}
+    if not campaign_ids:
+        return {"status": "empty", "message": "No campaigns added yet. Use Settings to add some."}
+
     try:
         today = datetime.date.today()
         first_of_this_month = today.replace(day=1)
@@ -684,7 +638,7 @@ def kpi_ga4_campaign_conversion(
             return datetime.date(d.year + month_index // 12, month_index % 12 + 1, 1)
 
         fetch_start = _shift_month(first_of_this_month, -13)
-        campaign_placeholders = ", ".join(["%s"] * len(GA4_CAMPAIGNS))
+        campaign_placeholders = ", ".join(["%s"] * len(campaign_ids))
         event_placeholders = ", ".join(["%s"] * len(GA4_CAMPAIGN_EVENTS))
 
         # Every event in ONE query, with EVENT_NAME kept as a column. Switching
@@ -692,15 +646,19 @@ def kpi_ga4_campaign_conversion(
         # Snowflake connection each time for data that is the same underneath —
         # the rows for all five events come back together for barely more cost
         # than one, and sessions are identical across them anyway.
+        #
+        # Filtered on CAMPAIGN_ID so a renamed campaign stays one series.
+        # CAMPAIGN_NAME is the name on each date; the one on the latest date is
+        # what the page shows.
         sql = f"""
-            SELECT DT, CAMPAIGN_NAME, EVENT_NAME, SESSIONS, EVENT_COUNT
-            FROM PROD_CARSUPERMARKET_DB.COMPUTE_UX_TRACKING.GA4_CAMPAIGN_METRICS
+            SELECT DT, CAMPAIGN_ID, CAMPAIGN_NAME, EVENT_NAME, SESSIONS, EVENT_COUNT
+            FROM {GA4_CAMPAIGN_METRICS_TABLE}
             WHERE EVENT_NAME IN ({event_placeholders})
-              AND CAMPAIGN_NAME IN ({campaign_placeholders})
+              AND CAMPAIGN_ID IN ({campaign_placeholders})
               AND DT >= %s AND DT <= %s
-            ORDER BY DT, CAMPAIGN_NAME
+            ORDER BY DT, CAMPAIGN_ID
         """
-        params = [*GA4_CAMPAIGN_EVENTS, *GA4_CAMPAIGNS, str(fetch_start), str(today)]
+        params = [*GA4_CAMPAIGN_EVENTS, *campaign_ids, str(fetch_start), str(today)]
 
         with SnowflakeClient() as sf:
             metric_rows, metric_cols = sf.execute(sql, params)
@@ -723,20 +681,26 @@ def kpi_ga4_campaign_conversion(
         # Sessions belong to the campaign and date, not to an event — the same
         # value repeats on every event's row, so it is stored once rather than
         # per event. Events are kept per event name.
-        sessions_by_campaign = {campaign: {} for campaign in GA4_CAMPAIGNS}
+        sessions_by_campaign = {campaign: {} for campaign in campaign_ids}
         events_by_event = {
-            event: {campaign: {} for campaign in GA4_CAMPAIGNS}
+            event: {campaign: {} for campaign in campaign_ids}
             for event in GA4_CAMPAIGN_EVENTS
         }
+        # Current name per ID: the name on the latest date seen. A campaign with
+        # no rows in the window falls back to showing its ID.
+        current_names: dict[str, tuple[datetime.date, str]] = {}
         all_dates: set[datetime.date] = set()
         for row in metric_rows:
-            campaign = str(row[col_map["CAMPAIGN_NAME"]])
+            campaign = str(row[col_map["CAMPAIGN_ID"]])
             if campaign not in sessions_by_campaign:
                 continue
             row_event = str(row[col_map["EVENT_NAME"]])
             if row_event not in events_by_event:
                 continue
             date_value = _date_value(row[col_map["DT"]])
+            name = row[col_map["CAMPAIGN_NAME"]]
+            if name and (campaign not in current_names or date_value >= current_names[campaign][0]):
+                current_names[campaign] = (date_value, str(name))
             sessions_by_campaign[campaign][date_value] = _number(row[col_map["SESSIONS"]])
             events_by_event[row_event][campaign][date_value] = _number(row[col_map["EVENT_COUNT"]])
             all_dates.add(date_value)
@@ -744,7 +708,7 @@ def kpi_ga4_campaign_conversion(
         # All events: the counts summed across every event, per campaign and
         # date. Sessions are NOT summed with them — they are counted once, which
         # is why the rate here is events per session and can exceed 100%.
-        all_events_by_campaign = {campaign: {} for campaign in GA4_CAMPAIGNS}
+        all_events_by_campaign = {campaign: {} for campaign in campaign_ids}
         for per_campaign in events_by_event.values():
             for campaign, by_date in per_campaign.items():
                 target = all_events_by_campaign[campaign]
@@ -863,7 +827,7 @@ def kpi_ga4_campaign_conversion(
             with get_database_connection() as conn:
                 for event in (GA4_ALL_EVENTS, *GA4_CAMPAIGN_EVENTS):
                     targets_by_event[event] = _campaign_targets(
-                        conn, event, daily_dates, weekly_date_groups, monthly_date_groups)
+                        conn, event, campaign_ids, daily_dates, weekly_date_groups, monthly_date_groups)
         except Exception as e:
             logger.warning("Chart targets unavailable, charts will show none: %s", e)
             targets_by_event = {}
@@ -871,10 +835,12 @@ def kpi_ga4_campaign_conversion(
         def _event_payload(events_map: dict, event: str) -> dict:
             stored = targets_by_event.get(event, {})
             return {
-                "aggregated": {"name": "Aggregated Total", **_series(events_map, GA4_CAMPAIGNS)},
-                "campaigns": [{"name": campaign, **_series(events_map, [campaign]),
+                "aggregated": {"name": "Aggregated Total", **_series(events_map, campaign_ids)},
+                "campaigns": [{"id": campaign,
+                               "name": current_names[campaign][1] if campaign in current_names else campaign,
+                               **_series(events_map, [campaign]),
                                "targets": stored.get(campaign)}
-                              for campaign in GA4_CAMPAIGNS],
+                              for campaign in campaign_ids],
             }
 
         # Every event is built and sent together, so switching events on the page
@@ -911,11 +877,17 @@ def kpi_ga4_campaign_conversion(
         return {"status": "error", "message": str(e)}
 
 
-# ── Custom charts: metric catalogue ──────────────────────────────────────────
-# Columns from product_slt_kpis.daily_summary available for user-created charts.
-# (column, description, suggested_agg) — suggested_agg is the sensible default
-# for weekly/monthly rollups: 'sum' for daily flow events, 'avg' for stock
-# levels and pre-averaged metrics.
+# ── KPI charts: metric catalogue ─────────────────────────────────────────────
+# Every chart on the KPI page is created on the page itself. A chart reads one
+# metric from one of two sources:
+#
+#   snowflake  - a number column of product_slt_kpis.daily_summary
+#   sharepoint - a number column of the "Daily Spend and Enquiries" table
+#
+# The column lists are read live, so new columns appear without code changes.
+# This list only supplies descriptions and the sensible weekly/monthly rollup
+# for columns we know: 'sum' for daily flow events, 'avg' for stock levels and
+# pre-averaged metrics. Columns not listed here get a guessed default.
 KPI_METRICS = [
     ("ORDERS", "Apex orders acknowledged on the day", "sum"),
     ("ORDERS_RATE_TOTAL", "Orders financed on a standard rate (non interest-free)", "sum"),
@@ -928,6 +900,11 @@ KPI_METRICS = [
     ("ORDERS_CASH_25K_PLUS", "Cash orders with vehicle price £25k+", "sum"),
     ("ORDERS_PRICE_CHANGED_LAST_7_DAYS", "Orders where the vehicle had a price change in the 7 days before the order", "sum"),
     ("ORDERS_PUBLISHED_LAST_7_DAYS", "Orders where the vehicle was first advertised in the 7 days before the order", "sum"),
+    ("ORDERS_SUB_12K_UNDER_30_DIS", "Orders with base price under £12k (no admin fee) and under 30 days in stock - the Apex rule that keeps cars off Autotrader", "sum"),
+    ("AVG_DIS_ORDERS_SUB_12K_UNDER_30_DIS", "Average days in stock of orders under £12k and under 30 days in stock", "avg"),
+    ("AVG_DAYS_ADVERTISED_ORDERS_SUB_12K_UNDER_30_DIS", "Average days advertised of orders under £12k and under 30 days in stock", "avg"),
+    ("AVG_AT_PRICE_POSITION_ORDERS_SUB_12K_UNDER_30_DIS", "Average Autotrader price position of rate orders under £12k and under 30 days in stock", "avg"),
+    ("AVG_AT_RETAIL_RATING_ORDERS_SUB_12K_UNDER_30_DIS", "Average Autotrader retail rating of orders under £12k and under 30 days in stock", "avg"),
     ("PURCHASES", "Vehicles purchased into stock on the day", "sum"),
     ("PUBLISHED", "Vehicles first advertised on the day", "sum"),
     ("STOCK_ON_SALE", "Advertised vehicles in stock (end of day)", "avg"),
@@ -949,127 +926,282 @@ KPI_METRICS = [
     ("AVG_AT_PRICE_POSITION_ORDERS_RATE", "Average Autotrader price position of rate vehicles ordered that day", "avg"),
     ("AVG_AT_PRICE_POSITION_ORDERS_0PCT", "Average Autotrader price position of 0% vehicles ordered that day", "avg"),
 ]
-KPI_METRIC_COLUMNS = {m[0] for m in KPI_METRICS}
+_KPI_METRIC_INFO = {col: (desc, agg) for col, desc, agg in KPI_METRICS}
 
-# Live column discovery: N-1 / target siblings are detected by naming
-# convention (<METRIC>_N_MINUS_1, <METRIC>_TARGET) against the actual table,
+KPI_SOURCES = ("snowflake", "sharepoint")
+
+# daily_summary columns that are not metrics: the date itself, its text
+# labels, and the N-1 / target companions of each metric.
+_DS_NON_METRIC_COLUMNS = {"DATE", "MONTH", "WEEK"}
+_SNOWFLAKE_NUMBER_TYPES = {"NUMBER", "FLOAT", "DECIMAL", "NUMERIC", "INT", "INTEGER", "BIGINT", "DOUBLE", "REAL"}
+
+# Live column discovery: target columns are detected by naming convention
+# (<METRIC>_TARGET) against the actual table,
 # so columns added to daily_summary later are picked up without code changes.
-_ds_columns_cache: set | None = None
+_ds_columns_cache: list | None = None      # [(column, data_type)] in table order
 _ds_columns_cache_at: float = 0.0
 _DS_COLUMNS_TTL = 600  # seconds
 
 
-def _get_daily_summary_columns() -> set:
+def _get_daily_summary_column_types() -> list:
     global _ds_columns_cache, _ds_columns_cache_at
     if _ds_columns_cache is not None and time.time() - _ds_columns_cache_at < _DS_COLUMNS_TTL:
         return _ds_columns_cache
     try:
         with SnowflakeClient() as sf:
             rows, _ = sf.execute("""
-                SELECT column_name
+                SELECT column_name, data_type
                 FROM PROD_CARSUPERMARKET_DB.INFORMATION_SCHEMA.COLUMNS
                 WHERE table_schema = 'PRODUCT_SLT_KPIS' AND table_name = 'DAILY_SUMMARY'
+                ORDER BY ordinal_position
             """)
-        _ds_columns_cache = {str(r[0]).upper() for r in rows}
+        _ds_columns_cache = [(str(r[0]).upper(), str(r[1]).upper()) for r in rows]
         _ds_columns_cache_at = time.time()
     except Exception as e:
         logger.warning("daily_summary column discovery failed: %s", e)
         if _ds_columns_cache is None:
-            # Minimal fallback: the metric columns plus the known orders siblings
-            _ds_columns_cache = KPI_METRIC_COLUMNS | {"ORDERS_N_MINUS_1", "ORDERS_TARGET"}
+            # Minimal fallback: the known metric columns plus the orders siblings
+            _ds_columns_cache = ([(c, "NUMBER") for c, _, _ in KPI_METRICS]
+                                 + [("ORDERS_TARGET", "NUMBER")])
     return _ds_columns_cache
 
 
-def _sibling_columns(metric: str) -> tuple[str | None, str | None]:
-    """Return (n1_col, target_col) for a metric — None where the column doesn't exist."""
-    cols = _get_daily_summary_columns()
-    n1 = f"{metric}_N_MINUS_1"
+def _get_daily_summary_columns() -> set:
+    return {col for col, _ in _get_daily_summary_column_types()}
+
+
+def _snowflake_metric_columns() -> list:
+    """Number columns of daily_summary that are metrics in their own right, in table order."""
+    return [
+        col for col, data_type in _get_daily_summary_column_types()
+        if data_type in _SNOWFLAKE_NUMBER_TYPES
+        and col not in _DS_NON_METRIC_COLUMNS
+        and not col.endswith("_N_MINUS_1")
+        and not col.endswith("_TARGET")
+    ]
+
+
+def _target_column(metric: str) -> str | None:
+    """The metric's <METRIC>_TARGET column, or None where it doesn't exist."""
     target = f"{metric}_TARGET"
-    return (n1 if n1 in cols else None, target if target in cols else None)
+    return target if target in _get_daily_summary_columns() else None
+
+
+def _guess_agg(column: str) -> str:
+    """Rollup for a column with no entry in KPI_METRICS: averages and stock
+    levels average, everything else is a daily count that adds up."""
+    upper = column.upper()
+    if upper.startswith("AVG") or upper.startswith("STOCK") or "AVERAGE" in upper or "RATE" in upper or "%" in upper:
+        return "avg"
+    return "sum"
+
+
+def _sharepoint_metric_columns() -> list:
+    """Number columns of the SharePoint table, or [] when it cannot be read."""
+    try:
+        sp = _get_sharepoint_data()
+    except Exception as e:
+        logger.warning("SharePoint column list failed: %s", e)
+        return []
+    return sp.get("columns", []) if sp.get("status") == "ok" else []
+
+
+def _validate_metric(source: str, metric: str) -> str | None:
+    """Returns an error message, or None when the source/metric pair is valid."""
+    if source not in KPI_SOURCES:
+        return f"Unknown source: {source}"
+    if not isinstance(metric, str) or not metric.strip():
+        return "Missing metric"
+    if source == "snowflake":
+        if metric not in _snowflake_metric_columns():
+            return f"Unknown metric: {metric}"
+    else:
+        # Only checked against the list when the SharePoint data is already in
+        # memory — reading it can mean a slow SharePoint fetch, which a layout
+        # save should not wait on.
+        cached_columns = _kpi_sp_cache.get("columns") if _kpi_sp_cache.get("status") == "ok" else None
+        if cached_columns is not None and metric not in cached_columns:
+            return f"Unknown SharePoint column: {metric}"
+        if len(metric) > 200:
+            return "Metric name is too long"
+    return None
+
 
 KPI_SECTIONS = ["Upper Funnel", "Results", "Stock", "Pricing", "Margin"]
 
-KPI_DEFAULT_LAYOUT = {
-    "rows": [
-        {"id": "sessions", "type": "builtin", "section": "Upper Funnel"},
-        {"id": "orders", "type": "builtin", "section": "Results"},
-    ]
-}
+KPI_DEFAULT_LAYOUT = {"rows": []}
 
 
 @router.get("/kpi/metrics")
 def kpi_metrics(request: Request, user: str = Depends(require_page_api('kpi'))):
     live_cols = _get_daily_summary_columns()
-    return {
-        "status": "ok",
-        "sections": KPI_SECTIONS,
-        "metrics": [
-            {
-                "column": col,
-                "description": desc,
-                "suggested_agg": agg,
-                "has_n1": f"{col}_N_MINUS_1" in live_cols,
-                "has_target": f"{col}_TARGET" in live_cols,
-            }
-            for col, desc, agg in KPI_METRICS
-        ],
-    }
+    metrics = []
+    for col in _snowflake_metric_columns():
+        desc, agg = _KPI_METRIC_INFO.get(col, ("", _guess_agg(col)))
+        metrics.append({
+            "source": "snowflake",
+            "column": col,
+            "description": desc,
+            "suggested_agg": agg,
+            "has_n1": True,   # N-1 is looked up from the metric's own history
+            "has_target": f"{col}_TARGET" in live_cols,
+        })
+    for col in _sharepoint_metric_columns():
+        metrics.append({
+            "source": "sharepoint",
+            "column": col,
+            "description": "From the Daily Spend and Enquiries spreadsheet",
+            "suggested_agg": _guess_agg(col),
+            # N-1 is worked out from the spreadsheet's own history.
+            "has_n1": True,
+            "has_target": False,
+        })
+    return {"status": "ok", "sections": KPI_SECTIONS, "metrics": metrics}
+
+
+# ── KPI chart periods ────────────────────────────────────────────────────────
+# How many months, weeks and days the charts cover is a page setting (see
+# /kpi/settings). The page sends the counts with each data request; they are
+# clamped here so a bad value cannot ask Snowflake for years of data.
+#
+# The day series always runs KPI_FUTURE_DAYS past today, so the target line
+# shows what is coming. days_total includes those future days.
+
+KPI_FUTURE_DAYS = 10
+
+KPI_DEFAULT_SETTINGS = {
+    "months": 14,          # including the current month
+    "weeks": 10,           # including the current week
+    "days_window": 35,     # days on screen at once in a day chart
+    "days_total": 90,      # days available to scroll across
+    "label_angle": 0,      # tilt of the value labels on the data points
+}
+
+KPI_SETTING_LIMITS = {
+    "months": (1, 24),
+    "weeks": (1, 104),
+    "days_window": (7, 400),
+    "days_total": (KPI_FUTURE_DAYS + 1, 400),
+    "label_angle": (-90, 90),
+}
+
+
+def _clamp_setting(name: str, value) -> int:
+    low, high = KPI_SETTING_LIMITS[name]
+    try:
+        value = int(value)
+    except (TypeError, ValueError):
+        value = KPI_DEFAULT_SETTINGS[name]
+    return min(max(value, low), high)
+
+
+def _kpi_periods(today: datetime.date, months: int, weeks: int, days_total: int):
+    """Month starts, week Mondays and day dates for the KPI charts, oldest first.
+    The last month and week are the current, part-elapsed ones."""
+    first_of_this_month = today.replace(day=1)
+    month_firsts = [first_of_this_month]
+    for _ in range(months - 1):
+        month_firsts.insert(0, (month_firsts[0] - datetime.timedelta(days=1)).replace(day=1))
+
+    current_week_monday = _week_monday_of(today)
+    week_mondays = [current_week_monday - datetime.timedelta(weeks=i) for i in range(weeks - 1, -1, -1)]
+
+    daily_end = today + datetime.timedelta(days=KPI_FUTURE_DAYS)
+    daily_start = daily_end - datetime.timedelta(days=days_total - 1)
+    dates = [daily_start + datetime.timedelta(days=i) for i in range(days_total)]
+    return month_firsts, week_mondays, dates
+
+
+def _month_dates(first: datetime.date) -> list:
+    return [first.replace(day=d) for d in range(1, calendar.monthrange(first.year, first.month)[1] + 1)]
+
+
+def _week_dates(monday: datetime.date) -> list:
+    return [monday + datetime.timedelta(days=i) for i in range(7)]
+
+
+# ── KPI chart targets ────────────────────────────────────────────────────────
+# A target belongs to the METRIC (source + column), so two charts on the same
+# column share it. Each chart picks where its target line comes from:
+#
+#   none       - no target
+#   fixed      - one figure per day, stored across the whole range the same way
+#                as the Google Ads targets
+#   import     - per-date figures from an uploaded CSV
+#   snowflake  - the column's own <METRIC>_TARGET in daily_summary
+#
+# Fixed and imported figures are stored under separate keys in chart_targets,
+# so switching a chart to fixed keeps the imported dates for switching back.
+# Both live in the PROD cluster, like the layout, so every environment shows
+# the same targets.
+
+KPI_TARGET_MODES = ("none", "fixed", "import", "snowflake")
+
+
+def _kpi_target_key(kind: str, source: str, metric: str) -> str:
+    return f"kpi:{kind}:{source}:{metric}"
+
+
+def _roll_up_kpi_targets(by_date: dict, dates: list, week_mondays: list,
+                         month_firsts: list, agg: str) -> tuple[list, list, list]:
+    """Daily, weekly and monthly target arrays from per-date targets.
+
+    A summed metric's period target is the average daily target times the
+    period's FULL length, as on the Google Ads page — summing only the dates
+    present would make the target dive on a part-covered week or month. An
+    averaged metric's period target is just the average daily target.
+    A period with no targeted date is None, never 0.
+    """
+    def _period(period_dates):
+        values = [by_date[d] for d in period_dates if d in by_date]
+        if not values:
+            return None
+        mean = sum(values) / len(values)
+        return round(mean * len(period_dates) if agg == "sum" else mean, 4)
+
+    daily = [by_date.get(d) for d in dates]
+    weekly = [_period(_week_dates(m)) for m in week_mondays]
+    monthly = [_period(_month_dates(f)) for f in month_firsts]
+    return daily, weekly, monthly
+
+
+def _stored_kpi_targets(kind: str, source: str, metric: str, dates: list,
+                        week_mondays: list, month_firsts: list, agg: str):
+    key = _kpi_target_key(kind, source, metric)
+    start = min(dates[0], week_mondays[0], month_firsts[0])
+    last_month = month_firsts[-1]
+    end = max(dates[-1], week_mondays[-1] + datetime.timedelta(days=6),
+              last_month.replace(day=calendar.monthrange(last_month.year, last_month.month)[1]))
+    with get_prod_pricer_connection() as conn:
+        by_date = get_chart_targets(conn, [key], start, end).get(key, {})
+    return _roll_up_kpi_targets(by_date, dates, week_mondays, month_firsts, agg)
 
 
 @router.get("/kpi/custom-data")
-def kpi_custom_data(request: Request, metric: str, agg: str = "sum", user: str = Depends(require_page_api('kpi'))):
-    """Daily/weekly/monthly series for one whitelisted daily_summary column."""
-    metric = metric.upper()
-    if metric not in KPI_METRIC_COLUMNS:
-        return {"status": "error", "message": f"Unknown metric: {metric}"}
+def kpi_custom_data(request: Request, metric: str, agg: str = "sum", source: str = "snowflake",
+                    target_mode: str = "snowflake", months: int = KPI_DEFAULT_SETTINGS["months"],
+                    weeks: int = KPI_DEFAULT_SETTINGS["weeks"],
+                    days: int = KPI_DEFAULT_SETTINGS["days_total"],
+                    include_current: bool = False,
+                    user: str = Depends(require_page_api('kpi'))):
+    """Daily/weekly/monthly series for one metric, plus its N-1 and target.
+    include_current: also fill the current (part-elapsed) week and month."""
+    if source == "snowflake":
+        metric = metric.upper()
+    error = _validate_metric(source, metric)
+    if error:
+        return {"status": "error", "message": error}
     if agg not in ("sum", "avg"):
         return {"status": "error", "message": f"Unknown agg: {agg}"}
+    if target_mode not in KPI_TARGET_MODES:
+        return {"status": "error", "message": f"Unknown target mode: {target_mode}"}
+    months = _clamp_setting("months", months)
+    weeks = _clamp_setting("weeks", weeks)
+    days = _clamp_setting("days_total", days)
     try:
-        import calendar
         today = datetime.date.today()
-
-        # Same date windows as /kpi/data
-        window_start = today - datetime.timedelta(days=24)
-        daily_end    = today + datetime.timedelta(days=10)
-        _nm = (today.replace(day=1) + datetime.timedelta(days=32)).replace(day=1)
-        window_end = (_nm + datetime.timedelta(days=32)).replace(day=1) - datetime.timedelta(days=1)
-
-        first_of_this_month = today.replace(day=1)
-        monthly_end = first_of_this_month - datetime.timedelta(days=1)
-        monthly_start_dt = (first_of_this_month - datetime.timedelta(days=1)).replace(day=1)
-        for _ in range(12):
-            monthly_start_dt = (monthly_start_dt - datetime.timedelta(days=1)).replace(day=1)
-
-        days_since_monday = today.weekday()
-        last_sunday = today - datetime.timedelta(days=days_since_monday + 1)
-        weekly_end = last_sunday
-
-        # Week mondays and their previous-ISO-year equivalents (same week number)
-        week_mondays = []
-        w = _week_monday_of(weekly_end)
-        for _ in range(9):
-            week_mondays.append(w)
-            w -= datetime.timedelta(weeks=1)
-        week_mondays = list(reversed(week_mondays))
-        current_week_monday = _week_monday_of(today)
-        week_mondays.append(current_week_monday)
+        month_firsts, week_mondays, dates = _kpi_periods(today, months, weeks, days)
         prev_week_mondays = [_prev_iso_week_monday(m) for m in week_mondays]
-
-        fetch_start = min(window_start, monthly_start_dt, prev_week_mondays[0])
-
-        n1_col, target_col = _sibling_columns(metric)
-        # All column names come from the whitelists above — safe to interpolate
-        select_cols = ["DATE", metric] + ([n1_col] if n1_col else []) + ([target_col] if target_col else [])
-
-        with SnowflakeClient() as sf:
-            rows, cols = sf.execute(f"""
-                SELECT {', '.join(select_cols)}
-                FROM PROD_CARSUPERMARKET_DB.product_slt_kpis.daily_summary
-                WHERE DATE >= %s AND DATE <= %s
-                ORDER BY DATE
-            """, [str(fetch_start), str(window_end)])
-
-        col_map = {c.upper(): i for i, c in enumerate(cols)}
 
         def _num(val):
             try:
@@ -1080,17 +1212,9 @@ def kpi_custom_data(request: Request, metric: str, agg: str = "sum", user: str =
         def _round(v):
             if v is None:
                 return None
-            return int(v) if float(v).is_integer() else round(v, 2)
-
-        by_date: dict[str, dict] = {}
-        for r in rows:
-            d = r[col_map['DATE']]
-            d = d.isoformat() if isinstance(d, datetime.date) else str(d)[:10]
-            by_date[d] = {
-                'v':  _num(r[col_map[metric]]),
-                'n1': _num(r[col_map[n1_col]]) if n1_col else None,
-                't':  _num(r[col_map[target_col]]) if target_col else None,
-            }
+            # 4 places, not 2: a ratio like price position (0.9876) shown as a
+            # percent needs them for 98.76%. Display decimals are set per chart.
+            return int(v) if float(v).is_integer() else round(v, 4)
 
         def _agg(vals):
             known = [v for v in vals if v is not None]
@@ -1099,67 +1223,109 @@ def kpi_custom_data(request: Request, metric: str, agg: str = "sum", user: str =
             total = sum(known)
             return _round(total if agg == 'sum' else total / len(known))
 
-        def _agg_month(ym: str, field: str):
-            y, mo = int(ym[:4]), int(ym[5:7])
-            days_in = calendar.monthrange(y, mo)[1]
-            return _agg([by_date.get(datetime.date(y, mo, day).isoformat(), {}).get(field) for day in range(1, days_in + 1)])
+        target_col = None
+        stale_date = None
+        if source == "snowflake":
+            # N-1 is looked up from the metric's own history (below), the same
+            # way for both sources, so the <METRIC>_N_MINUS_1 column is not read.
+            # It also only runs to yesterday, which left future days blank.
+            target_col = _target_column(metric)
+            # Fetch a year further back than anything shown, for N-1, and
+            # forward to the end of next month, so the current month's target
+            # total is complete.
+            fetch_start = min(_shift_years(dates[0], -1), _shift_years(month_firsts[0], -1),
+                              prev_week_mondays[0])
+            _nm = (today.replace(day=1) + datetime.timedelta(days=32)).replace(day=1)
+            fetch_end = max(dates[-1], (_nm + datetime.timedelta(days=32)).replace(day=1) - datetime.timedelta(days=1))
+            # All column names come from the live column list — safe to interpolate
+            select_cols = ["DATE", metric] + ([target_col] if target_col else [])
+            with SnowflakeClient() as sf:
+                rows, cols = sf.execute(f"""
+                    SELECT {', '.join(select_cols)}
+                    FROM PROD_CARSUPERMARKET_DB.product_slt_kpis.daily_summary
+                    WHERE DATE >= %s AND DATE <= %s
+                    ORDER BY DATE
+                """, [str(fetch_start), str(fetch_end)])
+            col_map = {c.upper(): i for i, c in enumerate(cols)}
+            by_date: dict = {}
+            for r in rows:
+                d = r[col_map['DATE']]
+                d = d if isinstance(d, datetime.date) else datetime.date.fromisoformat(str(d)[:10])
+                by_date[d] = {
+                    'v':  _num(r[col_map[metric]]),
+                    't':  _num(r[col_map[target_col]]) if target_col else None,
+                }
+            value_at = lambda d: by_date.get(d, {}).get('v')
+        else:
+            sp = _get_sharepoint_data()
+            if sp.get("status") != "ok":
+                return {"status": "error", "message": sp.get("message", "SharePoint data unavailable")}
+            stale_date = sp.get("stale_date") if sp.get("stale") else None
+            sp_by_date = sp.get("by_date", {})
+            value_at = lambda d: _num(sp_by_date.get(d.isoformat(), {}).get(metric))
 
-        def _agg_week(monday: datetime.date, field: str):
-            return _agg([by_date.get((monday + datetime.timedelta(days=i)).isoformat(), {}).get(field) for i in range(7)])
+        # N-1 from the metric's own history, for both sources: the same date
+        # a year back for days (as daily_summary's DATEADD(YEAR, -1)), the same
+        # month a year back for months. Runs to the end of the day chart,
+        # future days included.
+        daily_n1_at = lambda d: value_at(_shift_years(d, -1))
+        monthly_n1 = [_agg([value_at(d) for d in _month_dates(f.replace(year=f.year - 1))]) for f in month_firsts]
 
         month_abbrs = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']
 
-        # ── Daily arrays ──────────────────────────────────────────────────────
-        dates = []
-        d_iter = window_start
-        while d_iter <= daily_end:
-            dates.append(d_iter.isoformat())
-            d_iter += datetime.timedelta(days=1)
+        # ── Daily ─────────────────────────────────────────────────────────────
+        values = [_round(value_at(d)) for d in dates]
+        values_n1 = [_round(daily_n1_at(d)) for d in dates]
 
-        values        = [_round(by_date.get(d, {}).get('v'))  for d in dates]
-        values_n1     = [_round(by_date.get(d, {}).get('n1')) for d in dates] if n1_col else None
-        values_target = [_round(by_date.get(d, {}).get('t'))  for d in dates] if target_col else None
+        # ── Monthly (current month left empty — it is part elapsed — unless
+        # the chart asks for it) ─────────────────────────────────────────────
+        first_of_this_month = month_firsts[-1]
+        monthly_values = [None if f == first_of_this_month and not include_current else _agg([value_at(d) for d in _month_dates(f)])
+                          for f in month_firsts]
+        monthly_labels = [month_abbrs[f.month - 1] + ' ' + str(f.year)[2:] for f in month_firsts]
 
-        # ── Monthly arrays ────────────────────────────────────────────────────
-        months = []
-        m_iter = monthly_start_dt
-        while m_iter <= monthly_end:
-            months.append(m_iter.strftime('%Y-%m'))
-            days_in = calendar.monthrange(m_iter.year, m_iter.month)[1]
-            m_iter = (m_iter.replace(day=days_in) + datetime.timedelta(days=1)).replace(day=1)
-        months.append(first_of_this_month.strftime('%Y-%m'))
-
-        current_ym = first_of_this_month.strftime('%Y-%m')
-        monthly_values        = [None if m == current_ym else _agg_month(m, 'v') for m in months]
-        monthly_values_n1     = [_agg_month(m, 'n1') for m in months] if n1_col else None
-        monthly_values_target = [_agg_month(m, 't')  for m in months] if target_col else None
-        monthly_labels        = [month_abbrs[int(m[5:7]) - 1] + ' ' + m[2:4] for m in months]
-
-        # ── Weekly arrays ─────────────────────────────────────────────────────
+        # ── Weekly (current week left empty) ─────────────────────────────────
         # Weekly N-1 = same ISO week NUMBER of the previous year, aggregated
-        # from the metric's own daily history — available for every metric,
-        # even without an _N_MINUS_1 column
-        weekly_labels    = [f"W{m.isocalendar()[1]} ({m.day}-{month_abbrs[m.month-1]})" for m in week_mondays]
+        # from the metric's own daily history.
+        current_week_monday = week_mondays[-1]
+        weekly_labels = [f"W{m.isocalendar()[1]} ({m.day}-{month_abbrs[m.month-1]})" for m in week_mondays]
         weekly_n1_labels = [f"W{pm.isocalendar()[1]} ({pm.day}-{month_abbrs[pm.month-1]})" for pm in prev_week_mondays]
-        weekly_values        = [None if m == current_week_monday else _agg_week(m, 'v') for m in week_mondays]
-        weekly_values_n1     = [_agg_week(pm, 'v') for pm in prev_week_mondays]
-        weekly_values_target = [_agg_week(m, 't')  for m in week_mondays] if target_col else None
+        weekly_values = [None if m == current_week_monday and not include_current else _agg([value_at(d) for d in _week_dates(m)])
+                         for m in week_mondays]
+        weekly_values_n1 = [_agg([value_at(d) for d in _week_dates(pm)]) for pm in prev_week_mondays]
+
+        # ── Target ───────────────────────────────────────────────────────────
+        values_target = weekly_values_target = monthly_values_target = None
+        if target_mode == "snowflake" and target_col:
+            values_target = [_round(by_date.get(d, {}).get('t')) for d in dates]
+            weekly_values_target = [_agg([by_date.get(d, {}).get('t') for d in _week_dates(m)]) for m in week_mondays]
+            monthly_values_target = [_agg([by_date.get(d, {}).get('t') for d in _month_dates(f)]) for f in month_firsts]
+        elif target_mode in ("fixed", "import"):
+            values_target, weekly_values_target, monthly_values_target = _stored_kpi_targets(
+                target_mode, source, metric, dates, week_mondays, month_firsts, agg)
 
         return {
             "status": "ok",
             "today": today.isoformat(),
+            "source": source,
             "metric": metric,
             "agg": agg,
-            "has_n1": bool(n1_col),
-            "has_target": bool(target_col),
-            "dates": dates,
+            "target_mode": target_mode,
+            # Set when SharePoint could not be reached and an older copy was used.
+            "stale_date": stale_date,
+            "has_n1": values_n1 is not None,
+            "has_target": values_target is not None and any(v is not None for v in values_target),
+            "dates": [d.isoformat() for d in dates],
             "values": values,
             "values_n1": values_n1,
             "values_target": values_target,
             "monthly_labels": monthly_labels,
             "monthly_values": monthly_values,
-            "monthly_values_n1": monthly_values_n1,
+            "monthly_values_n1": monthly_n1,
             "monthly_values_target": monthly_values_target,
+            # First date of each month / week, so the page can place chart notes.
+            "monthly_starts": [f.isoformat() for f in month_firsts],
+            "weekly_starts": [m.isoformat() for m in week_mondays],
             "weekly_labels": weekly_labels,
             "weekly_n1_labels": weekly_n1_labels,
             "weekly_values": weekly_values,
@@ -1167,9 +1333,133 @@ def kpi_custom_data(request: Request, metric: str, agg: str = "sum", user: str =
             "weekly_values_target": weekly_values_target,
         }
     except Exception as e:
-        logger.error(f"KPI custom data failed for {metric}: {e}")
+        logger.error(f"KPI custom data failed for {source}:{metric}: {e}")
         return {"status": "error", "message": str(e)}
 
+
+# ── KPI target editing ───────────────────────────────────────────────────────
+
+@router.get("/kpi/metric-target")
+def kpi_get_metric_target(request: Request, source: str, metric: str,
+                          user: str = Depends(require_page_api('kpi'))):
+    """What is stored for one metric: the fixed figure and a summary of the
+    imported dates. Read separately from the chart data so the popup shows
+    what is stored even for dates no chart is drawing."""
+    if source == "snowflake":
+        metric = metric.upper()
+    error = _validate_metric(source, metric)
+    if error:
+        return {"status": "error", "message": error}
+    fixed_key = _kpi_target_key("fixed", source, metric)
+    import_key = _kpi_target_key("import", source, metric)
+    try:
+        with get_prod_pricer_connection() as conn:
+            fixed = get_chart_target_ranges(conn, [fixed_key]).get(fixed_key)
+            imported = get_chart_target_summary(conn, import_key)
+    except Exception as e:
+        logger.error("Reading KPI target failed for %s:%s: %s", source, metric, e)
+        return {"status": "error", "message": str(e)}
+    has_snowflake = source == "snowflake" and _target_column(metric) is not None
+    return {
+        "status": "ok",
+        "fixed": fixed['value'] if fixed else None,
+        "imported": None if not imported else {
+            "count": imported['count'],
+            "first": imported['first'].isoformat(),
+            "last": imported['last'].isoformat(),
+        },
+        "has_snowflake_target": has_snowflake,
+    }
+
+
+@router.post("/kpi/metric-target/fixed")
+async def kpi_save_fixed_target(request: Request, user: str = Depends(require_page_api('kpi'))):
+    """Body: {"source", "metric", "value": number|null}. null removes the fixed figure."""
+    if not is_admin(user):
+        return {"status": "error", "message": "Only the admin can change KPI targets"}
+    body = await request.json()
+    source, metric = body.get('source'), body.get('metric')
+    if source == "snowflake" and isinstance(metric, str):
+        metric = metric.upper()
+    error = _validate_metric(source, metric)
+    if error:
+        return {"status": "error", "message": error}
+    key = _kpi_target_key("fixed", source, metric)
+    try:
+        with get_prod_pricer_connection() as conn:
+            if body.get('value') is None:
+                # The whole fixed figure goes, past dates included — it is one
+                # figure, not a history.
+                delete_chart_target(conn, key, datetime.date(1900, 1, 1))
+                return {"status": "ok", "fixed": None}
+            value, error = _target_value_or_error(body.get('value'))
+            if error:
+                return {"status": "error", "message": error}
+            start, end = _target_write_range()
+            save_chart_targets(conn, [(key, value)], start, end, user)
+    except Exception as e:
+        logger.error("Saving KPI fixed target failed for %s:%s: %s", source, metric, e)
+        return {"status": "error", "message": f"Save failed: {e}"}
+    return {"status": "ok", "fixed": value}
+
+
+KPI_IMPORT_MAX_ROWS = 5000
+
+
+@router.post("/kpi/metric-target/import")
+async def kpi_import_targets(request: Request, user: str = Depends(require_page_api('kpi'))):
+    """Body: {"source", "metric", "rows": [{"date": "YYYY-MM-DD", "value": number}, ...]}.
+
+    Only the dates in the file are written: a stored date is overwritten, a new
+    one is added, and every other stored date is left alone.
+    """
+    if not is_admin(user):
+        return {"status": "error", "message": "Only the admin can change KPI targets"}
+    body = await request.json()
+    source, metric = body.get('source'), body.get('metric')
+    if source == "snowflake" and isinstance(metric, str):
+        metric = metric.upper()
+    error = _validate_metric(source, metric)
+    if error:
+        return {"status": "error", "message": error}
+    raw_rows = body.get('rows') or []
+    if not raw_rows:
+        return {"status": "error", "message": "The file has no rows"}
+    if len(raw_rows) > KPI_IMPORT_MAX_ROWS:
+        return {"status": "error", "message": f"Too many rows (limit {KPI_IMPORT_MAX_ROWS})"}
+
+    by_date = {}
+    for index, row in enumerate(raw_rows, start=1):
+        try:
+            d = datetime.date.fromisoformat(str(row.get('date')))
+        except (TypeError, ValueError, AttributeError):
+            return {"status": "error", "message": f"Row {index}: bad date {row.get('date')!r}"}
+        value, error = _target_value_or_error(row.get('value'))
+        if error:
+            return {"status": "error", "message": f"Row {index} ({d}): {error}"}
+        # A date repeated in the file: the later row wins, as it would in the sheet.
+        by_date[d] = value
+
+    key = _kpi_target_key("import", source, metric)
+    try:
+        with get_prod_pricer_connection() as conn:
+            upsert_chart_target_dates(conn, key, sorted(by_date.items()), user)
+            summary = get_chart_target_summary(conn, key)
+    except Exception as e:
+        logger.error("Importing KPI targets failed for %s:%s: %s", source, metric, e)
+        return {"status": "error", "message": f"Import failed: {e}"}
+    return {
+        "status": "ok",
+        "written": len(by_date),
+        "imported": None if not summary else {
+            "count": summary['count'],
+            "first": summary['first'].isoformat(),
+            "last": summary['last'].isoformat(),
+        },
+    }
+
+
+# ── Layout and settings ──────────────────────────────────────────────────────
 
 def _validate_layout(layout: dict) -> str | None:
     """Return an error message if the layout payload is invalid, else None."""
@@ -1179,72 +1469,208 @@ def _validate_layout(layout: dict) -> str | None:
     for row in rows:
         if not isinstance(row, dict):
             return "each row must be an object"
-        if row.get("type") not in ("builtin", "custom"):
+        if row.get("type") != "custom":
             return f"bad row type: {row.get('type')}"
         if row.get("section") not in KPI_SECTIONS:
             return f"bad section: {row.get('section')}"
-        if row["type"] == "builtin" and row.get("id") not in ("sessions", "orders"):
-            return f"bad builtin id: {row.get('id')}"
-        if row["type"] == "custom":
-            if row.get("metric") not in KPI_METRIC_COLUMNS:
-                return f"bad metric: {row.get('metric')}"
-            if row.get("agg") not in ("sum", "avg"):
-                return f"bad agg: {row.get('agg')}"
-            title = row.get("title", row["metric"])
-            if not isinstance(title, str) or not title.strip() or len(title) > 100:
-                return "bad title"
-            if not isinstance(row.get("invert", False), bool):
-                return "bad invert"
-            if row.get("fmt", "num") not in ("num", "pct"):
-                return f"bad fmt: {row.get('fmt')}"
-            decimals = row.get("decimals", 0)
-            if not isinstance(decimals, int) or not (0 <= decimals <= 3):
-                return f"bad decimals: {decimals}"
-    builtin_ids = [r["id"] for r in rows if r["type"] == "builtin"]
-    if sorted(builtin_ids) != ["orders", "sessions"]:
-        return "layout must contain the sessions and orders builtin rows exactly once"
+        error = _validate_metric(row.get("source", "snowflake"), row.get("metric"))
+        if error:
+            return error
+        if row.get("agg") not in ("sum", "avg"):
+            return f"bad agg: {row.get('agg')}"
+        title = row.get("title", row["metric"])
+        if not isinstance(title, str) or not title.strip() or len(title) > 100:
+            return "bad title"
+        subtitle = row.get("subtitle", "")
+        if not isinstance(subtitle, str) or len(subtitle) > 200:
+            return "bad subtitle"
+        if not isinstance(row.get("invert", False), bool):
+            return "bad invert"
+        if not isinstance(row.get("include_current", False), bool):
+            return "bad include_current"
+        if row.get("fmt", "num") not in ("num", "pct", "pct100", "k"):
+            return f"bad fmt: {row.get('fmt')}"
+        decimals = row.get("decimals", 0)
+        if not isinstance(decimals, int) or not (0 <= decimals <= 3):
+            return f"bad decimals: {decimals}"
+        if row.get("target_mode", "snowflake") not in KPI_TARGET_MODES:
+            return f"bad target mode: {row.get('target_mode')}"
+        # Vertical axis minimum and maximum per period (m/w/d). Missing or null
+        # minimum = start at 0; missing or null maximum = worked out from the data.
+        for field in ("y_min", "y_max"):
+            limits = row.get(field)
+            if limits is None:
+                continue
+            if not isinstance(limits, dict) or set(limits) - {"m", "w", "d"}:
+                return f"bad {field}"
+            for value in limits.values():
+                if value is not None and (isinstance(value, bool) or not isinstance(value, (int, float))):
+                    return f"bad {field} value"
+        y_min = row.get("y_min") or {}
+        for key, value in (row.get("y_max") or {}).items():
+            if value is not None and value <= (y_min.get(key) or 0):
+                return "axis maximum must be above its minimum"
+        # Ratio chart: the metric divided by a second metric. The page fetches
+        # both and divides; its target is a figure stored on the row itself,
+        # because the stored per-metric targets are for the numerator alone.
+        divide_by = row.get("divide_by")
+        if divide_by is not None:
+            if not isinstance(divide_by, dict):
+                return "bad divide_by"
+            error = _validate_metric(divide_by.get("source", "snowflake"), divide_by.get("metric"))
+            if error:
+                return error
+            if row.get("ratio_as", "dec") not in ("dec", "pct"):
+                return f"bad ratio_as: {row.get('ratio_as')}"
+            if row.get("target_mode", "none") not in ("none", "fixed"):
+                return "a ratio chart's target must be none or fixed"
+            ratio_target = row.get("ratio_target")
+            if ratio_target is not None and (isinstance(ratio_target, bool) or not isinstance(ratio_target, (int, float))):
+                return "bad ratio_target"
     return None
+
+
+def _read_kpi_layout_value(key: str):
+    # Layout and settings always live in the PROD cluster so local/dev edits
+    # and prod serve the same dashboard
+    with get_prod_pricer_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute("CREATE TABLE IF NOT EXISTS kpi_layout (key VARCHAR(50) PRIMARY KEY, value TEXT)")
+            cur.execute("SELECT value FROM kpi_layout WHERE key = %s", (key,))
+            row = cur.fetchone()
+        conn.commit()
+    return json.loads(row[0]) if row else None
+
+
+def _write_kpi_layout_value(key: str, value) -> None:
+    with get_prod_pricer_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute("CREATE TABLE IF NOT EXISTS kpi_layout (key VARCHAR(50) PRIMARY KEY, value TEXT)")
+            cur.execute(
+                "INSERT INTO kpi_layout (key, value) VALUES (%s, %s) "
+                "ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value",
+                (key, json.dumps(value))
+            )
+        conn.commit()
+
+
+def _kpi_settings(stored: dict | None) -> dict:
+    """Stored settings filled out with defaults and clamped to the limits."""
+    merged = {**KPI_DEFAULT_SETTINGS, **(stored or {})}
+    settings = {name: _clamp_setting(name, merged[name]) for name in KPI_DEFAULT_SETTINGS}
+    settings["days_window"] = min(settings["days_window"], settings["days_total"])
+    return settings
 
 
 @router.get("/kpi/layout")
 def kpi_layout_get(request: Request, user: str = Depends(require_page_api('kpi'))):
     try:
-        # Layout always lives in the PROD cluster so local/dev edits and prod
-        # serve the same dashboard
-        with get_prod_pricer_connection() as conn:
-            with conn.cursor() as cur:
-                cur.execute("CREATE TABLE IF NOT EXISTS kpi_layout (key VARCHAR(50) PRIMARY KEY, value TEXT)")
-                cur.execute("SELECT value FROM kpi_layout WHERE key = 'layout'")
-                row = cur.fetchone()
-            conn.commit()
-        layout = json.loads(row[0]) if row else KPI_DEFAULT_LAYOUT
-        return {"status": "ok", "layout": layout, "sections": KPI_SECTIONS}
+        layout = _read_kpi_layout_value('layout') or KPI_DEFAULT_LAYOUT
+        settings = _kpi_settings(_read_kpi_layout_value('settings'))
+        notes = _read_kpi_layout_value('notes') or []
     except Exception as e:
         logger.error(f"KPI layout load failed: {e}")
-        return {"status": "ok", "layout": KPI_DEFAULT_LAYOUT, "sections": KPI_SECTIONS}
+        layout, settings, notes = KPI_DEFAULT_LAYOUT, _kpi_settings(None), []
+    # The hard-coded Sessions and Apex Orders rows were removed: every chart is
+    # now created on the page. Drop them from a layout saved before that.
+    layout = {**layout, "rows": [r for r in layout.get("rows", []) if r.get("type") == "custom"]}
+    return {"status": "ok", "layout": layout, "sections": KPI_SECTIONS, "settings": settings,
+            "setting_limits": KPI_SETTING_LIMITS, "notes": notes}
+
+
+# ── Chart notes ──────────────────────────────────────────────────────────────
+# Dated notes marking business changes (a new finance deal, a change to which
+# cars go on Autotrader). Each draws a dotted line on the day chart and on the
+# week and month containing that date. row_id None = every chart, otherwise
+# only that chart row. The whole list is saved in one go, like the layout.
+_KPI_NOTES_MAX = 500
+
+
+def _validate_notes(notes) -> str | None:
+    if not isinstance(notes, list):
+        return "notes must be a list"
+    if len(notes) > _KPI_NOTES_MAX:
+        return f"At most {_KPI_NOTES_MAX} notes"
+    seen = set()
+    for note in notes:
+        if not isinstance(note, dict):
+            return "bad note"
+        note_id = note.get("id")
+        if not isinstance(note_id, str) or not note_id or len(note_id) > 40 or note_id in seen:
+            return "bad note id"
+        seen.add(note_id)
+        try:
+            datetime.date.fromisoformat(note.get("date"))
+        except (TypeError, ValueError):
+            return "Note date must be YYYY-MM-DD"
+        title = note.get("title")
+        if not isinstance(title, str) or not title.strip() or len(title) > 100:
+            return "Note title must be 1 to 100 characters"
+        text = note.get("text", "")
+        if not isinstance(text, str) or len(text) > 2000:
+            return "Note text must be 2000 characters or fewer"
+        row_id = note.get("row_id")
+        if row_id is not None and (not isinstance(row_id, str) or len(row_id) > 40):
+            return "bad note row_id"
+        if set(note) - {"id", "date", "title", "text", "row_id"}:
+            return "Unknown note field"
+    return None
+
+
+@router.post("/kpi/notes")
+def kpi_notes_save(request: Request, payload: dict, user: str = Depends(require_page_api('kpi'))):
+    if not is_admin(user):
+        return {"status": "error", "message": "Only the admin can change chart notes"}
+    notes = (payload or {}).get("notes")
+    err = _validate_notes(notes)
+    if err:
+        return {"status": "error", "message": err}
+    try:
+        _write_kpi_layout_value('notes', notes)
+        return {"status": "ok"}
+    except Exception as e:
+        logger.error(f"KPI notes save failed: {e}")
+        return {"status": "error", "message": str(e)}
 
 
 @router.post("/kpi/layout")
 def kpi_layout_save(request: Request, payload: dict, user: str = Depends(require_page_api('kpi'))):
+    if not is_admin(user):
+        return {"status": "error", "message": "Only the admin can change the KPI charts"}
     layout = (payload or {}).get("layout")
     err = _validate_layout(layout or {})
     if err:
         return {"status": "error", "message": err}
     try:
-        # Always write to the PROD cluster — see kpi_layout_get
-        with get_prod_pricer_connection() as conn:
-            with conn.cursor() as cur:
-                cur.execute("CREATE TABLE IF NOT EXISTS kpi_layout (key VARCHAR(50) PRIMARY KEY, value TEXT)")
-                cur.execute(
-                    "INSERT INTO kpi_layout (key, value) VALUES ('layout', %s) "
-                    "ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value",
-                    (json.dumps(layout),)
-                )
-            conn.commit()
+        _write_kpi_layout_value('layout', layout)
         return {"status": "ok"}
     except Exception as e:
         logger.error(f"KPI layout save failed: {e}")
         return {"status": "error", "message": str(e)}
+
+
+@router.post("/kpi/settings")
+def kpi_settings_save(request: Request, payload: dict, user: str = Depends(require_page_api('kpi'))):
+    """Chart periods and label angle, shared by everyone. Admin only."""
+    if not is_admin(user):
+        return {"status": "error", "message": "Only the admin can change the KPI settings"}
+    raw = (payload or {}).get("settings") or {}
+    for name, (low, high) in KPI_SETTING_LIMITS.items():
+        try:
+            value = int(raw.get(name))
+        except (TypeError, ValueError):
+            return {"status": "error", "message": f"{name} must be a whole number"}
+        if not low <= value <= high:
+            return {"status": "error", "message": f"{name} must be between {low} and {high}"}
+    settings = _kpi_settings(raw)
+    if int(raw["days_window"]) > int(raw["days_total"]):
+        return {"status": "error", "message": "Days shown cannot be more than the days available"}
+    try:
+        _write_kpi_layout_value('settings', settings)
+    except Exception as e:
+        logger.error(f"KPI settings save failed: {e}")
+        return {"status": "error", "message": str(e)}
+    return {"status": "ok", "settings": settings}
 
 
 # Model run through Snowflake Cortex (SNOWFLAKE.CORTEX.COMPLETE) rather than a
@@ -1300,7 +1726,7 @@ _kpi_sp_cache_at: float = 0.0
 # The source spreadsheet is refreshed once per day between 08:00 and 09:00 UK,
 # so a cached payload is fresh if fetched after the most recent 09:00 UK.
 _SP_S3_BUCKET = "aa-raw-sources-uk"
-_SP_S3_KEY = "applications/pricing/uk-vehicle-list-evaluator/shared/cache/kpi_sharepoint_sessions_v3.json"
+_SP_S3_KEY = "applications/pricing/uk-vehicle-list-evaluator/shared/cache/kpi_sharepoint_v4.json"
 
 
 def _sp_cache_is_fresh(cached_at: float) -> bool:
@@ -1382,9 +1808,9 @@ def warm_sharepoint_cache() -> None:
 
 
 def _build_kpi_sharepoint_data() -> dict:
-    """Fetch Table1 and aggregate Sessions. Result is cached in _kpi_sp_cache."""
-    import calendar
-
+    """Fetch Table1 and keep every number column by date. Result is cached in
+    _kpi_sp_cache; /kpi/custom-data turns it into chart series per request, so
+    the chart periods can change without refetching the spreadsheet."""
     client = SharePointClient()
     rows = client.get_table_rows(
         table_name="Table1",
@@ -1395,11 +1821,9 @@ def _build_kpi_sharepoint_data() -> dict:
         return {"status": "error", "message": "No rows returned from SharePoint"}
 
     columns = list(rows[0].keys())
-    col_map = {c.lower(): c for c in columns}
-    date_col = col_map.get("date")
-    sessions_col = next((col_map[k] for k in col_map if "session" in k), None)
-    if not date_col or not sessions_col:
-        return {"status": "error", "message": f"Could not find Date/Sessions columns. Found: {columns}"}
+    date_col = next((c for c in columns if c.lower() == "date"), None)
+    if not date_col:
+        return {"status": "error", "message": f"Could not find a Date column. Found: {columns}"}
 
     def _parse_date(val) -> str | None:
         if val is None or val == "":
@@ -1416,102 +1840,49 @@ def _build_kpi_sharepoint_data() -> dict:
         except ValueError:
             return None
 
-    today = datetime.date.today()
+    def _number(val):
+        if isinstance(val, bool):
+            return None
+        if isinstance(val, (int, float)):
+            return float(val)
+        try:
+            return float(str(val).strip())
+        except (TypeError, ValueError):
+            return None
 
-    # 26 months back: the monthly N-1 line needs up to 25 months of history
-    # (LY of the oldest displayed month) and the ISO-week N-1 needs ~62 weeks
-    first_of_this_month = today.replace(day=1)
-    cutoff = (first_of_this_month - datetime.timedelta(days=1)).replace(day=1)
-    for _ in range(25):
+    # Far enough back for the longest periods the settings allow plus their
+    # N-1 a year earlier: 24 months + 12, or 104 weeks + a year of weeks.
+    today = datetime.date.today()
+    cutoff = today.replace(day=1)
+    for _ in range(38):
         cutoff = (cutoff - datetime.timedelta(days=1)).replace(day=1)
     cutoff_str = cutoff.isoformat()
 
-    by_date: dict[str, int] = {}
-    for row in rows:
-        d = _parse_date(row.get(date_col))
-        if not d or d < cutoff_str:
+    dated = [(d, row) for d, row in ((_parse_date(row.get(date_col)), row) for row in rows)
+             if d and d >= cutoff_str]
+
+    # A number column is one where every filled cell is a number and at least
+    # one cell is filled. Text columns (notes, labels) are left out.
+    number_columns = []
+    for col in columns:
+        if col == date_col:
             continue
-        v = row.get(sessions_col)
-        try:
-            by_date[d] = int(float(v)) if v not in (None, "") else 0
-        except (ValueError, TypeError):
-            by_date[d] = 0
-    month_abbrs = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']
+        filled = [row.get(col) for _, row in dated if row.get(col) not in (None, "")]
+        if filled and all(_number(v) is not None for v in filled):
+            number_columns.append(col)
 
-    def _sum_month_sp(ym: str) -> int:
-        y, mo = int(ym[:4]), int(ym[5:7])
-        days_in = calendar.monthrange(y, mo)[1]
-        return sum(by_date.get(datetime.date(y, mo, day).isoformat(), 0) for day in range(1, days_in + 1))
-
-    def _sum_week_sp(monday: datetime.date) -> int:
-        return sum(by_date.get((monday + datetime.timedelta(days=i)).isoformat(), 0) for i in range(7))
-
-    first_of_this_month = today.replace(day=1)
-    monthly_end = first_of_this_month - datetime.timedelta(days=1)
-    m_iter = (first_of_this_month - datetime.timedelta(days=1)).replace(day=1)
-    for _ in range(12):
-        m_iter = (m_iter - datetime.timedelta(days=1)).replace(day=1)
-    months = []
-    while m_iter <= monthly_end:
-        months.append(m_iter.strftime('%Y-%m'))
-        days_in = calendar.monthrange(m_iter.year, m_iter.month)[1]
-        m_iter = (m_iter.replace(day=days_in) + datetime.timedelta(days=1)).replace(day=1)
-    months.append(first_of_this_month.strftime('%Y-%m'))
-
-    monthly_sessions = [None if m == first_of_this_month.strftime('%Y-%m') else _sum_month_sp(m) for m in months]
-    monthly_sessions_ly = [_sum_month_sp(f"{int(m[:4])-1}-{m[5:7]}") for m in months]
-    monthly_labels = [month_abbrs[int(m[5:7]) - 1] + ' ' + m[2:4] for m in months]
-
-    days_since_monday = today.weekday()
-    last_sunday = today - datetime.timedelta(days=days_since_monday + 1)
-    week_mondays = []
-    w = _week_monday_of(last_sunday)
-    for _ in range(9):
-        week_mondays.append(w)
-        w -= datetime.timedelta(weeks=1)
-    week_mondays = list(reversed(week_mondays))
-    current_week_monday = _week_monday_of(today)
-    week_mondays.append(current_week_monday)
-
-    weekly_labels = [f"W{m.isocalendar()[1]} ({m.day}-{month_abbrs[m.month-1]})" for m in week_mondays]
-    weekly_sessions = [None if m == current_week_monday else _sum_week_sp(m) for m in week_mondays]
-    # N-1 = same ISO week number of the previous year, not the same dates -52 weeks
-    weekly_sessions_ly = [_sum_week_sp(_prev_iso_week_monday(m)) for m in week_mondays]
-
-    window_start = today - datetime.timedelta(days=24)
-    window_end = today + datetime.timedelta(days=10)
-    dates = []
-    d_iter = window_start
-    while d_iter <= window_end:
-        dates.append(d_iter.isoformat())
-        d_iter += datetime.timedelta(days=1)
-
-    daily_sessions = [by_date.get(d) if d <= today.isoformat() else None for d in dates]
-    daily_sessions_ly = [by_date.get((datetime.date.fromisoformat(d) - datetime.timedelta(days=365)).isoformat()) for d in dates]
+    by_date: dict[str, dict] = {}
+    for d, row in dated:
+        values = {col: _number(row.get(col)) for col in number_columns if row.get(col) not in (None, "")}
+        if values:
+            by_date[d] = values
 
     return {
         "status": "ok",
-        "sessions_col": sessions_col,
-        "today": today.isoformat(),
-        "monthly_labels": monthly_labels,
-        "monthly_sessions": monthly_sessions,
-        "monthly_sessions_ly": monthly_sessions_ly,
-        "weekly_labels": weekly_labels,
-        "weekly_sessions": weekly_sessions,
-        "weekly_sessions_ly": weekly_sessions_ly,
-        "dates": dates,
-        "daily_sessions": daily_sessions,
-        "daily_sessions_ly": daily_sessions_ly,
+        "fetched": today.isoformat(),
+        "columns": number_columns,
+        "by_date": by_date,
     }
-
-
-@router.get("/kpi/sharepoint")
-def kpi_sharepoint(request: Request, user: str = Depends(require_page_api('kpi'))):
-    try:
-        return _get_sharepoint_data()
-    except Exception as e:
-        logger.error("KPI SharePoint fetch failed: %s", e)
-        return {"status": "error", "message": str(e)}
 
 
 @router.get("/weekly-business-review", response_class=HTMLResponse)

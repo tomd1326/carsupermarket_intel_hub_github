@@ -9,171 +9,81 @@
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css" rel="stylesheet">
     <link href="{{ static_url('css/theme.css') }}" rel="stylesheet">
+    <link href="{{ static_url('css/charts.css') }}" rel="stylesheet">
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+    <script src="{{ static_url('js/charts.js') }}"></script>
+    <!-- Chart styles shared with other chart pages live in charts.css; only
+         what exists on this page alone belongs here. -->
     <style>
-        @font-face { font-family: 'DM Sans'; src: url('{{ BASE_URL }}/static/fonts/DMSans-Regular.ttf');  font-weight: 400; }
-        @font-face { font-family: 'DM Sans'; src: url('{{ BASE_URL }}/static/fonts/DMSans-Bold.ttf');     font-weight: 700; }
-        body, button, input, select, textarea { font-family: 'DM Sans', system-ui, sans-serif; font-size: 14px; }
-        body { background: #f1f5f9; }
-
-        .top-bar {
-            background: #fff;
-            border-bottom: 1px solid #e2e8f0;
-            padding: 12px 28px;
-            display: flex;
-            align-items: center;
-            gap: 16px;
-            position: sticky;
-            top: 0;
-            z-index: 100;
+        /* ── Chart popup (Add / Edit Chart) ─────────────────────────────────── */
+        /* KPI charts are taller than the shared 289px: 316px, plus the 19px
+           freed by moving the scroller onto the title line (old: ~17px title
+           + 4px gap + 22px legend line + 2px gap = 45px; new: 22px title
+           line + 4px gap = 26px). The card's outer height stays as it was. */
+        .chart-wrap { height: 335px; }
+        /* Row title slightly bigger than the shared 0.86rem. */
+        .chart-row-title.kpi-row-title { font-size: 0.95rem; }
+        /* Two columns side by side (chart settings | axis + target) so the popup
+           fits on screen without scrolling. Drops to one column on narrow screens. */
+        .modal-box.chart-modal { width: 1180px; max-width: 96vw; max-height: 92vh; overflow-y: auto; }
+        .chart-modal-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 0 28px; }
+        .chart-modal-col { min-width: 0; }
+        .modal-box.notes-modal { width: 760px; max-width: 96vw; max-height: 92vh; overflow-y: auto; }
+        .notes-modal textarea { width: 100%; box-sizing: border-box; font: inherit; font-size: 0.85rem; padding: 6px 8px; border: 1px solid #cbd5e1; border-radius: 6px; resize: vertical; }
+        .note-item { display: flex; align-items: flex-start; gap: 10px; padding: 7px 0; border-bottom: 1px solid #f1f5f9; font-size: 0.84rem; }
+        .note-item-main { flex: 1; min-width: 0; }
+        .note-item-head { font-weight: 700; color: #0f172a; }
+        .note-item-date { color: #7c3aed; margin-right: 6px; }
+        .note-item-scope { font-weight: 400; color: #64748b; margin-left: 6px; font-size: 0.78rem; }
+        .note-item-text { color: #475569; white-space: pre-wrap; margin-top: 2px; }
+        .note-item .btn { padding: 3px 10px; font-size: 0.76rem; }
+        .notes-empty { font-size: 0.84rem; color: #64748b; }
+        /* Hover popup for a note line. Fixed so it is never clipped by a card. */
+        .note-tip {
+            position: fixed; z-index: 2000; display: none; pointer-events: none;
+            max-width: 320px; background: #fff; border: 1px solid #c4b5fd; border-left: 4px solid #7c3aed;
+            border-radius: 6px; padding: 7px 10px; box-shadow: 0 4px 14px rgba(15,23,42,0.15);
+            font-size: 0.8rem; color: #334155;
         }
-        .top-bar h1 { font-size: 1.1rem; font-weight: 700; margin: 0; color: #0f172a; }
-        .top-bar .back-link { color: #64748b; text-decoration: none; font-size: 0.9rem; }
-        .top-bar .back-link:hover { color: #0f172a; }
-        .page-content { padding: 24px 32px; }
-
-        .charts-row {
-            display: grid;
-            grid-template-columns: 30.5fr 30.5fr 39fr;
-            gap: 16px;
-            align-items: start;
+        .note-tip .note-tip-item + .note-tip-item { margin-top: 6px; padding-top: 6px; border-top: 1px solid #ede9fe; }
+        .note-tip .note-tip-title { font-weight: 700; color: #0f172a; }
+        .note-tip .note-tip-date { color: #7c3aed; font-weight: 600; margin-right: 5px; }
+        .note-tip .note-tip-text { white-space: pre-wrap; margin-top: 2px; }
+        @media (max-width: 900px) { .chart-modal-cols { grid-template-columns: 1fr; } }
+        .modal-section-title {
+            font-size: 0.72rem; font-weight: 700; color: #64748b; text-transform: uppercase;
+            letter-spacing: 0.04em; border-bottom: 1px solid #e2e8f0;
+            padding-bottom: 4px; margin: 6px 0 10px;
         }
-        .charts-row.with-ai {
-            grid-template-columns: 1.02fr 1.02fr 1.96fr auto;
-        }
-
-        .btn-ai {
-            background: #6366f1; border: none; color: #fff; font-weight: 700;
-            border-radius: 6px; padding: 7px 16px; font-size: 0.9rem;
-            display: inline-flex; align-items: center; gap: 7px; white-space: nowrap;
-        }
-        .btn-ai:hover { background: #4f46e5; color: #fff; }
-        .btn-ai:disabled { opacity: 0.6; cursor: not-allowed; }
-
-        .ai-panel {
-            background: #fff;
-            border: 1px solid #e2e8f0;
-            border-radius: 10px;
-            padding: 18px 20px;
-            box-shadow: 0 1px 3px rgba(0,0,0,0.06);
-            width: 280px;
-            min-height: 100px;
-            display: flex;
-            flex-direction: column;
-            gap: 12px;
-        }
-        .ai-panel h2 { font-size: 0.88rem; font-weight: 700; color: #0f172a; margin: 0; display: flex; align-items: center; gap: 6px; }
-        .ai-panel-body { font-size: 0.82rem; color: #334155; line-height: 1.55; white-space: pre-wrap; }
-        .ai-placeholder { font-size: 0.82rem; color: #94a3b8; font-style: italic; }
-
-        .chart-card {
-            background: #fff;
-            border: 1px solid #e2e8f0;
-            border-radius: 10px;
-            padding: 18px 20px;
-            box-shadow: 0 1px 3px rgba(0,0,0,0.06);
-        }
-        .chart-card h2 { font-size: 0.88rem; font-weight: 700; color: #0f172a; margin-bottom: 8px; }
-
-        .btn-load {
-            background: #7ed321; border: none; color: #0d3d5f; font-weight: 700;
-            border-radius: 6px; padding: 7px 20px; font-size: 0.9rem;
-            display: inline-flex; align-items: center; gap: 7px;
-        }
-        .btn-load:hover { background: #6cba18; color: #0d3d5f; }
-        .btn-load:disabled { opacity: 0.6; cursor: not-allowed; }
-        .status-text { font-size: 0.82rem; color: #64748b; }
-
-        .btn-edit {
-            background: #fff; border: 1px solid #cbd5e1; color: #334155; font-weight: 700;
-            border-radius: 6px; padding: 7px 16px; font-size: 0.9rem;
-            display: inline-flex; align-items: center; gap: 7px;
-        }
-        .btn-edit:hover { background: #f1f5f9; color: #0f172a; }
-        .btn-apply {
-            background: #0d3d6e; border: none; color: #fff; font-weight: 700;
-            border-radius: 6px; padding: 7px 16px; font-size: 0.9rem;
-            display: inline-flex; align-items: center; gap: 7px;
-        }
-        .btn-apply:hover { background: #0a2f56; color: #fff; }
-        .btn-apply:disabled { opacity: 0.6; cursor: not-allowed; }
-
-        .chart-legend {
-            display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
-            margin-bottom: 8px; font-size: 0.75rem; color: #475569;
-        }
-        .legend-item { display: flex; align-items: center; gap: 4px; }
-        .legend-dot { width: 14px; height: 3px; border-radius: 2px; display: inline-block; }
-        .legend-dot-dashed { width: 14px; height: 0; border-top: 2px dashed #9ca3af; display: inline-block; }
-
-        .category-header {
-            display: flex; align-items: center; gap: 10px;
-            padding: 9px 16px; margin-bottom: 0;
-            background: #e2e8f0; border-radius: 8px;
-            cursor: pointer; user-select: none;
-            font-size: 0.82rem; font-weight: 700; color: #0f172a;
-            border: 1px solid #cbd5e1;
-        }
-        .category-header:hover { background: #d1d9e2; }
-        .category-header .chevron { font-size: 0.7rem; color: #64748b; transition: transform 0.2s; }
-        .category-header.open .chevron { transform: rotate(90deg); }
-        .category-body { display: none; margin-top: 12px; }
-        .category-body.open { display: block; }
-        .category-section { margin-bottom: 12px; }
-
-        .chart-row + .chart-row { margin-top: 16px; }
-
-        /* ── Edit mode ──────────────────────────────────────────────────────── */
-        .row-toolbar {
-            display: none;
-            align-items: center; gap: 8px;
-            margin-bottom: 8px; padding: 7px 12px;
-            background: #fffbeb; border: 1px dashed #f59e0b; border-radius: 8px;
-            font-size: 0.82rem; color: #475569;
-        }
-        body.edit-mode .row-toolbar { display: flex; }
-        .row-toolbar .row-title { font-weight: 700; color: #0f172a; }
-        .row-toolbar .row-desc { color: #94a3b8; font-size: 0.78rem; }
-        .row-toolbar .toolbar-right { margin-left: auto; display: flex; align-items: center; gap: 6px; }
-        .btn-toolbar {
-            background: #fff; border: 1px solid #cbd5e1; color: #334155;
-            border-radius: 6px; padding: 3px 9px; font-size: 0.78rem;
-        }
-        .btn-toolbar:hover { background: #f1f5f9; }
-        .btn-toolbar:disabled { opacity: 0.4; cursor: not-allowed; }
-        .btn-toolbar.btn-remove { color: #b91c1c; border-color: #fca5a5; }
-        .btn-toolbar.btn-remove:hover { background: #fef2f2; }
-        .row-toolbar select {
-            padding: 3px 8px; border: 1px solid #cbd5e1; border-radius: 6px;
-            font-size: 0.8rem; background: #fff; color: #334155;
-        }
-        .row-toolbar { flex-wrap: wrap; }
-        .toolbar-title-input {
-            padding: 3px 8px; border: 1px solid #cbd5e1; border-radius: 6px;
-            font-size: 0.82rem; font-weight: 700; color: #0f172a; width: 220px;
-        }
-
-        /* ── Add-chart modal ────────────────────────────────────────────────── */
-        .modal-overlay {
-            position: fixed; inset: 0; background: rgba(15, 23, 42, 0.45);
-            display: none; align-items: flex-start; justify-content: center;
-            padding-top: 10vh; z-index: 200;
-        }
-        .modal-overlay.open { display: flex; }
-        .modal-box {
-            background: #fff; border-radius: 12px; padding: 22px 24px;
-            width: 480px; max-width: 92vw;
-            box-shadow: 0 10px 40px rgba(0,0,0,0.25);
-        }
-        .modal-box h2 { font-size: 1rem; font-weight: 700; color: #0f172a; margin-bottom: 16px; }
-        .modal-field { margin-bottom: 14px; }
-        .modal-field label { display: block; font-size: 0.8rem; font-weight: 700; color: #334155; margin-bottom: 4px; }
-        .modal-field select { width: 100%; padding: 6px 10px; border: 1px solid #cbd5e1; border-radius: 6px; background: #fff; color: #0f172a; }
+        .modal-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0 14px; }
+        .modal-grid.three { grid-template-columns: 1fr 1fr 1fr; }
+        .modal-grid .span-2 { grid-column: span 2; }
         .metric-desc { font-size: 0.8rem; color: #64748b; margin-top: 5px; min-height: 18px; }
-        .agg-options { display: flex; gap: 18px; font-size: 0.85rem; color: #334155; }
+        .agg-options { display: flex; gap: 18px; flex-wrap: wrap; font-size: 0.85rem; color: #334155; min-height: 34px; align-items: center; }
         .agg-options label { display: flex; align-items: center; gap: 5px; font-weight: 400; margin: 0; }
-        .modal-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 18px; }
-        /* Shared Back / Home / nav button size across all pages */
+        .settings-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0 14px; }
+        .import-row { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
+        .import-row input[type="file"] { flex: 1; min-width: 0; font-size: 0.8rem; }
+        .import-row .btn { padding: 4px 12px; font-size: 0.8rem; }
+        .import-summary { font-size: 0.8rem; color: #334155; }
+        .btn-remove-chart {
+            background: #fff; border: 1px solid #fca5a5; color: #b91c1c; font-weight: 700;
+            border-radius: 6px; padding: 7px 16px; font-size: 0.9rem;
+        }
+        .btn-remove-chart:hover { background: #fef2f2; color: #b91c1c; }
+        .chart-modal-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+        .modal-close-x {
+            background: none; border: none; font-size: 22px; line-height: 1;
+            cursor: pointer; color: #6b7280; padding: 0 2px; margin-top: -4px;
+        }
+        .modal-close-x:hover { color: #111; }
+        .page-loading {
+            display: none; position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
+            align-items: center; gap: 16px; font-size: 1.8rem; font-weight: 600; color: #64748b;
+        }
+        .page-is-loading .page-loading { display: flex; }
+        /* Hidden, not removed, so charts drawn during the load still get their real size */
+        .page-is-loading #sectionsContainer { visibility: hidden; }
     </style>
 </head>
 <body>
@@ -183,207 +93,349 @@
         <button class="btn btn-load" id="loadBtn" onclick="loadAll()">
             <i class="fas fa-sync-alt" id="loadIcon"></i> Load Data
         </button>
-        <button class="btn btn-edit" id="editBtn" onclick="enterEditMode()">
-            <i class="fas fa-pen"></i> Edit
-        </button>
-        <button class="btn btn-edit" id="addChartBtn" onclick="openAddModal()" style="display:none;">
+        {% if kpi_is_admin %}
+        <button class="btn btn-edit" onclick="openChartModal(null)">
             <i class="fas fa-plus"></i> Add Chart
         </button>
-        <button class="btn btn-apply" id="applyBtn" onclick="applyEdit()" style="display:none;">
-            <i class="fas fa-check"></i> Apply
+        <button class="btn btn-edit" onclick="openSettingsModal()">
+            <i class="fas fa-cog"></i> Settings
         </button>
+        <button class="btn btn-edit" onclick="openNotesModal()">
+            <i class="fas fa-sticky-note"></i> Notes
+        </button>
+        {% endif %}
         <span class="status-text" id="statusText"></span>
     </div>
 
-    <div class="page-content">
+    <div class="page-content page-is-loading" id="pageContent">
+        <div class="page-loading"><i class="fas fa-sync-alt fa-spin"></i> Loading...</div>
         <div id="sectionsContainer"></div>
     </div>
 
-    <!-- Built-in chart rows: moved into their sections by renderLayout() -->
-    <div id="builtinStore" style="display:none;">
+    <!-- Popup shown when hovering a chart note's dotted line -->
+    <div class="note-tip" id="noteTip"></div>
 
-        <div class="chart-row" id="row-sessions">
-            <div class="row-toolbar"></div>
-            <div class="charts-row">
-                <div class="chart-card">
-                    <h2>Sessions - month</h2>
-                    <div class="chart-legend">
-                        <div class="legend-item"><span class="legend-dot" style="background:#004a8f;height:3px;"></span> Sessions</div>
-                        <div class="legend-item"><span class="legend-dot-dashed"></span> N-1</div>
-                        <div class="legend-item"><span style="width:14px;height:0;border-top:2px solid #e53e3e;display:inline-block;"></span> Target</div>
-                    </div>
-                    <div style="position:relative; height: 280px;">
-                        <canvas id="sessionsMonthlyChart"></canvas>
-                    </div>
-                </div>
-                <div class="chart-card">
-                    <h2>Sessions - week</h2>
-                    <div class="chart-legend">
-                        <div class="legend-item"><span class="legend-dot" style="background:#004a8f;height:3px;"></span> Sessions</div>
-                        <div class="legend-item"><span class="legend-dot-dashed"></span> N-1</div>
-                        <div class="legend-item"><span style="width:14px;height:0;border-top:2px solid #e53e3e;display:inline-block;"></span> Target</div>
-                    </div>
-                    <div style="position:relative; height: 280px;">
-                        <canvas id="sessionsWeeklyChart"></canvas>
-                    </div>
-                </div>
-                <div class="chart-card">
-                    <h2>Sessions - day</h2>
-                    <div class="chart-legend">
-                        <div class="legend-item"><span class="legend-dot" style="background:#004a8f;height:3px;"></span> Sessions</div>
-                        <div class="legend-item"><span class="legend-dot-dashed"></span> N-1</div>
-                        <div class="legend-item"><span style="width:14px;height:0;border-top:2px solid #e53e3e;display:inline-block;"></span> Target</div>
-                    </div>
-                    <div style="position:relative; height: 280px;">
-                        <canvas id="sessionsDailyChart"></canvas>
-                    </div>
-                </div>
+    {% if kpi_is_admin %}
+    <!-- Add / Edit Chart popup: every setting for one chart, target included -->
+    <div class="modal-overlay" id="chartModal">
+        <div class="modal-box chart-modal">
+            <div class="chart-modal-head">
+                <h2 id="chartModalTitle">Edit Chart</h2>
+                <button type="button" class="modal-close-x" onclick="closeChartModal()" aria-label="Close">&times;</button>
             </div>
-        </div>
+            <div class="modal-error" id="chartModalError"></div>
 
-        <div class="chart-row" id="row-orders">
-            <div class="row-toolbar"></div>
-            <div class="charts-row{% if kpi_ai_summary %} with-ai{% endif %}">
-                <div class="chart-card">
-                    <h2>Apex Orders - month</h2>
-                    <div class="chart-legend">
-                        <div class="legend-item"><span class="legend-dot" style="background:#0d3d6e;height:3px;"></span> Orders</div>
-                        <div class="legend-item"><span class="legend-dot-dashed"></span> N-1</div>
-                        <div class="legend-item"><span style="width:14px;height:0;border-top:2px solid #e53e3e;display:inline-block;"></span> Target</div>
-                    </div>
-                    <div style="position:relative; height: 320px;">
-                        <canvas id="monthlyChart"></canvas>
+            <div class="chart-modal-cols">
+            <div class="chart-modal-col">
+            <div class="modal-section-title">Chart</div>
+            <div class="modal-grid">
+                <div class="modal-field span-2">
+                    <label for="metricSelect">Metric</label>
+                    <select id="metricSelect" onchange="onMetricChange()"></select>
+                    <div class="metric-desc" id="metricDesc"></div>
+                </div>
+                <div class="modal-field">
+                    <label for="divideSelect">Divided by</label>
+                    <select id="divideSelect" onchange="onDivideChange()"></select>
+                </div>
+                <div class="modal-field" id="ratioAsField">
+                    <label for="ratioAsSelect">Show result as</label>
+                    <select id="ratioAsSelect" onchange="onRatioAsChange()">
+                        <option value="pct">Percentage (x 100)</option>
+                        <option value="dec">Decimal</option>
+                    </select>
+                </div>
+                <div class="modal-field span-2">
+                    <label for="titleInput">Title</label>
+                    <input type="text" id="titleInput" maxlength="100">
+                </div>
+                <div class="modal-field span-2">
+                    <label for="subtitleInput">Subtitle (optional)</label>
+                    <input type="text" id="subtitleInput" maxlength="200">
+                </div>
+                <div class="modal-field">
+                    <label for="sectionSelect">Section</label>
+                    <select id="sectionSelect" onchange="fillPositionOptions()"></select>
+                </div>
+                <div class="modal-field">
+                    <label for="positionSelect">Position in section</label>
+                    <select id="positionSelect"></select>
+                </div>
+                <div class="modal-field">
+                    <label>Weekly / monthly figure</label>
+                    <div class="agg-options">
+                        <label><input type="radio" name="aggRadio" value="sum" onchange="showYMinInputs()"> Sum</label>
+                        <label><input type="radio" name="aggRadio" value="avg" onchange="showYMinInputs()"> Average</label>
                     </div>
                 </div>
-                <div class="chart-card">
-                    <h2>Apex Orders - week</h2>
-                    <div class="chart-legend">
-                        <div class="legend-item"><span class="legend-dot" style="background:#0d3d6e;height:3px;"></span> Orders</div>
-                        <div class="legend-item"><span class="legend-dot-dashed"></span> N-1</div>
-                        <div class="legend-item"><span style="width:14px;height:0;border-top:2px solid #e53e3e;display:inline-block;"></span> Target</div>
-                    </div>
-                    <div style="position:relative; height: 320px;">
-                        <canvas id="weeklyChart"></canvas>
+                <div class="modal-field">
+                    <label>Current week / month</label>
+                    <div class="agg-options">
+                        <label><input type="checkbox" id="includeCurrentInput"> Show (part-period so far)</label>
                     </div>
                 </div>
-                <div class="chart-card">
-                    <h2>Apex Orders - day</h2>
-                    <div class="chart-legend">
-                        <div class="legend-item"><span class="legend-dot" style="background:#0d3d6e;height:3px;"></span> Orders</div>
-                        <div class="legend-item"><span class="legend-dot-dashed"></span> N-1</div>
-                        <div class="legend-item"><span style="width:14px;height:0;border-top:2px solid #e53e3e;display:inline-block;"></span> Target</div>
-                    </div>
-                    <div style="position:relative; height: 320px;">
-                        <canvas id="ordersChart"></canvas>
-                    </div>
+                <div class="modal-field">
+                    <label for="invertSelect">Colour vs target</label>
+                    <select id="invertSelect">
+                        <option value="0">Green above target (higher is better)</option>
+                        <option value="1">Green below target (lower is better)</option>
+                    </select>
                 </div>
-
-                {% if kpi_ai_summary %}
-                <div class="ai-panel" id="aiPanel">
-                    <h2><i class="fas fa-robot" style="color:#6366f1;"></i> AI Summary</h2>
-                    <p class="ai-placeholder" id="aiPlaceholder">Load data first, then click "AI Summary" to analyse the charts.</p>
-                    <div class="ai-panel-body" id="aiOutput" style="display:none;"></div>
-                    <button class="btn btn-ai" id="aiBtn" onclick="getAiSummary()" disabled>
-                        <i class="fas fa-wand-magic-sparkles" id="aiIcon"></i> AI Summary
-                    </button>
-                </div>
-                {% endif %}
-            </div>
-        </div>
-
-    </div>
-
-    <!-- Add chart modal -->
-    <div class="modal-overlay" id="addModal">
-        <div class="modal-box">
-            <h2><i class="fas fa-chart-line"></i> Add Chart</h2>
-            <div class="modal-field">
-                <label for="metricSelect">Metric</label>
-                <select id="metricSelect" onchange="onMetricChange()"></select>
-                <div class="metric-desc" id="metricDesc"></div>
-            </div>
-            <div class="modal-field">
-                <label for="titleInput">Title</label>
-                <input type="text" id="titleInput" maxlength="100" style="width:100%; padding:6px 10px; border:1px solid #cbd5e1; border-radius:6px; color:#0f172a;">
-            </div>
-            <div class="modal-field">
-                <label>Weekly / monthly aggregation</label>
-                <div class="agg-options">
-                    <label><input type="radio" name="aggRadio" value="sum"> Sum</label>
-                    <label><input type="radio" name="aggRadio" value="avg"> Average</label>
-                </div>
-            </div>
-            <div class="modal-field" style="display:flex; gap:12px;">
-                <div style="flex:1;">
+                <div class="modal-field">
                     <label for="fmtSelect">Label format</label>
                     <select id="fmtSelect">
                         <option value="num">Number</option>
-                        <option value="pct">Percent (%)</option>
+                        <option value="pct">Percent (%) - value is already a %</option>
+                        <option value="pct100">Percent (%) - from a decimal, 1.02 = 102%</option>
+                        <option value="k">Thousands (k)</option>
                     </select>
                 </div>
-                <div style="flex:1;">
+                <div class="modal-field">
                     <label for="decimalsSelect">Decimals</label>
                     <select id="decimalsSelect">
                         <option value="0">0</option>
                         <option value="1">1</option>
                         <option value="2">2</option>
+                        <option value="3">3</option>
                     </select>
                 </div>
             </div>
+            </div>
+
+            <div class="chart-modal-col">
+            <div class="modal-section-title">Vertical axis</div>
+            <!-- Average charts share one scale, so they get one pair of boxes; Sum
+                 charts get one per period because a month total dwarfs a day's. -->
+            <div class="modal-grid" id="yMinShared">
+                <div class="modal-field">
+                    <label for="yMinAll">Minimum (all three charts)</label>
+                    <input type="number" id="yMinAll" step="any" placeholder="0" oninput="updateYMaxPlaceholders()">
+                </div>
+                <div class="modal-field">
+                    <label for="yMaxAll">Maximum (all three charts)</label>
+                    <input type="number" id="yMaxAll" step="any" placeholder="Auto">
+                </div>
+            </div>
+            <div id="yMinPerPeriod">
+                <div class="modal-grid three">
+                    <div class="modal-field">
+                        <label for="yMinM">Month minimum</label>
+                        <input type="number" id="yMinM" step="any" placeholder="0" oninput="updateYMaxPlaceholders()">
+                    </div>
+                    <div class="modal-field">
+                        <label for="yMinW">Week minimum</label>
+                        <input type="number" id="yMinW" step="any" placeholder="0" oninput="updateYMaxPlaceholders()">
+                    </div>
+                    <div class="modal-field">
+                        <label for="yMinD">Day minimum</label>
+                        <input type="number" id="yMinD" step="any" placeholder="0" oninput="updateYMaxPlaceholders()">
+                    </div>
+                </div>
+                <div class="modal-grid three">
+                    <div class="modal-field">
+                        <label for="yMaxM">Month maximum</label>
+                        <input type="number" id="yMaxM" step="any" placeholder="Auto">
+                    </div>
+                    <div class="modal-field">
+                        <label for="yMaxW">Week maximum</label>
+                        <input type="number" id="yMaxW" step="any" placeholder="Auto">
+                    </div>
+                    <div class="modal-field">
+                        <label for="yMaxD">Day maximum</label>
+                        <input type="number" id="yMaxD" step="any" placeholder="Auto">
+                    </div>
+                </div>
+            </div>
+            <div class="modal-hint" style="margin:-8px 0 14px;">
+                Blank minimum starts the axis at 0. Blank maximum is worked out from the
+                data above the minimum; the grey figure shows what it will be. Type a
+                figure to fix it instead.
+            </div>
+
+            <div class="modal-section-title">Target</div>
+            <p class="modal-hint" id="targetSharedNote" style="margin:-4px 0 10px;"></p>
             <div class="modal-field">
-                <label for="invertSelect">Colour vs target</label>
-                <select id="invertSelect">
-                    <option value="0">Green above target (higher is better)</option>
-                    <option value="1">Green below target (lower is better)</option>
-                </select>
+                <label>This chart's target line comes from</label>
+                <div class="agg-options" id="targetModes">
+                    <label><input type="radio" name="targetMode" value="none"> No target</label>
+                    <label><input type="radio" name="targetMode" value="fixed"> Fixed figure</label>
+                    <label id="targetModeImport"><input type="radio" name="targetMode" value="import"> Imported CSV</label>
+                    <label id="targetModeSnowflake"><input type="radio" name="targetMode" value="snowflake"> Snowflake target column</label>
+                </div>
             </div>
             <div class="modal-field">
-                <label for="sectionSelect">Section</label>
-                <select id="sectionSelect"></select>
+                <label for="fixedTargetInput" id="fixedTargetLabel">Fixed target (per day)</label>
+                <input type="number" id="fixedTargetInput" min="0" step="any">
+                <div class="modal-hint" id="fixedTargetHint">
+                    One figure for every date. Week and month targets are worked out from it:
+                    added up on Sum charts, the same figure on Average charts.
+                    Clear the box and Save to remove it.
+                </div>
+                <div class="modal-hint" id="ratioTargetHint">
+                    One figure for every day, week and month, in the same units as the
+                    chart (enter 25 for 25% when showing a percentage). Belongs to this
+                    chart only.
+                </div>
             </div>
+            <div class="modal-field" id="importField">
+                <label>Imported targets</label>
+                <div class="import-summary" id="importSummary">Nothing imported yet.</div>
+                <div class="import-row">
+                    <input type="file" id="importFile" accept=".csv,text/csv">
+                    <button type="button" class="btn btn-edit" id="importBtn" onclick="importTargets()">Import</button>
+                </div>
+                <div class="modal-hint">
+                    CSV with two columns, date and target, one row per day. Dates as
+                    YYYY-MM-DD or DD/MM/YYYY; a header row is fine. Dates in the file
+                    are added or overwritten, every other stored date is kept.
+                    Imports are saved straight away.
+                </div>
+            </div>
+            </div>
+            </div>
+
             <div class="modal-actions">
-                <button class="btn btn-edit" onclick="closeAddModal()">Cancel</button>
-                <button class="btn btn-apply" onclick="addChart()"><i class="fas fa-plus"></i> Add</button>
+                <button type="button" class="btn btn-remove-chart" id="removeChartBtn" onclick="removeChart()">
+                    <i class="fas fa-trash"></i> Remove chart
+                </button>
+                <div class="spacer"></div>
+                <button type="button" class="btn btn-edit" onclick="closeChartModal()">Cancel</button>
+                <button type="button" class="btn btn-apply" id="chartSaveBtn" onclick="saveChartModal()">Save</button>
             </div>
         </div>
     </div>
 
+    <!-- Chart notes: dated notes drawn as a dotted line on the charts -->
+    <div class="modal-overlay" id="notesModal">
+        <div class="modal-box notes-modal">
+            <div class="chart-modal-head">
+                <h2><i class="fas fa-sticky-note"></i> Chart Notes</h2>
+                <button type="button" class="modal-close-x" onclick="closeNotesModal()" aria-label="Close">&times;</button>
+            </div>
+            <p class="modal-sub">Marks a date on the charts with a dotted line, e.g. a new finance deal or a change to which cars go on Autotrader. Hover the line to read the note.</p>
+            <div class="modal-error" id="notesError"></div>
+            <div class="modal-section-title" id="noteFormTitle">Add note</div>
+            <div class="modal-grid">
+                <div class="modal-field">
+                    <label for="noteDate">Date</label>
+                    <input type="date" id="noteDate">
+                </div>
+                <div class="modal-field">
+                    <label for="noteRow">Show on</label>
+                    <select id="noteRow"></select>
+                </div>
+                <div class="modal-field span-2">
+                    <label for="noteTitle">Title</label>
+                    <input type="text" id="noteTitle" maxlength="100">
+                </div>
+                <div class="modal-field span-2">
+                    <label for="noteText">Note</label>
+                    <textarea id="noteText" maxlength="2000" rows="3"></textarea>
+                </div>
+            </div>
+            <div class="modal-actions" style="margin-top:0;">
+                <button type="button" class="btn btn-edit" id="noteCancelEditBtn" onclick="resetNoteForm()">Cancel edit</button>
+                <div class="spacer"></div>
+                <button type="button" class="btn btn-apply" id="noteSaveBtn" onclick="saveNote()">Add note</button>
+            </div>
+            <div class="modal-section-title">Saved notes</div>
+            <div id="notesList"></div>
+        </div>
+    </div>
+
+    <!-- Settings modal -->
+    <div class="modal-overlay" id="settingsModal">
+        <div class="modal-box">
+            <h2><i class="fas fa-cog"></i> Settings</h2>
+            <p class="modal-sub">Applies to every chart, for everyone.</p>
+            <div class="modal-error" id="settingsError"></div>
+            <div class="settings-grid">
+                <div class="modal-field">
+                    <label for="setMonths">Months shown</label>
+                    <input type="number" id="setMonths" step="1">
+                </div>
+                <div class="modal-field">
+                    <label for="setWeeks">Weeks shown</label>
+                    <input type="number" id="setWeeks" step="1">
+                </div>
+                <div class="modal-field">
+                    <label for="setDaysWindow">Days shown at once</label>
+                    <input type="number" id="setDaysWindow" step="1">
+                </div>
+                <div class="modal-field">
+                    <label for="setDaysTotal">Days available to scroll</label>
+                    <input type="number" id="setDaysTotal" step="1">
+                </div>
+                <div class="modal-field">
+                    <label for="setLabelAngle">Data label angle (degrees)</label>
+                    <input type="number" id="setLabelAngle" step="1">
+                </div>
+            </div>
+            <div class="modal-hint" id="settingsHint"></div>
+            <div class="modal-actions">
+                <button type="button" class="btn btn-edit" onclick="closeSettingsModal()">Cancel</button>
+                <button type="button" class="btn btn-apply" id="settingsSaveBtn" onclick="saveSettings()">Save</button>
+            </div>
+        </div>
+    </div>
+    {% endif %}
+
     <script>
+    // Shared helpers (escHtml, dateLabel, offsetRange, makeBgPlugin,
+    // makeDataLabelPlugin, chartCardHtml, DayWindow, ...) come from charts.js.
     const BASE_URL = "{{ BASE_URL }}";
-    const DAY_NAMES = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
-    const BG_GREEN = 'rgba(147, 196, 125, 0.30)';
-    const BG_RED   = 'rgba(224, 102, 102, 0.30)';
+    // Adding, editing and removing charts, targets and settings are the
+    // admin's alone; the server refuses them from anyone else as well.
+    const IS_ADMIN = {{ 'true' if kpi_is_admin else 'false' }};
+    const SOURCE_LABELS = { snowflake: 'Snowflake', sharepoint: 'SharePoint' };
+    const Y_MIN_INPUTS = { m: 'yMinM', w: 'yMinW', d: 'yMinD' };
+    const Y_MAX_INPUTS = { m: 'yMaxM', w: 'yMaxW', d: 'yMaxD' };
 
-    // Disable animations globally for all charts
-    Chart.defaults.animation = false;
-
-    let ordersChart = null;
-    let monthlyChart = null;
-    let weeklyChart = null;
-    let kpiSnapshot = null;
-
-    let sessionsMonthlyChart = null;
-    let sessionsWeeklyChart = null;
-    let sessionsDailyChart = null;
-
-    // ── Layout / sections state ──────────────────────────────────────────────
+    // ── State ────────────────────────────────────────────────────────────────
     let SECTIONS = ['Upper Funnel', 'Results', 'Stock', 'Pricing', 'Margin'];
     let layout = { rows: [] };
     let metricsCatalogue = [];
-    let metricsByCol = {};
-    let editMode = false;
+    let metricsByKey = {};
     let rowCharts = {};        // rowId -> [Chart, Chart, Chart]
     const customRowEls = {};   // rowId -> element
     const customRowData = {};  // rowId -> last /kpi/custom-data response
-    const BUILTIN_TITLES = { sessions: 'Sessions', orders: 'Apex Orders' };
     let layoutLoaded = false;
+
+    // Chart periods and label angle, shared by everyone, set by the admin.
+    let settings = { months: 14, weeks: 10, days_window: 35, days_total: 90, label_angle: 0 };
+    let settingLimits = {};
+
+    // Dates of the day charts (all rows share the same dates).
+    let kpiDates = [];
+
+    // Chart notes: [{ id, date, title, text, row_id }] (row_id null = every chart).
+    let chartNotes = [];
+
+    DayWindow.configure({
+        getCount: () => kpiDates.length,
+        getSize: () => settings.days_window,
+        onChange: () => {
+            DayWindow.applyToCharts(Object.values(rowCharts).map(charts => charts[2]));
+            updateDayTitles();
+        },
+    });
+
+    function metricKey(source, column) { return source + '|' + column; }
+    function rowSource(row) { return row.source || 'snowflake'; }
+    // Rows saved before target modes existed drew the Snowflake target column.
+    function rowTargetMode(row) { return row.target_mode || 'snowflake'; }
+    function rowMetricInfo(row) { return metricsByKey[metricKey(rowSource(row), row.metric)] || {}; }
 
     function sectionDomId(name) {
         return 'sec-' + name.toLowerCase().replace(/[^a-z0-9]+/g, '-');
     }
 
     async function init() {
-        renderLayout();
+        // The layout and metric list load before any chart data, so show
+        // the loading state from the start, not only once loadAll begins.
+        setPageLoading(true);
+        document.getElementById('loadIcon').classList.add('fa-spin');
+        document.getElementById('loadBtn').disabled = true;
         try {
             const [layoutResp, metricsResp] = await Promise.all([
                 fetch(BASE_URL + '/kpi/layout').then(r => r.json()),
@@ -391,16 +443,13 @@
             ]);
             if (layoutResp.sections) SECTIONS = layoutResp.sections;
             layout = layoutResp.layout || { rows: [] };
+            if (layoutResp.settings) settings = layoutResp.settings;
+            settingLimits = layoutResp.setting_limits || {};
+            chartNotes = layoutResp.notes || [];
             metricsCatalogue = metricsResp.metrics || [];
-            metricsByCol = Object.fromEntries(metricsCatalogue.map(m => [m.column, m]));
+            metricsByKey = Object.fromEntries(metricsCatalogue.map(m => [metricKey(m.source, m.column), m]));
         } catch (err) {
             document.getElementById('statusText').textContent = 'Layout load failed: ' + err;
-            layout = {
-                rows: [
-                    { id: 'sessions', type: 'builtin', section: 'Upper Funnel' },
-                    { id: 'orders', type: 'builtin', section: 'Results' },
-                ]
-            };
         }
         layoutLoaded = true;
         renderLayout();
@@ -419,12 +468,13 @@
                 sec = document.createElement('div');
                 sec.className = 'category-section';
                 sec.id = sectionDomId(name);
+                // Sections start open on every page load.
                 const header = document.createElement('div');
-                header.className = 'category-header';
-                header.innerHTML = '<i class="fas fa-chevron-right chevron"></i> ' + name;
+                header.className = 'category-header clickable open';
+                header.innerHTML = '<i class="fas fa-chevron-right chevron"></i> ' + escHtml(name);
                 header.onclick = () => toggleSection(name);
                 const body = document.createElement('div');
-                body.className = 'category-body';
+                body.className = 'category-body open';
                 sec.appendChild(header);
                 sec.appendChild(body);
             }
@@ -433,31 +483,43 @@
 
         // Place rows into section bodies, in layout order
         layout.rows.forEach(row => {
-            const el = getRowElement(row);
-            if (!el) return;
-            document.getElementById(sectionDomId(row.section)).querySelector('.category-body').appendChild(el);
-            updateRowToolbar(row, el);
+            document.getElementById(sectionDomId(row.section)).querySelector('.category-body')
+                .appendChild(getRowElement(row));
         });
 
-        // Hide sections with no rows when not editing (skip until layout has actually loaded,
+        // Hide sections with no charts (skip until layout has actually loaded,
         // so sections stay visible rather than flashing away then back on first paint)
         SECTIONS.forEach(name => {
-            const sec = document.getElementById(sectionDomId(name));
             const hasRows = layout.rows.some(r => r.section === name);
-            sec.style.display = (hasRows || editMode || !layoutLoaded) ? '' : 'none';
+            document.getElementById(sectionDomId(name)).style.display = (hasRows || !layoutLoaded) ? '' : 'none';
         });
 
         setTimeout(resizeAllCharts, 10);
     }
 
     function getRowElement(row) {
-        if (row.type === 'builtin') return document.getElementById('row-' + row.id);
         if (!customRowEls[row.id]) customRowEls[row.id] = buildCustomRowElement(row);
         return customRowEls[row.id];
     }
 
-    function escHtml(s) {
-        return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    // Which chart rows this viewer has collapsed. Kept in the browser only,
+    // so one person hiding a row does not hide it for anyone else.
+    const COLLAPSED_KEY = 'kpiCollapsedRows';
+    function collapsedRows() {
+        try { return new Set(JSON.parse(localStorage.getItem(COLLAPSED_KEY) || '[]')); }
+        catch (e) { return new Set(); }
+    }
+    function isRowCollapsed(id) { return collapsedRows().has(id); }
+
+    function toggleRowCollapsed(id) {
+        const el = customRowEls[id];
+        if (!el) return;
+        const collapsed = el.classList.toggle('collapsed');
+        const set = collapsedRows();
+        if (collapsed) set.add(id); else set.delete(id);
+        try { localStorage.setItem(COLLAPSED_KEY, JSON.stringify([...set])); } catch (e) {}
+        // A chart drawn or resized while hidden has no size; fit it on showing.
+        if (!collapsed) (rowCharts[id] || []).forEach(c => c && c.resize());
     }
 
     function rowTitle(row) {
@@ -465,138 +527,62 @@
     }
 
     function buildCustomRowElement(row) {
-        const m = metricsByCol[row.metric] || {};
         const el = document.createElement('div');
         el.className = 'chart-row';
         el.id = 'row-' + row.id;
-
-        const title = escHtml(rowTitle(row));
-        const legendFor = (showN1) => {
-            const items = [
-                `<div class="legend-item"><span class="legend-dot" style="background:#0d3d6e;height:3px;"></span> ${title}</div>`,
-            ];
-            if (showN1) items.push('<div class="legend-item"><span class="legend-dot-dashed"></span> N-1</div>');
-            if (m.has_target) items.push('<div class="legend-item"><span style="width:14px;height:0;border-top:2px solid #e53e3e;display:inline-block;"></span> Target</div>');
-            return `<div class="chart-legend">${items.join('')}</div>`;
-        };
-
-        const card = (period, suffix, showN1) => `
-            <div class="chart-card">
-                <h2>${title} - ${period}</h2>
-                ${legendFor(showN1)}
-                <div style="position:relative; height: 280px;">
-                    <canvas id="cv-${row.id}-${suffix}"></canvas>
-                </div>
-            </div>`;
-
-        // Weekly N-1 is always available (computed from the metric's own
-        // history); month/day need an _N_MINUS_1 column in daily_summary
+        const title = rowTitle(row);
+        const card = (period, suffix, dayScroller = false) => chartCardHtml({
+            canvasId: `cv-${row.id}-${suffix}`,
+            titleId: `t-${row.id}-${suffix}`,
+            title: `${title} - ${period}`,
+            subtitle: row.subtitle || '',
+            dayScroller,
+            legend: false,
+        });
+        const editButton = IS_ADMIN ? `
+            <button type="button" class="chart-title-btn" onclick="openChartModal('${row.id}')">
+                <i class="fas fa-pen"></i> Edit Chart
+            </button>
+            <button type="button" class="chart-title-btn" onclick="copyChartBelow('${row.id}')">
+                <i class="fas fa-copy"></i> Copy Chart Below
+            </button>` : '';
+        // Hide / show is for everyone; the title shows next to it so a
+        // collapsed row still says what it is.
+        const toggleButton = `
+            <button type="button" class="chart-title-btn chart-collapse-btn" onclick="toggleRowCollapsed('${row.id}')">
+                <i class="fas fa-chevron-down"></i>
+                <span class="chart-collapse-label">${escHtml(title)}</span>
+            </button>`;
+        if (isRowCollapsed(row.id)) el.classList.add('collapsed');
         el.innerHTML = `
-            <div class="row-toolbar"></div>
+            <div class="chart-row-actions">${toggleButton}${editButton ? `<span class="chart-row-admin">${editButton}</span>` : ''}</div>
             <div class="charts-row">
-                ${card('month', 'm', m.has_n1)}
-                ${card('week', 'w', true)}
-                ${card('day', 'd', m.has_n1)}
+                ${card('monthly', 'm')}
+                ${card('weekly', 'w')}
+                ${card('daily', 'd', true)}
             </div>`;
         return el;
     }
 
-    function updateRowToolbar(row, el) {
-        const toolbar = el.querySelector('.row-toolbar');
-        if (!toolbar) return;
-        const sectionOptions = SECTIONS.map(s => `<option value="${s}"${s === row.section ? ' selected' : ''}>${s}</option>`).join('');
-        const removeBtn = row.type === 'custom'
-            ? `<button class="btn-toolbar btn-remove" title="Remove chart" onclick="removeRow('${row.id}')"><i class="fas fa-trash"></i></button>`
-            : '';
-
-        let leftPart, settings = '';
-        if (row.type === 'builtin') {
-            leftPart = `<span class="row-title">${BUILTIN_TITLES[row.id]}</span>
-                        <span class="row-desc">Built-in charts</span>`;
-        } else {
-            const desc = escHtml((metricsByCol[row.metric] || {}).description || '');
-            leftPart = `<input type="text" class="toolbar-title-input" maxlength="100" value="${escHtml(rowTitle(row))}"
-                            title="${desc}" onchange="renameRow('${row.id}', this.value)">
-                        <span class="row-desc">${row.metric}</span>`;
-            settings = `
-                <select title="Weekly/monthly aggregation" onchange="changeRowAgg('${row.id}', this.value)">
-                    <option value="sum"${row.agg === 'sum' ? ' selected' : ''}>Sum</option>
-                    <option value="avg"${row.agg === 'avg' ? ' selected' : ''}>Average</option>
-                </select>
-                <select title="Label format" onchange="changeRowFmt('${row.id}', this.value)">
-                    <option value="num"${(row.fmt || 'num') === 'num' ? ' selected' : ''}>Number</option>
-                    <option value="pct"${row.fmt === 'pct' ? ' selected' : ''}>Percent</option>
-                </select>
-                <select title="Decimals" onchange="changeRowDecimals('${row.id}', this.value)">
-                    ${[0, 1, 2].map(n => `<option value="${n}"${(row.decimals || 0) === n ? ' selected' : ''}>${n} dp</option>`).join('')}
-                </select>
-                <select title="Colour vs target" onchange="changeRowInvert('${row.id}', this.value)">
-                    <option value="0"${!row.invert ? ' selected' : ''}>Green above</option>
-                    <option value="1"${row.invert ? ' selected' : ''}>Green below</option>
-                </select>`;
-        }
-
-        toolbar.innerHTML = `
-            ${leftPart}
-            <div class="toolbar-right">
-                ${settings}
-                <button class="btn-toolbar" title="Move up" onclick="moveRow('${row.id}', -1)"><i class="fas fa-arrow-up"></i></button>
-                <button class="btn-toolbar" title="Move down" onclick="moveRow('${row.id}', 1)"><i class="fas fa-arrow-down"></i></button>
-                <select title="Section" onchange="changeRowSection('${row.id}', this.value)">${sectionOptions}</select>
-                ${removeBtn}
-            </div>`;
-    }
-
-    // Rebuild a custom row's DOM + charts after a config change.
-    // refetch=true when the change affects the data (agg); otherwise re-render from cache.
+    // Rebuild a row's DOM + charts after a config change.
+    // refetch=true when the change affects the data (agg, target); otherwise re-render from cache.
     function rebuildCustomRow(row, refetch) {
-        (rowCharts[row.id] || []).forEach(c => c && c.destroy());
-        delete rowCharts[row.id];
-        const el = customRowEls[row.id];
-        if (el) el.remove();
-        delete customRowEls[row.id];
+        dropRowElement(row.id);
         renderLayout();
         if (refetch || !customRowData[row.id]) loadCustomRow(row);
         else renderCustomRow(row, customRowData[row.id]);
     }
 
+    function dropRowElement(id) {
+        (rowCharts[id] || []).forEach(c => c && c.destroy());
+        delete rowCharts[id];
+        const el = customRowEls[id];
+        if (el) el.remove();
+        delete customRowEls[id];
+    }
+
     function findRow(id) {
         return layout.rows.find(r => r.id === id);
-    }
-
-    function renameRow(id, title) {
-        const row = findRow(id);
-        if (!row) return;
-        row.title = title.trim() || row.metric;
-        rebuildCustomRow(row, false);
-    }
-
-    function changeRowAgg(id, agg) {
-        const row = findRow(id);
-        if (!row) return;
-        row.agg = agg;
-        rebuildCustomRow(row, true);
-    }
-
-    function changeRowFmt(id, fmt) {
-        const row = findRow(id);
-        if (!row) return;
-        row.fmt = fmt;
-        rebuildCustomRow(row, false);
-    }
-
-    function changeRowDecimals(id, decimals) {
-        const row = findRow(id);
-        if (!row) return;
-        row.decimals = parseInt(decimals, 10);
-        rebuildCustomRow(row, false);
-    }
-
-    function changeRowInvert(id, invert) {
-        const row = findRow(id);
-        if (!row) return;
-        row.invert = invert === '1';
-        rebuildCustomRow(row, false);
     }
 
     function toggleSection(name) {
@@ -613,411 +599,520 @@
         Object.values(rowCharts).flat().forEach(c => c && c.resize());
     }
 
-    // ── Edit mode ────────────────────────────────────────────────────────────
-    function enterEditMode() {
-        editMode = true;
-        document.body.classList.add('edit-mode');
-        document.getElementById('editBtn').style.display = 'none';
-        document.getElementById('addChartBtn').style.display = '';
-        document.getElementById('applyBtn').style.display = '';
-        renderLayout();
+    async function saveLayout(rows) {
+        const resp = await fetch(BASE_URL + '/kpi/layout', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ layout: { ...layout, rows } }),
+        });
+        const json = await resp.json();
+        if (json.status !== 'ok') throw new Error(json.message || 'Save failed');
     }
 
-    async function applyEdit() {
-        const btn = document.getElementById('applyBtn');
-        const status = document.getElementById('statusText');
-        btn.disabled = true;
-        try {
-            const resp = await fetch(BASE_URL + '/kpi/layout', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ layout }),
-            });
-            const json = await resp.json();
-            if (json.status !== 'ok') throw new Error(json.message || 'Save failed');
-            editMode = false;
-            document.body.classList.remove('edit-mode');
-            document.getElementById('editBtn').style.display = '';
-            document.getElementById('addChartBtn').style.display = 'none';
-            document.getElementById('applyBtn').style.display = 'none';
-            renderLayout();
-            status.textContent = 'Layout saved';
-        } catch (err) {
-            status.textContent = 'Layout save failed: ' + err.message;
-        } finally {
-            btn.disabled = false;
-        }
-    }
-
-    function moveRow(id, dir) {
-        const rows = layout.rows;
-        const idx = rows.findIndex(r => r.id === id);
-        if (idx < 0) return;
-        const row = rows[idx];
-        const sameSection = rows.map((r, i) => ({ r, i })).filter(x => x.r.section === row.section);
-        const pos = sameSection.findIndex(x => x.i === idx);
-        const swapWith = sameSection[pos + dir];
-        if (!swapWith) return;
-        [rows[idx], rows[swapWith.i]] = [rows[swapWith.i], rows[idx]];
-        renderLayout();
-    }
-
-    function changeRowSection(id, section) {
-        const idx = layout.rows.findIndex(r => r.id === id);
-        if (idx < 0) return;
-        const [row] = layout.rows.splice(idx, 1);
-        row.section = section;
-        layout.rows.push(row);  // appears last in its new section
-        renderLayout();
-    }
-
-    function removeRow(id) {
-        const row = layout.rows.find(r => r.id === id);
-        if (!row || row.type !== 'custom') return;
-        if (!confirm(`Remove the ${row.metric} charts?`)) return;
-        (rowCharts[id] || []).forEach(c => c && c.destroy());
-        delete rowCharts[id];
-        delete customRowData[id];
-        layout.rows = layout.rows.filter(r => r.id !== id);
-        const el = customRowEls[id];
-        if (el) el.remove();
-        delete customRowEls[id];
-        renderLayout();
-    }
-
-    // ── Add-chart modal ──────────────────────────────────────────────────────
-    function openAddModal() {
-        const metricSelect = document.getElementById('metricSelect');
-        metricSelect.innerHTML = metricsCatalogue
-            .map(m => `<option value="${m.column}">${m.column}</option>`)
-            .join('');
-        const sectionSelect = document.getElementById('sectionSelect');
-        sectionSelect.innerHTML = SECTIONS.map(s => `<option value="${s}">${s}</option>`).join('');
-        onMetricChange();
-        document.getElementById('addModal').classList.add('open');
-    }
-
-    function closeAddModal() {
-        document.getElementById('addModal').classList.remove('open');
-    }
-
-    function onMetricChange() {
-        const col = document.getElementById('metricSelect').value;
-        const m = metricsByCol[col] || {};
-        document.getElementById('metricDesc').textContent = m.description || '';
-        const suggested = m.suggested_agg || 'sum';
-        document.querySelectorAll('input[name="aggRadio"]').forEach(r => { r.checked = r.value === suggested; });
-        document.getElementById('titleInput').value = col;
-        document.getElementById('fmtSelect').value = 'num';
-        document.getElementById('decimalsSelect').value = suggested === 'avg' ? '1' : '0';
-        document.getElementById('invertSelect').value = '0';
-    }
-
-    function addChart() {
-        const metric = document.getElementById('metricSelect').value;
-        if (!metric) return;
-        const aggEl = document.querySelector('input[name="aggRadio"]:checked');
-        const row = {
-            id: 'c' + Date.now().toString(36),
-            type: 'custom',
+    // ── Data loading ─────────────────────────────────────────────────────────
+    function fetchMetricData(source, metric, agg, targetMode, includeCurrent = false) {
+        const params = new URLSearchParams({
+            source,
             metric,
-            title: document.getElementById('titleInput').value.trim() || metric,
-            agg: aggEl ? aggEl.value : 'sum',
-            fmt: document.getElementById('fmtSelect').value,
-            decimals: parseInt(document.getElementById('decimalsSelect').value, 10),
-            invert: document.getElementById('invertSelect').value === '1',
-            section: document.getElementById('sectionSelect').value,
-        };
-        layout.rows.push(row);
-        closeAddModal();
-        renderLayout();
-        // Make sure the target section is open so the new charts are visible
-        const sec = document.getElementById(sectionDomId(row.section));
-        if (!sec.querySelector('.category-body').classList.contains('open')) toggleSection(row.section);
-        loadCustomRow(row);
+            agg,
+            target_mode: targetMode,
+            include_current: includeCurrent ? '1' : '0',
+            months: settings.months,
+            weeks: settings.weeks,
+            days: settings.days_total,
+        });
+        return fetch(`${BASE_URL}/kpi/custom-data?${params}`).then(r => r.json());
     }
 
-    // ── Custom chart data + rendering ────────────────────────────────────────
-    function dateLabel(d) {
-        const dt = new Date(d + 'T00:00:00');
-        const dd = String(dt.getDate()).padStart(2, '0');
-        const mm = String(dt.getMonth() + 1).padStart(2, '0');
-        return DAY_NAMES[dt.getDay()] + ' ' + dd + '/' + mm;
+    function fetchRowData(row) {
+        const cur = !!row.include_current;
+        if (!row.divide_by) return fetchMetricData(rowSource(row), row.metric, row.agg, rowTargetMode(row), cur);
+        return Promise.all([
+            fetchMetricData(rowSource(row), row.metric, row.agg, 'none', cur),
+            fetchMetricData(row.divide_by.source || 'snowflake', row.divide_by.metric, row.agg, 'none', cur),
+        ]).then(([num, den]) => {
+            if (num.status !== 'ok') return num;
+            if (den.status !== 'ok') return { ...den, message: `${row.divide_by.metric}: ${den.message}` };
+            return ratioData(row, num, den);
+        });
+    }
+
+    // A ratio chart's series: each point of the metric divided by the same
+    // point of the divide-by metric. Both use the chart's Sum/Average, so a
+    // Sum chart's month is the month total over the month total, not a sum
+    // of daily ratios.
+    function ratioData(row, num, den) {
+        const scale = row.ratio_as === 'pct' ? 100 : 1;
+        const divide = (a, b) => (a || []).map((v, i) => {
+            const d = b ? b[i] : null;
+            if (v === null || v === undefined || d === null || d === undefined || d === 0) return null;
+            return v / d * scale;
+        });
+        const target = row.target_mode === 'fixed' && row.ratio_target !== null && row.ratio_target !== undefined
+            ? labels => labels.map(() => row.ratio_target)
+            : () => null;
+        const hasN1 = !!(num.values_n1 && den.values_n1);
+        return {
+            ...num,
+            stale_date: num.stale_date || den.stale_date,
+            values: divide(num.values, den.values),
+            values_n1: hasN1 ? divide(num.values_n1, den.values_n1) : null,
+            values_target: target(num.dates),
+            monthly_values: divide(num.monthly_values, den.monthly_values),
+            monthly_values_n1: num.monthly_values_n1 && den.monthly_values_n1
+                ? divide(num.monthly_values_n1, den.monthly_values_n1) : null,
+            monthly_values_target: target(num.monthly_labels),
+            weekly_values: divide(num.weekly_values, den.weekly_values),
+            weekly_values_n1: divide(num.weekly_values_n1, den.weekly_values_n1),
+            weekly_values_target: target(num.weekly_labels),
+        };
     }
 
     async function loadCustomRow(row) {
+        const el = customRowEls[row.id];
+        const status = document.getElementById('statusText');
+        if (el) el.classList.add('charts-loading');
+        status.textContent = `Loading ${rowTitle(row)}...`;
         try {
-            const d = await fetch(`${BASE_URL}/kpi/custom-data?metric=${encodeURIComponent(row.metric)}&agg=${encodeURIComponent(row.agg)}`)
-                .then(r => r.json());
+            const d = await fetchRowData(row);
             if (d.status !== 'ok') throw new Error(d.message || 'load failed');
             renderCustomRow(row, d);
+            status.textContent = 'Loaded';
         } catch (err) {
-            document.getElementById('statusText').textContent = `${row.metric}: ${err.message}`;
+            document.getElementById('statusText').textContent = `${rowTitle(row)}: ${err.message}`;
+        } finally {
+            if (el) el.classList.remove('charts-loading');
         }
     }
 
-    function renderCustomRow(row, d) {
-        customRowData[row.id] = d;
-        const nulls = arr => arr.map(() => null);
-        const dailyLabels = d.dates.map(dateLabel);
-        const valuesPast = d.values.map((v, i) => d.dates[i] <= d.today ? v : null);
-
-        const decimals = row.decimals || 0;
-        const suffix = row.fmt === 'pct' ? '%' : '';
-        const fmt = v => v.toFixed(decimals) + suffix;
-        const opts = { seriesLabel: rowTitle(row), fontSize: 10, fmt, invert: !!row.invert };
-
-        const ranges = calcRowRanges([
-            { series: [d.monthly_values, d.monthly_values_n1], target: d.monthly_values_target },
-            { series: [d.weekly_values, d.weekly_values_n1],   target: d.weekly_values_target },
-            { series: [valuesPast, d.values_n1],               target: d.values_target },
-        ], row.agg);
-
-        const existing = rowCharts[row.id] || [];
-        const cm = buildMetricChart(`cv-${row.id}-m`, d.monthly_labels, d.monthly_values,
-            d.monthly_values_n1, d.monthly_values_target || nulls(d.monthly_labels),
-            existing[0], { ...opts, range: ranges[0] });
-        const cw = buildMetricChart(`cv-${row.id}-w`, d.weekly_labels, d.weekly_values,
-            d.weekly_values_n1, d.weekly_values_target || nulls(d.weekly_labels),
-            existing[1], { ...opts, n1Labels: d.weekly_n1_labels, range: ranges[1] });
-        const cd = buildMetricChart(`cv-${row.id}-d`, dailyLabels, valuesPast,
-            d.values_n1, d.values_target || nulls(d.dates),
-            existing[2], { ...opts, range: ranges[2] });
-        rowCharts[row.id] = [cm, cw, cd];
+    // Large "Loading..." message in the middle of the page, used for whole-page
+    // loads. A single chart reloading keeps its own smaller message instead.
+    function setPageLoading(on) {
+        document.getElementById('pageContent').classList.toggle('page-is-loading', on);
+        if (on) document.getElementById('statusText').textContent = '';
     }
 
     function loadAll() {
         const btn    = document.getElementById('loadBtn');
         const icon   = document.getElementById('loadIcon');
         const status = document.getElementById('statusText');
+        const container = document.getElementById('sectionsContainer');
+        const rows = layout.rows.slice();
+        if (!rows.length) {
+            btn.disabled = false;
+            icon.classList.remove('fa-spin');
+            setPageLoading(false);
+            status.textContent = IS_ADMIN ? 'No charts yet. Use Add Chart.' : 'No charts yet.';
+            return;
+        }
         btn.disabled = true;
         icon.classList.add('fa-spin');
-        status.textContent = 'Loading...';
+        container.classList.add('charts-loading');
+        setPageLoading(true);
 
-        const snfPromise = fetch(BASE_URL + '/kpi/data').then(r => r.json());
-        const spPromise  = fetch(BASE_URL + '/kpi/sharepoint').then(r => r.json());
-        const customRows = layout.rows.filter(r => r.type === 'custom');
-        const customPromises = customRows.map(row =>
-            fetch(`${BASE_URL}/kpi/custom-data?metric=${encodeURIComponent(row.metric)}&agg=${encodeURIComponent(row.agg)}`)
-                .then(r => r.json())
-                .catch(err => ({ status: 'error', message: String(err) }))
-        );
-
-        Promise.all([snfPromise, spPromise, Promise.all(customPromises)])
-            .then(([snf, sp, customResults]) => {
-                btn.disabled = false;
-                icon.classList.remove('fa-spin');
-
+        Promise.all(rows.map(row => fetchRowData(row).catch(err => ({ status: 'error', message: String(err) }))))
+            .then(results => {
                 const errors = [];
-                if (snf.status !== 'ok') errors.push('Snowflake: ' + snf.message);
-                if (sp.status  !== 'ok') errors.push('SharePoint: ' + sp.message);
-                if (errors.length) { status.textContent = errors.join(' | '); return; }
-
-                renderOrdersRow(snf);
-                rowCharts['orders'] = [monthlyChart, weeklyChart, ordersChart];
-                kpiSnapshot = snf;
-                const aiBtn = document.getElementById('aiBtn');
-                if (aiBtn) {
-                    aiBtn.disabled = false;
-                    document.getElementById('aiPlaceholder').textContent = 'Click "AI Summary" to analyse the charts.';
-                }
-
-                const today = sp.today;
-                const dailyLabels = sp.dates.map(dateLabel);
-                const dailySessions = sp.daily_sessions.map((v, i) => sp.dates[i] <= today ? v : null);
-
-                const kMonthly = { s: toK(sp.monthly_sessions), ly: toK(sp.monthly_sessions_ly), t: toK(snf.monthly_sessions_target) };
-                const kWeekly  = { s: toK(sp.weekly_sessions),  ly: toK(sp.weekly_sessions_ly),  t: toK(snf.weekly_sessions_target) };
-                const kDaily   = { s: toK(dailySessions),       ly: toK(sp.daily_sessions_ly),   t: toK(snf.sessions_target) };
-                const sRanges = calcRowRanges([
-                    { series: [kMonthly.s, kMonthly.ly], target: kMonthly.t },
-                    { series: [kWeekly.s, kWeekly.ly],   target: kWeekly.t },
-                    { series: [kDaily.s, kDaily.ly],     target: kDaily.t },
-                ], 'sum');
-                sessionsMonthlyChart = buildSessionsChart('sessionsMonthlyChart', sp.monthly_labels, kMonthly, sRanges[0], sessionsMonthlyChart);
-                sessionsWeeklyChart  = buildSessionsChart('sessionsWeeklyChart',  sp.weekly_labels,  kWeekly,  sRanges[1], sessionsWeeklyChart, snf.weekly_n1_labels);
-                sessionsDailyChart   = buildSessionsChart('sessionsDailyChart',   dailyLabels,       kDaily,   sRanges[2], sessionsDailyChart);
-                rowCharts['sessions'] = [sessionsMonthlyChart, sessionsWeeklyChart, sessionsDailyChart];
-
-                const customErrors = [];
-                customResults.forEach((d, i) => {
-                    if (d.status === 'ok') renderCustomRow(customRows[i], d);
-                    else customErrors.push(`${customRows[i].metric}: ${d.message}`);
+                const staleDates = new Set();
+                results.forEach((d, i) => {
+                    if (d.status === 'ok') {
+                        renderCustomRow(rows[i], d);
+                        if (d.stale_date) staleDates.add(d.stale_date);
+                    } else {
+                        errors.push(`${rowTitle(rows[i])}: ${d.message}`);
+                    }
                 });
-
                 const notes = [];
-                if (sp.stale) notes.push('SharePoint unavailable — sessions from ' + (sp.stale_date || 'older cache'));
-                if (customErrors.length) notes.push('errors: ' + customErrors.join(' | '));
+                if (staleDates.size) notes.push('SharePoint unavailable - using data from ' + [...staleDates].join(', '));
+                if (errors.length) notes.push('errors: ' + errors.join(' | '));
                 status.textContent = notes.length ? 'Loaded (' + notes.join('; ') + ')' : 'Loaded';
             })
-            .catch(err => {
+            .catch(err => { status.textContent = 'Failed: ' + err; })
+            .finally(() => {
                 btn.disabled = false;
                 icon.classList.remove('fa-spin');
-                status.textContent = 'Failed: ' + err;
+                container.classList.remove('charts-loading');
+                setPageLoading(false);
             });
     }
 
-    // ── Row range calculator ──────────────────────────────────────────────────
-    // Computes the y-ranges for a metric's month/week/day charts TOGETHER.
-    // Each chart is centred on its own actual-data mean (actuals sit mid-chart),
-    // and the half-spans are scaled so the target line sits at the same
-    // relative height on all three charts — red/green areas match across the row.
-    const _cleanVals = arr => (arr || []).filter(v => v !== null && v !== undefined && !isNaN(v));
-    const _mean = a => a.reduce((x, y) => x + y, 0) / a.length;
-    const toK = arr => (arr || []).map(v => (v !== null && v !== undefined && !isNaN(v) && v > 0) ? v / 1000 : null);
-
-    function _roundTick(value, unit) {
-        const decimals = Math.max(0, -Math.floor(Math.log10(unit)) + 2);
-        return Number(value.toFixed(decimals));
+    // Redraw every row from its last response, e.g. after the window or label
+    // angle changes, which need no new data.
+    function renderAllFromCache() {
+        layout.rows.forEach(row => {
+            if (customRowData[row.id]) renderCustomRow(row, customRowData[row.id]);
+        });
     }
 
-    function _niceUnit(span) {
-        const rawStep = span / 8;
-        const pow = Math.pow(10, Math.floor(Math.log10(rawStep)));
-        return [1, 2, 5, 10].map(m => m * pow).find(u => u >= rawStep) || 10 * pow;
+    // ── Value formatting ─────────────────────────────────────────────────────
+    // Thousands separated by commas: 1,000 and 1,000,000.
+    function withCommas(v, decimals) {
+        return v.toLocaleString('en-GB', { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
     }
 
-    // Zero-based y-range with the mean roughly mid-chart (yMax = 2 x mean).
-    // max * 1.05 keeps the largest point on the chart when the series is spiky,
-    // and minYMax stops an all-zero series reaching _niceUnit(0), which returns 0
-    // and produces an unrenderable range.
-    // Assumes a non-negative series — a metric that can go negative would be
-    // clipped at the zero baseline.
-    function zeroBasedRange(values, minYMax = 1, wholeNumbers = false) {
-        const vals = _cleanVals(values);
-        const span = vals.length
-            ? Math.max(minYMax, _mean(vals) * 2, Math.max(...vals) * 1.05)
-            : minYMax;
-        let unit = _niceUnit(span);
-        if (wholeNumbers) unit = Math.max(1, Math.round(unit));
-        const yMax = Math.max(unit, Math.ceil(span / unit) * unit);
-        // Re-round to the unit's own precision: ceil(span/unit)*unit leaves
-        // floating-point noise (0.35000000000000003) on fractional units.
-        const decimals = Math.max(0, -Math.floor(Math.log10(unit)) + 2);
-        return { yMin: 0, yMax: Number(yMax.toFixed(decimals)), unit };
+    function rowFormatter(row) {
+        const decimals = row.decimals || 0;
+        if (row.fmt === 'pct') return v => withCommas(v, decimals) + '%';
+        if (row.fmt === 'pct100') return v => withCommas(v * 100, decimals) + '%';
+        if (row.fmt === 'k') return v => withCommas(v / 1000, decimals) + 'k';
+        return v => withCommas(v, decimals);
     }
 
-    // Ranges for a row's month/week/day charts. All zero-based, scaled from the
-    // real data only — targets no longer stretch the axis, so an off-scale target
-    // line is clipped (its shading is clamped in makeBgPlugin, and its value stays
-    // in the tooltip).
-    // aggType 'avg' (averages, %, rates) shares one scale across the three periods,
-    // since they are the same kind of number. 'sum' keeps them independent, because
-    // a month total is several times a week total.
-    function calcRowRanges(specs, aggType = 'sum') {
-        const ranges = specs.map(spec => zeroBasedRange((spec.series || []).flatMap(_cleanVals)));
-        if (aggType !== 'avg') return ranges;
-        const shared = ranges.reduce((a, b) => (b.yMax > a.yMax ? b : a));
-        return ranges.map(() => shared);
+    // Axis ticks keep only the decimals they need (up to 3).
+    function rowTickFormatter(row) {
+        const fmt = v => v.toLocaleString('en-GB', { maximumFractionDigits: 3 });
+        if (row.fmt === 'pct') return v => fmt(v) + '%';
+        // Rounded so 1.1 x 100 shows as 110%, not 110.00000000000001%.
+        if (row.fmt === 'pct100') return v => fmt(Math.round(v * 100 * 1000) / 1000) + '%';
+        if (row.fmt === 'k') return v => fmt(v / 1000) + 'k';
+        return v => fmt(v);
     }
 
-    // ── Background shading plugin ─────────────────────────────────────────────
-    // Draws a smooth green/red filled area that follows the target line.
-    // Default: green above target, red below; invert swaps them (lower is
-    // better). Full green where the chart has no target at all.
-    function makeBgPlugin(targetArr, yMin, yMax, invert) {
-        return {
-            id: 'bgShading',
-            beforeDatasetsDraw(chart) {
-                const { ctx, chartArea: { left, right, top, bottom }, scales: { x, y } } = chart;
-                const n = targetArr.length;
-                if (!n) return;
+    function renderCustomRow(row, d) {
+        customRowData[row.id] = d;
+        if (!document.getElementById(`cv-${row.id}-m`)) return;   // row removed meanwhile
+        kpiDates = d.dates;
 
-                const anyTarget = targetArr.some(t => t !== null && t !== undefined && t > 0);
-                if (!anyTarget) {
-                    // No target → whole chart green regardless of invert
-                    ctx.save();
-                    ctx.fillStyle = BG_GREEN;
-                    ctx.fillRect(left, top, right - left, bottom - top);
-                    ctx.restore();
-                    return;
-                }
-
-                const aboveColor = invert ? BG_RED : BG_GREEN;
-                const belowColor = invert ? BG_GREEN : BG_RED;
-
-                // Build (px, targetPx) points for each label using the chart's x scale
-                const points = targetArr.map((t, i) => {
-                    const px = x.getPixelForValue(i);
-                    const hasTarget = t !== null && t !== undefined && t > 0;
-                    const tpx = hasTarget
-                        ? Math.min(Math.max(y.getPixelForValue(t), top), bottom)
-                        : top; // gaps in target → treat as above-target colour
-                    return { px, tpx, hasTarget };
-                });
-
-                ctx.save();
-
-                // Below-target area: polygon bottom=bottom, top follows target line
-                ctx.beginPath();
-                ctx.moveTo(points[0].px, bottom);
-                points.forEach(p => ctx.lineTo(p.px, p.tpx));
-                ctx.lineTo(points[n - 1].px, bottom);
-                ctx.closePath();
-                ctx.fillStyle = belowColor;
-                ctx.fill();
-
-                // Above-target area: polygon bottom follows target line, top=top
-                ctx.beginPath();
-                ctx.moveTo(points[0].px, top);
-                points.forEach(p => ctx.lineTo(p.px, p.tpx));
-                ctx.lineTo(points[n - 1].px, top);
-                ctx.closePath();
-                ctx.fillStyle = aboveColor;
-                ctx.fill();
-
-                ctx.restore();
-            }
+        const nulls = arr => arr.map(() => null);
+        const dailyLabels = d.dates.map(dateLabel);
+        const valuesPast = d.values.map((v, i) => d.dates[i] <= d.today ? v : null);
+        const opts = {
+            seriesLabel: rowTitle(row),
+            fmt: rowFormatter(row),
+            tickFmt: rowTickFormatter(row),
+            invert: !!row.invert,
         };
+
+        const ranges = calcRowRanges(rangeSpecs(d, row.y_min, row.y_max), row.agg,
+            sharedAxisValue(row.y_min), sharedAxisValue(row.y_max));
+
+        const existing = rowCharts[row.id] || [];
+        const cm = buildMetricChart(`cv-${row.id}-m`, d.monthly_labels, d.monthly_values,
+            d.monthly_values_n1, d.monthly_values_target || nulls(d.monthly_labels),
+            existing[0], { ...opts, range: ranges[0],
+                notes: { rowId: row.id, kind: 'm', starts: d.monthly_starts || [] } });
+        const cw = buildMetricChart(`cv-${row.id}-w`, d.weekly_labels, d.weekly_values,
+            d.weekly_values_n1, d.weekly_values_target || nulls(d.weekly_labels),
+            existing[1], { ...opts, n1Labels: d.weekly_n1_labels, range: ranges[1],
+                notes: { rowId: row.id, kind: 'w', starts: d.weekly_starts || [] } });
+        const cd = buildMetricChart(`cv-${row.id}-d`, dailyLabels, valuesPast,
+            d.values_n1, d.values_target || nulls(d.dates),
+            existing[2], { ...opts, range: ranges[2], day: true,
+                notes: { rowId: row.id, kind: 'd', starts: d.dates } });
+        rowCharts[row.id] = [cm, cw, cd];
+
+        updateDayTitles();
+        DayWindow.updateScrollers();
     }
 
-    // ── Value formatter (custom metrics can be floats) ────────────────────────
-    function fmtVal(v) {
-        if (v === null || v === undefined) return '';
-        return Number.isInteger(v) ? String(v) : String(Math.round(v * 100) / 100);
+    // The month/week/day series and axis limits that set a row's ranges. Day
+    // range comes from the WHOLE day series, so the axis stays put as the
+    // window scrolls; only the plotted slice is windowed.
+    function rangeSpecs(d, yMin, yMax) {
+        yMin = yMin || {};
+        yMax = yMax || {};
+        const valuesPast = d.values.map((v, i) => d.dates[i] <= d.today ? v : null);
+        return [
+            { series: [d.monthly_values, d.monthly_values_n1], min: yMin.m, max: yMax.m },
+            { series: [d.weekly_values, d.weekly_values_n1],   min: yMin.w, max: yMax.w },
+            { series: [valuesPast, d.values_n1],               min: yMin.d, max: yMax.d },
+        ];
     }
 
-    // ── Data-label plugin ─────────────────────────────────────────────────────
-    function makeDataLabelPlugin(id, dsLabel, fontSize, fmt) {
-        const format = fmt || fmtVal;
+    // An Average chart's one axis minimum or maximum (from y_min / y_max). It
+    // is stored in all three period slots; the first one set is used, so a
+    // chart switched from Sum still picks up whatever was entered.
+    function sharedAxisValue(byPeriod) {
+        byPeriod = byPeriod || {};
+        return ['m', 'w', 'd'].map(k => byPeriod[k]).find(v => v !== null && v !== undefined) ?? null;
+    }
+
+    // A typed maximum replaces the worked-out top of the axis. Ignored if it
+    // is not above the bottom, which the chart box does not allow anyway.
+    function withFixedMax(range, max) {
+        if (max === null || max === undefined || max <= range.yMin) return range;
+        return { yMin: range.yMin, yMax: max, unit: _niceUnit(max - range.yMin) };
+    }
+
+    // Ranges for a row's month/week/day charts, scaled from the real data only
+    // — targets do not stretch the axis, so an off-scale target line is clipped
+    // (its background is clamped, and its value stays in the tooltip).
+    //
+    // 'sum': each period has its own scale and its own minimum, because a month
+    // total is several times a week total.
+    // 'avg' (averages, %, rates): month, week and day are the same kind of
+    // number, so all three get ONE scale — one minimum (sharedMin) and one
+    // maximum worked out from all three periods' data together, keeping that
+    // data central.
+    // A typed maximum (spec.max / sharedMax) overrides the worked-out top.
+    function calcRowRanges(specs, aggType = 'sum', sharedMin = null, sharedMax = null) {
+        const values = spec => (spec.series || []).flatMap(_cleanVals);
+        if (aggType !== 'avg') return specs.map(spec => withFixedMax(offsetRange(values(spec), spec.min), spec.max));
+        const shared = withFixedMax(offsetRange(specs.flatMap(values), sharedMin), sharedMax);
+        return specs.map(() => shared);
+    }
+
+    // A line round all four sides of the plot area. Chart.js only draws its
+    // axis lines (left and bottom), so those are turned off and this draws
+    // the whole frame in the same colour instead.
+    const PLOT_FRAME_PLUGIN = {
+        id: 'plotFrame',
+        afterDraw(chart) {
+            const { ctx, chartArea: a } = chart;
+            if (!a) return;
+            ctx.save();
+            ctx.strokeStyle = 'rgba(0,0,0,0.1)';
+            ctx.lineWidth = 1;
+            ctx.strokeRect(Math.round(a.left) + 0.5, Math.round(a.top) + 0.5,
+                Math.round(a.right - a.left) - 1, Math.round(a.bottom - a.top) - 1);
+            ctx.restore();
+        },
+    };
+
+    // ── Chart notes: dotted lines + hover popup ──────────────────────────────
+    const NOTE_COLOUR = '#7c3aed';
+
+    function addDaysIso(iso, n) {
+        const dt = new Date(iso + 'T00:00:00Z');
+        dt.setUTCDate(dt.getUTCDate() + n);
+        return dt.toISOString().slice(0, 10);
+    }
+
+    // Index of the point a note's date falls in: the day itself, the week
+    // (Monday to Sunday) or the month containing it. -1 when not on the chart.
+    function notePointIndex(kind, starts, date) {
+        if (kind === 'd') return starts.indexOf(date);
+        if (kind === 'm') return starts.findIndex(s => s.slice(0, 7) === date.slice(0, 7));
+        return starts.findIndex(s => s <= date && date < addDaysIso(s, 7));
+    }
+
+    function notesForRow(rowId) {
+        return chartNotes.filter(n => !n.row_id || n.row_id === rowId);
+    }
+
+    // meta = { rowId, kind: 'd'|'w'|'m', starts: first date of each point }.
+    // The day chart plots a window of its dates, so its index is shifted by
+    // the window start and read at draw time, following the scroller.
+    function makeNotesPlugin(meta) {
         return {
-            id,
+            id: 'chartNotes',
             afterDatasetsDraw(chart) {
-                const dsIdx = chart.data.datasets.findIndex(d => d.label === dsLabel);
-                if (dsIdx < 0) return;
-                const meta = chart.getDatasetMeta(dsIdx);
-                const c2 = chart.ctx;
-                c2.save();
-                c2.font = `bold ${fontSize}px DM Sans, system-ui, sans-serif`;
-                c2.fillStyle = '#0f172a';
-                c2.textAlign = 'center';
-                c2.textBaseline = 'bottom';
-                meta.data.forEach((point, i) => {
-                    const v = chart.data.datasets[dsIdx].data[i];
-                    if (v === null || v === undefined) return;
-                    c2.fillText(format(v), point.x, point.y - 5);
+                const { ctx, chartArea: a, scales: { x } } = chart;
+                const offset = meta.kind === 'd' ? DayWindow.startIndex() : 0;
+                const count = chart.data.labels.length;
+                // One line per point; several notes on the same week/month share it.
+                const byIndex = new Map();
+                notesForRow(meta.rowId).forEach(note => {
+                    const i = notePointIndex(meta.kind, meta.starts, note.date) - offset;
+                    if (i < 0 || i >= count) return;
+                    if (!byIndex.has(i)) byIndex.set(i, []);
+                    byIndex.get(i).push(note);
                 });
-                c2.restore();
-            }
+                chart.$notePositions = [];
+                if (!byIndex.size) return;
+                ctx.save();
+                ctx.strokeStyle = NOTE_COLOUR;
+                ctx.fillStyle = NOTE_COLOUR;
+                ctx.lineWidth = 1.5;
+                ctx.setLineDash([3, 3]);
+                byIndex.forEach((notes, i) => {
+                    const px = Math.round(x.getPixelForValue(i)) + 0.5;
+                    ctx.beginPath();
+                    ctx.moveTo(px, a.top);
+                    ctx.lineTo(px, a.bottom);
+                    ctx.stroke();
+                    // Small marker at the top so the line reads as a note.
+                    ctx.beginPath();
+                    ctx.moveTo(px - 4, a.top);
+                    ctx.lineTo(px + 4, a.top);
+                    ctx.lineTo(px, a.top + 6);
+                    ctx.closePath();
+                    ctx.fill();
+                    chart.$notePositions.push({ px, notes });
+                });
+                ctx.restore();
+            },
+            afterEvent(chart, args) {
+                const e = args.event;
+                if (e.type === 'mouseout') { hideNoteTip(); return; }
+                if (e.type !== 'mousemove') return;
+                const a = chart.chartArea;
+                const hit = e.y >= a.top && e.y <= a.bottom
+                    ? (chart.$notePositions || []).find(p => Math.abs(p.px - e.x) <= 5) : null;
+                if (!hit) { hideNoteTip(); return; }
+                const rect = chart.canvas.getBoundingClientRect();
+                showNoteTip(hit.notes, rect.left + hit.px, rect.top + e.y);
+            },
         };
     }
 
-    // ── Shared line chart builder ─────────────────────────────────────────────
+    function showNoteTip(notes, clientX, clientY) {
+        const tip = document.getElementById('noteTip');
+        tip.innerHTML = [...notes].sort((p, q) => p.date.localeCompare(q.date)).map(n => `
+            <div class="note-tip-item">
+                <div><span class="note-tip-date">${escHtml(dateLabel(n.date))}</span><span class="note-tip-title">${escHtml(n.title)}</span></div>
+                ${n.text ? `<div class="note-tip-text">${escHtml(n.text)}</div>` : ''}
+            </div>`).join('');
+        tip.style.display = 'block';
+        // Right of the line, flipped to the left near the screen edge.
+        const w = tip.offsetWidth, h = tip.offsetHeight;
+        const left = clientX + 12 + w > window.innerWidth ? clientX - 12 - w : clientX + 12;
+        const top = Math.min(Math.max(8, clientY - h / 2), window.innerHeight - h - 8);
+        tip.style.left = left + 'px';
+        tip.style.top = top + 'px';
+    }
+
+    function hideNoteTip() {
+        document.getElementById('noteTip').style.display = 'none';
+    }
+
+    function redrawAllCharts() {
+        Object.values(rowCharts).flat().forEach(c => c && c.update('none'));
+    }
+
+    // ── Notes popup (admin) ──
+    let noteEditingId = null;
+
+    function openNotesModal() {
+        document.getElementById('notesError').classList.remove('show');
+        resetNoteForm();
+        renderNotesList();
+        document.getElementById('notesModal').classList.add('open');
+    }
+
+    function closeNotesModal() {
+        document.getElementById('notesModal').classList.remove('open');
+    }
+
+    function noteRowOptions(selected) {
+        const opts = ['<option value="">All charts</option>'].concat(
+            layout.rows.map(r => `<option value="${escHtml(r.id)}">${escHtml(rowTitle(r))}</option>`));
+        const select = document.getElementById('noteRow');
+        select.innerHTML = opts.join('');
+        select.value = selected || '';
+    }
+
+    function resetNoteForm() {
+        noteEditingId = null;
+        document.getElementById('noteFormTitle').textContent = 'Add note';
+        document.getElementById('noteSaveBtn').textContent = 'Add note';
+        document.getElementById('noteCancelEditBtn').style.display = 'none';
+        document.getElementById('noteDate').value = new Date().toISOString().slice(0, 10);
+        document.getElementById('noteTitle').value = '';
+        document.getElementById('noteText').value = '';
+        noteRowOptions('');
+    }
+
+    function editNote(id) {
+        const note = chartNotes.find(n => n.id === id);
+        if (!note) return;
+        noteEditingId = id;
+        document.getElementById('noteFormTitle').textContent = 'Edit note';
+        document.getElementById('noteSaveBtn').textContent = 'Save note';
+        document.getElementById('noteCancelEditBtn').style.display = '';
+        document.getElementById('noteDate').value = note.date;
+        document.getElementById('noteTitle').value = note.title;
+        document.getElementById('noteText').value = note.text || '';
+        noteRowOptions(note.row_id);
+    }
+
+    function renderNotesList() {
+        const list = document.getElementById('notesList');
+        if (!chartNotes.length) {
+            list.innerHTML = '<div class="notes-empty">No notes yet.</div>';
+            return;
+        }
+        const scope = n => {
+            if (!n.row_id) return 'All charts';
+            const row = findRow(n.row_id);
+            return row ? rowTitle(row) : '(chart removed)';
+        };
+        list.innerHTML = [...chartNotes].sort((p, q) => q.date.localeCompare(p.date)).map(n => `
+            <div class="note-item">
+                <div class="note-item-main">
+                    <div class="note-item-head">
+                        <span class="note-item-date">${escHtml(dateLabel(n.date))} ${escHtml(n.date.slice(0, 4))}</span>${escHtml(n.title)}
+                        <span class="note-item-scope">${escHtml(scope(n))}</span>
+                    </div>
+                    ${n.text ? `<div class="note-item-text">${escHtml(n.text)}</div>` : ''}
+                </div>
+                <button type="button" class="btn btn-edit" onclick="editNote('${escHtml(n.id)}')">Edit</button>
+                <button type="button" class="btn btn-remove-chart" onclick="deleteNote('${escHtml(n.id)}')">Delete</button>
+            </div>`).join('');
+    }
+
+    async function saveNotes(next) {
+        const resp = await fetch(BASE_URL + '/kpi/notes', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ notes: next }),
+        }).then(r => r.json());
+        if (resp.status !== 'ok') throw new Error(resp.message || 'Save failed');
+        chartNotes = next;
+        renderNotesList();
+        redrawAllCharts();
+    }
+
+    function showNotesError(msg) {
+        const box = document.getElementById('notesError');
+        box.textContent = msg;
+        box.classList.add('show');
+    }
+
+    async function saveNote() {
+        document.getElementById('notesError').classList.remove('show');
+        const note = {
+            id: noteEditingId || 'n' + Date.now().toString(36),
+            date: document.getElementById('noteDate').value,
+            title: document.getElementById('noteTitle').value.trim(),
+            text: document.getElementById('noteText').value.trim(),
+            row_id: document.getElementById('noteRow').value || null,
+        };
+        if (!note.date) { showNotesError('Choose a date.'); return; }
+        if (!note.title) { showNotesError('Enter a title.'); return; }
+        const next = noteEditingId
+            ? chartNotes.map(n => n.id === noteEditingId ? note : n)
+            : [...chartNotes, note];
+        const button = document.getElementById('noteSaveBtn');
+        button.disabled = true;
+        try {
+            await saveNotes(next);
+            resetNoteForm();
+        } catch (err) {
+            showNotesError('Save failed: ' + err.message);
+        } finally {
+            button.disabled = false;
+        }
+    }
+
+    async function deleteNote(id) {
+        const note = chartNotes.find(n => n.id === id);
+        if (!note || !confirm(`Delete the note "${note.title}"?`)) return;
+        try {
+            await saveNotes(chartNotes.filter(n => n.id !== id));
+            if (noteEditingId === id) resetNoteForm();
+        } catch (err) {
+            showNotesError('Delete failed: ' + err.message);
+        }
+    }
+
+    // ── Line chart builder ────────────────────────────────────────────────────
     // lyData may be null (no N-1 dataset). targetData of all-nulls = full-green chart.
+    // opts.day: the arrays are the whole day history; only the current window
+    // is plotted (see makeDayChart in charts.js).
     function buildMetricChart(canvasId, labels, data, lyData, targetData, existingChart, opts) {
-        const { seriesLabel, fontSize, n1Labels, invert } = opts;
-        const fmt = opts.fmt || fmtVal;
+        const { seriesLabel, n1Labels, invert, fmt, tickFmt, day } = opts;
         const { yMin, yMax, unit } = opts.range;
         const ctx = document.getElementById(canvasId).getContext('2d');
         if (existingChart) existingChart.destroy();
 
         const datasets = [];
-        if (lyData) {
+        if (hasValues(lyData)) {
             datasets.push({
                 label: 'N-1',
                 data: lyData,
                 fill: false,
-                borderColor: '#9ca3af',
+                borderColor: N1_COLOUR,
                 borderWidth: 1.5,
                 borderDash: [5, 4],
                 pointRadius: 0,
@@ -1026,7 +1121,7 @@
                 order: 3,
             });
         }
-        if (targetData && targetData.some(v => v !== null)) {
+        if (hasValues(targetData)) {
             datasets.push({
                 label: 'Target',
                 data: targetData,
@@ -1046,7 +1141,7 @@
             fill: false,
             borderColor: '#0d3d6e',
             borderWidth: 2.5,
-            pointRadius: ctx => ctx.dataset.data[ctx.dataIndex] !== null ? 4 : 0,
+            pointRadius: p => p.dataset.data[p.dataIndex] !== null ? 3 : 0,
             pointBackgroundColor: '#0d3d6e',
             pointBorderColor: '#fff',
             pointBorderWidth: 1.5,
@@ -1055,226 +1150,720 @@
             order: 1,
         });
 
-        return new Chart(ctx, {
-            type: 'line',
-            data: { labels, datasets },
-            options: {
-                responsive: true,
-                maintainAspectRatio: false,
-                interaction: { mode: 'index', intersect: false },
-                plugins: {
-                    legend: { display: false },
-                    tooltip: {
-                        callbacks: {
-                            label: ctx => {
-                                const v = ctx.parsed.y;
-                                if (v === null || isNaN(v)) return null;
-                                if (ctx.dataset.label === 'N-1' && n1Labels) {
-                                    return `N-1 (${n1Labels[ctx.dataIndex]}): ${fmt(v)}`;
+        const build = (chartLabels, chartDatasets, chartTarget) => {
+            const angle = Number(settings.label_angle) || 0;
+            const chart = new Chart(ctx, {
+                type: 'line',
+                data: { labels: chartLabels, datasets: chartDatasets },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    interaction: { mode: 'index', intersect: false },
+                    // Tilted labels on the highest points need room at the top.
+                    layout: { padding: { top: angle ? 22 : 4 } },
+                    plugins: {
+                        legend: { display: false },
+                        tooltip: {
+                            callbacks: {
+                                label: c => {
+                                    const v = c.parsed.y;
+                                    if (v === null || isNaN(v)) return null;
+                                    if (c.dataset.label === 'N-1' && n1Labels) {
+                                        return `N-1 (${n1Labels[c.dataIndex]}): ${fmt(v)}`;
+                                    }
+                                    return c.dataset.label + ': ' + fmt(v);
+                                },
+                                // The axis is scaled from the data, so a target outside
+                                // it is clipped and Chart.js drops it from the tooltip.
+                                // State it here so the value is still reachable.
+                                afterBody: items => {
+                                    if (!items.length) return;
+                                    const t = (items[0].chart.$bgTarget || [])[items[0].dataIndex];
+                                    if (t === null || t === undefined || isNaN(t)) return;
+                                    if (t <= yMax && t >= yMin) return;
+                                    return `Target: ${fmt(t)} (${t > yMax ? 'above' : 'below'} chart range)`;
                                 }
-                                return ctx.dataset.label + ': ' + fmt(v);
-                            },
-                            // The axis is scaled from the data, so a target above
-                            // yMax is clipped and Chart.js drops it from the tooltip.
-                            // State it here so the value is still reachable.
-                            afterBody: items => {
-                                if (!targetData || !items.length) return;
-                                const t = targetData[items[0].dataIndex];
-                                if (t === null || t === undefined || isNaN(t)) return;
-                                if (t <= yMax && t >= yMin) return;
-                                return `Target: ${fmt(t)} (${t > yMax ? 'above' : 'below'} chart range)`;
                             }
+                        }
+                    },
+                    scales: {
+                        x: {
+                            border: { display: false },
+                            grid: { color: 'rgba(0,0,0,0.06)' },
+                            ticks: { font: { size: 10 }, maxRotation: 45, minRotation: 30 }
+                        },
+                        y: {
+                            min: yMin,
+                            max: yMax,
+                            border: { display: false },
+                            grid: { color: 'rgba(0,0,0,0.06)' },
+                            ticks: { font: { size: 10 }, stepSize: unit, callback: v => tickFmt(v) }
                         }
                     }
                 },
-                scales: {
-                    x: {
-                        grid: { color: 'rgba(0,0,0,0.06)' },
-                        ticks: { font: { size: 10 }, maxRotation: 45, minRotation: 30 }
-                    },
-                    y: {
-                        min: yMin,
-                        max: yMax,
-                        grid: { color: 'rgba(0,0,0,0.06)' },
-                        ticks: { font: { size: 10 }, stepSize: unit }
-                    }
-                }
-            },
-            plugins: [
-                makeBgPlugin(targetData || labels.map(() => null), yMin, yMax, invert),
-                makeDataLabelPlugin(canvasId + 'Labels', seriesLabel, fontSize, fmt)
-            ]
-        });
-    }
-
-    // ── Orders row (month/week/day share row-consistent y-ranges) ────────────
-    function renderOrdersRow(data) {
-        const dates      = data.dates;
-        const today      = data.today;
-        const ordersPast = data.orders.map((v, i) => dates[i] <= today ? v : null);
-        const dailyLabels = dates.map(dateLabel);
-
-        const ranges = calcRowRanges([
-            { series: [data.monthly_orders, data.monthly_orders_ly], target: data.monthly_orders_target },
-            { series: [data.weekly_orders, data.weekly_orders_ly],   target: data.weekly_orders_target },
-            { series: [ordersPast, data.orders_ly],                  target: data.orders_target },
-        ], 'sum');
-
-        monthlyChart = buildMetricChart(
-            'monthlyChart', data.monthly_labels,
-            data.monthly_orders, data.monthly_orders_ly, data.monthly_orders_target,
-            monthlyChart, { seriesLabel: 'Orders', fontSize: 10, range: ranges[0] }
-        );
-        weeklyChart = buildMetricChart(
-            'weeklyChart', data.weekly_labels,
-            data.weekly_orders, data.weekly_orders_ly, data.weekly_orders_target,
-            weeklyChart, { seriesLabel: 'Orders', fontSize: 10, n1Labels: data.weekly_n1_labels, range: ranges[1] }
-        );
-        ordersChart = buildMetricChart(
-            'ordersChart', dailyLabels,
-            ordersPast, data.orders_ly, data.orders_target,
-            ordersChart, { seriesLabel: 'Orders', fontSize: 11, range: ranges[2] }
-        );
-    }
-
-    // ── Sessions chart builder (values in thousands) ──────────────────────────
-    // k = { s, ly, t } already converted to thousands; range from calcRowRanges
-    function buildSessionsChart(canvasId, labels, k, range, existingChart, n1Labels) {
-        const { yMin, yMax, unit } = range;
-        const kSessions = k.s, kLy = k.ly, kTarget = k.t;
-        const ctx = document.getElementById(canvasId).getContext('2d');
-        if (existingChart) existingChart.destroy();
-
-        return new Chart(ctx, {
-            type: 'line',
-            data: {
-                labels,
-                datasets: [
-                    {
-                        label: 'N-1',
-                        data: kLy,
-                        fill: false,
-                        borderColor: '#9ca3af',
-                        borderWidth: 1.5,
-                        borderDash: [5, 4],
-                        pointRadius: 0,
-                        tension: 0,
-                        spanGaps: true,
-                        order: 3,
-                    },
-                    {
-                        label: 'Target',
-                        data: kTarget,
-                        fill: false,
-                        borderColor: '#e53e3e',
-                        borderWidth: 1.5,
-                        borderDash: [],
-                        pointRadius: 0,
-                        tension: 0,
-                        spanGaps: true,
-                        order: 2,
-                    },
-                    {
-                        label: 'Sessions',
-                        data: kSessions,
-                        fill: false,
-                        borderColor: '#004a8f',
-                        borderWidth: 2.5,
-                        pointRadius: ctx => ctx.dataset.data[ctx.dataIndex] !== null ? 4 : 0,
-                        pointBackgroundColor: '#004a8f',
-                        pointBorderColor: '#fff',
-                        pointBorderWidth: 1.5,
-                        tension: 0,
-                        spanGaps: false,
-                        order: 1,
-                    },
+                plugins: [
+                    makeBgPlugin(invert, chartTarget),
+                    PLOT_FRAME_PLUGIN,
+                    makeDataLabelPlugin(canvasId + 'Labels', seriesLabel, 10, fmt, () => settings.label_angle),
+                    ...(opts.notes ? [makeNotesPlugin(opts.notes)] : [])
                 ]
-            },
-            options: {
-                responsive: true,
-                maintainAspectRatio: false,
-                interaction: { mode: 'index', intersect: false },
-                plugins: {
-                    legend: { display: false },
-                    tooltip: {
-                        callbacks: {
-                            label: ctx => {
-                                const v = ctx.parsed.y;
-                                if (v === null || isNaN(v)) return null;
-                                if (ctx.dataset.label === 'N-1' && n1Labels) {
-                                    return `N-1 (${n1Labels[ctx.dataIndex]}): ${v.toFixed(1)}k`;
-                                }
-                                return ctx.dataset.label + ': ' + v.toFixed(1) + 'k';
-                            },
-                            // Target is clipped when it falls outside the data-driven
-                            // range, so state its value here (see buildMetricChart).
-                            afterBody: items => {
-                                if (!kTarget || !items.length) return;
-                                const t = kTarget[items[0].dataIndex];
-                                if (t === null || t === undefined || isNaN(t)) return;
-                                if (t <= yMax && t >= yMin) return;
-                                return `Target: ${t.toFixed(1)}k (${t > yMax ? 'above' : 'below'} chart range)`;
-                            }
-                        }
-                    }
-                },
-                scales: {
-                    x: { grid: { color: 'rgba(0,0,0,0.06)' }, ticks: { font: { size: 10 }, maxRotation: 45, minRotation: 30 } },
-                    y: { min: yMin, max: yMax, grid: { color: 'rgba(0,0,0,0.06)' }, ticks: { font: { size: 10 }, stepSize: unit, callback: v => v + 'k' } }
-                }
-            },
-            plugins: [makeBgPlugin(kTarget, yMin, yMax)]
+            });
+            chart.$bgTarget = chartTarget;
+            return chart;
+        };
+
+        return day ? makeDayChart(labels, datasets, targetData, build) : build(labels, datasets, targetData);
+    }
+
+    // Day chart heading, e.g. "Orders - daily". No date range: the axis
+    // labels already show which days are on screen.
+    function updateDayTitles() {
+        layout.rows.forEach(row => {
+            const title = document.getElementById(`t-${row.id}-d`);
+            if (title) title.textContent = `${rowTitle(row)} - daily`;
         });
     }
 
-    // ── AI Summary ────────────────────────────────────────────────────────────
-    async function getAiSummary() {
-        if (!kpiSnapshot) return;
-        const btn  = document.getElementById('aiBtn');
-        const icon = document.getElementById('aiIcon');
-        const out  = document.getElementById('aiOutput');
-        const placeholder = document.getElementById('aiPlaceholder');
+    // ── Add / Edit Chart popup (admin only) ───────────────────────────────────
+    // One popup for every chart setting, target included. Fixed and imported
+    // target figures belong to the METRIC (shared by every chart on it); which
+    // one a chart draws is the chart's own target_mode. Imported dates are kept
+    // when a chart switches to fixed, so it can switch back.
 
-        btn.disabled = true;
-        icon.className = 'fas fa-spinner fa-spin';
-        placeholder.style.display = 'none';
-        out.style.display = 'none';
-        out.textContent = '';
+    let chartModalState = null;   // { rowId (null = adding), stored, metricKey }
 
-        const d = kpiSnapshot;
-        const today = d.today;
+    function selectedMetric() {
+        return metricsByKey[document.getElementById('metricSelect').value] || null;
+    }
 
-        const dailyRows = d.dates
-            .map((date, i) => ({ date, orders: d.orders[i], ly: d.orders_ly[i] }))
-            .filter(r => r.date <= today && r.orders !== null);
+    function setRadio(name, value) {
+        document.querySelectorAll(`input[name="${name}"]`).forEach(r => { r.checked = r.value === value; });
+    }
 
-        const prompt = `You are analysing Apex (online car sales) order data for Car Supermarket UK. Today is ${today}. Give exactly 2-3 short bullet points. Lead with the headline YoY trend (up or down, by how much). Call out one standout week or month. Flag anything unusual. Numbers only where they add meaning. No waffle, no headers, no intro sentence.
+    function radioValue(name, fallback) {
+        const el = document.querySelector(`input[name="${name}"]:checked`);
+        return el ? el.value : fallback;
+    }
 
-Monthly orders (current year vs last year, last 13 months):
-${d.monthly_labels.map((lbl, i) => `${lbl}: ${d.monthly_orders[i] ?? 'in progress'} (LY: ${d.monthly_orders_ly[i] ?? 'n/a'})`).join('\n')}
+    function openChartModal(rowId) {
+        const row = rowId ? findRow(rowId) : null;
+        if (rowId && !row) return;
+        chartModalState = { rowId: row ? row.id : null, stored: null, metricKey: null };
+        document.getElementById('chartModalTitle').textContent = row ? 'Edit Chart' : 'Add Chart';
+        document.getElementById('chartModalError').classList.remove('show');
+        document.getElementById('removeChartBtn').style.display = row ? '' : 'none';
+        document.getElementById('importFile').value = '';
 
-Weekly orders (current year vs last year, last 10 weeks):
-${d.weekly_labels.map((lbl, i) => `${lbl}: ${d.weekly_orders[i] ?? 'in progress'} (LY: ${d.weekly_orders_ly[i] ?? 'n/a'})`).join('\n')}
+        // Metric list. Can be changed on an existing chart (e.g. a copy pointed
+        // at another metric); the chart then uses the new metric's targets.
+        const metricSelect = document.getElementById('metricSelect');
+        const group = source => {
+            const items = metricsCatalogue.filter(m => m.source === source);
+            if (!items.length) return '';
+            const options = items.map(m =>
+                `<option value="${escHtml(metricKey(m.source, m.column))}">${escHtml(m.column)}</option>`).join('');
+            return `<optgroup label="${source === 'snowflake' ? 'Snowflake - daily_summary' : 'SharePoint - Daily Spend and Enquiries'}">${options}</optgroup>`;
+        };
+        metricSelect.innerHTML = group('snowflake') + group('sharepoint');
+        if (row && !metricsByKey[metricKey(rowSource(row), row.metric)]) {
+            // The column has gone from the list; keep it showing for this chart.
+            metricSelect.insertAdjacentHTML('afterbegin',
+                `<option value="${escHtml(metricKey(rowSource(row), row.metric))}">${escHtml(row.metric)}</option>`);
+        }
 
-Daily orders (last 24 days):
-${dailyRows.map(r => `${r.date}: ${r.orders} (LY: ${r.ly ?? 'n/a'})`).join('\n')}`;
+        // Divide-by list: the same metrics, plus "nothing" for a plain chart.
+        // Unlike the metric it can change later — a ratio chart's target is
+        // stored on the chart, not on either metric.
+        const divideSelect = document.getElementById('divideSelect');
+        divideSelect.innerHTML = '<option value="">(nothing - plain chart)</option>'
+            + group('snowflake') + group('sharepoint');
+        const divideKey = row && row.divide_by
+            ? metricKey(row.divide_by.source || 'snowflake', row.divide_by.metric) : '';
+        if (divideKey && !metricsByKey[divideKey]) {
+            divideSelect.insertAdjacentHTML('beforeend',
+                `<option value="${escHtml(divideKey)}">${escHtml(row.divide_by.metric)}</option>`);
+        }
+        divideSelect.value = divideKey;
+        document.getElementById('ratioAsSelect').value = row && row.ratio_as === 'dec' ? 'dec' : 'pct';
+        chartModalState.ratioTarget = row && row.ratio_target !== undefined ? row.ratio_target : null;
+        chartModalState.wasRatio = !!divideKey;
+        // The title the popup would fill in; a title still matching it follows
+        // the divide-by choice, a hand-typed one is left alone.
+        chartModalState.autoTitle = row
+            ? (row.divide_by ? `${row.metric} / ${row.divide_by.metric}` : row.metric) : null;
 
+        document.getElementById('sectionSelect').innerHTML =
+            SECTIONS.map(s => `<option value="${escHtml(s)}">${escHtml(s)}</option>`).join('');
+
+        if (row) {
+            metricSelect.value = metricKey(rowSource(row), row.metric);
+            document.getElementById('metricDesc').textContent = rowMetricInfo(row).description || '';
+            document.getElementById('titleInput').value = rowTitle(row);
+            document.getElementById('subtitleInput').value = row.subtitle || '';
+            document.getElementById('sectionSelect').value = row.section;
+            setRadio('aggRadio', row.agg);
+            document.getElementById('includeCurrentInput').checked = !!row.include_current;
+            document.getElementById('invertSelect').value = row.invert ? '1' : '0';
+            document.getElementById('fmtSelect').value = row.fmt || 'num';
+            document.getElementById('decimalsSelect').value = String(row.decimals || 0);
+            fillAxisInputs(Y_MIN_INPUTS, 'yMinAll', row.y_min);
+            fillAxisInputs(Y_MAX_INPUTS, 'yMaxAll', row.y_max);
+            showYMinInputs();
+            fillPositionOptions();
+            prepareTargetSection(rowSource(row), row.metric, rowTargetMode(row));
+            updateRatioUi();
+        } else {
+            document.getElementById('subtitleInput').value = '';
+            fillAxisInputs(Y_MIN_INPUTS, 'yMinAll', null);
+            fillAxisInputs(Y_MAX_INPUTS, 'yMaxAll', null);
+            onMetricChange();
+        }
+        document.getElementById('chartModal').classList.add('open');
+    }
+
+    // Adding: a new metric resets the defaults to suit it. Editing: the
+    // chart's other settings are kept; only the description, target section
+    // and an auto-filled title follow the new metric.
+    function onMetricChange() {
+        const m = selectedMetric() || {};
+        document.getElementById('metricDesc').textContent = m.description || '';
+        if (chartModalState && chartModalState.rowId) {
+            if (m.column) prepareTargetSection(m.source, m.column, radioValue('targetMode', 'none'));
+            onDivideChange();
+            return;
+        }
+        const suggested = m.suggested_agg || 'sum';
+        setRadio('aggRadio', suggested);
+        // Averages and rates read fine part-way through a period; totals do not.
+        document.getElementById('includeCurrentInput').checked = suggested === 'avg';
+        showYMinInputs();
+        document.getElementById('fmtSelect').value = 'num';
+        document.getElementById('decimalsSelect').value = suggested === 'avg' ? '1' : '0';
+        document.getElementById('invertSelect').value = '0';
+        fillPositionOptions();
+        if (m.column) prepareTargetSection(m.source, m.column, m.has_target ? 'snowflake' : 'none');
+        chartModalState.autoTitle = null;   // title follows the metric again
+        onDivideChange();
+    }
+
+    function selectedDivide() {
+        const key = document.getElementById('divideSelect').value;
+        if (!key) return null;
+        const cut = key.indexOf('|');
+        return { source: key.slice(0, cut), metric: key.slice(cut + 1) };
+    }
+
+    // Shows the ratio settings when a divide-by metric is chosen. A ratio
+    // chart's target is one figure on the chart itself, so the imported and
+    // Snowflake target options (which belong to the metric) are hidden.
+    function updateRatioUi() {
+        const ratio = !!selectedDivide();
+        const show = (id, on) => { document.getElementById(id).style.display = on ? '' : 'none'; };
+        show('ratioAsField', ratio);
+        show('targetModeImport', !ratio);
+        show('importField', !ratio);
+        show('fixedTargetHint', !ratio);
+        show('ratioTargetHint', ratio);
+        document.getElementById('fixedTargetLabel').textContent = ratio ? 'Fixed target' : 'Fixed target (per day)';
+        if (ratio) {
+            show('targetModeSnowflake', false);
+            document.getElementById('targetSharedNote').textContent = '';
+            if (!['none', 'fixed'].includes(radioValue('targetMode', 'none'))) setRadio('targetMode', 'none');
+            const t = chartModalState.ratioTarget;
+            document.getElementById('fixedTargetInput').value = t === null || t === undefined ? '' : t;
+        } else if (chartModalState.metricKey) {
+            const info = metricsByKey[chartModalState.metricKey] || {};
+            show('targetModeSnowflake', !!info.has_target);
+            const cut = chartModalState.metricKey.indexOf('|');
+            document.getElementById('targetSharedNote').textContent =
+                `Fixed and imported figures belong to ${SOURCE_LABELS[chartModalState.metricKey.slice(0, cut)]}: `
+                + `${chartModalState.metricKey.slice(cut + 1)}, so every chart on it shares them.`;
+            const fixed = chartModalState.stored ? chartModalState.stored.fixed : null;
+            document.getElementById('fixedTargetInput').value = fixed === null || fixed === undefined ? '' : fixed;
+        }
+    }
+
+    function onDivideChange() {
+        if (!chartModalState) return;
+        // Keep a typed ratio target while switching the divide-by metric.
+        if (chartModalState.wasRatio) {
+            const raw = document.getElementById('fixedTargetInput').value.trim();
+            chartModalState.ratioTarget = raw === '' ? null : Number(raw);
+        }
+        const m = selectedMetric() || {};
+        const divide = selectedDivide();
+        const autoTitle = divide ? `${m.column || ''} / ${divide.metric}` : (m.column || '');
+        const titleInput = document.getElementById('titleInput');
+        // Only replace a title the popup filled in, never one typed by hand.
+        if (chartModalState.autoTitle === null || titleInput.value === chartModalState.autoTitle) {
+            titleInput.value = autoTitle;
+            chartModalState.autoTitle = autoTitle;
+        }
+        if (divide && !chartModalState.wasRatio) onRatioAsChange();
+        chartModalState.wasRatio = !!divide;
+        updateRatioUi();
+        updateYMaxPlaceholders();
+    }
+
+    function onRatioAsChange() {
+        const pct = document.getElementById('ratioAsSelect').value === 'pct';
+        document.getElementById('fmtSelect').value = pct ? 'pct' : 'num';
+        document.getElementById('decimalsSelect').value = pct ? '1' : '2';
+        updateYMaxPlaceholders();
+    }
+
+    // Positions 1..n within the chosen section. A chart staying in its own
+    // section keeps its place; one arriving goes last.
+    function fillPositionOptions() {
+        const section = document.getElementById('sectionSelect').value;
+        const rowId = chartModalState && chartModalState.rowId;
+        const others = layout.rows.filter(r => r.section === section && r.id !== rowId);
+        const select = document.getElementById('positionSelect');
+        select.innerHTML = Array.from({ length: others.length + 1 }, (_, i) =>
+            `<option value="${i}">${i + 1}${i === others.length ? ' (last)' : ''}</option>`).join('');
+        const row = rowId ? findRow(rowId) : null;
+        const current = row && row.section === section
+            ? layout.rows.filter(r => r.section === section).findIndex(r => r.id === rowId)
+            : others.length;
+        select.value = String(current);
+    }
+
+    // Rows with `row` placed at `position` (0-based) within `section`.
+    function placeRow(rows, row, section, position) {
+        const rest = rows.filter(r => r.id !== row.id);
+        const inSection = rest.filter(r => r.section === section);
+        const placed = { ...row, section };
+        if (position < inSection.length) {
+            rest.splice(rest.indexOf(inSection[position]), 0, placed);
+        } else {
+            const last = inSection[inSection.length - 1];
+            rest.splice(last ? rest.indexOf(last) + 1 : rest.length, 0, placed);
+        }
+        return rest;
+    }
+
+    async function prepareTargetSection(source, metric, mode) {
+        const key = metricKey(source, metric);
+        chartModalState.metricKey = key;
+        chartModalState.stored = null;
+        const info = metricsByKey[key] || {};
+        document.getElementById('targetSharedNote').textContent =
+            `Fixed and imported figures belong to ${SOURCE_LABELS[source]}: ${metric}, so every chart on it shares them.`;
+        document.getElementById('targetModeSnowflake').style.display = info.has_target ? '' : 'none';
+        setRadio('targetMode', mode === 'snowflake' && !info.has_target ? 'none' : mode);
+        document.getElementById('fixedTargetInput').value = '';
+        document.getElementById('importSummary').textContent = 'Loading...';
         try {
-            const resp = await fetch(BASE_URL + '/kpi/ai-summary', {
+            const params = new URLSearchParams({ source, metric });
+            const resp = await fetch(`${BASE_URL}/kpi/metric-target?${params}`).then(r => r.json());
+            // Ignore a late reply if the popup has moved on since.
+            if (!chartModalState || chartModalState.metricKey !== key) return;
+            if (resp.status !== 'ok') throw new Error(resp.message || 'load failed');
+            chartModalState.stored = resp;
+            // A ratio chart's box holds its own target, not the metric's.
+            if (!selectedDivide() && resp.fixed !== null && resp.fixed !== undefined) {
+                document.getElementById('fixedTargetInput').value = resp.fixed;
+            }
+            showImportSummary(resp.imported);
+        } catch (err) {
+            if (chartModalState && chartModalState.metricKey === key) {
+                showChartError('Could not load the stored targets: ' + err.message);
+            }
+        }
+    }
+
+    function showImportSummary(imported) {
+        document.getElementById('importSummary').textContent = imported
+            ? `${imported.count} dates stored, ${imported.first} to ${imported.last}.`
+            : 'Nothing imported yet.';
+    }
+
+    function closeChartModal() {
+        chartModalState = null;
+        document.getElementById('chartModal').classList.remove('open');
+    }
+
+    // Return saves the chart box. Skipped when a button has focus, so Return
+    // still presses that button (Cancel, Import, Remove), and while a save is
+    // already running.
+    document.getElementById('chartModal').addEventListener('keydown', e => {
+        if (e.key !== 'Enter' || e.target.tagName === 'BUTTON') return;
+        e.preventDefault();
+        if (!document.getElementById('chartSaveBtn').disabled) saveChartModal();
+    });
+
+    function showChartError(message) {
+        const box = document.getElementById('chartModalError');
+        box.textContent = message;
+        box.classList.add('show');
+    }
+
+    // ── CSV parsing ──
+    function splitCsvLine(line) {
+        const cells = [];
+        let cell = '', quoted = false;
+        for (let i = 0; i < line.length; i++) {
+            const ch = line[i];
+            if (ch === '"') {
+                if (quoted && line[i + 1] === '"') { cell += '"'; i++; }
+                else quoted = !quoted;
+            } else if (ch === ',' && !quoted) {
+                cells.push(cell); cell = '';
+            } else {
+                cell += ch;
+            }
+        }
+        cells.push(cell);
+        return cells.map(c => c.trim());
+    }
+
+    // YYYY-MM-DD, or DD/MM/YYYY as a UK spreadsheet saves it. Returns
+    // YYYY-MM-DD, or null when the text is not a real date.
+    function parseCsvDate(text) {
+        let y, m, d;
+        let match = /^(\d{4})-(\d{1,2})-(\d{1,2})$/.exec(text);
+        if (match) { [, y, m, d] = match.map(Number); }
+        else {
+            match = /^(\d{1,2})\/(\d{1,2})\/(\d{2}|\d{4})$/.exec(text);
+            if (!match) return null;
+            [, d, m, y] = match.map(Number);
+            if (y < 100) y += 2000;
+        }
+        const dt = new Date(Date.UTC(y, m - 1, d));
+        if (dt.getUTCFullYear() !== y || dt.getUTCMonth() !== m - 1 || dt.getUTCDate() !== d) return null;
+        return dt.toISOString().slice(0, 10);
+    }
+
+    function parseCsvNumber(text) {
+        const cleaned = String(text).replace(/[£,%\s]/g, '');
+        if (cleaned === '') return null;
+        const n = Number(cleaned);
+        return isNaN(n) ? null : n;
+    }
+
+    function parseTargetCsv(text) {
+        const lines = text.replace(/^﻿/, '').split(/\r?\n/);
+        const firstLine = lines.findIndex(l => l.trim());
+        const rows = [];
+        lines.forEach((line, index) => {
+            if (!line.trim()) return;
+            const cells = splitCsvLine(line);
+            const date = parseCsvDate(cells[0] || '');
+            if (!date) {
+                // The first line may be a header.
+                if (index === firstLine) return;
+                throw new Error(`Line ${index + 1}: cannot read the date "${cells[0]}"`);
+            }
+            const value = parseCsvNumber(cells[1] === undefined ? '' : cells[1]);
+            if (value === null) throw new Error(`Line ${index + 1}: cannot read the target "${cells[1] || ''}"`);
+            rows.push({ date, value });
+        });
+        if (!rows.length) throw new Error('No rows found in the file');
+        return rows;
+    }
+
+    async function importTargets() {
+        if (!chartModalState || !chartModalState.metricKey) return;
+        const m = metricsByKey[chartModalState.metricKey];
+        const source = m ? m.source : chartModalState.metricKey.split('|')[0];
+        const metric = m ? m.column : chartModalState.metricKey.slice(source.length + 1);
+        const file = document.getElementById('importFile').files[0];
+        document.getElementById('chartModalError').classList.remove('show');
+        if (!file) { showChartError('Choose a CSV file first.'); return; }
+
+        const button = document.getElementById('importBtn');
+        button.disabled = true;
+        try {
+            const rows = parseTargetCsv(await file.text());
+            const resp = await fetch(`${BASE_URL}/kpi/metric-target/import`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ prompt })
-            });
-            const json = await resp.json();
-            if (!resp.ok || json.status !== 'ok') throw new Error(json.message || resp.statusText);
-            out.textContent = (json.summary || '').trim();
-            out.style.display = 'block';
+                body: JSON.stringify({ source, metric, rows }),
+            }).then(r => r.json());
+            if (resp.status !== 'ok') throw new Error(resp.message || 'import failed');
+            if (chartModalState.stored) chartModalState.stored.imported = resp.imported;
+            else chartModalState.stored = { fixed: null, imported: resp.imported };
+            showImportSummary(resp.imported);
+            document.getElementById('importFile').value = '';
+            // Point the chart at what was just imported; Save confirms it.
+            setRadio('targetMode', 'import');
+            refreshRowsOnMetric(source, metric, ['import']);
         } catch (err) {
-            out.textContent = 'Error: ' + err.message;
-            out.style.display = 'block';
+            showChartError('Import failed: ' + err.message);
         } finally {
-            btn.disabled = false;
-            icon.className = 'fas fa-wand-magic-sparkles';
+            button.disabled = false;
+        }
+    }
+
+    // Figures are shared per metric, so every chart on it that draws them
+    // needs reloading after a change.
+    function refreshRowsOnMetric(source, metric, modes) {
+        layout.rows
+            .filter(r => rowSource(r) === source && r.metric === metric && modes.includes(rowTargetMode(r)))
+            .forEach(r => loadCustomRow(r));
+    }
+
+    // One min/max pair for Average charts (they share one scale), three for Sum.
+    function showYMinInputs() {
+        const avg = radioValue('aggRadio', 'sum') === 'avg';
+        document.getElementById('yMinShared').style.display = avg ? '' : 'none';
+        document.getElementById('yMinPerPeriod').style.display = avg ? 'none' : '';
+        updateYMaxPlaceholders();
+    }
+
+    function fillAxisInputs(inputs, sharedId, byPeriod) {
+        const vals = byPeriod || {};
+        Object.entries(inputs).forEach(([key, id]) => {
+            document.getElementById(id).value = vals[key] === null || vals[key] === undefined ? '' : vals[key];
+        });
+        const shared = sharedAxisValue(byPeriod);
+        document.getElementById(sharedId).value = shared === null ? '' : shared;
+    }
+
+    function readAxisInput(id) {
+        const raw = document.getElementById(id).value.trim();
+        if (raw === '') return null;
+        const n = Number(raw);
+        if (isNaN(n)) throw new Error('Axis minimums and maximums must be numbers.');
+        return n;
+    }
+
+    // An Average chart's single value is stored in all three period slots.
+    function readAxis(inputs, sharedId) {
+        if (radioValue('aggRadio', 'sum') === 'avg') {
+            const v = readAxisInput(sharedId);
+            return { m: v, w: v, d: v };
+        }
+        const out = {};
+        for (const [key, id] of Object.entries(inputs)) out[key] = readAxisInput(id);
+        return out;
+    }
+
+    const divideId = div => div ? metricKey(div.source || 'snowflake', div.metric) : '';
+
+    // Grey placeholder in each blank maximum box: the top the chart would get
+    // from the minimum as typed. Only shown when the loaded data still matches
+    // the box (same metric, divide-by and Sum/Average); otherwise "Auto".
+    function updateYMaxPlaceholders() {
+        const ids = { ...Y_MAX_INPUTS, all: 'yMaxAll' };
+        Object.values(ids).forEach(id => { document.getElementById(id).placeholder = 'Auto'; });
+        if (!chartModalState || !chartModalState.rowId) return;
+        const row = findRow(chartModalState.rowId);
+        const d = row && customRowData[row.id];
+        const m = selectedMetric();
+        const agg = radioValue('aggRadio', 'sum');
+        if (!d || !m || m.column !== row.metric || m.source !== rowSource(row)
+            || divideId(selectedDivide()) !== divideId(row.divide_by) || agg !== row.agg
+            || (row.divide_by && (document.getElementById('ratioAsSelect').value === 'pct') !== (row.ratio_as === 'pct'))) return;
+
+        let yMin;
+        try { yMin = readAxis(Y_MIN_INPUTS, 'yMinAll'); } catch (err) { return; }
+        const ranges = calcRowRanges(rangeSpecs(d, yMin, null), agg, sharedAxisValue(yMin), null);
+        const show = (id, range) => { document.getElementById(id).placeholder = 'Auto: ' + range.yMax; };
+        if (agg === 'avg') show('yMaxAll', ranges[0]);
+        else ['m', 'w', 'd'].forEach((k, i) => show(Y_MAX_INPUTS[k], ranges[i]));
+    }
+
+    async function saveChartModal() {
+        if (!chartModalState) return;
+        const existing = chartModalState.rowId ? findRow(chartModalState.rowId) : null;
+        const m = selectedMetric();
+        const source = m ? m.source : (existing && rowSource(existing));
+        const metric = m ? m.column : (existing && existing.metric);
+        document.getElementById('chartModalError').classList.remove('show');
+        if (!metric) { showChartError('Choose a metric.'); return; }
+
+        const stored = chartModalState.stored || {};
+        const mode = radioValue('targetMode', 'none');
+        const raw = document.getElementById('fixedTargetInput').value.trim();
+        const fixed = raw === '' ? null : Number(raw);
+        let yMin, yMax;
+        try {
+            yMin = readAxis(Y_MIN_INPUTS, 'yMinAll');
+            yMax = readAxis(Y_MAX_INPUTS, 'yMaxAll');
+        } catch (err) { showChartError(err.message); return; }
+        if (['m', 'w', 'd'].some(k => yMax[k] !== null && yMax[k] <= (yMin[k] || 0))) {
+            showChartError('Each axis maximum must be above its minimum (0 when the minimum is blank).');
+            return;
+        }
+        if (fixed !== null && (isNaN(fixed) || fixed < 0)) { showChartError('The fixed target must be a number of 0 or more.'); return; }
+        if (mode === 'fixed' && fixed === null) { showChartError('Enter a fixed figure, or choose another target option.'); return; }
+        const divide = selectedDivide();
+        if (!divide && mode === 'import' && !stored.imported) { showChartError('Import a CSV first, or choose another target option.'); return; }
+
+        const updated = {
+            ...(existing || { id: 'c' + Date.now().toString(36), type: 'custom' }),
+            source,
+            metric,
+            title: document.getElementById('titleInput').value.trim() || metric,
+            subtitle: document.getElementById('subtitleInput').value.trim(),
+            agg: radioValue('aggRadio', 'sum'),
+            include_current: document.getElementById('includeCurrentInput').checked,
+            fmt: document.getElementById('fmtSelect').value,
+            decimals: parseInt(document.getElementById('decimalsSelect').value, 10),
+            invert: document.getElementById('invertSelect').value === '1',
+            target_mode: mode,
+            y_min: yMin,
+            y_max: yMax,
+        };
+        // A ratio chart keeps its target on the row; the metric's stored
+        // fixed figure is left as it was.
+        delete updated.divide_by;
+        delete updated.ratio_as;
+        delete updated.ratio_target;
+        if (divide) {
+            updated.divide_by = divide;
+            updated.ratio_as = document.getElementById('ratioAsSelect').value;
+            updated.ratio_target = fixed;
+        }
+        const rows = placeRow(layout.rows, updated,
+            document.getElementById('sectionSelect').value,
+            parseInt(document.getElementById('positionSelect').value, 10));
+
+        const button = document.getElementById('chartSaveBtn');
+        button.disabled = true;
+        try {
+            const storedFixed = stored.fixed === undefined ? null : stored.fixed;
+            const fixedChanged = !divide && fixed !== storedFixed;
+            if (fixedChanged) {
+                const resp = await fetch(`${BASE_URL}/kpi/metric-target/fixed`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ source, metric, value: fixed }),
+                }).then(r => r.json());
+                if (resp.status !== 'ok') throw new Error(resp.message || 'target save failed');
+            }
+            // The page only changes once the server has the new layout.
+            await saveLayout(rows);
+            layout.rows = rows;
+            const row = findRow(updated.id);
+            closeChartModal();
+
+            const ratioKey = r => JSON.stringify([r.divide_by || null, r.ratio_as || null, r.ratio_target ?? null]);
+            const needsData = !existing || existing.metric !== row.metric || rowSource(existing) !== row.source
+                || existing.agg !== row.agg || !!existing.include_current !== !!row.include_current || rowTargetMode(existing) !== row.target_mode
+                || ratioKey(existing) !== ratioKey(row);
+            if (existing) rebuildCustomRow(row, needsData);
+            else {
+                renderLayout();
+                loadCustomRow(row);
+            }
+            if (fixedChanged) refreshRowsOnMetric(source, metric, ['fixed']);
+            // A reload already started says "Loading..." until it finishes.
+            if (!needsData && !fixedChanged) {
+                document.getElementById('statusText').textContent = 'Chart saved';
+            }
+        } catch (err) {
+            showChartError('Save failed: ' + err.message);
+        } finally {
+            button.disabled = false;
+        }
+    }
+
+    // Duplicate a chart row, settings and all, directly under the original in
+    // the same section. Fixed and imported targets belong to the metric, so
+    // the copy shares them; a ratio chart's own target is copied with the row.
+    async function copyChartBelow(rowId) {
+        const row = findRow(rowId);
+        if (!row) return;
+        const copy = {
+            ...JSON.parse(JSON.stringify(row)),
+            id: 'c' + Date.now().toString(36),
+            // The server rejects titles over 100 characters.
+            title: `${rowTitle(row).slice(0, 93)} (copy)`,
+        };
+        const rows = [...layout.rows];
+        rows.splice(rows.indexOf(row) + 1, 0, copy);
+        try {
+            await saveLayout(rows);
+        } catch (err) {
+            document.getElementById('statusText').textContent = 'Copy failed: ' + err.message;
+            return;
+        }
+        layout.rows = rows;
+        renderLayout();
+        loadCustomRow(copy);
+    }
+
+    async function removeChart() {
+        if (!chartModalState || !chartModalState.rowId) return;
+        const row = findRow(chartModalState.rowId);
+        if (!row || !confirm(`Remove the ${rowTitle(row)} charts?`)) return;
+        const rows = layout.rows.filter(r => r.id !== row.id);
+        try {
+            await saveLayout(rows);
+        } catch (err) {
+            showChartError('Remove failed: ' + err.message);
+            return;
+        }
+        layout.rows = rows;
+        dropRowElement(row.id);
+        delete customRowData[row.id];
+        closeChartModal();
+        renderLayout();
+        document.getElementById('statusText').textContent = 'Chart removed';
+    }
+
+    // ── Settings modal (admin only) ───────────────────────────────────────────
+    const SETTING_INPUTS = {
+        months: 'setMonths', weeks: 'setWeeks', days_window: 'setDaysWindow',
+        days_total: 'setDaysTotal', label_angle: 'setLabelAngle',
+    };
+
+    function openSettingsModal() {
+        Object.entries(SETTING_INPUTS).forEach(([name, id]) => {
+            const input = document.getElementById(id);
+            input.value = settings[name];
+            const limits = settingLimits[name];
+            if (limits) { input.min = limits[0]; input.max = limits[1]; }
+        });
+        const lim = name => settingLimits[name] ? `${settingLimits[name][0]}-${settingLimits[name][1]}` : '';
+        document.getElementById('settingsHint').textContent =
+            `Months ${lim('months')}, weeks ${lim('weeks')}, days available ${lim('days_total')}. `
+            + 'Months and weeks include the current one. Days available includes the 10 days ahead of today '
+            + 'shown for the target line. Data label angle: 0 is flat, -40 tilts the labels up to the right.';
+        document.getElementById('settingsError').classList.remove('show');
+        document.getElementById('settingsModal').classList.add('open');
+    }
+
+    function closeSettingsModal() {
+        document.getElementById('settingsModal').classList.remove('open');
+    }
+
+    async function saveSettings() {
+        const next = {};
+        for (const [name, id] of Object.entries(SETTING_INPUTS)) {
+            next[name] = parseInt(document.getElementById(id).value, 10);
+        }
+        const errorBox = document.getElementById('settingsError');
+        if (next.days_window > next.days_total) {
+            errorBox.textContent = 'Days shown at once cannot be more than the days available.';
+            errorBox.classList.add('show');
+            return;
+        }
+        const button = document.getElementById('settingsSaveBtn');
+        button.disabled = true;
+        try {
+            const resp = await fetch(BASE_URL + '/kpi/settings', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ settings: next }),
+            }).then(r => r.json());
+            if (resp.status !== 'ok') throw new Error(resp.message || 'save failed');
+            const needsData = ['months', 'weeks', 'days_total'].some(k => resp.settings[k] !== settings[k]);
+            settings = resp.settings;
+            DayWindow.reset();
+            closeSettingsModal();
+            // Periods change what the server sends; the window and angle are
+            // drawing only, so the loaded data is reused.
+            if (needsData) loadAll();
+            else renderAllFromCache();
+            document.getElementById('statusText').textContent = 'Settings saved';
+        } catch (err) {
+            errorBox.textContent = 'Save failed: ' + err.message;
+            errorBox.classList.add('show');
+        } finally {
+            button.disabled = false;
         }
     }
     </script>
