@@ -1,0 +1,253 @@
+/* ─────────────────────────────────────────────────────────────────────────
+   Shared styles for the chart pages (KPI Dashboard, Google Ads Campaigns).
+
+   Everything the chart pages have in common lives here: the page frame, the
+   section headers, the chart cards, the day-window scroller and the popups.
+   Change a chart's look HERE, not in a page's own <style> block, so every
+   chart page stays the same. Pair with static/js/charts.js.
+
+       <link href="{{ static_url('css/theme.css') }}" rel="stylesheet">
+       <link href="{{ static_url('css/charts.css') }}" rel="stylesheet">
+
+   A page's own <style> block should only hold what genuinely exists on that
+   one page (its filters, its edit toolbar).
+   ───────────────────────────────────────────────────────────────────────── */
+
+@font-face { font-family: 'DM Sans'; src: url('../fonts/DMSans-Regular.ttf'); font-weight: 400; }
+@font-face { font-family: 'DM Sans'; src: url('../fonts/DMSans-Bold.ttf');    font-weight: 700; }
+body, button, input, select, textarea { font-family: 'DM Sans', system-ui, sans-serif; font-size: 14px; }
+body { background: #f1f5f9; }
+
+/* ── Page frame ───────────────────────────────────────────────────────────── */
+.top-bar {
+    background: #fff;
+    border-bottom: 1px solid #e2e8f0;
+    padding: 12px 28px;
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    position: sticky;
+    top: 0;
+    z-index: 100;
+}
+.top-bar h1 { font-size: 1.1rem; font-weight: 700; margin: 0; color: #0f172a; }
+.page-content { padding: 24px 32px; }
+.status-text { font-size: 0.82rem; color: #64748b; }
+
+/* ── Buttons ──────────────────────────────────────────────────────────────── */
+.btn-load {
+    background: #7ed321; border: none; color: #0d3d5f; font-weight: 700;
+    border-radius: 6px; padding: 7px 20px; font-size: 0.9rem;
+    display: inline-flex; align-items: center; gap: 7px;
+}
+.btn-load:hover { background: #6cba18; color: #0d3d5f; }
+.btn-load:disabled { opacity: 0.6; cursor: not-allowed; }
+
+.btn-apply {
+    background: #0d3d6e; border: none; color: #fff; font-weight: 700;
+    border-radius: 6px; padding: 7px 16px; font-size: 0.9rem;
+    display: inline-flex; align-items: center; gap: 7px;
+}
+.btn-apply:hover { background: #0a2f56; color: #fff; }
+.btn-apply:disabled { opacity: 0.6; cursor: not-allowed; }
+
+.btn-edit, .btn-cancel {
+    background: #fff; border: 1px solid #cbd5e1; color: #334155; font-weight: 700;
+    border-radius: 6px; padding: 7px 16px; font-size: 0.9rem;
+    display: inline-flex; align-items: center; gap: 7px;
+}
+.btn-edit:hover, .btn-cancel:hover { background: #f1f5f9; color: #0f172a; }
+
+/* ── Collapsible sections ─────────────────────────────────────────────────── */
+.category-section { margin-bottom: 12px; }
+.category-header {
+    display: flex; align-items: center; gap: 10px;
+    padding: 9px 16px; margin-bottom: 0;
+    background: #e2e8f0; border-radius: 8px;
+    user-select: none;
+    font-size: 0.82rem; font-weight: 700; color: #0f172a;
+    border: 1px solid #cbd5e1;
+}
+/* Whole bar toggles the section (KPI). */
+.category-header.clickable { cursor: pointer; }
+.category-header.clickable:hover { background: #d1d9e2; }
+/* Only this button toggles the section, for a bar that also holds filters
+   (Google Ads), where a click on the bar used to collapse it by accident. */
+.category-toggle {
+    display: flex; align-items: center; gap: 10px;
+    margin: -9px 0 -9px -16px; padding: 9px 12px 9px 16px;
+    background: none; border: none; border-radius: 8px 0 0 8px;
+    font: inherit; color: inherit; cursor: pointer;
+}
+.category-toggle:hover { background: #d1d9e2; }
+.category-header .chevron { font-size: 0.7rem; color: #64748b; transition: transform 0.2s; }
+.category-header.open .chevron { transform: rotate(90deg); }
+.category-body { display: none; margin-top: 12px; }
+.category-body.open { display: block; }
+
+/* ── Chart rows and cards ─────────────────────────────────────────────────── */
+.chart-row + .chart-row { margin-top: 16px; }
+
+.charts-row {
+    display: grid;
+    grid-template-columns: 30.5fr 30.5fr 39fr;
+    gap: 16px;
+    align-items: start;
+}
+
+/* Title bar above each row of three charts. The text shrinks to its content
+   so the Target button sits right next to it. */
+.chart-row-title {
+    display: flex; align-items: center; gap: 10px; justify-content: flex-start;
+    margin: 0 0 8px; padding: 7px 12px; border-left: 4px solid #0d3d6e;
+    background: #f8fafc; color: #0f172a; font-size: 0.86rem; font-weight: 700;
+    overflow-wrap: anywhere;
+}
+.chart-row-title .chart-title-text { flex: 0 1 auto; min-width: 0; }
+/* Optional second line under a row title. */
+.chart-subtitle-text {
+    display: block; font-size: 0.86rem; font-weight: 700; color: #475569; margin-top: 1px;
+}
+/* Button in the title bar (Target on Google Ads, Edit Chart on KPI). */
+.chart-target-btn, .chart-title-btn {
+    flex: none; border: 1px solid #cbd5e1; background: #fff; color: #0d3d6e;
+    border-radius: 6px; padding: 3px 10px; font-size: 0.74rem; font-weight: 700;
+    cursor: pointer; white-space: nowrap;
+}
+.chart-target-btn:hover, .chart-title-btn:hover { background: #f1f5f9; }
+.chart-target-btn.has-target { border-color: #e53e3e; color: #e53e3e; }
+
+.chart-card {
+    background: #fff;
+    border: 1px solid #e2e8f0;
+    border-radius: 10px;
+    padding: 12px 14px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.06);
+}
+.chart-card h2 { font-size: 0.88rem; font-weight: 700; color: #0f172a; margin-bottom: 4px; }
+
+/* Legend line. The day chart's scroller sits at the right of it, so every
+   card's line is the same height and the three plots stay the same size.
+   min-height matches the scroller's own height. */
+.chart-legend-row {
+    display: flex; align-items: center; gap: 10px;
+    margin-bottom: 2px; min-height: 22px;
+}
+.chart-legend {
+    flex: 1; min-width: 0;
+    display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+    font-size: 0.75rem; color: #475569;
+}
+.legend-item { display: flex; align-items: center; gap: 4px; }
+.legend-dot { width: 14px; height: 3px; border-radius: 2px; display: inline-block; background: #0d3d6e; }
+/* Matches N1_COLOUR in charts.js. */
+.legend-dot-dashed { width: 14px; height: 0; border-top: 2px dashed #6b7280; display: inline-block; }
+.legend-target { width: 14px; height: 0; border-top: 2px solid #e53e3e; display: inline-block; }
+
+/* Title line with the day scroller beside it (cards built with legend: false).
+   min-height matches the scroller, so every card's plot starts level; the
+   title stays on one line for the same reason. */
+.chart-card-head {
+    display: flex; align-items: center; gap: 10px;
+    min-height: 22px; margin-bottom: 4px;
+}
+.chart-card-head h2 {
+    flex: 1; min-width: 0; margin: 0;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+/* Optional line under a card title. One line only, so every card in a row
+   with a subtitle keeps its plot level. */
+.chart-card-subtitle {
+    font-size: 0.78rem; font-weight: 600; color: #475569;
+    margin: -2px 0 4px;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+/* Row with no title bar, just the Edit button. */
+.chart-row-actions { display: flex; gap: 8px; margin: 0 0 6px; }
+/* Hide / show button. The title only shows while the row is collapsed. */
+.chart-collapse-btn i { transition: transform 0.15s; }
+.chart-collapse-label { display: none; margin-left: 4px; }
+.chart-row.collapsed .charts-row { display: none; }
+/* Edit / Copy only show while the row is open, so a collapsed row is one clean line. */
+.chart-row-admin { display: flex; gap: 8px; }
+.chart-row.collapsed .chart-row-admin { display: none; }
+.chart-row.collapsed .chart-collapse-btn i { transform: rotate(-90deg); }
+.chart-row.collapsed .chart-collapse-label { display: inline; }
+
+/* Gaps above the plot are kept tight (heading 4px, legend line 2px) so the
+   card's height goes to the chart itself. */
+.chart-wrap { position: relative; height: 289px; }
+
+/* While data loads, hide the old lines so they are not mistaken for current
+   data. The cards keep their size, so the page does not jump. Put the class
+   on any container holding chart rows. */
+.charts-loading .chart-wrap canvas { visibility: hidden; }
+.charts-loading .chart-wrap:after {
+    content: 'Loading...';
+    position: absolute; inset: 0;
+    display: flex; align-items: center; justify-content: center;
+    color: #94a3b8; font-size: 0.8rem;
+}
+.charts-loading .chart-row-title { opacity: 0.45; }
+.charts-loading .chart-day-scroller { opacity: 0.45; pointer-events: none; }
+
+/* ── Day-window scroller ──────────────────────────────────────────────────── */
+/* Sits on the legend line of each day chart. Every copy drives the one shared
+   window (DayWindow in charts.js), so they all move together. */
+.chart-day-scroller {
+    flex: 0 1 300px; min-width: 180px;
+    display: flex; align-items: center; gap: 4px;
+}
+/* The track is the whole history; the thumb's WIDTH is the visible window's
+   share of it, so the bar shows how much is on screen as well as where. A
+   native range input cannot do this — its thumb is a fixed size. */
+.chart-day-track {
+    flex: 1; min-width: 0; position: relative; height: 12px;
+    background: #f1f5f9; border: 1px solid #e2e8f0; border-radius: 8px;
+    cursor: pointer; touch-action: none;
+}
+.chart-day-thumb {
+    position: absolute; top: -1px; bottom: -1px;
+    background: #0d3d6e; border-radius: 8px; cursor: grab;
+    min-width: 18px;
+}
+.chart-day-thumb:hover { background: #0a2f56; }
+.chart-day-track.dragging { cursor: grabbing; }
+.chart-day-track.dragging .chart-day-thumb { cursor: grabbing; background: #0a2f56; }
+.chart-day-step, .chart-day-latest {
+    border: 1px solid #cbd5e1; background: #fff; color: #334155;
+    border-radius: 6px; padding: 0 6px; font-size: 0.68rem; line-height: 1.4;
+    height: 20px;
+}
+.chart-day-step:hover:not(:disabled), .chart-day-latest:hover:not(:disabled) { background: #f1f5f9; }
+.chart-day-step:disabled { opacity: 0.4; cursor: not-allowed; }
+.chart-day-latest { font-weight: 700; white-space: nowrap; }
+
+/* ── Popups ───────────────────────────────────────────────────────────────── */
+.modal-overlay {
+    position: fixed; inset: 0; background: rgba(15, 23, 42, 0.45);
+    display: none; align-items: flex-start; justify-content: center;
+    padding-top: 10vh; z-index: 200;
+}
+.modal-overlay.open { display: flex; }
+.modal-box {
+    background: #fff; border-radius: 12px; padding: 22px 24px;
+    width: 480px; max-width: 92vw;
+    box-shadow: 0 10px 40px rgba(0,0,0,0.25);
+}
+.modal-box h2 { font-size: 1rem; font-weight: 700; color: #0f172a; margin-bottom: 16px; }
+/* Line under the heading; pulls up so it sits close to it. */
+.modal-sub { font-size: 0.78rem; color: #64748b; margin: -12px 0 16px; overflow-wrap: anywhere; }
+.modal-field { margin-bottom: 14px; }
+.modal-field > label { display: block; font-size: 0.8rem; font-weight: 700; color: #334155; margin-bottom: 4px; }
+.modal-field select,
+.modal-field input[type="text"],
+.modal-field input[type="number"] {
+    width: 100%; padding: 6px 10px; border: 1px solid #cbd5e1; border-radius: 6px;
+    background: #fff; color: #0f172a;
+}
+.modal-hint { font-size: 0.75rem; color: #64748b; margin-top: 5px; line-height: 1.45; }
+.modal-error { font-size: 0.78rem; color: #e53e3e; margin-bottom: 10px; display: none; }
+.modal-error.show { display: block; }
+.modal-actions { display: flex; justify-content: flex-end; align-items: center; gap: 10px; margin-top: 18px; }
+.modal-actions .spacer { flex: 1; }
