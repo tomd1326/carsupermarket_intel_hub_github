@@ -955,3 +955,110 @@ def delete_chart_target(conn, chart_key: str, from_date) -> int:
     except Exception:
         conn.rollback()
         raise
+
+
+def upsert_chart_target_dates(conn, chart_key: str, rows: list, user: str = None) -> None:
+    """Write per-date targets for one key: [(date, value), ...].
+
+    Used by the KPI CSV import. Only the dates given are touched — a date already
+    stored is overwritten, a new one is added, and every other date is left as
+    it was, so a later file can carry amendments and new dates together.
+    """
+    if not rows:
+        return
+    _ensure_chart_targets_table(conn)
+    try:
+        with conn.cursor() as cur:
+            psycopg2.extras.execute_values(
+                cur,
+                "INSERT INTO chart_targets (chart_key, target_date, target_value, created_by) VALUES %s "
+                "ON CONFLICT (chart_key, target_date) DO UPDATE "
+                "SET target_value = EXCLUDED.target_value, "
+                "    created_by   = EXCLUDED.created_by, "
+                "    updated_at   = NOW()",
+                [(chart_key, d, value, user) for d, value in rows],
+                page_size=1000,
+            )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+
+
+# ── Google Ads Campaigns: chosen campaigns ────────────────────────────────────
+# Which GA4 campaign IDs the Google Ads Campaigns page shows. db/14_ga4_campaigns.sql
+# is the schema; the table is created on first use. Removing a campaign leaves
+# its chart_targets rows alone, so its targets return if it is added again.
+
+def _ensure_ga4_campaigns_table(conn) -> None:
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS ga4_campaigns (
+                campaign_id VARCHAR(50)  NOT NULL PRIMARY KEY,
+                added_by    VARCHAR(100),
+                added_at    TIMESTAMPTZ  NOT NULL DEFAULT NOW()
+            )
+            """
+        )
+    conn.commit()
+
+
+def get_ga4_campaign_ids(conn) -> list:
+    """Chosen campaign IDs, in the order they were added. Empty before the
+    table exists."""
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT campaign_id FROM ga4_campaigns ORDER BY added_at, campaign_id")
+            return [row[0] for row in cur.fetchall()]
+    except psycopg2.errors.UndefinedTable:
+        conn.rollback()
+        return []
+
+
+def add_ga4_campaign(conn, campaign_id: str, user: str = None) -> None:
+    _ensure_ga4_campaigns_table(conn)
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO ga4_campaigns (campaign_id, added_by) VALUES (%s, %s) "
+                "ON CONFLICT (campaign_id) DO NOTHING",
+                (campaign_id, user),
+            )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+
+
+def remove_ga4_campaign(conn, campaign_id: str) -> int:
+    try:
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM ga4_campaigns WHERE campaign_id = %s", (campaign_id,))
+            removed = cur.rowcount
+        conn.commit()
+        return removed
+    except psycopg2.errors.UndefinedTable:
+        conn.rollback()
+        return 0
+    except Exception:
+        conn.rollback()
+        raise
+
+
+def get_chart_target_summary(conn, chart_key: str) -> dict | None:
+    """Returns {'count', 'first', 'last'} for the dates stored under one key, or
+    None when nothing is stored (or the table does not exist yet)."""
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT COUNT(*), MIN(target_date), MAX(target_date) FROM chart_targets WHERE chart_key = %s",
+                (chart_key,),
+            )
+            count, first, last = cur.fetchone()
+    except psycopg2.errors.UndefinedTable:
+        conn.rollback()
+        return None
+    if not count:
+        return None
+    return {'count': count, 'first': first, 'last': last}

@@ -9,85 +9,12 @@
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css" rel="stylesheet">
     <link href="{{ static_url('css/theme.css') }}" rel="stylesheet">
+    <link href="{{ static_url('css/charts.css') }}" rel="stylesheet">
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+    <script src="{{ static_url('js/charts.js') }}"></script>
+    <!-- Chart styles shared with other chart pages live in charts.css; only
+         what exists on this page alone belongs here. -->
     <style>
-        @font-face { font-family: 'DM Sans'; src: url('{{ BASE_URL }}/static/fonts/DMSans-Regular.ttf');  font-weight: 400; }
-        @font-face { font-family: 'DM Sans'; src: url('{{ BASE_URL }}/static/fonts/DMSans-Bold.ttf');     font-weight: 700; }
-        body, button, input, select, textarea { font-family: 'DM Sans', system-ui, sans-serif; font-size: 14px; }
-        body { background: #f1f5f9; }
-
-        .top-bar {
-            background: #fff;
-            border-bottom: 1px solid #e2e8f0;
-            padding: 12px 28px;
-            display: flex;
-            align-items: center;
-            gap: 16px;
-            position: sticky;
-            top: 0;
-            z-index: 100;
-        }
-        .top-bar h1 { font-size: 1.1rem; font-weight: 700; margin: 0; color: #0f172a; }
-        .page-content { padding: 24px 32px; }
-
-        .charts-row {
-            display: grid;
-            grid-template-columns: 30.5fr 30.5fr 39fr;
-            gap: 16px;
-            align-items: start;
-        }
-
-        .chart-card {
-            background: #fff;
-            border: 1px solid #e2e8f0;
-            border-radius: 10px;
-            padding: 18px 20px;
-            box-shadow: 0 1px 3px rgba(0,0,0,0.06);
-        }
-        .chart-card h2 { font-size: 0.88rem; font-weight: 700; color: #0f172a; margin-bottom: 8px; }
-
-        .btn-load {
-            background: #7ed321; border: none; color: #0d3d5f; font-weight: 700;
-            border-radius: 6px; padding: 7px 20px; font-size: 0.9rem;
-            display: inline-flex; align-items: center; gap: 7px;
-        }
-        .btn-load:hover { background: #6cba18; color: #0d3d5f; }
-        .btn-load:disabled { opacity: 0.6; cursor: not-allowed; }
-        .status-text { font-size: 0.82rem; color: #64748b; }
-
-        .btn-apply {
-            background: #0d3d6e; border: none; color: #fff; font-weight: 700;
-            border-radius: 6px; padding: 7px 16px; font-size: 0.9rem;
-            display: inline-flex; align-items: center; gap: 7px;
-        }
-        .btn-apply:hover { background: #0a2f56; color: #fff; }
-        .btn-apply:disabled { opacity: 0.6; cursor: not-allowed; }
-
-        .category-header {
-            display: flex; align-items: center; gap: 10px;
-            padding: 9px 16px; margin-bottom: 0;
-            background: #e2e8f0; border-radius: 8px;
-            user-select: none;
-            font-size: 0.82rem; font-weight: 700; color: #0f172a;
-            border: 1px solid #cbd5e1;
-        }
-        /* Only this button collapses the section. The rest of the bar holds the
-           filters, where a click used to collapse it by accident. */
-        .category-toggle {
-            display: flex; align-items: center; gap: 10px;
-            margin: -9px 0 -9px -16px; padding: 9px 12px 9px 16px;
-            background: none; border: none; border-radius: 8px 0 0 8px;
-            font: inherit; color: inherit; cursor: pointer;
-        }
-        .category-toggle:hover { background: #d1d9e2; }
-        .category-toggle .chevron { font-size: 0.7rem; color: #64748b; transition: transform 0.2s; }
-        .category-header.open .chevron { transform: rotate(90deg); }
-        .category-body { display: none; margin-top: 12px; }
-        .category-body.open { display: block; }
-        .category-section { margin-bottom: 12px; }
-
-        .chart-row + .chart-row { margin-top: 16px; }
-
         /* First filter sits right after the section title; the rest follow it. */
         .ga4-filter {
             display: flex; align-items: center; gap: 8px;
@@ -132,106 +59,17 @@
             background: none; border: none; padding: 0; cursor: pointer;
             color: #0d3d6e; font-size: 0.75rem; font-weight: 700; text-decoration: underline;
         }
-        .ga4-campaign-title {
-            margin: 0 0 8px; padding: 7px 12px; border-left: 4px solid #0d3d6e;
-            background: #f8fafc; color: #0f172a; font-size: 0.86rem; font-weight: 700;
-            overflow-wrap: anywhere;
-        }
-        .ga4-aggregated-title {
+        .chart-row-title.ga4-aggregated-title {
             border-left-color: #e53e3e; background: #fef2f2; font-size: 0.92rem;
         }
         .ga4-status { margin: 0 0 10px; color: #64748b; font-size: 0.8rem; }
-        .ga4-chart-wrap { position: relative; height: 260px; }
         /* The stacked aggregated charts carry a campaign legend under the plot,
            so they need the extra height or the plot area is squeezed. */
-        .ga4-chart-wrap.ga4-chart-legended { height: 330px; }
+        .chart-wrap.ga4-chart-legended { height: 359px; }
 
-        /* While a new event loads, hide the old event's lines so the charts are
-           not mistaken for current data. The cards keep their size, so the page
-           does not jump when the new data arrives. */
-        .ga4-loading .ga4-chart-wrap canvas { visibility: hidden; }
-        .ga4-loading .ga4-chart-wrap:after {
-            content: 'Loading...';
-            position: absolute; inset: 0;
-            display: flex; align-items: center; justify-content: center;
-            color: #94a3b8; font-size: 0.8rem;
-        }
-        .ga4-loading .ga4-campaign-title { opacity: 0.45; }
-
-        /* Day-window scroller: sits under each day chart. Every copy drives the
-           one shared window, so they all move together. */
-        .ga4-day-scroller {
-            display: flex; align-items: center; gap: 6px;
-            margin-top: 10px; padding-top: 10px;
-            border-top: 1px solid #e2e8f0;
-        }
-        /* The track is the whole history; the thumb's WIDTH is the visible
-           window's share of it, so the bar shows how much is on screen as well
-           as where. A native range input cannot do this — its thumb is a fixed
-           size regardless of the window. */
-        .ga4-day-track {
-            flex: 1; min-width: 0; position: relative; height: 16px;
-            background: #f1f5f9; border: 1px solid #e2e8f0; border-radius: 8px;
-            cursor: pointer; touch-action: none;
-        }
-        .ga4-day-thumb {
-            position: absolute; top: -1px; bottom: -1px;
-            background: #0d3d6e; border-radius: 8px; cursor: grab;
-            min-width: 18px;
-        }
-        .ga4-day-thumb:hover { background: #0a2f56; }
-        .ga4-day-track.dragging { cursor: grabbing; }
-        .ga4-day-track.dragging .ga4-day-thumb { cursor: grabbing; background: #0a2f56; }
-        .ga4-day-step, .ga4-day-latest {
-            border: 1px solid #cbd5e1; background: #fff; color: #334155;
-            border-radius: 6px; padding: 2px 8px; font-size: 0.72rem; line-height: 1.5;
-        }
-        .ga4-day-step:hover:not(:disabled), .ga4-day-latest:hover:not(:disabled) { background: #f1f5f9; }
-        .ga4-day-step:disabled { opacity: 0.4; cursor: not-allowed; }
-        .ga4-day-latest { font-weight: 700; white-space: nowrap; }
-        .ga4-loading .ga4-day-scroller { opacity: 0.45; pointer-events: none; }
-
-        /* Target button, sitting at the right of the campaign title bar. */
-        /* Title text shrinks to its content so the button sits immediately to
-           its right rather than at the far edge of the row. justify-content
-           keeps the pair left-aligned once the text no longer fills the width. */
-        .ga4-campaign-title {
-            display: flex; align-items: center; gap: 10px; justify-content: flex-start;
-        }
-        .ga4-campaign-title .ga4-title-text { flex: 0 1 auto; min-width: 0; }
-        .ga4-target-btn {
-            flex: none; border: 1px solid #cbd5e1; background: #fff; color: #0d3d6e;
-            border-radius: 6px; padding: 3px 10px; font-size: 0.74rem; font-weight: 700;
-            cursor: pointer; white-space: nowrap;
-        }
-        .ga4-target-btn:hover { background: #f1f5f9; }
-        .ga4-target-btn.has-target { border-color: #e53e3e; color: #e53e3e; }
-
-        /* ── Target modal ───────────────────────────────────────────────────── */
-        .modal-overlay {
-            position: fixed; inset: 0; background: rgba(15, 23, 42, 0.45);
-            display: none; align-items: flex-start; justify-content: center;
-            padding-top: 10vh; z-index: 200;
-        }
-        .modal-overlay.open { display: flex; }
-        .modal-box {
-            background: #fff; border-radius: 12px; padding: 22px 24px;
-            width: 420px; max-width: 92vw;
-            box-shadow: 0 10px 40px rgba(0,0,0,0.25);
-        }
-        .modal-box h2 { font-size: 1rem; font-weight: 700; color: #0f172a; margin-bottom: 4px; }
-        .modal-sub {
-            font-size: 0.78rem; color: #64748b; margin-bottom: 16px;
-            overflow-wrap: anywhere;
-        }
-        .modal-field { margin-bottom: 14px; }
-        .modal-field label { display: block; font-size: 0.8rem; font-weight: 700; color: #334155; margin-bottom: 4px; }
+        /* ── Target popup ───────────────────────────────────────────────────── */
         .modal-input-wrap { display: flex; align-items: center; gap: 6px; }
-        .modal-field input {
-            flex: 1; padding: 6px 10px; border: 1px solid #cbd5e1;
-            border-radius: 6px; font-size: 0.9rem;
-        }
-        .modal-suffix { font-weight: 700; color: #475569; }
+        .modal-input-wrap input { flex: 1; }
         /* Read-only: the All events figure is the components added up, shown so
            the derived rate makes sense but not typeable. */
         .modal-field input.readonly {
@@ -247,15 +85,52 @@
             font-size: 0.74rem; color: #64748b; line-height: 1.5;
             border-top: 1px solid #e2e8f0; padding-top: 10px; margin-bottom: 14px;
         }
-        .modal-error { font-size: 0.78rem; color: #e53e3e; margin-bottom: 10px; display: none; }
-        .modal-error.show { display: block; }
-        .modal-actions { display: flex; gap: 8px; justify-content: flex-end; align-items: center; }
-        .modal-actions .spacer { flex: 1; }
-        .btn-cancel {
-            background: none; border: 1px solid #cbd5e1; color: #334155;
-            border-radius: 6px; padding: 6px 14px; font-size: 0.85rem; font-weight: 700;
+
+        /* ── Settings popup (which campaigns the page shows) ───────────────── */
+        .modal-box.settings-modal { width: 960px; max-width: 96vw; max-height: 86vh; overflow-y: auto; }
+        .settings-section-title {
+            font-size: 0.72rem; font-weight: 700; color: #64748b; text-transform: uppercase;
+            letter-spacing: 0.04em; border-bottom: 1px solid #e2e8f0;
+            padding-bottom: 4px; margin: 6px 0 8px;
         }
-        .btn-cancel:hover { background: #f1f5f9; }
+        .settings-table { width: 100%; border-collapse: collapse; font-size: 0.8rem; }
+        .settings-table th {
+            text-align: left; font-size: 0.72rem; font-weight: 700; color: #64748b;
+            padding: 5px 8px; border-bottom: 1px solid #e2e8f0;
+            position: sticky; top: 0; background: #fff; z-index: 1;
+        }
+        .settings-table td {
+            padding: 5px 8px; border-bottom: 1px solid #f1f5f9; color: #0f172a;
+            vertical-align: middle; overflow-wrap: anywhere;
+        }
+        .settings-table td.settings-id { font-family: monospace; color: #475569; white-space: nowrap; }
+        .settings-table td.settings-date { white-space: nowrap; color: #475569; }
+        .settings-table td.settings-action { text-align: right; white-space: nowrap; }
+        .settings-table .btn { padding: 3px 10px; font-size: 0.76rem; }
+        .status-pill {
+            display: inline-block; padding: 1px 8px; border-radius: 10px;
+            font-size: 0.72rem; font-weight: 700; white-space: nowrap;
+        }
+        .status-pill.active { background: #dcfce7; color: #166534; }
+        .status-pill.inactive { background: #f1f5f9; color: #64748b; }
+        .settings-empty { font-size: 0.8rem; color: #64748b; padding: 6px 0; margin: 0; }
+        .settings-add-btn { margin-top: 12px; }
+        .settings-add-panel { display: none; margin-top: 14px; }
+        .settings-add-panel.open { display: block; }
+        .settings-add-tools { display: flex; align-items: center; gap: 12px; margin-bottom: 8px; }
+        .settings-add-tools input[type="text"] {
+            flex: 1; padding: 5px 10px; border: 1px solid #cbd5e1; border-radius: 6px; font-size: 0.8rem;
+        }
+        .settings-add-tools label {
+            display: flex; align-items: center; gap: 5px; margin: 0;
+            font-size: 0.78rem; color: #334155; white-space: nowrap;
+        }
+        /* No top padding: the sticky header pins to the top of this box. */
+        .settings-add-list {
+            max-height: 360px; overflow-y: auto; padding: 0;
+            border: 1px solid #e2e8f0; border-radius: 8px;
+        }
+        .settings-add-list .settings-empty { padding: 8px; }
     </style>
 </head>
 <body>
@@ -264,6 +139,9 @@
         <h1>Google Ads Campaigns</h1>
         <button class="btn btn-load" id="loadBtn" onclick="loadGa4Campaigns()">
             <i class="fas fa-sync-alt" id="loadIcon"></i> Load Data
+        </button>
+        <button class="btn btn-edit" onclick="openSettingsModal()">
+            <i class="fas fa-cog"></i> Settings
         </button>
         <span class="status-text" id="statusText"></span>
     </div>
@@ -364,18 +242,45 @@
         </div>
     </div>
 
+    <div class="modal-overlay" id="settingsModal">
+        <div class="modal-box settings-modal">
+            <h2>Campaigns</h2>
+            <p class="modal-sub" id="settingsSub">The campaigns shown on this page.</p>
+
+            <div class="modal-error" id="settingsError"></div>
+
+            <div class="settings-section-title">On this page</div>
+            <div id="settingsChosen"></div>
+
+            <button type="button" class="btn btn-edit settings-add-btn" onclick="toggleSettingsAddPanel()">
+                <i class="fas fa-plus"></i> Add Campaign
+            </button>
+
+            <div class="settings-add-panel" id="settingsAddPanel">
+                <div class="settings-section-title">Every campaign in the GA4 data</div>
+                <div class="settings-add-tools">
+                    <input type="text" id="settingsSearch" placeholder="Search name or ID"
+                           oninput="renderSettingsAddList()">
+                    <label>
+                        <input type="checkbox" id="settingsShowInactive" onchange="renderSettingsAddList()">
+                        Include inactive (<span id="settingsInactiveCount">0</span>)
+                    </label>
+                </div>
+                <div class="settings-add-list" id="settingsAddList"></div>
+            </div>
+
+            <div class="modal-actions">
+                <div class="spacer"></div>
+                <button type="button" class="btn btn-apply" onclick="closeSettingsModal()">Done</button>
+            </div>
+        </div>
+    </div>
+
     <script>
     const BASE_URL = "{{ BASE_URL }}";
-    const DAY_NAMES = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
-    // Same shading colours as the KPI page, so the two read as one system.
-    const BG_GREEN = 'rgba(147, 196, 125, 0.30)';
-    const BG_RED   = 'rgba(224, 102, 102, 0.30)';
     // Dataset label for target lines. Used to tell them apart from campaign
     // series when scrolling the day window and when totalling a stacked tooltip.
     const TARGET_LABEL = 'Target';
-
-    // Disable animations globally for all charts
-    Chart.defaults.animation = false;
 
     let ga4RequestNumber = 0;
     let ga4LastData = null;
@@ -384,13 +289,11 @@
     // line, so this is ignored there. Must match the selected option in the
     // Chart dropdown, or the control and the first render disagree.
     let ga4ChartType = 'line';
-    // null = show every campaign; otherwise the set of campaign names to show.
+    // null = show every campaign; otherwise the set of campaign IDs to show.
     let ga4SelectedCampaigns = null;
     let ga4Charts = {};        // rowId -> [Chart, Chart, Chart]
-    // Day charts show a window of ga4DayWindowDays ending at ga4DayOffset
-    // (an index into the full dates array). null = pin to the latest day.
+    // Days on screen at once in a day chart; the endpoint can override it.
     let ga4DayWindowDays = 25;
-    let ga4DayOffset = null;
 
     // The default view is Conversion %, so the toggle starts hidden — without
     // this it would show until the view was changed for the first time.
@@ -404,17 +307,6 @@
     function ga4IsAllEvents(eventName) {
         const label = (ga4LastData && ga4LastData.all_events_label) || 'All events';
         return eventName === label;
-    }
-
-    function escHtml(s) {
-        return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-    }
-
-    function dateLabel(d) {
-        const dt = new Date(d + 'T00:00:00');
-        const dd = String(dt.getDate()).padStart(2, '0');
-        const mm = String(dt.getMonth() + 1).padStart(2, '0');
-        return DAY_NAMES[dt.getDay()] + ' ' + dd + '/' + mm;
     }
 
     function resizeAllCharts() {
@@ -445,11 +337,16 @@
         select.disabled = true;
         btn.disabled = true;
         icon.classList.add('fa-spin');
-        document.getElementById('ga4CampaignRows').classList.add('ga4-loading');
+        document.getElementById('ga4CampaignRows').classList.add('charts-loading');
         status.textContent = `Loading ${eventName}...`;
         try {
             const data = await fetchGa4Campaigns(eventName);
             if (requestNumber !== ga4RequestNumber) return;
+            if (data.status === 'empty') {
+                showGa4Empty(data.message);
+                document.getElementById('statusText').textContent = 'Loaded';
+                return;
+            }
             if (data.status !== 'ok') throw new Error(data.message || 'load failed');
             select.value = data.event_name;
             ga4LastData = data;
@@ -466,9 +363,29 @@
                 select.disabled = false;
                 btn.disabled = false;
                 icon.classList.remove('fa-spin');
-                document.getElementById('ga4CampaignRows').classList.remove('ga4-loading');
+                document.getElementById('ga4CampaignRows').classList.remove('charts-loading');
             }
         }
+    }
+
+    // No campaigns added in Settings yet: clear any charts and say so.
+    function showGa4Empty(message) {
+        ga4DestroyCharts();
+        ga4LastData = null;
+        ga4SelectedCampaigns = null;
+        const box = document.getElementById('ga4CampaignChecks');
+        box.innerHTML = '';
+        box.dataset.ids = '';
+        updateGa4CampaignToggleLabel(0, 0);
+        document.getElementById('ga4CampaignRows').innerHTML = '';
+        document.getElementById('ga4Status').textContent = message;
+    }
+
+    function ga4DestroyCharts() {
+        Object.keys(ga4Charts).forEach(key => {
+            ga4Charts[key].forEach(chart => chart && chart.destroy());
+            delete ga4Charts[key];
+        });
     }
 
     // Switch the Event filter without going back to the server. Every event's
@@ -653,37 +570,34 @@
     // build-once guard left the list showing the first event's campaigns
     // forever.
     //
-    // Keyed on the names rather than a flag so a plain re-render (changing view,
-    // chart type, or saving a target) does not rebuild the list and lose which
-    // boxes are ticked.
+    // Keyed on the campaign IDs rather than a flag so a plain re-render
+    // (changing view, chart type, or saving a target) does not rebuild the list
+    // and lose which boxes are ticked. IDs, not names, so a rename does not
+    // look like a new campaign.
     function populateGa4CampaignChecks(campaigns) {
         const box = document.getElementById('ga4CampaignChecks');
-        // Newline-separated: campaign names can contain most punctuation, but
-        // not a line break, so this cannot collide.
-        const key = campaigns.join('\n');
-        if (box.dataset.names === key) return;
+        const ids = campaigns.map(c => c.id);
+        const key = ids.join('\n');
+        if (box.dataset.ids === key) return;
 
         // Carry the current ticks across the rebuild. A campaign that is new to
-        // this event starts ticked, matching the "all campaigns" default.
+        // the list (just added in Settings) starts ticked, matching the "all
+        // campaigns" default.
         const previous = new Map(
             [...box.querySelectorAll('input')].map(cb => [cb.value, cb.checked]));
-        box.innerHTML = campaigns.map(name => {
-            const ticked = previous.has(name) ? previous.get(name) : true;
-            return `<label><input type="checkbox" value="${escHtml(name)}"${ticked ? ' checked' : ''}> ${escHtml(name)}</label>`;
+        box.innerHTML = campaigns.map(c => {
+            const ticked = previous.has(c.id) ? previous.get(c.id) : true;
+            return `<label><input type="checkbox" value="${escHtml(c.id)}"${ticked ? ' checked' : ''}> ${escHtml(c.name)}</label>`;
         }).join('');
-        box.dataset.names = key;
+        box.dataset.ids = key;
 
         // Keep the filter and its label in step with the rebuilt list, so a
         // campaign that has gone is not left in ga4SelectedCampaigns holding
-        // back a filter the user can no longer see.
-        if (ga4SelectedCampaigns) {
-            const stillThere = campaigns.filter(name => ga4SelectedCampaigns.has(name));
-            ga4SelectedCampaigns = stillThere.length === campaigns.length
-                ? null : new Set(stillThere);
-        }
-        const tickedCount = campaigns.filter(
-            name => previous.has(name) ? previous.get(name) : true).length;
-        updateGa4CampaignToggleLabel(campaigns.length, tickedCount);
+        // back a filter the user can no longer see. A newly added campaign is
+        // ticked above, so it joins the filter too.
+        const tickedIds = ids.filter(id => previous.has(id) ? previous.get(id) : true);
+        ga4SelectedCampaigns = tickedIds.length === ids.length ? null : new Set(tickedIds);
+        updateGa4CampaignToggleLabel(ids.length, tickedIds.length);
     }
 
     function setAllGa4Campaigns(checked) {
@@ -744,186 +658,25 @@
     };
 
     // ── Day-chart window ──────────────────────────────────────────────────────
-    // The endpoint sends every day. These slice out the visible window; the
-    // y-scale is still computed from the whole series (see ga4SeriesRanges), so
-    // scrolling moves the window without the axis jumping under it.
+    // The endpoint sends every day; the shared DayWindow (charts.js) plots a
+    // window of it. The y-scale is still computed from the whole series (see
+    // ga4SeriesRanges), so scrolling moves the window without the axis jumping
+    // under it.
+    DayWindow.configure({
+        getCount: () => ga4LastData ? ga4LastData.dates.length : 0,
+        getSize: () => ga4DayWindowDays,
+        onChange: () => {
+            DayWindow.applyToCharts(Object.values(ga4Charts).map(charts => charts[2]));
+            updateGa4DayTitles();
+        },
+    });
 
-    function ga4DayCount() {
-        return ga4LastData ? ga4LastData.dates.length : 0;
-    }
-
-    // Highest valid offset = the index of the last day.
-    function ga4DayMaxOffset() {
-        return Math.max(0, ga4DayCount() - 1);
-    }
-
-    // Lowest valid offset: the earliest end index that still has a full window
-    // behind it. Scrolling further left would shrink the window instead of
-    // moving it.
-    function ga4DayMinOffset() {
-        return Math.min(ga4DayWindowDays - 1, ga4DayMaxOffset());
-    }
-
-    // Resolved end index of the window; null offset means pin to the latest day.
-    function ga4DayEndIndex() {
-        if (ga4DayOffset === null) return ga4DayMaxOffset();
-        return Math.min(Math.max(ga4DayOffset, ga4DayMinOffset()), ga4DayMaxOffset());
-    }
-
-    function ga4DaySlice(arr) {
-        const end = ga4DayEndIndex();
-        return (arr || []).slice(Math.max(0, end - ga4DayWindowDays + 1), end + 1);
-    }
-
-    function setGa4DayOffset(offset) {
-        // Pin back to null at the latest day, so a later reload follows new data.
-        ga4DayOffset = offset >= ga4DayMaxOffset()
-            ? null
-            : Math.max(offset, ga4DayMinOffset());
-        if (ga4LastData) renderGa4Campaigns(ga4LastData);
-    }
-
-    // Dragging changes the offset many times a second. A full renderGa4Campaigns
-    // destroys and rebuilds every chart on the page, which is far too much work
-    // per frame, so a drag updates only the day charts' data in place.
-    function slideGa4DayOffset(offset) {
-        const previous = ga4DayEndIndex();
-        ga4DayOffset = offset >= ga4DayMaxOffset()
-            ? null
-            : Math.max(offset, ga4DayMinOffset());
-        if (ga4DayEndIndex() === previous) return;
-        updateGa4DayCharts();
-        updateGa4DayScroller();
-    }
-
-    // Repoint the existing day charts at the new window without rebuilding them.
-    function updateGa4DayCharts() {
-        if (!ga4LastData) return;
-        const viewConfig = GA4_VIEW_CONFIG[ga4View];
-        const dayKey = viewConfig.keys.day;
-        const labels = ga4DaySlice(ga4LastData.dates).map(dateLabel);
-
-        Object.entries(ga4Charts).forEach(([rowId, charts]) => {
-            const chart = charts[2];   // [month, week, day]
-            if (!chart) return;
-            chart.data.labels = labels;
-            // The target is not one of the campaign series, so it is sliced from
-            // its own array. Without this it would be looked up by label, miss,
-            // and on the aggregate row fall through to the actual series — the
-            // target line would be overwritten with actual values.
-            const targetSlice = chart.$ga4DayTarget ? ga4DaySlice(chart.$ga4DayTarget) : null;
-            chart.data.datasets.forEach(dataset => {
-                if (dataset.label === TARGET_LABEL) {
-                    if (targetSlice) dataset.data = targetSlice;
-                    return;
-                }
-                const source = ga4DaySeriesFor(rowId, dataset.label);
-                if (source) dataset.data = ga4DaySlice(source[dayKey]);
-            });
-            // The shading reads this, so it has to move with the line.
-            if (targetSlice) chart.$ga4Target = targetSlice;
-            chart.update('none');
+    function updateGa4DayTitles() {
+        Object.keys(ga4Charts).forEach(rowId => {
             const title = document.getElementById(`${rowId}-day-title`);
             if (title) title.textContent = `${ga4TitlePrefix()} - ${ga4DayTitleSuffix()}`;
         });
     }
-
-    // Finds the series behind one day-chart dataset. On a stacked chart the
-    // dataset label is the campaign name; otherwise it is the row's own series.
-    function ga4DaySeriesFor(rowId, datasetLabel) {
-        const byName = ga4LastData.campaigns.find(c => c.name === datasetLabel);
-        if (byName) return byName;
-        if (rowId === 'ga4-aggregated') return ga4CurrentAggregated();
-        return null;
-    }
-
-    function stepGa4DayWindow(direction) {
-        setGa4DayOffset(ga4DayEndIndex() + direction * ga4DayWindowDays);
-    }
-
-    // Every day chart carries its own copy of the scroller, but they all drive
-    // the one shared window, so each is updated to the same position.
-    function updateGa4DayScroller() {
-        const count = ga4DayCount();
-        const scrollers = document.querySelectorAll('[data-day-scroller]');
-        // Nothing to scroll when everything already fits on one screen.
-        if (!count || count <= ga4DayWindowDays) {
-            scrollers.forEach(s => { s.style.display = 'none'; });
-            return;
-        }
-
-        const end = ga4DayEndIndex();
-        const start = Math.max(0, end - ga4DayWindowDays + 1);
-        // The thumb spans the visible days as a fraction of the whole history,
-        // so its width shows how much of the history is on screen.
-        const left = (start / count) * 100;
-        const width = (ga4DayWindowDays / count) * 100;
-        scrollers.forEach(scroller => {
-            scroller.style.display = '';
-            const thumb = scroller.querySelector('[data-day-thumb]');
-            thumb.style.left = left + '%';
-            thumb.style.width = width + '%';
-            scroller.querySelector('[data-day-prev]').disabled = start <= 0;
-            scroller.querySelector('[data-day-next]').disabled = end >= ga4DayMaxOffset();
-        });
-    }
-
-    // ── Dragging the day-window thumb ─────────────────────────────────────────
-    // Pointer events (not mouse) so the drag keeps working when the pointer
-    // leaves the track, and capture means we still get the release.
-    let ga4DragState = null;
-
-    function ga4TrackToOffset(track, clientX, grabOffsetPx) {
-        const rect = track.getBoundingClientRect();
-        const count = ga4DayCount();
-        const thumbWidth = rect.width * (ga4DayWindowDays / count);
-        // Position of the thumb's left edge, in track pixels.
-        const leftPx = clientX - rect.left - grabOffsetPx;
-        const usable = Math.max(1, rect.width - thumbWidth);
-        const fraction = Math.min(Math.max(leftPx / usable, 0), 1);
-        // Fraction maps onto the range of valid START days, then to an end index.
-        const startDay = Math.round(fraction * Math.max(0, count - ga4DayWindowDays));
-        return startDay + ga4DayWindowDays - 1;
-    }
-
-    function ga4OnTrackPointerDown(event) {
-        const track = event.target.closest('[data-day-track]');
-        if (!track || !ga4DayCount()) return;
-        const thumb = track.querySelector('[data-day-thumb]');
-        const thumbRect = thumb.getBoundingClientRect();
-        // Grabbing the thumb keeps the point under the cursor; clicking the bare
-        // track jumps so the thumb centres on the click.
-        const onThumb = event.target === thumb;
-        const grabOffsetPx = onThumb
-            ? event.clientX - thumbRect.left
-            : thumbRect.width / 2;
-
-        ga4DragState = { track, grabOffsetPx };
-        track.classList.add('dragging');
-        track.setPointerCapture(event.pointerId);
-        slideGa4DayOffset(ga4TrackToOffset(track, event.clientX, grabOffsetPx));
-        event.preventDefault();
-    }
-
-    function ga4OnTrackPointerMove(event) {
-        if (!ga4DragState) return;
-        slideGa4DayOffset(
-            ga4TrackToOffset(ga4DragState.track, event.clientX, ga4DragState.grabOffsetPx));
-        event.preventDefault();
-    }
-
-    function ga4OnTrackPointerUp() {
-        if (!ga4DragState) return;
-        ga4DragState.track.classList.remove('dragging');
-        ga4DragState = null;
-    }
-
-    // Bound once on the document: the tracks are rebuilt on every render, so
-    // per-element listeners would have to be rebound each time.
-    document.addEventListener('pointerdown', ga4OnTrackPointerDown);
-    document.addEventListener('pointermove', ga4OnTrackPointerMove);
-    document.addEventListener('pointerup', ga4OnTrackPointerUp);
-    document.addEventListener('pointercancel', ga4OnTrackPointerUp);
 
     // Chart heading. With every event summed the rate is events per session,
     // not a share of sessions, so it is not called a conversion rate.
@@ -938,9 +691,7 @@
     // Date range for the day chart heading, e.g. "day (Mon 18/08 - Thu 11/09)".
     function ga4DayTitleSuffix() {
         if (!ga4LastData || !ga4LastData.dates.length) return 'day';
-        const end = ga4DayEndIndex();
-        const start = Math.max(0, end - ga4DayWindowDays + 1);
-        return `day (${dateLabel(ga4LastData.dates[start])} - ${dateLabel(ga4LastData.dates[end])})`;
+        return `day (${DayWindow.rangeLabel(ga4LastData.dates)})`;
     }
 
     // Rate is the same kind of number in all three periods, so month/week/day share
@@ -1032,67 +783,6 @@
         };
     }
 
-    // Copied from the KPI page (kpi.html makeBgPlugin) so the two pages shade
-    // identically. Green above the target, red below; whole chart green where
-    // there is no target at all.
-    //
-    // Only values > 0 count as a target, which is the KPI behaviour kept as-is:
-    // a zero target renders as no line and a green chart. It stays a stored
-    // target everywhere else — the popup still prefills it and the button still
-    // reads Edit Target.
-    function makeBgPlugin(targetArr, yMin, yMax) {
-        return {
-            id: 'bgShading',
-            beforeDatasetsDraw(chart) {
-                const { ctx, chartArea: { left, right, top, bottom }, scales: { x, y } } = chart;
-                // Read the target off the plugin's own state, not the closure:
-                // scrolling the day window replaces it in place, and a closure
-                // would keep shading the window the chart was built with.
-                const arr = chart.$ga4Target || targetArr;
-                const n = arr.length;
-                if (!n) return;
-
-                const anyTarget = arr.some(t => t !== null && t !== undefined && t > 0);
-                if (!anyTarget) {
-                    ctx.save();
-                    ctx.fillStyle = BG_GREEN;
-                    ctx.fillRect(left, top, right - left, bottom - top);
-                    ctx.restore();
-                    return;
-                }
-
-                const points = arr.map((t, i) => {
-                    const px = x.getPixelForValue(i);
-                    const hasTarget = t !== null && t !== undefined && t > 0;
-                    const tpx = hasTarget
-                        ? Math.min(Math.max(y.getPixelForValue(t), top), bottom)
-                        : top;   // gaps in the target read as above-target
-                    return { px, tpx, hasTarget };
-                });
-
-                ctx.save();
-
-                ctx.beginPath();
-                ctx.moveTo(points[0].px, bottom);
-                points.forEach(p => ctx.lineTo(p.px, p.tpx));
-                ctx.lineTo(points[n - 1].px, bottom);
-                ctx.closePath();
-                ctx.fillStyle = BG_RED;
-                ctx.fill();
-
-                ctx.beginPath();
-                ctx.moveTo(points[0].px, top);
-                points.forEach(p => ctx.lineTo(p.px, p.tpx));
-                ctx.lineTo(points[n - 1].px, top);
-                ctx.closePath();
-                ctx.fillStyle = BG_GREEN;
-                ctx.fill();
-
-                ctx.restore();
-            }
-        };
-    }
-
     // stacked:false so the target plots at its own value rather than riding on
     // top of the campaign bars; type:'line' so it stays a line on a bar chart.
     function ga4TargetDataset(data) {
@@ -1125,119 +815,107 @@
 
     // datasets is already built by the caller: one line, one bar series, or
     // several stacked bar series (one per campaign).
+    // opts.day: the arrays are the whole day history; only the current window
+    // is plotted (see makeDayChart in charts.js).
     function buildGa4Chart(canvasId, labels, datasets, range, viewConfig, opts = {}) {
-        const { stacked = false, showLegend = false, target = null, chartType = null } = opts;
+        const { stacked = false, showLegend = false, target = null, chartType = null, day = false } = opts;
         const ctx = document.getElementById(canvasId).getContext('2d');
         const resolvedType = chartType || viewConfig.chartType || 'line';
         const allDatasets = target ? [...datasets, ga4TargetDataset(target)] : datasets;
-        // Shading goes with the line view only. Behind stacked multi-colour
-        // campaign bars it reads as muddy, so columns get the target line alone.
-        const plugins = (target && resolvedType === 'line')
-            ? [makeBgPlugin(target, range.yMin, range.yMax)]
-            : [];
-        const chart = new Chart(ctx, {
-            type: resolvedType,
-            data: { labels, datasets: allDatasets },
-            plugins,
-            options: {
-                responsive: true,
-                maintainAspectRatio: false,
-                interaction: { mode: 'index', intersect: false },
-                plugins: {
-                    legend: showLegend ? {
-                        display: true,
-                        position: 'bottom',
-                        labels: { boxWidth: 10, boxHeight: 10, font: { size: 10 }, padding: 8 },
-                    } : { display: false },
-                    tooltip: {
-                        callbacks: {
-                            label: context => context.parsed.y === null
-                                ? null
-                                : (context.dataset.label === TARGET_LABEL
-                                    ? `Target: ${viewConfig.tooltip('', context.parsed.y).replace(/^: /, '')}`
-                                    : viewConfig.tooltip(context.dataset.label, context.parsed.y)),
-                            // With a stack, the individual campaign values do not
-                            // tell you the column's total, so state it. The target
-                            // is not part of the actual, so it is left out of it.
-                            footer: items => {
-                                if (!stacked) return;
-                                const actual = items.filter(item => item.dataset.label !== TARGET_LABEL);
-                                if (actual.length < 2) return;
-                                const total = actual.reduce((sum, item) => sum + (item.parsed.y || 0), 0);
-                                return `Total: ${Number(total).toLocaleString()}`;
+
+        const build = (chartLabels, chartDatasets, chartTarget) => {
+            // Background goes with the line view only. Behind stacked
+            // multi-colour campaign bars it reads as muddy, so columns get the
+            // target line alone.
+            const plugins = (chartTarget && resolvedType === 'line') ? [makeBgPlugin(false, chartTarget)] : [];
+            const chart = new Chart(ctx, {
+                type: resolvedType,
+                data: { labels: chartLabels, datasets: chartDatasets },
+                plugins,
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    interaction: { mode: 'index', intersect: false },
+                    plugins: {
+                        legend: showLegend ? {
+                            display: true,
+                            position: 'bottom',
+                            labels: { boxWidth: 10, boxHeight: 10, font: { size: 10 }, padding: 8 },
+                        } : { display: false },
+                        tooltip: {
+                            callbacks: {
+                                label: context => context.parsed.y === null
+                                    ? null
+                                    : (context.dataset.label === TARGET_LABEL
+                                        ? `Target: ${viewConfig.tooltip('', context.parsed.y).replace(/^: /, '')}`
+                                        : viewConfig.tooltip(context.dataset.label, context.parsed.y)),
+                                // With a stack, the individual campaign values do not
+                                // tell you the column's total, so state it. The target
+                                // is not part of the actual, so it is left out of it.
+                                footer: items => {
+                                    if (!stacked) return;
+                                    const actual = items.filter(item => item.dataset.label !== TARGET_LABEL);
+                                    if (actual.length < 2) return;
+                                    const total = actual.reduce((sum, item) => sum + (item.parsed.y || 0), 0);
+                                    return `Total: ${Number(total).toLocaleString()}`;
+                                }
+                            }
+                        }
+                    },
+                    scales: {
+                        x: {
+                            stacked,
+                            grid: { color: 'rgba(0,0,0,0.06)' },
+                            ticks: { font: { size: 10 }, maxRotation: 45, minRotation: 30 }
+                        },
+                        y: {
+                            stacked,
+                            min: range.yMin,
+                            max: range.yMax,
+                            grid: { color: 'rgba(0,0,0,0.06)' },
+                            ticks: {
+                                font: { size: 10 },
+                                stepSize: range.unit,
+                                callback: value => viewConfig.tickLabel(value, range.unit)
                             }
                         }
                     }
-                },
-                scales: {
-                    x: {
-                        stacked,
-                        grid: { color: 'rgba(0,0,0,0.06)' },
-                        ticks: { font: { size: 10 }, maxRotation: 45, minRotation: 30 }
-                    },
-                    y: {
-                        stacked,
-                        min: range.yMin,
-                        max: range.yMax,
-                        grid: { color: 'rgba(0,0,0,0.06)' },
-                        ticks: {
-                            font: { size: 10 },
-                            stepSize: range.unit,
-                            callback: value => viewConfig.tickLabel(value, range.unit)
-                        }
-                    }
                 }
-            }
-        });
-        // The shading plugin reads this rather than its closure, so scrolling the
-        // day window can repoint it without rebuilding the chart.
-        chart.$ga4Target = target;
-        return chart;
+            });
+            // The background reads this rather than its closure, so scrolling
+            // the day window can repoint it without rebuilding the chart.
+            chart.$bgTarget = chartTarget;
+            return chart;
+        };
+
+        return day ? makeDayChart(labels, allDatasets, target, build) : build(labels, allDatasets, target);
     }
 
     // No button on the Aggregated row: its target is summed from the campaigns
     // on screen, so there is no key to write to. Every other row has one, All
     // events included — the sessions target has no event in its key, so it can
     // be set from there; only the events figure is read-only in that mode.
-    function ga4RowHtml(rowId, index, title, isAggregated, targetState) {
+    // campaignId is passed through a data attribute rather than inside the
+    // onclick string, so no quoting can break it.
+    function ga4RowHtml(rowId, index, title, isAggregated, targetState, campaignId = null) {
         const button = isAggregated ? '' : `
-                    <button type="button" class="ga4-target-btn${targetState.has ? ' has-target' : ''}"
-                            onclick="openTargetModal('${escHtml(title).replace(/'/g, "\\'")}')">
+                    <button type="button" class="chart-target-btn${targetState.has ? ' has-target' : ''}"
+                            data-campaign-id="${escHtml(campaignId)}"
+                            onclick="openTargetModal(this.dataset.campaignId)">
                         ${targetState.has ? 'Edit Target' : 'Add Target'}
                     </button>`;
+        const card = (period, dayScroller = false) => chartCardHtml({
+            canvasId: `${rowId}-${period}`,
+            titleId: `${rowId}-${period}-title`,
+            dayScroller,
+        });
         return `
             <div class="chart-row">
-                <h3 class="ga4-campaign-title${isAggregated ? ' ga4-aggregated-title' : ''}">
-                    <span class="ga4-title-text">${escHtml(title)}</span>${button}
-                </h3>
+                ${chartRowTitleHtml(title, button, isAggregated ? 'ga4-aggregated-title' : '')}
                 <div class="charts-row">
-                    <div class="chart-card">
-                        <h2 id="${rowId}-month-title"></h2>
-                        <div class="ga4-chart-wrap"><canvas id="${rowId}-month"></canvas></div>
-                    </div>
-                    <div class="chart-card">
-                        <h2 id="${rowId}-week-title"></h2>
-                        <div class="ga4-chart-wrap"><canvas id="${rowId}-week"></canvas></div>
-                    </div>
-                    <div class="chart-card">
-                        <h2 id="${rowId}-day-title"></h2>
-                        <div class="ga4-chart-wrap"><canvas id="${rowId}-day"></canvas></div>
-                        <div class="ga4-day-scroller" data-day-scroller style="display:none;">
-                            <button type="button" class="ga4-day-step" data-day-prev
-                                    onclick="stepGa4DayWindow(-1)" title="Earlier">
-                                <i class="fas fa-chevron-left"></i>
-                            </button>
-                            <div class="ga4-day-track" data-day-track>
-                                <div class="ga4-day-thumb" data-day-thumb></div>
-                            </div>
-                            <button type="button" class="ga4-day-step" data-day-next
-                                    onclick="stepGa4DayWindow(1)" title="Later">
-                                <i class="fas fa-chevron-right"></i>
-                            </button>
-                            <button type="button" class="ga4-day-latest"
-                                    onclick="setGa4DayOffset(ga4DayMaxOffset())">Latest</button>
-                        </div>
-                    </div>
+                    ${card('month')}
+                    ${card('week')}
+                    ${card('day', true)}
                 </div>
             </div>
         `;
@@ -1305,8 +983,8 @@
     // The per-day events target this campaign already has in All events mode:
     // the individual events added up, which is what the chart plots. Read off
     // the loaded data rather than the target endpoint, which has no key for it.
-    function ga4AllEventsDailyTarget(campaign) {
-        const series = (ga4LastData.campaigns || []).find(c => c.name === campaign);
+    function ga4AllEventsDailyTarget(campaignId) {
+        const series = (ga4LastData.campaigns || []).find(c => c.id === campaignId);
         const daily = series && series.targets && series.targets.events
             ? series.targets.events.daily : null;
         if (!daily) return null;
@@ -1314,12 +992,15 @@
         return value === undefined ? null : value;
     }
 
+    // campaign is the GA4 campaign ID — targets are stored against it, so they
+    // survive a rename. The popup shows the current name.
     async function openTargetModal(campaign) {
         const eventName = ga4TargetEventName();
         const isAllEvents = ga4IsAllEvents(eventName);
         targetModalState = { campaign, eventName, isAllEvents, view: ga4View, existing: null };
 
-        document.getElementById('targetModalCampaign').textContent = campaign;
+        const series = (ga4LastData.campaigns || []).find(c => c.id === campaign);
+        document.getElementById('targetModalCampaign').textContent = series ? series.name : campaign;
         document.getElementById('targetModalError').classList.remove('show');
         document.getElementById('targetSessionsInput').value = '';
         document.getElementById('targetEventsInput').value = '';
@@ -1486,9 +1167,9 @@
                         + `&data_end=${ga4LastData.data_end}`;
             const resp = await fetch(`${BASE_URL}/kpi/ga4-targets${query}`).then(r => r.json());
             if (resp.status !== 'ok') throw new Error(resp.message || 'load failed');
-            const byName = new Map(resp.campaigns.map(c => [c.name, c.targets]));
+            const byId = new Map(resp.campaigns.map(c => [c.id, c.targets]));
             const patch = list => list.forEach(campaign => {
-                if (byName.has(campaign.name)) campaign.targets = byName.get(campaign.name);
+                if (byId.has(campaign.id)) campaign.targets = byId.get(campaign.id);
             });
             patch(ga4LastData.campaigns);
             // The stored copy of the event being shown has to move too, or
@@ -1509,7 +1190,7 @@
     function ga4ShownCampaigns() {
         if (!ga4LastData) return [];
         return ga4SelectedCampaigns
-            ? ga4LastData.campaigns.filter(c => ga4SelectedCampaigns.has(c.name))
+            ? ga4LastData.campaigns.filter(c => ga4SelectedCampaigns.has(c.id))
             : ga4LastData.campaigns;
     }
 
@@ -1524,15 +1205,12 @@
     }
 
     function renderGa4Campaigns(data) {
-        Object.keys(ga4Charts).forEach(key => {
-            ga4Charts[key].forEach(chart => chart && chart.destroy());
-            delete ga4Charts[key];
-        });
+        ga4DestroyCharts();
 
         const viewConfig = GA4_VIEW_CONFIG[ga4View];
         const rows = document.getElementById('ga4CampaignRows');
 
-        populateGa4CampaignChecks(data.campaigns.map(c => c.name));
+        populateGa4CampaignChecks(data.campaigns);
 
         const shown = ga4ShownCampaigns();
 
@@ -1559,9 +1237,9 @@
 
         rows.innerHTML =
             ga4RowHtml('ga4-aggregated', 'aggregated', aggregated.name, true, targetStateFor(aggregated)) +
-            shown.map((c, index) => ga4RowHtml(`ga4-campaign-${index}`, index, c.name, false, targetStateFor(c))).join('');
+            shown.map((c, index) => ga4RowHtml(`ga4-campaign-${index}`, index, c.name, false, targetStateFor(c), c.id)).join('');
 
-        const dailyLabels = ga4DaySlice(data.dates).map(dateLabel);
+        const dailyLabels = data.dates.map(dateLabel);
 
         // The aggregated row splits by campaign only as COLUMNS, where the stack
         // adds up to the aggregate total. As lines it stays one total line —
@@ -1580,18 +1258,17 @@
             // For a stack, each campaign contributes a dataset. The colour comes
             // from the campaign's position in the full list, so filtering others
             // out does not recolour the ones that remain.
-            const datasetsFor = (periodKey, sliceDays) => {
-                const cut = arr => sliceDays ? ga4DaySlice(arr) : arr;
+            const datasetsFor = (periodKey) => {
                 if (!stacked) {
-                    const values = cut(series[periodKey]);
+                    const values = series[periodKey];
                     return [chartType === 'bar'
                         ? ga4BarDataset(series.name, values, '#0d3d6e')
                         : ga4LineDataset(series.name, values)];
                 }
                 return shown.map(campaign => ga4BarDataset(
                     campaign.name,
-                    cut(campaign[periodKey]),
-                    ga4CampaignColour(data.campaigns.findIndex(c => c.name === campaign.name)),
+                    campaign[periodKey],
+                    ga4CampaignColour(data.campaigns.findIndex(c => c.id === campaign.id)),
                 ));
             };
 
@@ -1611,16 +1288,14 @@
                     { ...opts, target: targets ? targets.monthly : null }),
                 buildGa4Chart(`${rowId}-week`, data.weekly_labels, datasetsFor(viewConfig.keys.week), weekRange, viewConfig,
                     { ...opts, target: targets ? targets.weekly : null }),
-                buildGa4Chart(`${rowId}-day`, dailyLabels, datasetsFor(viewConfig.keys.day, true), dayRange, viewConfig,
-                    { ...opts, target: targets ? ga4DaySlice(targets.daily) : null }),
+                buildGa4Chart(`${rowId}-day`, dailyLabels, datasetsFor(viewConfig.keys.day), dayRange, viewConfig,
+                    { ...opts, target: targets ? targets.daily : null, day: true }),
             ];
-            // Kept whole so the day window can re-slice it while scrolling.
-            if (targets) ga4Charts[rowId][2].$ga4DayTarget = targets.daily;
         };
 
         renderSeries('ga4-aggregated', aggregated, true);
         shown.forEach((c, index) => renderSeries(`ga4-campaign-${index}`, c));
-        updateGa4DayScroller();
+        DayWindow.updateScrollers();
 
         const scope = shown.length === data.campaigns.length
             ? 'all campaigns' : `${shown.length} of ${data.campaigns.length} campaigns`;
@@ -1656,48 +1331,157 @@
             `${basis} (${scope}). Data ${data.data_start} to ${data.data_end}.${targetNote}`;
     }
 
-    // ── Y-range helpers ───────────────────────────────────────────────────────
-    const _cleanVals = arr => (arr || []).filter(v => v !== null && v !== undefined && !isNaN(v));
-    const _mean = a => a.reduce((x, y) => x + y, 0) / a.length;
+    // ── Settings popup ────────────────────────────────────────────────────────
+    // Chooses which campaigns the page shows, stored by campaign ID. Every
+    // campaign in the GA4 data can be added; active means it has sessions on
+    // the latest date loaded. Removing a campaign keeps its targets, so they
+    // return if it is added again.
 
-    function _roundTick(value, unit) {
-        const decimals = Math.max(0, -Math.floor(Math.log10(unit)) + 2);
-        return Number(value.toFixed(decimals));
+    let settingsState = { campaigns: [], chosen: [], changed: false };
+
+    async function openSettingsModal() {
+        settingsState = { campaigns: [], chosen: [], changed: false };
+        document.getElementById('settingsError').classList.remove('show');
+        document.getElementById('settingsAddPanel').classList.remove('open');
+        document.getElementById('settingsSearch').value = '';
+        document.getElementById('settingsShowInactive').checked = false;
+        document.getElementById('settingsChosen').innerHTML = '<p class="settings-empty">Loading...</p>';
+        document.getElementById('settingsAddList').innerHTML = '';
+        document.getElementById('settingsModal').classList.add('open');
+        try {
+            const resp = await fetch(`${BASE_URL}/kpi/ga4-campaigns`).then(r => r.json());
+            if (resp.status !== 'ok') throw new Error(resp.message || 'load failed');
+            settingsState.campaigns = resp.campaigns;
+            settingsState.chosen = resp.chosen;
+            const latest = resp.campaigns.reduce((max, c) => c.last_date > max ? c.last_date : max, '');
+            document.getElementById('settingsSub').textContent = latest
+                ? `The campaigns shown on this page. Active means it had sessions on the latest date loaded (${latest}).`
+                : 'The campaigns shown on this page.';
+            renderSettings();
+        } catch (err) {
+            document.getElementById('settingsChosen').innerHTML = '';
+            showSettingsError('Could not load campaigns: ' + err.message);
+        }
     }
 
-    function _niceUnit(span) {
-        const rawStep = span / 8;
-        const pow = Math.pow(10, Math.floor(Math.log10(rawStep)));
-        return [1, 2, 5, 10].map(m => m * pow).find(u => u >= rawStep) || 10 * pow;
+    // Reload the charts only if the list changed, so opening and closing
+    // Settings to look does not re-query Snowflake.
+    function closeSettingsModal() {
+        document.getElementById('settingsModal').classList.remove('open');
+        if (settingsState.changed) loadGa4Campaigns();
     }
 
-    // Zero-based y-range.
-    //
-    // A line sits mid-chart (yMax = 2 x mean), which leaves room above and below
-    // for the shape of the line to read. Bars are drawn from zero, so that rule
-    // wastes the top half of the chart whenever the data is fairly flat: with a
-    // mean of 10.7 and a max of 17, 2 x mean puts the tallest column at 80% of
-    // the axis and the typical one near half. Bars therefore scale from the max
-    // with a little headroom, so the tallest column nearly fills the plot.
-    //
-    // max * 1.05 keeps the largest point off the top edge, and minYMax stops an
-    // all-zero series reaching _niceUnit(0), which returns 0 and produces an
-    // unrenderable range.
-    function zeroBasedRange(values, minYMax = 1, wholeNumbers = false, fromMax = false) {
-        const vals = _cleanVals(values);
-        const span = vals.length
-            ? (fromMax
-                ? Math.max(minYMax, Math.max(...vals) * 1.05)
-                : Math.max(minYMax, _mean(vals) * 2, Math.max(...vals) * 1.05))
-            : minYMax;
-        let unit = _niceUnit(span);
-        if (wholeNumbers) unit = Math.max(1, Math.round(unit));
-        const yMax = Math.max(unit, Math.ceil(span / unit) * unit);
-        // Re-round to the unit's own precision: ceil(span/unit)*unit leaves
-        // floating-point noise (0.35000000000000003) on fractional units.
-        const decimals = Math.max(0, -Math.floor(Math.log10(unit)) + 2);
-        return { yMin: 0, yMax: Number(yMax.toFixed(decimals)), unit };
+    function showSettingsError(message) {
+        const box = document.getElementById('settingsError');
+        box.textContent = message;
+        box.classList.add('show');
     }
+
+    function toggleSettingsAddPanel() {
+        const panel = document.getElementById('settingsAddPanel');
+        panel.classList.toggle('open');
+        if (panel.classList.contains('open')) document.getElementById('settingsSearch').focus();
+    }
+
+    function settingsStatusHtml(campaign) {
+        if (!campaign) return '<span class="status-pill inactive">No data</span>';
+        return campaign.active
+            ? '<span class="status-pill active">Active</span>'
+            : '<span class="status-pill inactive">Inactive</span>';
+    }
+
+    function settingsRowHtml(id, campaign, actionHtml) {
+        return `<tr>
+            <td class="settings-id">${escHtml(id)}</td>
+            <td>${escHtml(campaign ? campaign.name : '')}</td>
+            <td>${settingsStatusHtml(campaign)}</td>
+            <td class="settings-date">${campaign ? escHtml(campaign.last_date) : '-'}</td>
+            <td class="settings-action">${actionHtml}</td>
+        </tr>`;
+    }
+
+    const SETTINGS_TABLE_HEAD = `<thead><tr>
+        <th>Campaign ID</th><th>Name</th><th>Status</th><th>Last data</th><th></th>
+    </tr></thead>`;
+
+    function renderSettings() {
+        const byId = new Map(settingsState.campaigns.map(c => [c.id, c]));
+        const chosenBox = document.getElementById('settingsChosen');
+        if (!settingsState.chosen.length) {
+            chosenBox.innerHTML = '<p class="settings-empty">No campaigns added yet. Use Add Campaign.</p>';
+        } else {
+            chosenBox.innerHTML = `<table class="settings-table">${SETTINGS_TABLE_HEAD}<tbody>`
+                + settingsState.chosen.map(id => settingsRowHtml(id, byId.get(id),
+                    `<button type="button" class="btn btn-cancel" data-id="${escHtml(id)}"
+                             onclick="removeSettingsCampaign(this.dataset.id, this)">Remove</button>`)).join('')
+                + '</tbody></table>';
+        }
+        renderSettingsAddList();
+    }
+
+    function renderSettingsAddList() {
+        const search = document.getElementById('settingsSearch').value.trim().toLowerCase();
+        const showInactive = document.getElementById('settingsShowInactive').checked;
+        const chosen = new Set(settingsState.chosen);
+
+        document.getElementById('settingsInactiveCount').textContent =
+            settingsState.campaigns.filter(c => !c.active).length;
+
+        const list = settingsState.campaigns.filter(c =>
+            (showInactive || c.active)
+            && (!search || c.name.toLowerCase().includes(search) || c.id.includes(search)));
+
+        const box = document.getElementById('settingsAddList');
+        if (!list.length) {
+            box.innerHTML = '<p class="settings-empty">No campaigns match.</p>';
+            return;
+        }
+        box.innerHTML = `<table class="settings-table">${SETTINGS_TABLE_HEAD}<tbody>`
+            + list.map(c => settingsRowHtml(c.id, c, chosen.has(c.id)
+                ? '<button type="button" class="btn btn-cancel" disabled>Added</button>'
+                : `<button type="button" class="btn btn-apply" data-id="${escHtml(c.id)}"
+                           onclick="addSettingsCampaign(this.dataset.id, this)">Add</button>`)).join('')
+            + '</tbody></table>';
+    }
+
+    async function addSettingsCampaign(campaignId, button) {
+        button.disabled = true;
+        document.getElementById('settingsError').classList.remove('show');
+        try {
+            const resp = await fetch(`${BASE_URL}/kpi/ga4-campaigns`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ campaign_id: campaignId }),
+            }).then(r => r.json());
+            if (resp.status !== 'ok') throw new Error(resp.message || 'add failed');
+            if (!settingsState.chosen.includes(campaignId)) settingsState.chosen.push(campaignId);
+            settingsState.changed = true;
+            renderSettings();
+        } catch (err) {
+            button.disabled = false;
+            showSettingsError('Add failed: ' + err.message);
+        }
+    }
+
+    async function removeSettingsCampaign(campaignId, button) {
+        button.disabled = true;
+        document.getElementById('settingsError').classList.remove('show');
+        try {
+            const resp = await fetch(`${BASE_URL}/kpi/ga4-campaigns`, {
+                method: 'DELETE',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ campaign_id: campaignId }),
+            }).then(r => r.json());
+            if (resp.status !== 'ok') throw new Error(resp.message || 'remove failed');
+            settingsState.chosen = settingsState.chosen.filter(id => id !== campaignId);
+            settingsState.changed = true;
+            renderSettings();
+        } catch (err) {
+            button.disabled = false;
+            showSettingsError('Remove failed: ' + err.message);
+        }
+    }
+
     </script>
 </body>
 </html>

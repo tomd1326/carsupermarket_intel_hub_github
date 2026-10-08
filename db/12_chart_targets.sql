@@ -31,7 +31,10 @@ CREATE TABLE IF NOT EXISTS chart_targets (
 -- by (chart_key, target_date) range.
 --
 -- chart_key formats:
---   ga4:sessions:<campaign>            -- shared by every event
---   ga4:events:<event_name>:<campaign> -- one per event
+--   ga4:sessions:<campaign_id>            -- shared by every event
+--   ga4:events:<event_name>:<campaign_id> -- one per event
+--
+-- Keyed by GA4 campaign ID, not name, so a renamed campaign keeps its targets.
+-- Keys were name-based until db/15_ga4_targets_by_campaign_id.sql moved them.
 --
 -- There is deliberately no Aggregated key, no rate key and no All events key.
