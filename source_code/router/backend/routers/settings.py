@@ -12,7 +12,8 @@ from utils.db_utils import (get_database_connection, get_settings, save_settings
                             get_active_sessions_all_envs, upsert_user,
                             load_user_details, update_user_details,
                             load_all_page_access, set_page_access_many,
-                            delete_user_and_access, ALWAYS_ENABLED_USERS)
+                            delete_user_and_access, ALWAYS_ENABLED_USERS,
+                            get_prod_pricer_connection, load_page_names, save_page_names)
 
 from . import core
 from .core import (BASE_URL, templates, VALID_USERS, _active_sessions, get_current_user,
@@ -234,7 +235,56 @@ def force_relogin(request: Request, user: str = Depends(get_current_user)):
 _REDIRECT_TARGETS = {
     "users":       "/settings/users",
     "page_access": "/settings/page-access",
+    "page_names":  "/settings/page-names",
 }
+
+_PAGE_NAME_MAX = 100
+
+
+@router.get("/settings/page-names", response_class=HTMLResponse)
+def page_names_page(request: Request, user: str = Depends(get_current_user)):
+    """One box per page, holding its current name. Blank = the default name."""
+    if user != ADMIN_USERNAME:
+        return RedirectResponse(url=BASE_URL + "/home", status_code=303)
+    try:
+        with get_prod_pricer_connection() as conn:
+            stored = load_page_names(conn)
+        load_error = None
+    except Exception as e:
+        logger.warning("Page names: could not load: %s", e)
+        stored, load_error = {}, str(getattr(e, "detail", None) or e)
+    return templates.TemplateResponse("page_names.html", {
+        "request": request, "user": user, "BASE_URL": BASE_URL,
+        "pages": PAGES, "stored": stored, "load_error": load_error,
+        "max_length": _PAGE_NAME_MAX,
+        "sections": SETTINGS_SECTIONS, "active_section": "page_names",
+    })
+
+
+@router.post("/settings/page-names")
+async def save_page_names_route(request: Request, user: str = Depends(get_current_user)):
+    """Fields arrive as name__<page_key>. A blank box, or one holding the
+    default name, stores nothing, so that page follows its default."""
+    if user != ADMIN_USERNAME:
+        raise HTTPException(status_code=403)
+    form = await request.form()
+    names = {}
+    for page in PAGES:
+        label = str(form.get(f"name__{page.key}", "")).strip()
+        if len(label) > _PAGE_NAME_MAX:
+            return _user_redirect("page_names", nameerr=f"Names+must+be+{_PAGE_NAME_MAX}+characters+or+fewer")
+        if label and label != page.label:
+            names[page.key] = label
+    try:
+        with get_prod_pricer_connection() as conn:
+            save_page_names(conn, names, updated_by=user)
+    except Exception as e:
+        logger.error("Page names save failed: %s", e)
+        return _user_redirect("page_names", nameerr="Save+failed+-+see+the+log")
+    # This container shows the new names straight away; others within a minute.
+    core.reload_page_names()
+    logger.info("Page names saved by %s: %s", user, names or 'all default')
+    return _user_redirect("page_names", nameok=1)
 
 
 def _user_redirect(redirect_to: str, **params):
