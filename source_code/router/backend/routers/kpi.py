@@ -1051,6 +1051,8 @@ KPI_DEFAULT_SETTINGS = {
     "days_window": 35,     # days on screen at once in a day chart
     "days_total": 90,      # days available to scroll across
     "label_angle": 0,      # tilt of the value labels on the data points
+    "section_font_px": 13,  # section heading, e.g. "Upper Funnel" (was 0.82rem)
+    "title_font_px": 14,    # chart titles (was 0.88rem)
 }
 
 KPI_SETTING_LIMITS = {
@@ -1059,6 +1061,8 @@ KPI_SETTING_LIMITS = {
     "days_window": (7, 400),
     "days_total": (KPI_FUTURE_DAYS + 1, 400),
     "label_angle": (-90, 90),
+    "section_font_px": (10, 28),
+    "title_font_px": (10, 28),
 }
 
 
@@ -1484,6 +1488,113 @@ def _validate_layout_metric(source: str, metric) -> str | None:
     return _validate_metric(source, metric)
 
 
+# ── Chart types ──────────────────────────────────────────────────────────────
+# "line" (the default): one metric with N-1 and a target, month / week / day.
+# "stacked": stacked columns, one segment per series, month / week / day, no
+# N-1. The page fetches each series with /kpi/custom-data and stacks them.
+# row["metric"] / row["source"] hold the first series, so code that reads a
+# chart's metric (titles, notes) still has one.
+KPI_CHART_TYPES = ("line", "stacked")
+_KPI_SERIES_MAX = 12
+_HEX_COLOUR = r"#[0-9a-fA-F]{6}"
+
+
+def _validate_stacked_row(row: dict) -> str | None:
+    chart_type = row.get("chart_type", "line")
+    if chart_type not in KPI_CHART_TYPES:
+        return f"bad chart type: {chart_type}"
+    if chart_type != "stacked":
+        return None
+    series = row.get("series")
+    if not isinstance(series, list) or not series:
+        return "A stacked chart needs at least one series"
+    if len(series) > _KPI_SERIES_MAX:
+        return f"At most {_KPI_SERIES_MAX} series in a chart"
+    for s in series:
+        if not isinstance(s, dict) or set(s) - {"source", "metric", "label", "colour"}:
+            return "bad series"
+        error = _validate_layout_metric(s.get("source", "snowflake"), s.get("metric"))
+        if error:
+            return error
+        label = s.get("label", "")
+        if not isinstance(label, str) or len(label) > 60:
+            return "Series names must be 60 characters or fewer"
+        colour = s.get("colour")
+        if colour is not None and (not isinstance(colour, str) or not re.fullmatch(_HEX_COLOUR, colour)):
+            return f"bad colour: {colour}"
+    theme = row.get("theme")
+    if theme is not None and (not isinstance(theme, str) or len(theme) > 40):
+        return "bad theme"
+    for flag in ("pct", "seg_labels"):
+        if not isinstance(row.get(flag, False), bool):
+            return f"bad {flag}"
+    if row.get("divide_by") is not None or row.get("weight_by") is not None:
+        return "A stacked chart cannot be divided or weighted"
+    if row.get("target_mode", "none") not in ("none", "fixed"):
+        return "A stacked chart's target must be none or fixed"
+    target = row.get("stack_target")
+    if target is not None and (isinstance(target, bool) or not isinstance(target, (int, float))):
+        return "bad stack_target"
+    return None
+
+
+# Colour themes for multi-series charts: [{id, name, colours: [hex, ...]}],
+# edited in Settings > Appearance. Series take a theme's colours in order;
+# a series past the last colour is grey (colours are never repeated, so two
+# series never look the same). The built-in ones are used until any are saved.
+# Checked with the dataviz palette validator (light surface): Standard and
+# Brand blue pass every check, colour-blind separation included. Blues is an
+# ordered ramp, dark to light, for series that have an order (e.g. price bands).
+KPI_DEFAULT_THEMES = [
+    {"id": "standard", "name": "Standard",
+     "colours": ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#008300", "#4a3aa7", "#e34948"]},
+    {"id": "brand", "name": "Brand blue",
+     "colours": ["#256abf", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#4a3aa7"]},
+    {"id": "blues", "name": "Blues (ordered)",
+     "colours": ["#0d366b", "#1c5cab", "#2a78d6", "#5598e7", "#86b6ef"]},
+]
+
+
+def _validate_themes(themes) -> str | None:
+    if not isinstance(themes, list) or not themes:
+        return "At least one colour theme is needed"
+    if len(themes) > 30:
+        return "At most 30 colour themes"
+    ids = set()
+    for t in themes:
+        if not isinstance(t, dict) or set(t) - {"id", "name", "colours"}:
+            return "bad theme"
+        theme_id, name, colours = t.get("id"), t.get("name"), t.get("colours")
+        if not isinstance(theme_id, str) or not re.fullmatch(r"[a-z0-9_-]{1,40}", theme_id) or theme_id in ids:
+            return "bad theme id"
+        ids.add(theme_id)
+        if not isinstance(name, str) or not name.strip() or len(name) > 40:
+            return "Theme names must be 1 to 40 characters"
+        if not isinstance(colours, list) or not 1 <= len(colours) <= 20:
+            return f"{name}: a theme needs 1 to 20 colours"
+        if any(not isinstance(c, str) or not re.fullmatch(_HEX_COLOUR, c) for c in colours):
+            return f"{name}: colours must be #rrggbb"
+    return None
+
+
+@router.post("/kpi/themes")
+def kpi_themes_save(request: Request, payload: dict, user: str = Depends(require_page_api('kpi'))):
+    """The colour themes for multi-series charts. Admin only."""
+    if not is_admin(user):
+        return {"status": "error", "message": "Only the admin can change the colour themes"}
+    themes = (payload or {}).get("themes")
+    err = _validate_themes(themes)
+    if err:
+        return {"status": "error", "message": err}
+    themes = [{**t, "name": t["name"].strip(), "colours": [c.lower() for c in t["colours"]]} for t in themes]
+    try:
+        _write_kpi_layout_value('themes', themes)
+    except Exception as e:
+        logger.error(f"KPI themes save failed: {e}")
+        return {"status": "error", "message": str(e)}
+    return {"status": "ok", "themes": themes}
+
+
 def _validate_layout(layout: dict, sections: list) -> str | None:
     """Return an error message if the layout payload is invalid, else None."""
     rows = layout.get("rows") if isinstance(layout, dict) else None
@@ -1553,6 +1664,9 @@ def _validate_layout(layout: dict, sections: list) -> str | None:
         error = _validate_row_vehicles(row.get("vehicles"))
         if error:
             return error
+        error = _validate_stacked_row(row)
+        if error:
+            return error
         # Average charts only: a daily_summary count column to weight the
         # week and month figures by (see kpi_custom_data). Checked against the
         # live columns when the chart loads, like the metric itself.
@@ -1611,6 +1725,7 @@ def kpi_layout_get(request: Request, user: str = Depends(require_page_api('kpi')
         settings = _kpi_settings(_read_kpi_layout_value('settings'))
         notes = _read_kpi_layout_value('notes') or []
         sections = _read_kpi_layout_value('sections') or KPI_DEFAULT_SECTIONS
+        themes = _read_kpi_layout_value('themes') or KPI_DEFAULT_THEMES
     except Exception as e:
         # Report it rather than serving an empty layout: the page saves the
         # whole layout in one go, so a save made on an empty one would wipe
@@ -1622,7 +1737,7 @@ def kpi_layout_get(request: Request, user: str = Depends(require_page_api('kpi')
     # now created on the page. Drop them from a layout saved before that.
     layout = {**layout, "rows": [r for r in layout.get("rows", []) if r.get("type") == "custom"]}
     return {"status": "ok", "layout": layout, "sections": sections, "settings": settings,
-            "setting_limits": KPI_SETTING_LIMITS, "notes": notes}
+            "setting_limits": KPI_SETTING_LIMITS, "notes": notes, "themes": themes}
 
 
 # ── Chart notes ──────────────────────────────────────────────────────────────
@@ -1805,18 +1920,24 @@ _VEHICLE_DATE_TYPES = {"DATE", "TIMESTAMP_NTZ", "TIMESTAMP_LTZ", "TIMESTAMP_TZ",
 _FILTER_OPS_NO_VALUE = {"is true", "is false", "is empty", "is not empty"}
 _FILTER_OPS_VALUE = {"=", "!=", ">", ">=", "<", "<=", "in", "not in", "contains"}
 # How a column's values show in the View Vehicles list (set per column in Settings).
-_VEHICLE_FORMATS = {"number", "gbp", "pct", "text", "date", "datetime"}
+_VEHICLE_FORMATS = {"number", "gbp", "pct", "text", "date", "datetime", "link"}
 
 
 def _vehicle_view_config(stored) -> dict:
-    """The stored View Vehicles setting with defaults filled in. grey_column /
-    grey_value: rows where that column equals that value show in light grey
-    (cancelled deals by default), checked whether or not the column is shown."""
+    """The stored View Vehicles setting with defaults filled in. grey_rules:
+    [{column, op, value}] like a chart filter; a row matching ANY of them shows
+    in light grey (cancelled deals by default), checked whether or not the
+    column is shown. A setting saved with the older single grey_column /
+    grey_value pair becomes a one-rule list."""
     stored = stored if isinstance(stored, dict) else {}
+    if "grey_rules" in stored:
+        grey_rules = stored["grey_rules"] or []
+    else:
+        column = stored.get("grey_column", "INVOICE_STATUS")
+        grey_rules = [{"column": column, "op": "=", "value": stored.get("grey_value", "STATUS_CANCELLED")}] if column else []
     return {"table": stored.get("table") or _VEHICLE_TABLE_DEFAULT,
             "columns": stored.get("columns") or [],
-            "grey_column": stored.get("grey_column", "INVOICE_STATUS"),
-            "grey_value": stored.get("grey_value", "STATUS_CANCELLED")}
+            "grey_rules": grey_rules}
 
 
 def _vehicle_tables() -> list:
@@ -1847,14 +1968,11 @@ def _vehicle_table_columns(table: str) -> list:
 
 
 def _validate_vehicle_view(view) -> str | None:
-    if not isinstance(view, dict) or set(view) - {"table", "columns", "grey_column", "grey_value"}:
+    if not isinstance(view, dict) or set(view) - {"table", "columns", "grey_rules"}:
         return "bad vehicle view"
-    grey_column = view.get("grey_column", "")
-    if not isinstance(grey_column, str) or (grey_column and not re.fullmatch(_IDENTIFIER, grey_column)):
-        return "bad grey-out column"
-    grey_value = view.get("grey_value", "")
-    if not isinstance(grey_value, str) or len(grey_value) > 200:
-        return "The grey-out value must be 200 characters or fewer"
+    error = _validate_filter_list(view.get("grey_rules", []), "grey-out rule")
+    if error:
+        return error
     table = view.get("table")
     if not isinstance(table, str) or not re.fullmatch(rf"{_IDENTIFIER}\.{_IDENTIFIER}", table):
         return "bad vehicle table"
@@ -1893,22 +2011,28 @@ def _validate_row_vehicles(vehicles) -> str | None:
     date_column = vehicles.get("date_column")
     if not isinstance(date_column, str) or not re.fullmatch(_IDENTIFIER, date_column):
         return "Choose the date column for View Vehicles"
-    filters = vehicles.get("filters", [])
+    return _validate_filter_list(vehicles.get("filters", []), "View Vehicles filter")
+
+
+def _validate_filter_list(filters, name: str) -> str | None:
+    """A list of {column, op, value}: a chart's View Vehicles filters, or the
+    Settings grey-out rules. Columns are checked against the live table when
+    the list is used."""
     if not isinstance(filters, list) or len(filters) > _VEHICLE_FILTERS_MAX:
-        return f"At most {_VEHICLE_FILTERS_MAX} View Vehicles filters"
+        return f"At most {_VEHICLE_FILTERS_MAX} of each {name}"
     for f in filters:
         if not isinstance(f, dict) or set(f) - {"column", "op", "value"}:
-            return "bad View Vehicles filter"
+            return f"bad {name}"
         if not isinstance(f.get("column"), str) or not re.fullmatch(_IDENTIFIER, f["column"]):
-            return "Choose a column for each View Vehicles filter"
+            return f"Choose a column for each {name}"
         op = f.get("op")
         if op not in _FILTER_OPS_NO_VALUE | _FILTER_OPS_VALUE:
-            return f"bad filter operator: {op}"
+            return f"bad operator in a {name}: {op}"
         value = f.get("value", "")
         if not isinstance(value, str) or len(value) > 500:
-            return "Filter values must be 500 characters or fewer"
+            return f"Values in a {name} must be 500 characters or fewer"
         if op in _FILTER_OPS_VALUE and not value.strip():
-            return f"Enter a value for the {f['column']} filter"
+            return f"Enter a value for the {f['column']} {name}"
     return None
 
 
@@ -2046,13 +2170,25 @@ def kpi_vehicles(request: Request, row_id: str, start: str, end: str,
             params.extend(values)
 
         select_cols = ", ".join(c["column"] for c in shown)
-        # Grey-out check, read whether or not its column is shown: one extra
-        # true/false at the end of each row, after the shown columns.
-        grey_column = view["grey_column"]
-        grey = bool(grey_column and grey_column in live)
+        # Grey-out check, read whether or not its columns are shown: one extra
+        # true/false at the end of each row, after the shown columns, true when
+        # ANY grey-out rule matches. A rule on a column that has gone from the
+        # table is skipped rather than failing the list.
+        grey_parts, grey_params = [], []
+        for rule in view["grey_rules"]:
+            if rule["column"] not in live:
+                continue
+            try:
+                sql, values = _filter_sql(rule, live[rule["column"]])
+            except ValueError as e:
+                return {"status": "error", "message": f"Grey-out rule: {e}"}
+            grey_parts.append(f"({sql})")
+            grey_params.extend(values)
+        grey = bool(grey_parts)
         if grey:
-            select_cols += f", COALESCE({grey_column}::VARCHAR = %s, FALSE) AS GREY_ROW__"
-            params = [view["grey_value"]] + params
+            select_cols += f", COALESCE({' OR '.join(grey_parts)}, FALSE) AS GREY_ROW__"
+            # The SELECT's placeholders come before the WHERE's.
+            params = grey_params + params
         with SnowflakeClient() as sf:
             rows, _ = sf.execute(f"""
                 SELECT {select_cols}
