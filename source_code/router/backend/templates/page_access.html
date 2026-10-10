@@ -107,7 +107,7 @@
                             <th class="pa-user">User</th>
                             {% for page in pages %}
                             <th class="pa-tool {% if page.default_for_existing %}pa-default{% endif %}">
-                                <div>{{ page.label }}</div>
+                                <div>{{ page_name(page.key) }}</div>
                             </th>
                             {% endfor %}
                         </tr>

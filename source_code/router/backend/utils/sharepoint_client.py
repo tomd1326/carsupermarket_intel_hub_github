@@ -232,6 +232,31 @@ class SharePointClient:
         logger.info("SharePoint table '%s': fetched %d rows", table_name, len(all_rows))
         return all_rows
 
+    def get_worksheet_values_by_url(self, sharepoint_url: str, sheet_name: str,
+                                    max_col: str = "Z", max_row: int = 2000) -> list[list]:
+        """
+        Fetch cell values from a named worksheet in the file at sharepoint_url,
+        bounded to A1:{max_col}{max_row}. For sheets that are not a named Table.
+
+        Returns:
+            list[list]: Row-major 2D array. Row 0 is the header row.
+        """
+        drive_id, item_id = self._get_item_id_by_url(sharepoint_url)
+        encoded_sheet = requests.utils.quote(sheet_name)
+        address = requests.utils.quote(f"A1:{max_col}{max_row}")
+        url = (
+            f"https://graph.microsoft.com/v1.0/drives/{drive_id}/items/{item_id}"
+            f"/workbook/worksheets/{encoded_sheet}/range(address='{address}')?$select=values"
+        )
+        resp = requests.get(url, headers=self._headers)
+        resp.raise_for_status()
+        values = resp.json().get("values", [])
+        # Trim fully-blank trailing rows Graph pads the bounded range with
+        while values and all(c in (None, "") for c in values[-1]):
+            values.pop()
+        logger.info("SharePoint sheet '%s': fetched %d rows", sheet_name, len(values))
+        return values
+
     def get_worksheet_values(self, subfolder: str, filename: str, sheet_name: str,
                               max_col: str = "Z", max_row: int = 2000) -> list[list]:
         """

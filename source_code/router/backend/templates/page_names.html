@@ -1,0 +1,87 @@
+{% from '_navigation.html' import account_nav with context %}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Page Names</title>
+    <link rel="icon" type="image/png" href="{{ BASE_URL }}/static/icon.png">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css" rel="stylesheet">
+    <link href="{{ static_url('css/theme.css') }}" rel="stylesheet">
+    {% include '_settings_head.html' %}
+    <style>
+        .pn-table td { vertical-align: middle; }
+        .pn-table .pn-default { color: #64748b; white-space: nowrap; }
+        .pn-note { font-size: 0.85rem; color: #64748b; }
+    </style>
+</head>
+<body class="bg-light">
+    {{ account_nav(user) }}
+    <div class="settings-card">
+        <div class="d-flex align-items-center gap-3 mb-4">
+            <a href="{{ BASE_URL }}/settings-page" class="btn btn-outline-secondary nav-btn">
+                <i class="fas fa-arrow-left me-1"></i>Back
+            </a>
+            <h4 class="mb-0">Settings</h4>
+        </div>
+
+        <div class="settings-layout">
+        {% include '_settings_nav.html' %}
+
+        <div class="settings-content">
+
+        <div class="card">
+            <div class="card-header fw-semibold">Page Names</div>
+            {% if request.query_params.get('nameok') %}
+            <div class="alert alert-success mb-0 rounded-0 border-0 py-2 px-3">
+                Page names saved. Other open copies of the site pick them up within a minute.
+            </div>
+            {% endif %}
+            {% if request.query_params.get('nameerr') %}
+            <div class="alert alert-danger mb-0 rounded-0 border-0 py-2 px-3">{{ request.query_params.get('nameerr') }}</div>
+            {% endif %}
+            {% if load_error %}
+            <div class="alert alert-danger mb-0 rounded-0 border-0 py-2 px-3">
+                The saved names could not be loaded, so saving is turned off to avoid
+                wiping them. {{ load_error }}
+            </div>
+            {% endif %}
+            <div class="card-body">
+                <p class="pn-note mb-3">
+                    The name used on the home page tile, the page heading and the browser
+                    tab. Clear a box to go back to the default name. Applies to every
+                    environment.
+                </p>
+                <form method="post" action="{{ BASE_URL }}/settings/page-names">
+                    <table class="table table-sm table-bordered pn-table mb-0">
+                        <thead class="table-light">
+                            <tr><th>Default name</th><th>Name shown</th></tr>
+                        </thead>
+                        <tbody>
+                            {% for page in pages %}
+                            <tr>
+                                <td class="pn-default">{{ page.label }}</td>
+                                <td>
+                                    <input type="text" class="form-control form-control-sm"
+                                           name="name__{{ page.key }}"
+                                           maxlength="{{ max_length }}"
+                                           placeholder="{{ page.label }}"
+                                           value="{{ stored.get(page.key, '') }}">
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                    <div class="text-end mt-3">
+                        <button type="submit" class="btn btn-primary" {% if load_error %}disabled{% endif %}>Save Changes</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+
+        </div><!-- /.settings-content -->
+        </div><!-- /.settings-layout -->
+    </div>
+</body>
+</html>

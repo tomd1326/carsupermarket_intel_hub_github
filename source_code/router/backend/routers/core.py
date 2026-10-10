@@ -14,9 +14,10 @@ from zoneinfo import ZoneInfo
 from fastapi import HTTPException, Request
 from fastapi.templating import Jinja2Templates
 
-from utils.db_utils import (get_database_connection, load_all_users,
-                            load_all_page_access, record_event)
-from .page_registry import ALL_PAGE_KEYS, CONFIGURED_MARKER, DEFAULT_PAGE_KEYS
+from utils.db_utils import (get_database_connection, get_prod_pricer_connection,
+                            load_all_users, load_all_page_access, load_page_names,
+                            record_event)
+from .page_registry import ALL_PAGE_KEYS, CONFIGURED_MARKER, DEFAULT_PAGE_KEYS, PAGES_BY_KEY
 
 logger = logging.getLogger(__name__)
 
@@ -62,6 +63,42 @@ def static_url(path: str) -> str:
 
 
 templates.env.globals['static_url'] = static_url
+
+
+# Page names set on Settings > Page Names, cached per process. Like page
+# access, each Lambda container keeps its own copy, so a rename shows
+# everywhere within PAGE_NAMES_TTL_SECONDS. A failed read keeps the last copy
+# (or the default names) and waits the same time before trying again, so one
+# page with many names on it does not retry the database for each one.
+PAGE_NAMES: dict = {}
+_PAGE_NAMES_LOADED_AT: float = 0.0
+PAGE_NAMES_TTL_SECONDS = 60
+
+
+def reload_page_names() -> None:
+    global _PAGE_NAMES_LOADED_AT
+    _PAGE_NAMES_LOADED_AT = time.time()
+    try:
+        with get_prod_pricer_connection() as conn:
+            names = load_page_names(conn)
+        PAGE_NAMES.clear()
+        PAGE_NAMES.update(names)
+    except Exception as e:
+        logger.warning("Could not load page names - using the last known names: %s", e)
+
+
+def page_name(page_key: str) -> str:
+    """The page's name as set in Settings, else its default from page_registry.
+    Usage in a template:  {{ page_name('kpi') }}"""
+    if time.time() - _PAGE_NAMES_LOADED_AT >= PAGE_NAMES_TTL_SECONDS:
+        reload_page_names()
+    if page_key in PAGE_NAMES:
+        return PAGE_NAMES[page_key]
+    page = PAGES_BY_KEY.get(page_key)
+    return page.label if page else page_key
+
+
+templates.env.globals['page_name'] = page_name
 
 # Generic initialization
 s3_bucketname = 'aa-raw-sources-uk'

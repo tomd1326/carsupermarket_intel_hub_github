@@ -4,6 +4,7 @@ from fastapi import APIRouter, Request, Depends, HTTPException
 from fastapi.responses import HTMLResponse, RedirectResponse
 import calendar
 import json
+import re
 import time
 import logging
 import datetime
@@ -885,48 +886,8 @@ def kpi_ga4_campaign_conversion(
 #   sharepoint - a number column of the "Daily Spend and Enquiries" table
 #
 # The column lists are read live, so new columns appear without code changes.
-# This list only supplies descriptions and the sensible weekly/monthly rollup
-# for columns we know: 'sum' for daily flow events, 'avg' for stock levels and
-# pre-averaged metrics. Columns not listed here get a guessed default.
-KPI_METRICS = [
-    ("ORDERS", "Apex orders acknowledged on the day", "sum"),
-    ("ORDERS_RATE_TOTAL", "Orders financed on a standard rate (non interest-free)", "sum"),
-    ("ORDERS_CASH_TOTAL", "Orders paid in cash (no finance)", "sum"),
-    ("ORDERS_RATE_0_15K", "Rate-financed orders with vehicle price £0-15k", "sum"),
-    ("ORDERS_RATE_15_25K", "Rate-financed orders with vehicle price £15-25k", "sum"),
-    ("ORDERS_RATE_25K_PLUS", "Rate-financed orders with vehicle price £25k+", "sum"),
-    ("ORDERS_CASH_0_15K", "Cash orders with vehicle price £0-15k", "sum"),
-    ("ORDERS_CASH_15_25K", "Cash orders with vehicle price £15-25k", "sum"),
-    ("ORDERS_CASH_25K_PLUS", "Cash orders with vehicle price £25k+", "sum"),
-    ("ORDERS_PRICE_CHANGED_LAST_7_DAYS", "Orders where the vehicle had a price change in the 7 days before the order", "sum"),
-    ("ORDERS_PUBLISHED_LAST_7_DAYS", "Orders where the vehicle was first advertised in the 7 days before the order", "sum"),
-    ("ORDERS_SUB_12K_UNDER_30_DIS", "Orders with base price under £12k (no admin fee) and under 30 days in stock - the Apex rule that keeps cars off Autotrader", "sum"),
-    ("AVG_DIS_ORDERS_SUB_12K_UNDER_30_DIS", "Average days in stock of orders under £12k and under 30 days in stock", "avg"),
-    ("AVG_DAYS_ADVERTISED_ORDERS_SUB_12K_UNDER_30_DIS", "Average days advertised of orders under £12k and under 30 days in stock", "avg"),
-    ("AVG_AT_PRICE_POSITION_ORDERS_SUB_12K_UNDER_30_DIS", "Average Autotrader price position of rate orders under £12k and under 30 days in stock", "avg"),
-    ("AVG_AT_RETAIL_RATING_ORDERS_SUB_12K_UNDER_30_DIS", "Average Autotrader retail rating of orders under £12k and under 30 days in stock", "avg"),
-    ("PURCHASES", "Vehicles purchased into stock on the day", "sum"),
-    ("PUBLISHED", "Vehicles first advertised on the day", "sum"),
-    ("STOCK_ON_SALE", "Advertised vehicles in stock (end of day)", "avg"),
-    ("STOCK_ON_SALE_STORES", "Advertised stock physically located at a retail store", "avg"),
-    ("STOCK_ON_SALE_RATE", "Advertised stock on standard rate finance (non interest-free)", "avg"),
-    ("STOCK_ON_SALE_0PCT", "Advertised stock on 0% interest-free finance", "avg"),
-    ("STOCK_ON_SALE_RATE_EV", "Advertised electric vehicles on standard rate finance", "avg"),
-    ("TOTAL_STOCK", "All vehicles in stock, advertised or not (end of day)", "avg"),
-    ("STOCK_45_PLUS_DAYS", "Vehicles in stock for 45 days or more", "avg"),
-    ("STOCK_60_PLUS_DAYS", "Vehicles in stock for 60 days or more", "avg"),
-    ("AVG_DAYS_IN_STOCK", "Average days in stock across all vehicles", "avg"),
-    ("AVG_GPU_M_STOCK_ON_SALE", "Average GPU-M (£) of advertised stock", "avg"),
-    ("AVG_GPU_M_B2B2C", "Average GPU-M (£) of advertised B2B2C stock", "avg"),
-    ("AVG_GPU_M_CONSIGNMENT", "Average GPU-M (£) of advertised consignment stock", "avg"),
-    ("AVG_GPU_M_C2B2C_PX", "Average GPU-M (£) of advertised part-exchange stock", "avg"),
-    ("AVG_GPU_M_C2B2C_OTHER", "Average GPU-M (£) of advertised C2B2C (non-PX) stock", "avg"),
-    ("AVG_AT_PRICE_POSITION_UNSOLD_STOCK_RATE", "Average Autotrader price position of unsold advertised rate stock", "avg"),
-    ("AVG_AT_PRICE_POSITION_UNSOLD_STOCK_0PCT", "Average Autotrader price position of unsold advertised 0% stock", "avg"),
-    ("AVG_AT_PRICE_POSITION_ORDERS_RATE", "Average Autotrader price position of rate vehicles ordered that day", "avg"),
-    ("AVG_AT_PRICE_POSITION_ORDERS_0PCT", "Average Autotrader price position of 0% vehicles ordered that day", "avg"),
-]
-_KPI_METRIC_INFO = {col: (desc, agg) for col, desc, agg in KPI_METRICS}
+# No daily_summary column is named in this file except the exclusions below;
+# the weekly/monthly rollup default is guessed from the column name.
 
 KPI_SOURCES = ("snowflake", "sharepoint")
 
@@ -941,6 +902,17 @@ _SNOWFLAKE_NUMBER_TYPES = {"NUMBER", "FLOAT", "DECIMAL", "NUMERIC", "INT", "INTE
 _ds_columns_cache: list | None = None      # [(column, data_type)] in table order
 _ds_columns_cache_at: float = 0.0
 _DS_COLUMNS_TTL = 600  # seconds
+# Load Data sends a new token on each click. The first request carrying it
+# re-reads the column list, so a daily_summary rebuilt with different columns
+# is picked up without a restart. Later requests with the same token reuse it.
+_ds_columns_refresh_token: str = ""
+
+
+def _refresh_daily_summary_columns(token: str) -> None:
+    global _ds_columns_cache, _ds_columns_refresh_token
+    if token and token != _ds_columns_refresh_token:
+        _ds_columns_refresh_token = token
+        _ds_columns_cache = None
 
 
 def _get_daily_summary_column_types() -> list:
@@ -960,9 +932,9 @@ def _get_daily_summary_column_types() -> list:
     except Exception as e:
         logger.warning("daily_summary column discovery failed: %s", e)
         if _ds_columns_cache is None:
-            # Minimal fallback: the known metric columns plus the orders siblings
-            _ds_columns_cache = ([(c, "NUMBER") for c, _, _ in KPI_METRICS]
-                                 + [("ORDERS_TARGET", "NUMBER")])
+            # No list yet: return none rather than a guessed one. The read
+            # time stays 0, so the next request tries again.
+            return []
     return _ds_columns_cache
 
 
@@ -988,8 +960,8 @@ def _target_column(metric: str) -> str | None:
 
 
 def _guess_agg(column: str) -> str:
-    """Rollup for a column with no entry in KPI_METRICS: averages and stock
-    levels average, everything else is a daily count that adds up."""
+    """Default weekly/monthly rollup: averages and stock levels average,
+    everything else is a daily count that adds up."""
     upper = column.upper()
     if upper.startswith("AVG") or upper.startswith("STOCK") or "AVERAGE" in upper or "RATE" in upper or "%" in upper:
         return "avg"
@@ -1027,7 +999,10 @@ def _validate_metric(source: str, metric: str) -> str | None:
     return None
 
 
-KPI_SECTIONS = ["Upper Funnel", "Results", "Stock", "Pricing", "Margin"]
+# Sections are added, removed, renamed and reordered in the page's Settings
+# popup and stored in kpi_layout under 'sections'. This list is only used
+# until the first save.
+KPI_DEFAULT_SECTIONS = ["Upper Funnel", "Results", "Stock", "Pricing", "Margin"]
 
 KPI_DEFAULT_LAYOUT = {"rows": []}
 
@@ -1037,12 +1012,11 @@ def kpi_metrics(request: Request, user: str = Depends(require_page_api('kpi'))):
     live_cols = _get_daily_summary_columns()
     metrics = []
     for col in _snowflake_metric_columns():
-        desc, agg = _KPI_METRIC_INFO.get(col, ("", _guess_agg(col)))
         metrics.append({
             "source": "snowflake",
             "column": col,
-            "description": desc,
-            "suggested_agg": agg,
+            "description": "",
+            "suggested_agg": _guess_agg(col),
             "has_n1": True,   # N-1 is looked up from the metric's own history
             "has_target": f"{col}_TARGET" in live_cols,
         })
@@ -1050,13 +1024,15 @@ def kpi_metrics(request: Request, user: str = Depends(require_page_api('kpi'))):
         metrics.append({
             "source": "sharepoint",
             "column": col,
-            "description": "From the Daily Spend and Enquiries spreadsheet",
+            "description": ("From the at_data sheet of the Autotrader CTR spreadsheet"
+                            if col in _AT_DATA_COLUMNS.values()
+                            else "From the Daily Spend and Enquiries spreadsheet"),
             "suggested_agg": _guess_agg(col),
             # N-1 is worked out from the spreadsheet's own history.
             "has_n1": True,
             "has_target": False,
         })
-    return {"status": "ok", "sections": KPI_SECTIONS, "metrics": metrics}
+    return {"status": "ok", "metrics": metrics}
 
 
 # ── KPI chart periods ────────────────────────────────────────────────────────
@@ -1075,6 +1051,8 @@ KPI_DEFAULT_SETTINGS = {
     "days_window": 35,     # days on screen at once in a day chart
     "days_total": 90,      # days available to scroll across
     "label_angle": 0,      # tilt of the value labels on the data points
+    "section_font_px": 13,  # section heading, e.g. "Upper Funnel" (was 0.82rem)
+    "title_font_px": 14,    # chart titles (was 0.88rem)
 }
 
 KPI_SETTING_LIMITS = {
@@ -1083,6 +1061,8 @@ KPI_SETTING_LIMITS = {
     "days_window": (7, 400),
     "days_total": (KPI_FUTURE_DAYS + 1, 400),
     "label_angle": (-90, 90),
+    "section_font_px": (10, 28),
+    "title_font_px": (10, 28),
 }
 
 
@@ -1097,14 +1077,16 @@ def _clamp_setting(name: str, value) -> int:
 
 def _kpi_periods(today: datetime.date, months: int, weeks: int, days_total: int):
     """Month starts, week Mondays and day dates for the KPI charts, oldest first.
-    The last month and week are the current, part-elapsed ones."""
+    The months and weeks end with the current, part-elapsed one, then the
+    following one (no actuals yet, but its N-1 and target are shown)."""
     first_of_this_month = today.replace(day=1)
     month_firsts = [first_of_this_month]
     for _ in range(months - 1):
         month_firsts.insert(0, (month_firsts[0] - datetime.timedelta(days=1)).replace(day=1))
+    month_firsts.append((first_of_this_month + datetime.timedelta(days=32)).replace(day=1))
 
     current_week_monday = _week_monday_of(today)
-    week_mondays = [current_week_monday - datetime.timedelta(weeks=i) for i in range(weeks - 1, -1, -1)]
+    week_mondays = [current_week_monday - datetime.timedelta(weeks=i) for i in range(weeks - 1, -2, -1)]
 
     daily_end = today + datetime.timedelta(days=KPI_FUTURE_DAYS)
     daily_start = daily_end - datetime.timedelta(days=days_total - 1)
@@ -1183,16 +1165,30 @@ def kpi_custom_data(request: Request, metric: str, agg: str = "sum", source: str
                     weeks: int = KPI_DEFAULT_SETTINGS["weeks"],
                     days: int = KPI_DEFAULT_SETTINGS["days_total"],
                     include_current: bool = False,
+                    refresh: str = "",
+                    weight_by: str = "",
                     user: str = Depends(require_page_api('kpi'))):
     """Daily/weekly/monthly series for one metric, plus its N-1 and target.
-    include_current: also fill the current (part-elapsed) week and month."""
+    include_current: also fill the current (part-elapsed) week and month.
+    refresh: Load Data's click token — re-reads the column list once per click.
+    weight_by: on an Average chart, a daily_summary count column to weight
+    each day by, so a week or month is the average over every vehicle rather
+    than the plain average of the daily averages (a 3-order day would
+    otherwise count as much as a 20-order day)."""
+    _refresh_daily_summary_columns(refresh)
     if source == "snowflake":
         metric = metric.upper()
+        weight_by = weight_by.upper()
     error = _validate_metric(source, metric)
     if error:
         return {"status": "error", "message": error}
     if agg not in ("sum", "avg"):
         return {"status": "error", "message": f"Unknown agg: {agg}"}
+    if weight_by:
+        if source != "snowflake" or agg != "avg":
+            return {"status": "error", "message": "Weight by is only for Average charts on daily_summary"}
+        if weight_by not in _snowflake_metric_columns():
+            return {"status": "error", "message": f"Unknown weight column: {weight_by}"}
     if target_mode not in KPI_TARGET_MODES:
         return {"status": "error", "message": f"Unknown target mode: {target_mode}"}
     months = _clamp_setting("months", months)
@@ -1238,7 +1234,8 @@ def kpi_custom_data(request: Request, metric: str, agg: str = "sum", source: str
             _nm = (today.replace(day=1) + datetime.timedelta(days=32)).replace(day=1)
             fetch_end = max(dates[-1], (_nm + datetime.timedelta(days=32)).replace(day=1) - datetime.timedelta(days=1))
             # All column names come from the live column list — safe to interpolate
-            select_cols = ["DATE", metric] + ([target_col] if target_col else [])
+            select_cols = (["DATE", metric] + ([target_col] if target_col else [])
+                           + ([weight_by] if weight_by and weight_by != metric else []))
             with SnowflakeClient() as sf:
                 rows, cols = sf.execute(f"""
                     SELECT {', '.join(select_cols)}
@@ -1254,6 +1251,7 @@ def kpi_custom_data(request: Request, metric: str, agg: str = "sum", source: str
                 by_date[d] = {
                     'v':  _num(r[col_map[metric]]),
                     't':  _num(r[col_map[target_col]]) if target_col else None,
+                    'w':  _num(r[col_map[weight_by]]) if weight_by else None,
                 }
             value_at = lambda d: by_date.get(d, {}).get('v')
         else:
@@ -1264,12 +1262,24 @@ def kpi_custom_data(request: Request, metric: str, agg: str = "sum", source: str
             sp_by_date = sp.get("by_date", {})
             value_at = lambda d: _num(sp_by_date.get(d.isoformat(), {}).get(metric))
 
+        # One week's or month's figure from its days. With weight_by, each
+        # day's average counts in proportion to that day's count: sum(average
+        # x count) / sum(count), which is the average over every vehicle in the
+        # period. Days with no average or no count are left out.
+        def _period(period_dates):
+            if not weight_by:
+                return _agg([value_at(d) for d in period_dates])
+            pairs = [(value_at(d), by_date.get(d, {}).get('w')) for d in period_dates]
+            pairs = [(v, w) for v, w in pairs if v is not None and w]
+            total_weight = sum(w for _, w in pairs)
+            return _round(sum(v * w for v, w in pairs) / total_weight) if total_weight else None
+
         # N-1 from the metric's own history, for both sources: the same date
         # a year back for days (as daily_summary's DATEADD(YEAR, -1)), the same
         # month a year back for months. Runs to the end of the day chart,
         # future days included.
         daily_n1_at = lambda d: value_at(_shift_years(d, -1))
-        monthly_n1 = [_agg([value_at(d) for d in _month_dates(f.replace(year=f.year - 1))]) for f in month_firsts]
+        monthly_n1 = [_period(_month_dates(f.replace(year=f.year - 1))) for f in month_firsts]
 
         month_abbrs = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']
 
@@ -1278,21 +1288,24 @@ def kpi_custom_data(request: Request, metric: str, agg: str = "sum", source: str
         values_n1 = [_round(daily_n1_at(d)) for d in dates]
 
         # ── Monthly (current month left empty — it is part elapsed — unless
-        # the chart asks for it) ─────────────────────────────────────────────
-        first_of_this_month = month_firsts[-1]
-        monthly_values = [None if f == first_of_this_month and not include_current else _agg([value_at(d) for d in _month_dates(f)])
+        # the chart asks for it; next month always empty) ────────────────────
+        first_of_this_month = today.replace(day=1)
+        monthly_values = [None if f > first_of_this_month or (f == first_of_this_month and not include_current)
+                          else _period(_month_dates(f))
                           for f in month_firsts]
         monthly_labels = [month_abbrs[f.month - 1] + ' ' + str(f.year)[2:] for f in month_firsts]
 
-        # ── Weekly (current week left empty) ─────────────────────────────────
+        # ── Weekly (current week left empty unless asked for; next week always
+        # empty) ──────────────────────────────────────────────────────────────
         # Weekly N-1 = same ISO week NUMBER of the previous year, aggregated
         # from the metric's own daily history.
-        current_week_monday = week_mondays[-1]
+        current_week_monday = _week_monday_of(today)
         weekly_labels = [f"W{m.isocalendar()[1]} ({m.day}-{month_abbrs[m.month-1]})" for m in week_mondays]
         weekly_n1_labels = [f"W{pm.isocalendar()[1]} ({pm.day}-{month_abbrs[pm.month-1]})" for pm in prev_week_mondays]
-        weekly_values = [None if m == current_week_monday and not include_current else _agg([value_at(d) for d in _week_dates(m)])
+        weekly_values = [None if m > current_week_monday or (m == current_week_monday and not include_current)
+                         else _period(_week_dates(m))
                          for m in week_mondays]
-        weekly_values_n1 = [_agg([value_at(d) for d in _week_dates(pm)]) for pm in prev_week_mondays]
+        weekly_values_n1 = [_period(_week_dates(pm)) for pm in prev_week_mondays]
 
         # ── Target ───────────────────────────────────────────────────────────
         values_target = weekly_values_target = monthly_values_target = None
@@ -1461,7 +1474,128 @@ async def kpi_import_targets(request: Request, user: str = Depends(require_page_
 
 # ── Layout and settings ──────────────────────────────────────────────────────
 
-def _validate_layout(layout: dict) -> str | None:
+def _validate_layout_metric(source: str, metric) -> str | None:
+    """Layout-save check for a chart's metric. A Snowflake column only has to
+    look like a column name, not exist right now: the whole layout is saved in
+    one go, so one chart on a column that was renamed or dropped from
+    daily_summary would otherwise block every save, including the one that
+    moves it to the new column. /kpi/custom-data still checks the live list
+    before any SQL runs, and that chart shows the error instead."""
+    if source == "snowflake":
+        if not isinstance(metric, str) or not re.fullmatch(r"[A-Z][A-Z0-9_]*", metric):
+            return f"Bad metric: {metric}"
+        return None
+    return _validate_metric(source, metric)
+
+
+# ── Chart types ──────────────────────────────────────────────────────────────
+# "line" (the default): one metric with N-1 and a target, month / week / day.
+# "stacked": stacked columns, one segment per series, month / week / day, no
+# N-1. The page fetches each series with /kpi/custom-data and stacks them.
+# row["metric"] / row["source"] hold the first series, so code that reads a
+# chart's metric (titles, notes) still has one.
+KPI_CHART_TYPES = ("line", "stacked")
+_KPI_SERIES_MAX = 12
+_HEX_COLOUR = r"#[0-9a-fA-F]{6}"
+
+
+def _validate_stacked_row(row: dict) -> str | None:
+    chart_type = row.get("chart_type", "line")
+    if chart_type not in KPI_CHART_TYPES:
+        return f"bad chart type: {chart_type}"
+    if chart_type != "stacked":
+        return None
+    series = row.get("series")
+    if not isinstance(series, list) or not series:
+        return "A stacked chart needs at least one series"
+    if len(series) > _KPI_SERIES_MAX:
+        return f"At most {_KPI_SERIES_MAX} series in a chart"
+    for s in series:
+        if not isinstance(s, dict) or set(s) - {"source", "metric", "label", "colour"}:
+            return "bad series"
+        error = _validate_layout_metric(s.get("source", "snowflake"), s.get("metric"))
+        if error:
+            return error
+        label = s.get("label", "")
+        if not isinstance(label, str) or len(label) > 60:
+            return "Series names must be 60 characters or fewer"
+        colour = s.get("colour")
+        if colour is not None and (not isinstance(colour, str) or not re.fullmatch(_HEX_COLOUR, colour)):
+            return f"bad colour: {colour}"
+    theme = row.get("theme")
+    if theme is not None and (not isinstance(theme, str) or len(theme) > 40):
+        return "bad theme"
+    for flag in ("pct", "seg_labels"):
+        if not isinstance(row.get(flag, False), bool):
+            return f"bad {flag}"
+    if row.get("divide_by") is not None or row.get("weight_by") is not None:
+        return "A stacked chart cannot be divided or weighted"
+    if row.get("target_mode", "none") not in ("none", "fixed"):
+        return "A stacked chart's target must be none or fixed"
+    target = row.get("stack_target")
+    if target is not None and (isinstance(target, bool) or not isinstance(target, (int, float))):
+        return "bad stack_target"
+    return None
+
+
+# Colour themes for multi-series charts: [{id, name, colours: [hex, ...]}],
+# edited in Settings > Appearance. Series take a theme's colours in order;
+# a series past the last colour is grey (colours are never repeated, so two
+# series never look the same). The built-in ones are used until any are saved.
+# Checked with the dataviz palette validator (light surface): Standard and
+# Brand blue pass every check, colour-blind separation included. Blues is an
+# ordered ramp, dark to light, for series that have an order (e.g. price bands).
+KPI_DEFAULT_THEMES = [
+    {"id": "standard", "name": "Standard",
+     "colours": ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#008300", "#4a3aa7", "#e34948"]},
+    {"id": "brand", "name": "Brand blue",
+     "colours": ["#256abf", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#4a3aa7"]},
+    {"id": "blues", "name": "Blues (ordered)",
+     "colours": ["#0d366b", "#1c5cab", "#2a78d6", "#5598e7", "#86b6ef"]},
+]
+
+
+def _validate_themes(themes) -> str | None:
+    if not isinstance(themes, list) or not themes:
+        return "At least one colour theme is needed"
+    if len(themes) > 30:
+        return "At most 30 colour themes"
+    ids = set()
+    for t in themes:
+        if not isinstance(t, dict) or set(t) - {"id", "name", "colours"}:
+            return "bad theme"
+        theme_id, name, colours = t.get("id"), t.get("name"), t.get("colours")
+        if not isinstance(theme_id, str) or not re.fullmatch(r"[a-z0-9_-]{1,40}", theme_id) or theme_id in ids:
+            return "bad theme id"
+        ids.add(theme_id)
+        if not isinstance(name, str) or not name.strip() or len(name) > 40:
+            return "Theme names must be 1 to 40 characters"
+        if not isinstance(colours, list) or not 1 <= len(colours) <= 20:
+            return f"{name}: a theme needs 1 to 20 colours"
+        if any(not isinstance(c, str) or not re.fullmatch(_HEX_COLOUR, c) for c in colours):
+            return f"{name}: colours must be #rrggbb"
+    return None
+
+
+@router.post("/kpi/themes")
+def kpi_themes_save(request: Request, payload: dict, user: str = Depends(require_page_api('kpi'))):
+    """The colour themes for multi-series charts. Admin only."""
+    if not is_admin(user):
+        return {"status": "error", "message": "Only the admin can change the colour themes"}
+    themes = (payload or {}).get("themes")
+    err = _validate_themes(themes)
+    if err:
+        return {"status": "error", "message": err}
+    themes = [{**t, "name": t["name"].strip(), "colours": [c.lower() for c in t["colours"]]} for t in themes]
+    try:
+        _write_kpi_layout_value('themes', themes)
+    except Exception as e:
+        logger.error(f"KPI themes save failed: {e}")
+        return {"status": "error", "message": str(e)}
+    return {"status": "ok", "themes": themes}
+
+
+def _validate_layout(layout: dict, sections: list) -> str | None:
     """Return an error message if the layout payload is invalid, else None."""
     rows = layout.get("rows") if isinstance(layout, dict) else None
     if not isinstance(rows, list):
@@ -1471,9 +1605,9 @@ def _validate_layout(layout: dict) -> str | None:
             return "each row must be an object"
         if row.get("type") != "custom":
             return f"bad row type: {row.get('type')}"
-        if row.get("section") not in KPI_SECTIONS:
+        if row.get("section") not in sections:
             return f"bad section: {row.get('section')}"
-        error = _validate_metric(row.get("source", "snowflake"), row.get("metric"))
+        error = _validate_layout_metric(row.get("source", "snowflake"), row.get("metric"))
         if error:
             return error
         if row.get("agg") not in ("sum", "avg"):
@@ -1488,7 +1622,7 @@ def _validate_layout(layout: dict) -> str | None:
             return "bad invert"
         if not isinstance(row.get("include_current", False), bool):
             return "bad include_current"
-        if row.get("fmt", "num") not in ("num", "pct", "pct100", "k"):
+        if row.get("fmt", "num") not in ("num", "pct", "pct100", "k", "km"):
             return f"bad fmt: {row.get('fmt')}"
         decimals = row.get("decimals", 0)
         if not isinstance(decimals, int) or not (0 <= decimals <= 3):
@@ -1517,7 +1651,7 @@ def _validate_layout(layout: dict) -> str | None:
         if divide_by is not None:
             if not isinstance(divide_by, dict):
                 return "bad divide_by"
-            error = _validate_metric(divide_by.get("source", "snowflake"), divide_by.get("metric"))
+            error = _validate_layout_metric(divide_by.get("source", "snowflake"), divide_by.get("metric"))
             if error:
                 return error
             if row.get("ratio_as", "dec") not in ("dec", "pct"):
@@ -1527,6 +1661,22 @@ def _validate_layout(layout: dict) -> str | None:
             ratio_target = row.get("ratio_target")
             if ratio_target is not None and (isinstance(ratio_target, bool) or not isinstance(ratio_target, (int, float))):
                 return "bad ratio_target"
+        error = _validate_row_vehicles(row.get("vehicles"))
+        if error:
+            return error
+        error = _validate_stacked_row(row)
+        if error:
+            return error
+        # Average charts only: a daily_summary count column to weight the
+        # week and month figures by (see kpi_custom_data). Checked against the
+        # live columns when the chart loads, like the metric itself.
+        weight_by = row.get("weight_by")
+        if weight_by is not None:
+            if row.get("agg") != "avg" or row.get("source", "snowflake") != "snowflake":
+                return "Weight by is only for Average charts on daily_summary"
+            error = _validate_layout_metric("snowflake", weight_by)
+            if error:
+                return error
     return None
 
 
@@ -1543,14 +1693,20 @@ def _read_kpi_layout_value(key: str):
 
 
 def _write_kpi_layout_value(key: str, value) -> None:
+    _write_kpi_layout_values({key: value})
+
+
+def _write_kpi_layout_values(values: dict) -> None:
+    """Write several keys in one transaction: all are saved or none are."""
     with get_prod_pricer_connection() as conn:
         with conn.cursor() as cur:
             cur.execute("CREATE TABLE IF NOT EXISTS kpi_layout (key VARCHAR(50) PRIMARY KEY, value TEXT)")
-            cur.execute(
-                "INSERT INTO kpi_layout (key, value) VALUES (%s, %s) "
-                "ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value",
-                (key, json.dumps(value))
-            )
+            for key, value in values.items():
+                cur.execute(
+                    "INSERT INTO kpi_layout (key, value) VALUES (%s, %s) "
+                    "ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value",
+                    (key, json.dumps(value))
+                )
         conn.commit()
 
 
@@ -1568,14 +1724,20 @@ def kpi_layout_get(request: Request, user: str = Depends(require_page_api('kpi')
         layout = _read_kpi_layout_value('layout') or KPI_DEFAULT_LAYOUT
         settings = _kpi_settings(_read_kpi_layout_value('settings'))
         notes = _read_kpi_layout_value('notes') or []
+        sections = _read_kpi_layout_value('sections') or KPI_DEFAULT_SECTIONS
+        themes = _read_kpi_layout_value('themes') or KPI_DEFAULT_THEMES
     except Exception as e:
-        logger.error(f"KPI layout load failed: {e}")
-        layout, settings, notes = KPI_DEFAULT_LAYOUT, _kpi_settings(None), []
+        # Report it rather than serving an empty layout: the page saves the
+        # whole layout in one go, so a save made on an empty one would wipe
+        # every saved chart.
+        message = getattr(e, "detail", None) or str(e)
+        logger.error(f"KPI layout load failed: {message}")
+        return {"status": "error", "message": message}
     # The hard-coded Sessions and Apex Orders rows were removed: every chart is
     # now created on the page. Drop them from a layout saved before that.
     layout = {**layout, "rows": [r for r in layout.get("rows", []) if r.get("type") == "custom"]}
-    return {"status": "ok", "layout": layout, "sections": KPI_SECTIONS, "settings": settings,
-            "setting_limits": KPI_SETTING_LIMITS, "notes": notes}
+    return {"status": "ok", "layout": layout, "sections": sections, "settings": settings,
+            "setting_limits": KPI_SETTING_LIMITS, "notes": notes, "themes": themes}
 
 
 # ── Chart notes ──────────────────────────────────────────────────────────────
@@ -1638,15 +1800,75 @@ def kpi_layout_save(request: Request, payload: dict, user: str = Depends(require
     if not is_admin(user):
         return {"status": "error", "message": "Only the admin can change the KPI charts"}
     layout = (payload or {}).get("layout")
-    err = _validate_layout(layout or {})
-    if err:
-        return {"status": "error", "message": err}
     try:
+        sections = _read_kpi_layout_value('sections') or KPI_DEFAULT_SECTIONS
+        err = _validate_layout(layout or {}, sections)
+        if err:
+            return {"status": "error", "message": err}
         _write_kpi_layout_value('layout', layout)
         return {"status": "ok"}
     except Exception as e:
         logger.error(f"KPI layout save failed: {e}")
         return {"status": "error", "message": str(e)}
+
+
+def _section_slug(name: str) -> str:
+    """Matches sectionDomId in kpi.html, so two names never share a page element."""
+    return re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")
+
+
+@router.post("/kpi/sections")
+def kpi_sections_save(request: Request, payload: dict, user: str = Depends(require_page_api('kpi'))):
+    """Save the section list in order. Each item is {name, from}: `from` is the
+    section's name before this edit (null for a new one), so a rename carries
+    its charts across. A section left out is removed, which is refused while
+    it still holds charts. Admin only."""
+    if not is_admin(user):
+        return {"status": "error", "message": "Only the admin can change the KPI sections"}
+    items = (payload or {}).get("sections")
+    if not isinstance(items, list) or not items:
+        return {"status": "error", "message": "At least one section is needed"}
+    if len(items) > 50:
+        return {"status": "error", "message": "At most 50 sections"}
+    names, renames, slugs = [], {}, set()
+    for item in items:
+        if not isinstance(item, dict):
+            return {"status": "error", "message": "bad section"}
+        name = item.get("name")
+        if not isinstance(name, str) or not name.strip() or len(name.strip()) > 60:
+            return {"status": "error", "message": "Section names must be 1 to 60 characters"}
+        name = name.strip()
+        slug = _section_slug(name)
+        if not slug:
+            return {"status": "error", "message": f"'{name}' needs at least one letter or number"}
+        if slug in slugs:
+            return {"status": "error", "message": f"Two sections are named too alike: '{name}'"}
+        slugs.add(slug)
+        names.append(name)
+        old = item.get("from")
+        if old is not None:
+            if not isinstance(old, str):
+                return {"status": "error", "message": "bad section"}
+            renames[old] = name
+    try:
+        current = _read_kpi_layout_value('sections') or KPI_DEFAULT_SECTIONS
+        layout = _read_kpi_layout_value('layout') or KPI_DEFAULT_LAYOUT
+        rows = layout.get("rows", [])
+        for old in renames:
+            if old not in current:
+                return {"status": "error", "message": f"Section '{old}' no longer exists - reload the page"}
+        removed = [s for s in current if s not in renames]
+        in_use = [s for s in removed if any(r.get("section") == s for r in rows)]
+        if in_use:
+            return {"status": "error",
+                    "message": f"Move or remove the charts in {', '.join(in_use)} before removing it"}
+        new_rows = [{**r, "section": renames.get(r.get("section"), r.get("section"))} for r in rows]
+        new_layout = {**layout, "rows": new_rows}
+        _write_kpi_layout_values({'layout': new_layout, 'sections': names})
+    except Exception as e:
+        logger.error(f"KPI sections save failed: {e}")
+        return {"status": "error", "message": str(e)}
+    return {"status": "ok", "sections": names, "layout": new_layout}
 
 
 @router.post("/kpi/settings")
@@ -1671,6 +1893,328 @@ def kpi_settings_save(request: Request, payload: dict, user: str = Depends(requi
         logger.error(f"KPI settings save failed: {e}")
         return {"status": "error", "message": str(e)}
     return {"status": "ok", "settings": settings}
+
+
+# ── View Vehicles ────────────────────────────────────────────────────────────
+# Clicking a point on a chart opens a popup; its View Vehicles button lists the
+# vehicles behind that day, week or month. Nothing at vehicle level is loaded
+# with the charts — each click runs one query for that date range only.
+#
+# What is set where, all on the page:
+#   Settings popup  - the vehicle table and its columns, in order, with
+#                     headings ('vehicle_view' in kpi_layout, shared by every
+#                     chart)
+#   Edit Chart      - the chart's date column and filters (row["vehicles"])
+#
+# Table and column names are checked against INFORMATION_SCHEMA before any
+# query runs, so they can be put into the SQL; filter values are always
+# bound as parameters.
+
+_VEHICLE_DB = "PROD_CARSUPERMARKET_DB"
+_VEHICLE_TABLE_DEFAULT = "PRODUCT_SALES_PERFORMANCE.SALES_PERFORMANCE"
+_VEHICLE_ROW_LIMIT = 5000
+_VEHICLE_FILTERS_MAX = 20
+_IDENTIFIER = r"[A-Z][A-Z0-9_$]*"
+_VEHICLE_DATE_TYPES = {"DATE", "TIMESTAMP_NTZ", "TIMESTAMP_LTZ", "TIMESTAMP_TZ", "TIMESTAMP"}
+# Operators a chart filter can use: those taking no value, and those taking one.
+_FILTER_OPS_NO_VALUE = {"is true", "is false", "is empty", "is not empty"}
+_FILTER_OPS_VALUE = {"=", "!=", ">", ">=", "<", "<=", "in", "not in", "contains"}
+# How a column's values show in the View Vehicles list (set per column in Settings).
+_VEHICLE_FORMATS = {"number", "gbp", "pct", "text", "date", "datetime", "link"}
+
+
+def _vehicle_view_config(stored) -> dict:
+    """The stored View Vehicles setting with defaults filled in. grey_rules:
+    [{column, op, value}] like a chart filter; a row matching ANY of them shows
+    in light grey (cancelled deals by default), checked whether or not the
+    column is shown. A setting saved with the older single grey_column /
+    grey_value pair becomes a one-rule list."""
+    stored = stored if isinstance(stored, dict) else {}
+    if "grey_rules" in stored:
+        grey_rules = stored["grey_rules"] or []
+    else:
+        column = stored.get("grey_column", "INVOICE_STATUS")
+        grey_rules = [{"column": column, "op": "=", "value": stored.get("grey_value", "STATUS_CANCELLED")}] if column else []
+    return {"table": stored.get("table") or _VEHICLE_TABLE_DEFAULT,
+            "columns": stored.get("columns") or [],
+            "grey_rules": grey_rules}
+
+
+def _vehicle_tables() -> list:
+    """Every table and view in the PRODUCT_ schemas, as SCHEMA.TABLE."""
+    with SnowflakeClient() as sf:
+        rows, _ = sf.execute(f"""
+            SELECT table_schema, table_name
+            FROM {_VEHICLE_DB}.INFORMATION_SCHEMA.TABLES
+            WHERE table_schema LIKE %s
+            ORDER BY table_schema, table_name
+        """, ["PRODUCT\\_%"])
+    return [f"{r[0]}.{r[1]}" for r in rows]
+
+
+def _vehicle_table_columns(table: str) -> list:
+    """[(column, data_type)] of SCHEMA.TABLE in table order; [] if it does not exist."""
+    if not isinstance(table, str) or not re.fullmatch(rf"{_IDENTIFIER}\.{_IDENTIFIER}", table):
+        return []
+    schema, name = table.split(".")
+    with SnowflakeClient() as sf:
+        rows, _ = sf.execute(f"""
+            SELECT column_name, data_type
+            FROM {_VEHICLE_DB}.INFORMATION_SCHEMA.COLUMNS
+            WHERE table_schema = %s AND table_name = %s
+            ORDER BY ordinal_position
+        """, [schema, name])
+    return [(str(r[0]).upper(), str(r[1]).upper()) for r in rows]
+
+
+def _validate_vehicle_view(view) -> str | None:
+    if not isinstance(view, dict) or set(view) - {"table", "columns", "grey_rules"}:
+        return "bad vehicle view"
+    error = _validate_filter_list(view.get("grey_rules", []), "grey-out rule")
+    if error:
+        return error
+    table = view.get("table")
+    if not isinstance(table, str) or not re.fullmatch(rf"{_IDENTIFIER}\.{_IDENTIFIER}", table):
+        return "bad vehicle table"
+    columns = view.get("columns")
+    if not isinstance(columns, list) or len(columns) > 300:
+        return "bad vehicle columns"
+    seen = set()
+    for col in columns:
+        if not isinstance(col, dict) or set(col) - {"column", "label", "format", "decimals", "summary", "blank_grey"}:
+            return "bad vehicle column"
+        if not isinstance(col.get("blank_grey", False), bool):
+            return f"bad blank-on-grey setting for {col.get('column')}"
+        if col.get("summary", "none") not in ("none", "sum", "avg"):
+            return f"bad total/average setting for {col.get('column')}"
+        if col.get("format", "text") not in _VEHICLE_FORMATS:
+            return f"bad format for {col.get('column')}"
+        decimals = col.get("decimals", 0)
+        if isinstance(decimals, bool) or not isinstance(decimals, int) or not 0 <= decimals <= 4:
+            return f"bad decimals for {col.get('column')}"
+        name = col.get("column")
+        if not isinstance(name, str) or not re.fullmatch(_IDENTIFIER, name) or name in seen:
+            return f"bad vehicle column: {name}"
+        seen.add(name)
+        label = col.get("label", "")
+        if not isinstance(label, str) or len(label) > 60:
+            return "Column headings must be 60 characters or fewer"
+    return None
+
+
+def _validate_row_vehicles(vehicles) -> str | None:
+    """A chart's View Vehicles setting: its date column and filters."""
+    if vehicles is None:
+        return None
+    if not isinstance(vehicles, dict) or set(vehicles) - {"date_column", "filters"}:
+        return "bad vehicles setting"
+    date_column = vehicles.get("date_column")
+    if not isinstance(date_column, str) or not re.fullmatch(_IDENTIFIER, date_column):
+        return "Choose the date column for View Vehicles"
+    return _validate_filter_list(vehicles.get("filters", []), "View Vehicles filter")
+
+
+def _validate_filter_list(filters, name: str) -> str | None:
+    """A list of {column, op, value}: a chart's View Vehicles filters, or the
+    Settings grey-out rules. Columns are checked against the live table when
+    the list is used."""
+    if not isinstance(filters, list) or len(filters) > _VEHICLE_FILTERS_MAX:
+        return f"At most {_VEHICLE_FILTERS_MAX} of each {name}"
+    for f in filters:
+        if not isinstance(f, dict) or set(f) - {"column", "op", "value"}:
+            return f"bad {name}"
+        if not isinstance(f.get("column"), str) or not re.fullmatch(_IDENTIFIER, f["column"]):
+            return f"Choose a column for each {name}"
+        op = f.get("op")
+        if op not in _FILTER_OPS_NO_VALUE | _FILTER_OPS_VALUE:
+            return f"bad operator in a {name}: {op}"
+        value = f.get("value", "")
+        if not isinstance(value, str) or len(value) > 500:
+            return f"Values in a {name} must be 500 characters or fewer"
+        if op in _FILTER_OPS_VALUE and not value.strip():
+            return f"Enter a value for the {f['column']} {name}"
+    return None
+
+
+def _filter_sql(f: dict, data_type: str) -> tuple[str, list]:
+    """One filter as SQL plus its bound values. The column has been checked
+    against the live list, so it can go into the SQL."""
+    col, op, value = f["column"], f["op"], (f.get("value") or "").strip()
+    if op == "is true":
+        return f"{col} = TRUE", []
+    if op == "is false":
+        return f"{col} = FALSE", []
+    if op == "is empty":
+        return f"({col} IS NULL OR TRIM({col}::VARCHAR) = '')", []
+    if op == "is not empty":
+        return f"({col} IS NOT NULL AND TRIM({col}::VARCHAR) <> '')", []
+    if op in ("in", "not in"):
+        values = [v.strip() for v in value.split(",") if v.strip()]
+        placeholders = ", ".join(["%s"] * len(values))
+        # Compared as text so one list works for text and number columns alike.
+        return f"{col}::VARCHAR {'NOT IN' if op == 'not in' else 'IN'} ({placeholders})", values
+    if op == "contains":
+        return f"{col}::VARCHAR ILIKE %s", [f"%{value}%"]
+    # Comparisons follow the column's type: true/false columns as true/false,
+    # number columns as numbers, date columns as dates (value YYYY-MM-DD),
+    # everything else as text.
+    if data_type == "BOOLEAN":
+        flag = {"true": True, "yes": True, "1": True, "false": False, "no": False, "0": False}.get(value.lower())
+        if flag is None or op not in ("=", "!="):
+            raise ValueError(f"The {col} filter is true/false: use is true / is false, or equals true / false")
+        return f"{col} {op} %s", [flag]
+    if data_type in _SNOWFLAKE_NUMBER_TYPES:
+        try:
+            return f"{col} {op} %s", [float(value)]
+        except ValueError:
+            raise ValueError(f"The {col} filter needs a number, not '{value}'")
+    if data_type in _VEHICLE_DATE_TYPES:
+        try:
+            datetime.date.fromisoformat(value)
+        except ValueError:
+            raise ValueError(f"The {col} filter needs a date as YYYY-MM-DD, not '{value}'")
+        return f"{col}::DATE {op} %s", [value]
+    return f"{col}::VARCHAR {op} %s", [value]
+
+
+def _json_cell(value):
+    if value is None or isinstance(value, (bool, int, float, str)):
+        return value
+    if isinstance(value, (datetime.datetime, datetime.date)):
+        return value.isoformat()
+    try:
+        return float(value)   # Decimal
+    except (TypeError, ValueError):
+        return str(value)
+
+
+@router.get("/kpi/vehicle-columns")
+def kpi_vehicle_columns(request: Request, table: str = "", user: str = Depends(require_page_api('kpi'))):
+    """Live table list and the chosen table's columns, read when the Settings or
+    Edit Chart popup opens, so columns added to the table show up straight away."""
+    try:
+        view = _vehicle_view_config(_read_kpi_layout_value('vehicle_view'))
+        table = table or view["table"]
+        columns = _vehicle_table_columns(table)
+        tables = _vehicle_tables() if is_admin(user) else []
+    except Exception as e:
+        message = getattr(e, "detail", None) or str(e)
+        logger.error(f"KPI vehicle columns failed: {message}")
+        return {"status": "error", "message": message}
+    return {"status": "ok", "view": view, "table": table, "tables": tables,
+            "columns": [{"column": c, "type": t} for c, t in columns]}
+
+
+@router.post("/kpi/vehicle-view")
+def kpi_vehicle_view_save(request: Request, payload: dict, user: str = Depends(require_page_api('kpi'))):
+    """The vehicle table and the columns View Vehicles shows. Admin only."""
+    if not is_admin(user):
+        return {"status": "error", "message": "Only the admin can change the View Vehicles columns"}
+    view = (payload or {}).get("view")
+    err = _validate_vehicle_view(view)
+    if err:
+        return {"status": "error", "message": err}
+    try:
+        if not _vehicle_table_columns(view["table"]):
+            return {"status": "error", "message": f"Table {view['table']} was not found"}
+        _write_kpi_layout_value('vehicle_view', view)
+    except Exception as e:
+        logger.error(f"KPI vehicle view save failed: {e}")
+        return {"status": "error", "message": str(e)}
+    return {"status": "ok", "view": _vehicle_view_config(view)}
+
+
+@router.get("/kpi/vehicles")
+def kpi_vehicles(request: Request, row_id: str, start: str, end: str,
+                 user: str = Depends(require_page_api('kpi'))):
+    """The vehicles behind one chart point: the chart's saved date column and
+    filters, between start and end (inclusive), with the Settings columns."""
+    try:
+        start_date = datetime.date.fromisoformat(start)
+        end_date = datetime.date.fromisoformat(end)
+    except ValueError:
+        return {"status": "error", "message": "Dates must be YYYY-MM-DD"}
+    if start_date > end_date or (end_date - start_date).days > 400:
+        return {"status": "error", "message": "Bad date range"}
+    try:
+        layout = _read_kpi_layout_value('layout') or KPI_DEFAULT_LAYOUT
+        row = next((r for r in layout.get("rows", []) if r.get("id") == row_id), None)
+        if not row:
+            return {"status": "error", "message": "Chart not found - reload the page"}
+        vehicles = row.get("vehicles")
+        if not vehicles:
+            return {"status": "error", "message": "View Vehicles is not set up for this chart"}
+        view = _vehicle_view_config(_read_kpi_layout_value('vehicle_view'))
+        live = dict(_vehicle_table_columns(view["table"]))
+        if not live:
+            return {"status": "error", "message": f"Table {view['table']} was not found"}
+
+        # Ticked columns that have since gone from the table are left out
+        # rather than failing the whole list.
+        shown = [c for c in view["columns"] if c["column"] in live]
+        missing = [c["column"] for c in view["columns"] if c["column"] not in live]
+        if not shown:
+            return {"status": "error", "message": "No View Vehicles columns are chosen - set them in Settings"}
+        date_col = vehicles["date_column"]
+        if date_col not in live:
+            return {"status": "error", "message": f"Date column {date_col} is not in {view['table']}"}
+        where, params = [f"{date_col}::DATE BETWEEN %s AND %s"], [start_date.isoformat(), end_date.isoformat()]
+        for f in vehicles.get("filters", []):
+            if f["column"] not in live:
+                return {"status": "error", "message": f"Filter column {f['column']} is not in {view['table']}"}
+            try:
+                sql, values = _filter_sql(f, live[f["column"]])
+            except ValueError as e:
+                return {"status": "error", "message": str(e)}
+            where.append(sql)
+            params.extend(values)
+
+        select_cols = ", ".join(c["column"] for c in shown)
+        # Grey-out check, read whether or not its columns are shown: one extra
+        # true/false at the end of each row, after the shown columns, true when
+        # ANY grey-out rule matches. A rule on a column that has gone from the
+        # table is skipped rather than failing the list.
+        grey_parts, grey_params = [], []
+        for rule in view["grey_rules"]:
+            if rule["column"] not in live:
+                continue
+            try:
+                sql, values = _filter_sql(rule, live[rule["column"]])
+            except ValueError as e:
+                return {"status": "error", "message": f"Grey-out rule: {e}"}
+            grey_parts.append(f"({sql})")
+            grey_params.extend(values)
+        grey = bool(grey_parts)
+        if grey:
+            select_cols += f", COALESCE({' OR '.join(grey_parts)}, FALSE) AS GREY_ROW__"
+            # The SELECT's placeholders come before the WHERE's.
+            params = grey_params + params
+        with SnowflakeClient() as sf:
+            rows, _ = sf.execute(f"""
+                SELECT {select_cols}
+                FROM {_VEHICLE_DB}.{view['table']}
+                WHERE {' AND '.join(where)}
+                ORDER BY {date_col}
+                LIMIT {_VEHICLE_ROW_LIMIT + 1}
+            """, params)
+    except Exception as e:
+        message = getattr(e, "detail", None) or str(e)
+        logger.error(f"KPI vehicles failed for {row_id}: {message}")
+        return {"status": "error", "message": message}
+    return {
+        "status": "ok",
+        "columns": [{"column": c["column"], "label": c.get("label") or c["column"],
+                     "type": live[c["column"]], "format": c.get("format"),
+                     "decimals": c.get("decimals"), "summary": c.get("summary", "none"),
+                     "blank_grey": bool(c.get("blank_grey"))} for c in shown],
+        # Each row is the shown columns, then (when grey-out is on) its
+        # true/false grey flag as one extra value at the end.
+        "rows": [[_json_cell(v) for v in r] for r in rows[:_VEHICLE_ROW_LIMIT]],
+        "grey_flag": grey,
+        "truncated": len(rows) > _VEHICLE_ROW_LIMIT,
+        "row_limit": _VEHICLE_ROW_LIMIT,
+        "missing_columns": missing,
+    }
 
 
 # Model run through Snowflake Cortex (SNOWFLAKE.CORTEX.COMPLETE) rather than a
@@ -1726,7 +2270,22 @@ _kpi_sp_cache_at: float = 0.0
 # The source spreadsheet is refreshed once per day between 08:00 and 09:00 UK,
 # so a cached payload is fresh if fetched after the most recent 09:00 UK.
 _SP_S3_BUCKET = "aa-raw-sources-uk"
-_SP_S3_KEY = "applications/pricing/uk-vehicle-list-evaluator/shared/cache/kpi_sharepoint_v4.json"
+_SP_S3_KEY = "applications/pricing/uk-vehicle-list-evaluator/shared/cache/kpi_sharepoint_v5.json"
+
+# The at_data sheet of the Autotrader CTR workbook. Sheet header → metric name.
+# The natural columns are headed "Market Extension natural ..." in the sheet.
+_AT_DATA_URL = ("https://carsmkt.sharepoint.com/teams/marketing/Shared%20Documents/"
+                "Classifieds/AutoTrader/Autotrader%20CTR%20v3.xlsx")
+_AT_DATA_SHEET = "at_data"
+_AT_DATA_DATE_HEADER = "Dynamic Date"
+_AT_DATA_COLUMNS = {
+    "Total search appearances": "at_search_appearances_total",
+    "PPC search appearances": "at_search_appearances_ppc",
+    "Market Extension natural search appearances": "at_search_appearances_natural",
+    "Total advert views": "at_advert_views_total",
+    "PPC advert views": "at_advert_views_ppc",
+    "Market Extension natural advert views": "at_advert_views_natural",
+}
 
 
 def _sp_cache_is_fresh(cached_at: float) -> bool:
@@ -1876,6 +2435,29 @@ def _build_kpi_sharepoint_data() -> dict:
         values = {col: _number(row.get(col)) for col in number_columns if row.get(col) not in (None, "")}
         if values:
             by_date[d] = values
+
+    # Autotrader search appearances and advert views, from a second workbook.
+    # A failure here leaves these columns out rather than failing the whole read.
+    try:
+        at_rows = SharePointClient(team_site="/teams/marketing").get_worksheet_values_by_url(
+            _AT_DATA_URL, _AT_DATA_SHEET, max_col="G", max_row=5000,
+        )
+        headers = [str(h).strip() for h in at_rows[0]] if at_rows else []
+        missing = [h for h in [_AT_DATA_DATE_HEADER, *_AT_DATA_COLUMNS] if h not in headers]
+        if missing:
+            raise ValueError(f"at_data headers not found: {missing}. Found: {headers}")
+        date_idx = headers.index(_AT_DATA_DATE_HEADER)
+        col_idx = {metric: headers.index(header) for header, metric in _AT_DATA_COLUMNS.items()}
+        for row in at_rows[1:]:
+            d = _parse_date(row[date_idx])
+            if not d or d < cutoff_str:
+                continue
+            values = {metric: _number(row[i]) for metric, i in col_idx.items() if row[i] not in (None, "")}
+            if values:
+                by_date.setdefault(d, {}).update(values)
+        number_columns.extend(_AT_DATA_COLUMNS.values())
+    except Exception as e:
+        logger.warning("KPI SharePoint: Autotrader CTR at_data read failed: %s", e)
 
     return {
         "status": "ok",

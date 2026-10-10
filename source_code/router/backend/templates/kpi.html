@@ -4,7 +4,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>KPI Dashboard</title>
+    <title>{{ page_name('kpi') }}</title>
     <link rel="icon" type="image/png" href="{{ BASE_URL }}/static/icon.png">
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css" rel="stylesheet">
@@ -21,13 +21,30 @@
            + 4px gap + 22px legend line + 2px gap = 45px; new: 22px title
            line + 4px gap = 26px). The card's outer height stays as it was. */
         .chart-wrap { height: 335px; }
+        /* Section heading and chart title sizes come from Settings > Appearance
+           (applyAppearance sets the two variables); the fallbacks are the
+           shared charts.css sizes. */
+        .category-header { font-size: var(--kpi-section-font, 0.82rem); }
+        .chart-card h2 { font-size: var(--kpi-title-font, 0.88rem); }
         /* Row title slightly bigger than the shared 0.86rem. */
         .chart-row-title.kpi-row-title { font-size: 0.95rem; }
         /* Two columns side by side (chart settings | axis + target) so the popup
            fits on screen without scrolling. Drops to one column on narrow screens. */
-        .modal-box.chart-modal { width: 1180px; max-width: 96vw; max-height: 92vh; overflow-y: auto; }
-        .chart-modal-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 0 28px; }
+        /* Edit Chart: three columns (chart | axis and target | View Vehicles) so
+           it fits one screen; nearer the top than other popups (3vh, not 10vh)
+           and allowed the extra height. Fields sit a little closer together than
+           elsewhere; the font size is unchanged. Two columns, then one, on
+           narrower screens, where it scrolls instead. */
+        #chartModal { padding-top: 3vh; }
+        .modal-box.chart-modal { width: 1800px; max-width: 97vw; max-height: 95vh; overflow-y: auto; }
+        .chart-modal-cols { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0 26px; }
         .chart-modal-col { min-width: 0; }
+        .chart-modal .modal-field { margin-bottom: 10px; }
+        .chart-modal .modal-hint { margin-top: 3px; line-height: 1.35; }
+        .chart-modal .modal-section-title { margin-top: 0; }
+        .chart-modal .modal-actions { margin-top: 8px; }
+        .chart-modal .metric-desc:empty { display: none; }
+        @media (max-width: 1350px) { .chart-modal-cols { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
         .modal-box.notes-modal { width: 760px; max-width: 96vw; max-height: 92vh; overflow-y: auto; }
         .notes-modal textarea { width: 100%; box-sizing: border-box; font: inherit; font-size: 0.85rem; padding: 6px 8px; border: 1px solid #cbd5e1; border-radius: 6px; resize: vertical; }
         .note-item { display: flex; align-items: flex-start; gap: 10px; padding: 7px 0; border-bottom: 1px solid #f1f5f9; font-size: 0.84rem; }
@@ -51,7 +68,7 @@
         .note-tip .note-tip-text { white-space: pre-wrap; margin-top: 2px; }
         @media (max-width: 900px) { .chart-modal-cols { grid-template-columns: 1fr; } }
         .modal-section-title {
-            font-size: 0.72rem; font-weight: 700; color: #64748b; text-transform: uppercase;
+            font-size: 0.82rem; font-weight: 700; color: #64748b; text-transform: uppercase;
             letter-spacing: 0.04em; border-bottom: 1px solid #e2e8f0;
             padding-bottom: 4px; margin: 6px 0 10px;
         }
@@ -62,6 +79,14 @@
         .agg-options { display: flex; gap: 18px; flex-wrap: wrap; font-size: 0.85rem; color: #334155; min-height: 34px; align-items: center; }
         .agg-options label { display: flex; align-items: center; gap: 5px; font-weight: 400; margin: 0; }
         .settings-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0 14px; }
+        .section-item { display: flex; align-items: center; gap: 6px; margin-bottom: 6px; }
+        .section-item input {
+            flex: 1; min-width: 0; padding: 6px 10px; border: 1px solid #cbd5e1; border-radius: 6px;
+            background: #fff; color: #0f172a;
+        }
+        .section-item .btn { padding: 3px 9px; font-size: 0.78rem; }
+        .section-item .section-count { font-size: 0.76rem; color: #64748b; width: 62px; text-align: right; }
+        .section-add-btn { padding: 4px 12px; font-size: 0.8rem; margin: 2px 0 8px; }
         .import-row { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
         .import-row input[type="file"] { flex: 1; min-width: 0; font-size: 0.8rem; }
         .import-row .btn { padding: 4px 12px; font-size: 0.8rem; }
@@ -72,6 +97,28 @@
         }
         .btn-remove-chart:hover { background: #fef2f2; color: #b91c1c; }
         .chart-modal-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+        /* Heading and X stay at the top while a long popup scrolls. The box has
+           22px top padding (.modal-box), and a sticky header pins inside that
+           padding, leaving a 22px gap that the content would scroll through.
+           So the header pulls up over the padding (margin-top -22px), fills it
+           with its own white padding, and pins 22px higher (top -22px) — flush
+           with the box's top edge, with nothing showing above it. */
+        .chart-modal > .chart-modal-head,
+        .settings-modal > .chart-modal-head,
+        .notes-modal > .chart-modal-head {
+            position: sticky; top: -22px; z-index: 5;
+            margin-top: -22px; padding-top: 22px; background: #fff;
+        }
+        /* .modal-sub normally pulls up 12px under the heading (margin -12px). With
+           the heading's white background now covering that space, the top of the
+           line was hidden. Same 4px gap instead from a smaller heading margin and
+           no pull-up. */
+        .chart-modal > .chart-modal-head h2,
+        .settings-modal > .chart-modal-head h2,
+        .notes-modal > .chart-modal-head h2 { margin-bottom: 4px; }
+        .chart-modal > .chart-modal-head + *,
+        .settings-modal > .chart-modal-head + .modal-sub,
+        .notes-modal > .chart-modal-head + .modal-sub { margin-top: 0; }
         .modal-close-x {
             background: none; border: none; font-size: 22px; line-height: 1;
             cursor: pointer; color: #6b7280; padding: 0 2px; margin-top: -4px;
@@ -82,25 +129,182 @@
             align-items: center; gap: 16px; font-size: 1.8rem; font-weight: 600; color: #64748b;
         }
         .page-is-loading .page-loading { display: flex; }
+        /* Own spin rather than Font Awesome's fa-spin, which stops moving when
+           Windows has animations turned off */
+        .spin { display: inline-block; animation: css-spin 0.8s linear infinite; }
         /* Hidden, not removed, so charts drawn during the load still get their real size */
         .page-is-loading #sectionsContainer { visibility: hidden; }
+
+        /* ── Point popup and View Vehicles ──────────────────────────────────── */
+        .chart-wrap canvas { cursor: pointer; }
+        .modal-box.point-modal { width: 1400px; max-width: 96vw; max-height: 86vh; display: flex; flex-direction: column; }
+        .modal-overlay#pointModal { padding-top: 6vh; }
+        .point-figures { display: flex; gap: 22px; flex-wrap: wrap; font-size: 0.86rem; color: #334155; margin-bottom: 12px; }
+        .point-figures b { color: #0f172a; }
+        .point-actions { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+        .point-status { font-size: 0.82rem; color: #64748b; }
+        /* Scroll container with no border or top padding: the frame is drawn
+           on the table itself, and a sticky header pins flush to this box's
+           top edge, so rows never show through a gap above it. */
+        .vehicles-wrap { margin-top: 12px; overflow: auto; flex: 1; min-height: 0; display: none; }
+        .vehicles-wrap.show { display: block; }
+        /* Gridlines as the Orders & Deliveries vehicle popup: grey outer frame,
+           rounded corners, a 1px line between every row and column.
+           The frame is drawn on the outer CELLS, not the table. The header row
+           sticks to the top of the scroll box and the total row to the bottom;
+           a frame on the table scrolls away underneath them, which left the top
+           of the header and the bottom of the total row with no line. Cells
+           that stick carry their own edge with them. Corners are rounded on the
+           corner cells, since overflow: hidden on the table would stop the
+           header sticking. */
+        .vehicles-table {
+            border-collapse: separate; border-spacing: 0; font-size: 0.78rem; width: max-content; min-width: 100%;
+        }
+        .vehicles-table th {
+            position: sticky; top: 0; z-index: 3;
+            background: var(--c-table-header-bg); color: var(--c-table-header-text); font-weight: 600; text-align: left;
+            padding: 0.5em 0.6em; white-space: nowrap; cursor: pointer; user-select: none;
+            border-top: 1px solid var(--c-border);
+            border-right: 1px solid var(--c-border);
+            border-bottom: 1px solid var(--c-border);
+        }
+        .vehicles-table th:hover { background: var(--c-table-header-hover); }
+        .vehicles-table th.num { text-align: right; }
+        .vehicles-table td {
+            padding: 0.35em 0.6em; white-space: nowrap; color: var(--c-text);
+            border-bottom: 1px solid var(--c-border); border-right: 1px solid var(--c-border-soft);
+        }
+        .vehicles-table td.num { text-align: right; font-variant-numeric: tabular-nums; }
+        /* Hyperlink columns: a centred icon, no underline. */
+        .vehicles-table td.link { text-align: center; }
+        .vehicles-table .veh-link { color: var(--c-table-header-text); text-decoration: none; }
+        .vehicles-table .veh-link:hover { color: #2563eb; }
+        .vehicles-table tbody tr:hover td { background: var(--c-surface-alt); }
+        /* Outer left and right edges in the frame colour. The last column's
+           right edge is the frame, not the lighter line between columns. */
+        .vehicles-table th:first-child, .vehicles-table td:first-child { border-left: 1px solid var(--c-border); }
+        .vehicles-table td:last-child { border-right: 1px solid var(--c-border); }
+        .vehicles-table thead tr:first-child th:first-child { border-top-left-radius: 4px; }
+        .vehicles-table thead tr:first-child th:last-child { border-top-right-radius: 4px; }
+        .vehicles-table tbody tr:last-child td:first-child { border-bottom-left-radius: 4px; }
+        .vehicles-table tbody tr:last-child td:last-child { border-bottom-right-radius: 4px; }
+        .vehicles-table .sort-mark { opacity: 0.5; margin-left: 4px; font-size: 0.85em; }
+        /* Total / average row: pinned to the bottom of the scroll box so it stays
+           in view, with a strong rule above it like the Orders & Deliveries
+           totals row, and the frame's bottom edge under it. With a total row the
+           body's last row is no longer the bottom of the table: it loses its
+           bottom line (the 2px rule sits there) and its rounded corners. */
+        .vehicles-table tfoot td {
+            position: sticky; bottom: 0; z-index: 2;
+            background: var(--c-table-total-bg); font-weight: 700;
+            border-top: 2px solid var(--c-border-strong); border-bottom: 1px solid var(--c-border);
+        }
+        .vehicles-table tfoot tr td:first-child { border-bottom-left-radius: 4px; }
+        .vehicles-table tfoot tr td:last-child { border-bottom-right-radius: 4px; }
+        .vehicles-table:has(tfoot) tbody tr:last-child td { border-radius: 0; border-bottom: none; }
+
+        /* ── View Vehicles setup (Edit Chart and Settings popups) ──────────── */
+        .veh-filter { display: grid; grid-template-columns: 1.4fr 1fr 1.2fr auto; gap: 6px; margin-bottom: 6px; align-items: center; }
+        .veh-filter select, .veh-filter input {
+            width: 100%; min-width: 0; padding: 5px 8px; border: 1px solid #cbd5e1; border-radius: 6px; background: #fff; font-size: 0.82rem;
+        }
+        .veh-filter .btn { padding: 3px 9px; font-size: 0.78rem; }
+        /* Stacked chart series rows: metric, name, colour, order, remove. */
+        .series-row { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr) auto auto auto auto auto; gap: 5px; margin-bottom: 6px; align-items: center; }
+        .series-row select, .series-row input[type="text"] {
+            width: 100%; min-width: 0; padding: 5px 8px; border: 1px solid #cbd5e1; border-radius: 6px; background: #fff; font-size: 0.82rem;
+        }
+        .series-row input[type="color"] { width: 34px; height: 30px; padding: 1px 2px; border: 1px solid #cbd5e1; border-radius: 6px; background: #fff; cursor: pointer; }
+        .series-row .btn { padding: 3px 8px; font-size: 0.76rem; }
+        .series-row .series-own { outline: 2px solid #0f172a; outline-offset: 1px; }
+        /* Settings > Appearance colour themes: name, swatches, add / remove. */
+        .theme-row { display: flex; align-items: center; gap: 8px; padding: 6px 0; border-bottom: 1px solid #f1f5f9; flex-wrap: wrap; }
+        .theme-row > input[type="text"] { width: 170px; padding: 5px 8px; border: 1px solid #cbd5e1; border-radius: 6px; font-size: 0.82rem; }
+        .theme-swatches { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; flex: 1; min-width: 0; }
+        .theme-swatch { position: relative; }
+        .theme-swatch input[type="color"] { width: 30px; height: 28px; padding: 1px 2px; border: 1px solid #cbd5e1; border-radius: 5px; background: #fff; cursor: pointer; }
+        .theme-swatch button {
+            position: absolute; top: -6px; right: -6px; width: 15px; height: 15px; line-height: 13px; padding: 0;
+            border-radius: 50%; border: 1px solid #cbd5e1; background: #fff; color: #64748b; font-size: 10px; cursor: pointer; display: none;
+        }
+        .theme-swatch:hover button { display: block; }
+        .theme-row .btn { padding: 3px 9px; font-size: 0.78rem; }
+        .theme-row .theme-uses { font-size: 0.76rem; color: #64748b; white-space: nowrap; }
+        /* Wide enough for the longest column names (about 45 characters) with
+           the heading, format and order controls beside them. */
+        .modal-box.settings-modal { width: 1500px; max-width: 96vw; max-height: 92vh; overflow-y: auto; }
+        /* minmax(0, ...): a plain 1fr column cannot be narrower than its longest
+           unbroken column name, which pushed the grid past the box edge and
+           hid the Add buttons. With 0 as the minimum the columns always fit the
+           box, and a name that still does not fit is cut with "..." (full name
+           on hover). */
+        .veh-cols { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); gap: 0 18px; }
+        .veh-col-list { border: 1px solid #e2e8f0; border-radius: 6px; height: 340px; overflow-y: auto; padding: 4px; }
+        .veh-col-item { display: flex; align-items: center; gap: 6px; padding: 3px 4px; font-size: 0.8rem; border-bottom: 1px solid #f8fafc; }
+        .veh-col-item .veh-col-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #0f172a; }
+        .veh-col-item .veh-col-type { color: #94a3b8; font-size: 0.72rem; flex-shrink: 0; }
+        .veh-col-item input[type="text"] { width: 160px; flex-shrink: 0; padding: 3px 7px; border: 1px solid #cbd5e1; border-radius: 5px; font-size: 0.78rem; }
+        /* No fixed widths: each dropdown sizes to its longest option plus its
+           arrow, so "0 dp" or "Date & time" is never cut off. */
+        .veh-col-item select { flex-shrink: 0; width: auto; padding: 3px 5px; border: 1px solid #cbd5e1; border-radius: 5px; font-size: 0.78rem; background: #fff; }
+        .veh-col-item select:disabled { opacity: 0.4; }
+        .veh-col-item .btn { padding: 2px 7px; font-size: 0.72rem; flex-shrink: 0; }
+        .veh-col-item.missing .veh-col-name { color: #b91c1c; }
+        .veh-col-blank { display: flex; align-items: center; gap: 4px; flex-shrink: 0; margin: 0; font-size: 0.76rem; font-weight: 400; color: #475569; white-space: nowrap; }
+        .veh-grey-row { display: flex; align-items: center; gap: 8px; }
+        .veh-grey-row select, .veh-grey-row input { flex: 1; min-width: 0; }
+        .veh-grey-row span { font-size: 0.82rem; color: #64748b; }
+        /* Rows matched by the Settings grey-out rule (cancelled deals). */
+        /* Light grey fill only; the text stays the same colour as every other
+           row. A touch darker under the pointer so the hover still shows. */
+        .vehicles-table tbody tr.grey-row td { background: #e5e7eb; }
+        .vehicles-table tbody tr.grey-row:hover td { background: #d9dce1; }
+        /* Admin View / User View switch (admin only). User View hides every
+           editing control, so the admin sees the page as everyone else does. */
+        .view-toggle { display: inline-flex; background: #e2e8f0; border-radius: 8px; padding: 3px; gap: 2px; }
+        .view-toggle button {
+            border: none; background: transparent; border-radius: 6px; padding: 5px 12px;
+            font-size: 0.82rem; font-weight: 600; color: #475569; cursor: pointer;
+        }
+        .view-toggle button.active { background: #fff; color: #0f172a; box-shadow: 0 1px 2px rgba(15,23,42,0.15); }
+        body.user-view .admin-only, body.user-view .chart-row-admin { display: none !important; }
+        /* Settings popup: tabs down the left, one pane showing on the right. The
+           box keeps one height whichever tab is open, so it does not jump. */
+        .settings-body { display: grid; grid-template-columns: 170px minmax(0, 1fr); gap: 22px; min-height: 62vh; }
+        .settings-tabs { display: flex; flex-direction: column; gap: 4px; border-right: 1px solid #e2e8f0; padding-right: 12px; }
+        .settings-tabs button {
+            text-align: left; background: none; border: none; border-radius: 6px; padding: 8px 10px;
+            font-size: 0.88rem; font-weight: 600; color: #475569; cursor: pointer;
+        }
+        .settings-tabs button:hover { background: #f1f5f9; color: #0f172a; }
+        .settings-tabs button.active { background: var(--c-table-header-bg); color: var(--c-table-header-text); }
+        .settings-pane { display: none; }
+        .settings-pane.active { display: block; }
+        .veh-col-search { width: 100%; padding: 5px 9px; border: 1px solid #cbd5e1; border-radius: 6px; margin-bottom: 6px; font-size: 0.82rem; }
+        .veh-col-head { font-size: 0.8rem; font-weight: 700; color: #334155; margin-bottom: 4px; }
     </style>
 </head>
 <body>
     {{ account_nav(user) }}
     <div class="top-bar">
-        <h1>KPI Dashboard</h1>
+        <h1>{{ page_name('kpi') }}</h1>
         <button class="btn btn-load" id="loadBtn" onclick="loadAll()">
             <i class="fas fa-sync-alt" id="loadIcon"></i> Load Data
         </button>
         {% if kpi_is_admin %}
-        <button class="btn btn-edit" onclick="openChartModal(null)">
+        <!-- Admin View shows the editing buttons; User View hides them to see
+             the page as everyone else does. Admin only; remembered per browser. -->
+        <div class="view-toggle" role="group" aria-label="View">
+            <button type="button" data-view="admin" onclick="setPageView('admin')">Admin View</button>
+            <button type="button" data-view="user" onclick="setPageView('user')">User View</button>
+        </div>
+        <button class="btn btn-edit admin-only" onclick="openChartModal(null)">
             <i class="fas fa-plus"></i> Add Chart
         </button>
-        <button class="btn btn-edit" onclick="openSettingsModal()">
+        <button class="btn btn-edit admin-only" onclick="openSettingsModal()">
             <i class="fas fa-cog"></i> Settings
         </button>
-        <button class="btn btn-edit" onclick="openNotesModal()">
+        <button class="btn btn-edit admin-only" onclick="openNotesModal()">
             <i class="fas fa-sticky-note"></i> Notes
         </button>
         {% endif %}
@@ -108,12 +312,37 @@
     </div>
 
     <div class="page-content page-is-loading" id="pageContent">
-        <div class="page-loading"><i class="fas fa-sync-alt fa-spin"></i> Loading...</div>
+        <div class="page-loading"><i class="fas fa-sync-alt spin"></i> Loading...</div>
         <div id="sectionsContainer"></div>
     </div>
 
     <!-- Popup shown when hovering a chart note's dotted line -->
     <div class="note-tip" id="noteTip"></div>
+
+    <!-- Clicking a chart point: its figures, and the vehicles behind it on request -->
+    <div class="modal-overlay" id="pointModal">
+        <div class="modal-box point-modal">
+            <div class="chart-modal-head">
+                <h2 id="pointTitle"></h2>
+                <button type="button" class="modal-close-x" onclick="closePointModal()" aria-label="Close">&times;</button>
+            </div>
+            <p class="modal-sub" id="pointPeriod"></p>
+            <div class="point-figures" id="pointFigures"></div>
+            <div class="point-actions">
+                <button type="button" class="btn btn-apply" id="viewVehiclesBtn" onclick="loadPointVehicles()">
+                    <i class="fas fa-car"></i> View Vehicles
+                </button>
+                <span class="point-status" id="pointStatus"></span>
+                <div class="spacer" style="flex:1;"></div>
+                <button type="button" class="btn btn-csv" id="vehiclesCsvBtn" onclick="downloadVehiclesCsv()" style="display:none;">
+                    <i class="fas fa-download"></i> CSV
+                </button>
+            </div>
+            <div class="vehicles-wrap" id="vehiclesWrap">
+                <table class="vehicles-table" id="vehiclesTable"></table>
+            </div>
+        </div>
+    </div>
 
     {% if kpi_is_admin %}
     <!-- Add / Edit Chart popup: every setting for one chart, target included -->
@@ -125,16 +354,45 @@
             </div>
             <div class="modal-error" id="chartModalError"></div>
 
+            <!-- Three columns side by side (chart | axis and target | View Vehicles)
+                 so the whole popup fits on one screen without scrolling. -->
             <div class="chart-modal-cols">
             <div class="chart-modal-col">
             <div class="modal-section-title">Chart</div>
             <div class="modal-grid">
                 <div class="modal-field span-2">
+                    <label for="chartTypeSelect">Chart type</label>
+                    <select id="chartTypeSelect" onchange="onChartTypeChange()">
+                        <option value="line">Line - one metric, with N-1 and target</option>
+                        <option value="stacked">Stacked columns - several metrics</option>
+                    </select>
+                </div>
+                <!-- Stacked charts only -->
+                <div class="modal-field span-2 stacked-only" id="seriesField">
+                    <label>Series (first is the bottom of the stack)</label>
+                    <div id="seriesList"></div>
+                    <button type="button" class="btn btn-edit section-add-btn" onclick="addSeries()">
+                        <i class="fas fa-plus"></i> Add series
+                    </button>
+                </div>
+                <div class="modal-field stacked-only">
+                    <label for="themeSelect">Colour theme</label>
+                    <select id="themeSelect" onchange="renderSeriesList()"></select>
+                </div>
+                <div class="modal-field stacked-only">
+                    <label>Show</label>
+                    <div class="agg-options">
+                        <label><input type="checkbox" id="pctInput"> Each column as 100%</label>
+                        <label><input type="checkbox" id="segLabelsInput"> Values in segments</label>
+                    </div>
+                </div>
+                <!-- Line charts only -->
+                <div class="modal-field span-2 line-only">
                     <label for="metricSelect">Metric</label>
                     <select id="metricSelect" onchange="onMetricChange()"></select>
                     <div class="metric-desc" id="metricDesc"></div>
                 </div>
-                <div class="modal-field">
+                <div class="modal-field line-only">
                     <label for="divideSelect">Divided by</label>
                     <select id="divideSelect" onchange="onDivideChange()"></select>
                 </div>
@@ -174,11 +432,21 @@
                         <label><input type="checkbox" id="includeCurrentInput"> Show (part-period so far)</label>
                     </div>
                 </div>
+                <div class="modal-field span-2" id="weightField">
+                    <label for="weightSelect">Weight weeks and months by</label>
+                    <select id="weightSelect"></select>
+                    <div class="modal-hint">
+                        The count behind each day's average, so a week or month matches the
+                        average over every vehicle in View Vehicles.
+                    </div>
+                </div>
+            </div>
+            <div class="modal-grid three">
                 <div class="modal-field">
-                    <label for="invertSelect">Colour vs target</label>
+                    <label for="invertSelect">Green when</label>
                     <select id="invertSelect">
-                        <option value="0">Green above target (higher is better)</option>
-                        <option value="1">Green below target (lower is better)</option>
+                        <option value="0">Above target</option>
+                        <option value="1">Below target</option>
                     </select>
                 </div>
                 <div class="modal-field">
@@ -188,6 +456,7 @@
                         <option value="pct">Percent (%) - value is already a %</option>
                         <option value="pct100">Percent (%) - from a decimal, 1.02 = 102%</option>
                         <option value="k">Thousands (k)</option>
+                        <option value="km">Thousands (k) and millions (M)</option>
                     </select>
                 </div>
                 <div class="modal-field">
@@ -208,52 +477,51 @@
                  charts get one per period because a month total dwarfs a day's. -->
             <div class="modal-grid" id="yMinShared">
                 <div class="modal-field">
-                    <label for="yMinAll">Minimum (all three charts)</label>
+                    <label for="yMinAll">Minimum (all three)</label>
                     <input type="number" id="yMinAll" step="any" placeholder="0" oninput="updateYMaxPlaceholders()">
                 </div>
                 <div class="modal-field">
-                    <label for="yMaxAll">Maximum (all three charts)</label>
+                    <label for="yMaxAll">Maximum (all three)</label>
                     <input type="number" id="yMaxAll" step="any" placeholder="Auto">
                 </div>
             </div>
             <div id="yMinPerPeriod">
                 <div class="modal-grid three">
                     <div class="modal-field">
-                        <label for="yMinM">Month minimum</label>
+                        <label for="yMinM">Month min</label>
                         <input type="number" id="yMinM" step="any" placeholder="0" oninput="updateYMaxPlaceholders()">
                     </div>
                     <div class="modal-field">
-                        <label for="yMinW">Week minimum</label>
+                        <label for="yMinW">Week min</label>
                         <input type="number" id="yMinW" step="any" placeholder="0" oninput="updateYMaxPlaceholders()">
                     </div>
                     <div class="modal-field">
-                        <label for="yMinD">Day minimum</label>
+                        <label for="yMinD">Day min</label>
                         <input type="number" id="yMinD" step="any" placeholder="0" oninput="updateYMaxPlaceholders()">
                     </div>
                 </div>
                 <div class="modal-grid three">
                     <div class="modal-field">
-                        <label for="yMaxM">Month maximum</label>
+                        <label for="yMaxM">Month max</label>
                         <input type="number" id="yMaxM" step="any" placeholder="Auto">
                     </div>
                     <div class="modal-field">
-                        <label for="yMaxW">Week maximum</label>
+                        <label for="yMaxW">Week max</label>
                         <input type="number" id="yMaxW" step="any" placeholder="Auto">
                     </div>
                     <div class="modal-field">
-                        <label for="yMaxD">Day maximum</label>
+                        <label for="yMaxD">Day max</label>
                         <input type="number" id="yMaxD" step="any" placeholder="Auto">
                     </div>
                 </div>
             </div>
-            <div class="modal-hint" style="margin:-8px 0 14px;">
-                Blank minimum starts the axis at 0. Blank maximum is worked out from the
-                data above the minimum; the grey figure shows what it will be. Type a
-                figure to fix it instead.
+            <div class="modal-hint" style="margin:-4px 0 12px;">
+                Blank minimum starts at 0; blank maximum is worked out from the data (the
+                grey figure). Type a figure to fix it.
             </div>
 
             <div class="modal-section-title">Target</div>
-            <p class="modal-hint" id="targetSharedNote" style="margin:-4px 0 10px;"></p>
+            <p class="modal-hint" id="targetSharedNote" style="margin:-4px 0 8px;"></p>
             <div class="modal-field">
                 <label>This chart's target line comes from</label>
                 <div class="agg-options" id="targetModes">
@@ -267,14 +535,11 @@
                 <label for="fixedTargetInput" id="fixedTargetLabel">Fixed target (per day)</label>
                 <input type="number" id="fixedTargetInput" min="0" step="any">
                 <div class="modal-hint" id="fixedTargetHint">
-                    One figure for every date. Week and month targets are worked out from it:
-                    added up on Sum charts, the same figure on Average charts.
-                    Clear the box and Save to remove it.
+                    One figure for every date: added up for weeks and months on Sum charts,
+                    the same figure on Average charts. Clear and Save to remove it.
                 </div>
                 <div class="modal-hint" id="ratioTargetHint">
-                    One figure for every day, week and month, in the same units as the
-                    chart (enter 25 for 25% when showing a percentage). Belongs to this
-                    chart only.
+                    One figure for every point, in the chart's units (25 for 25%). This chart only.
                 </div>
             </div>
             <div class="modal-field" id="importField">
@@ -285,10 +550,32 @@
                     <button type="button" class="btn btn-edit" id="importBtn" onclick="importTargets()">Import</button>
                 </div>
                 <div class="modal-hint">
-                    CSV with two columns, date and target, one row per day. Dates as
-                    YYYY-MM-DD or DD/MM/YYYY; a header row is fine. Dates in the file
-                    are added or overwritten, every other stored date is kept.
-                    Imports are saved straight away.
+                    CSV of date, target per day (YYYY-MM-DD or DD/MM/YYYY, header row fine).
+                    Dates in the file are added or overwritten; saved straight away.
+                </div>
+            </div>
+            </div>
+
+            <div class="chart-modal-col">
+            <div class="modal-section-title">View Vehicles</div>
+            <div class="modal-field" id="vehCopyField">
+                <label for="vehCopySelect">Copy View Vehicles filters from</label>
+                <select id="vehCopySelect" onchange="copyVehSetup(this.value)"></select>
+                <div class="modal-hint">Copies that chart's date column and filters only.</div>
+            </div>
+            <div class="modal-field">
+                <label for="vehDateSelect">Date column</label>
+                <select id="vehDateSelect" onchange="onVehDateChange()"></select>
+                <div class="modal-hint" id="vehTableHint"></div>
+            </div>
+            <div class="modal-field" id="vehFiltersField">
+                <label>Filters (all must match)</label>
+                <div id="vehFilterList"></div>
+                <button type="button" class="btn btn-edit section-add-btn" onclick="addVehFilter()">
+                    <i class="fas fa-plus"></i> Add filter
+                </button>
+                <div class="modal-hint">
+                    "is one of" takes a comma-separated list.
                 </div>
             </div>
             </div>
@@ -345,10 +632,24 @@
 
     <!-- Settings modal -->
     <div class="modal-overlay" id="settingsModal">
-        <div class="modal-box">
-            <h2><i class="fas fa-cog"></i> Settings</h2>
+        <div class="modal-box settings-modal">
+            <div class="chart-modal-head">
+                <h2><i class="fas fa-cog"></i> Settings</h2>
+                <button type="button" class="modal-close-x" onclick="closeSettingsModal()" aria-label="Close">&times;</button>
+            </div>
             <p class="modal-sub">Applies to every chart, for everyone.</p>
             <div class="modal-error" id="settingsError"></div>
+            <!-- Tabs down the left, the chosen tab's settings on the right. One
+                 Save covers every tab; switching tabs keeps what was typed. -->
+            <div class="settings-body">
+            <nav class="settings-tabs">
+                <button type="button" data-tab="setGroupPeriods" onclick="showSettingsTab(this.dataset.tab)">Chart Periods</button>
+                <button type="button" data-tab="setGroupSections" onclick="showSettingsTab(this.dataset.tab)">Sections</button>
+                <button type="button" data-tab="setGroupVehicles" onclick="showSettingsTab(this.dataset.tab)">View Vehicles</button>
+                <button type="button" data-tab="setGroupAppearance" onclick="showSettingsTab(this.dataset.tab)">Appearance</button>
+            </nav>
+            <div class="settings-panes">
+            <div class="settings-pane" id="setGroupPeriods">
             <div class="settings-grid">
                 <div class="modal-field">
                     <label for="setMonths">Months shown</label>
@@ -372,6 +673,76 @@
                 </div>
             </div>
             <div class="modal-hint" id="settingsHint"></div>
+            </div>
+            <div class="settings-pane" id="setGroupSections">
+            <div id="sectionList"></div>
+            <button type="button" class="btn btn-edit section-add-btn" onclick="addSectionDraft()">
+                <i class="fas fa-plus"></i> Add section
+            </button>
+            <div class="modal-hint">
+                Type in a box to rename a section; its charts move with it. A section
+                with charts cannot be removed until they are moved or removed.
+                Sections with no charts are hidden on the page.
+            </div>
+            </div>
+            <div class="settings-pane" id="setGroupVehicles">
+            <div class="modal-field">
+                <label for="vehTableSelect">Vehicle table</label>
+                <select id="vehTableSelect" onchange="onVehTableChange()"></select>
+            </div>
+            <div class="modal-field">
+                <label>Grey out rows where any of these match</label>
+                <div id="vehGreyList"></div>
+                <button type="button" class="btn btn-edit section-add-btn" onclick="addGreyRule()">
+                    <i class="fas fa-plus"></i> Add rule
+                </button>
+                <div class="modal-hint">Checked on every row whether or not the column is shown, e.g. INVOICE_STATUS equals STATUS_CANCELLED.</div>
+            </div>
+            <div class="veh-cols">
+                <div>
+                    <div class="veh-col-head" id="vehShownHead">Shown, in order</div>
+                    <div class="veh-col-list" id="vehShownList"></div>
+                </div>
+                <div>
+                    <div class="veh-col-head">Not shown</div>
+                    <input type="text" class="veh-col-search" id="vehColSearch" placeholder="Search columns" oninput="renderVehColumnDraft()">
+                    <div class="veh-col-list" id="vehHiddenList" style="height:302px;"></div>
+                </div>
+            </div>
+            <div class="modal-hint">
+                The columns are read from the table each time this popup opens, so new
+                ones appear under Not shown. Type in a box to change the heading.
+                Format sets how values show in the list (date &amp; time as dd/mm/yyyy hh:mm,
+                % turns 0.9999 into 99.99%); decimals apply to number, £ and %. The CSV
+                keeps the raw values. A shown column that has gone from the table is
+                marked in red and left out of the list.
+            </div>
+            </div>
+            <div class="settings-pane" id="setGroupAppearance">
+            <div class="settings-grid">
+                <div class="modal-field">
+                    <label for="setSectionFont">Section heading size (px)</label>
+                    <input type="number" id="setSectionFont" step="1">
+                </div>
+                <div class="modal-field">
+                    <label for="setTitleFont">Chart title size (px)</label>
+                    <input type="number" id="setTitleFont" step="1">
+                </div>
+            </div>
+            <div class="modal-hint" id="appearanceHint"></div>
+            <div class="modal-section-title" style="margin-top:16px;">Colour themes</div>
+            <div id="themeList"></div>
+            <button type="button" class="btn btn-edit section-add-btn" onclick="addThemeDraft()">
+                <i class="fas fa-plus"></i> Add theme
+            </button>
+            <div class="modal-hint">
+                The series in a stacked chart take its theme's colours in order: the first series
+                the first colour, and so on. A series past the last colour is grey, so add colours
+                to a theme rather than repeat one. Click a colour to change it.
+            </div>
+            </div>
+            </div>
+            </div>
             <div class="modal-actions">
                 <button type="button" class="btn btn-edit" onclick="closeSettingsModal()">Cancel</button>
                 <button type="button" class="btn btn-apply" id="settingsSaveBtn" onclick="saveSettings()">Save</button>
@@ -392,14 +763,23 @@
     const Y_MAX_INPUTS = { m: 'yMaxM', w: 'yMaxW', d: 'yMaxD' };
 
     // ── State ────────────────────────────────────────────────────────────────
-    let SECTIONS = ['Upper Funnel', 'Results', 'Stock', 'Pricing', 'Margin'];
+    // Section names, in order. Set from /kpi/layout, edited in the Settings popup.
+    let SECTIONS = [];
     let layout = { rows: [] };
     let metricsCatalogue = [];
     let metricsByKey = {};
+    // Colour themes for multi-series charts, from /kpi/layout (Settings > Appearance).
+    let themes = [];
     let rowCharts = {};        // rowId -> [Chart, Chart, Chart]
     const customRowEls = {};   // rowId -> element
     const customRowData = {};  // rowId -> last /kpi/custom-data response
     let layoutLoaded = false;
+    // Set when the saved layout could not be read. Every save is blocked, since
+    // saving what is on screen would replace the real layout, notes or settings.
+    let layoutLoadFailed = false;
+    function blockSaveIfLoadFailed() {
+        if (layoutLoadFailed) throw new Error('The saved layout could not be loaded, so saving is turned off. Reload the page once the problem is fixed.');
+    }
 
     // Chart periods and label angle, shared by everyone, set by the admin.
     let settings = { months: 14, weeks: 10, days_window: 35, days_total: 90, label_angle: 0 };
@@ -430,26 +810,55 @@
         return 'sec-' + name.toLowerCase().replace(/[^a-z0-9]+/g, '-');
     }
 
+    // ── Admin View / User View (admin only) ──
+    // User View hides the editing buttons (Add Chart, Settings, Notes, Edit
+    // Chart, Copy Chart Below). Kept in this browser only.
+    const PAGE_VIEW_KEY = 'kpiPageView';
+
+    function isUserView() {
+        return !IS_ADMIN || document.body.classList.contains('user-view');
+    }
+
+    function setPageView(view) {
+        document.body.classList.toggle('user-view', view === 'user');
+        document.querySelectorAll('.view-toggle button').forEach(b => b.classList.toggle('active', b.dataset.view === view));
+        try { localStorage.setItem(PAGE_VIEW_KEY, view); } catch (e) {}
+    }
+
+    if (IS_ADMIN) {
+        let savedView = 'admin';
+        try { savedView = localStorage.getItem(PAGE_VIEW_KEY) || 'admin'; } catch (e) {}
+        setPageView(savedView);
+    }
+
     async function init() {
         // The layout and metric list load before any chart data, so show
         // the loading state from the start, not only once loadAll begins.
         setPageLoading(true);
-        document.getElementById('loadIcon').classList.add('fa-spin');
+        document.getElementById('loadIcon').classList.add('spin');
         document.getElementById('loadBtn').disabled = true;
         try {
             const [layoutResp, metricsResp] = await Promise.all([
                 fetch(BASE_URL + '/kpi/layout').then(r => r.json()),
                 fetch(BASE_URL + '/kpi/metrics').then(r => r.json()),
             ]);
+            if (layoutResp.status !== 'ok') throw new Error(layoutResp.message || 'no layout returned');
             if (layoutResp.sections) SECTIONS = layoutResp.sections;
             layout = layoutResp.layout || { rows: [] };
             if (layoutResp.settings) settings = layoutResp.settings;
+            applyAppearance();
             settingLimits = layoutResp.setting_limits || {};
             chartNotes = layoutResp.notes || [];
+            themes = layoutResp.themes || [];
             metricsCatalogue = metricsResp.metrics || [];
             metricsByKey = Object.fromEntries(metricsCatalogue.map(m => [metricKey(m.source, m.column), m]));
         } catch (err) {
-            document.getElementById('statusText').textContent = 'Layout load failed: ' + err;
+            layoutLoadFailed = true;
+            setPageLoading(false);
+            document.getElementById('loadIcon').classList.remove('spin');
+            document.getElementById('statusText').textContent =
+                'Layout load failed - saving is turned off so the saved charts are not overwritten. ' + err.message;
+            return;
         }
         layoutLoaded = true;
         renderLayout();
@@ -600,6 +1009,7 @@
     }
 
     async function saveLayout(rows) {
+        blockSaveIfLoadFailed();
         const resp = await fetch(BASE_URL + '/kpi/layout', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -610,23 +1020,26 @@
     }
 
     // ── Data loading ─────────────────────────────────────────────────────────
-    function fetchMetricData(source, metric, agg, targetMode, includeCurrent = false) {
+    function fetchMetricData(source, metric, agg, targetMode, includeCurrent = false, weightBy = '') {
         const params = new URLSearchParams({
             source,
             metric,
             agg,
             target_mode: targetMode,
             include_current: includeCurrent ? '1' : '0',
+            refresh: loadToken,
             months: settings.months,
             weeks: settings.weeks,
             days: settings.days_total,
         });
+        if (weightBy) params.set('weight_by', weightBy);
         return fetch(`${BASE_URL}/kpi/custom-data?${params}`).then(r => r.json());
     }
 
     function fetchRowData(row) {
+        if (isStacked(row)) return fetchStackedData(row);
         const cur = !!row.include_current;
-        if (!row.divide_by) return fetchMetricData(rowSource(row), row.metric, row.agg, rowTargetMode(row), cur);
+        if (!row.divide_by) return fetchMetricData(rowSource(row), row.metric, row.agg, rowTargetMode(row), cur, row.weight_by || '');
         return Promise.all([
             fetchMetricData(rowSource(row), row.metric, row.agg, 'none', cur),
             fetchMetricData(row.divide_by.source || 'snowflake', row.divide_by.metric, row.agg, 'none', cur),
@@ -692,7 +1105,12 @@
         if (on) document.getElementById('statusText').textContent = '';
     }
 
+    // New on every load, so the server re-reads daily_summary's columns once
+    // instead of using a list from before the table was last rebuilt.
+    let loadToken = '';
+
     function loadAll() {
+        loadToken = String(Date.now());
         const btn    = document.getElementById('loadBtn');
         const icon   = document.getElementById('loadIcon');
         const status = document.getElementById('statusText');
@@ -700,13 +1118,13 @@
         const rows = layout.rows.slice();
         if (!rows.length) {
             btn.disabled = false;
-            icon.classList.remove('fa-spin');
+            icon.classList.remove('spin');
             setPageLoading(false);
             status.textContent = IS_ADMIN ? 'No charts yet. Use Add Chart.' : 'No charts yet.';
             return;
         }
         btn.disabled = true;
-        icon.classList.add('fa-spin');
+        icon.classList.add('spin');
         container.classList.add('charts-loading');
         setPageLoading(true);
 
@@ -730,7 +1148,7 @@
             .catch(err => { status.textContent = 'Failed: ' + err; })
             .finally(() => {
                 btn.disabled = false;
-                icon.classList.remove('fa-spin');
+                icon.classList.remove('spin');
                 container.classList.remove('charts-loading');
                 setPageLoading(false);
             });
@@ -750,11 +1168,23 @@
         return v.toLocaleString('en-GB', { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
     }
 
+    // 'km' format: millions as M, thousands as k, smaller values as they are.
+    // Picks the unit from the rounded value, so 999,960 at 1 decimal shows as
+    // 1.0M rather than 1,000.0k.
+    function withKOrM(v, decimals, numFmt) {
+        const scale = 10 ** decimals;
+        const rounded = x => Math.round(x * scale) / scale;
+        if (Math.abs(rounded(v / 1000)) >= 1000) return numFmt(v / 1e6) + 'M';
+        if (Math.abs(rounded(v)) >= 1000) return numFmt(v / 1000) + 'k';
+        return numFmt(v);
+    }
+
     function rowFormatter(row) {
         const decimals = row.decimals || 0;
         if (row.fmt === 'pct') return v => withCommas(v, decimals) + '%';
         if (row.fmt === 'pct100') return v => withCommas(v * 100, decimals) + '%';
         if (row.fmt === 'k') return v => withCommas(v / 1000, decimals) + 'k';
+        if (row.fmt === 'km') return v => withKOrM(v, decimals, x => withCommas(x, decimals));
         return v => withCommas(v, decimals);
     }
 
@@ -765,6 +1195,7 @@
         // Rounded so 1.1 x 100 shows as 110%, not 110.00000000000001%.
         if (row.fmt === 'pct100') return v => fmt(Math.round(v * 100 * 1000) / 1000) + '%';
         if (row.fmt === 'k') return v => fmt(v / 1000) + 'k';
+        if (row.fmt === 'km') return v => withKOrM(v, 3, fmt);
         return v => fmt(v);
     }
 
@@ -772,6 +1203,7 @@
         customRowData[row.id] = d;
         if (!document.getElementById(`cv-${row.id}-m`)) return;   // row removed meanwhile
         kpiDates = d.dates;
+        if (isStacked(row)) { renderStackedRow(row, d); return; }
 
         const nulls = arr => arr.map(() => null);
         const dailyLabels = d.dates.map(dateLabel);
@@ -1042,6 +1474,7 @@
     }
 
     async function saveNotes(next) {
+        blockSaveIfLoadFailed();
         const resp = await fetch(BASE_URL + '/kpi/notes', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -1094,6 +1527,274 @@
         } catch (err) {
             showNotesError('Delete failed: ' + err.message);
         }
+    }
+
+    // ── Point popup and View Vehicles ────────────────────────────────────────
+    // Clicking a chart point shows its figures and a View Vehicles button. The
+    // vehicles are only fetched when the button is pressed: one query for that
+    // day, week or month, using the chart's saved date column and filters.
+    let pointState = null;   // { row, start, end, data, sort: { index, dir } }
+
+    function lastDayOfMonthIso(firstIso) {
+        const [y, m] = firstIso.split('-').map(Number);
+        return new Date(Date.UTC(y, m, 0)).toISOString().slice(0, 10);
+    }
+
+    function ukDate(iso) {
+        return `${iso.slice(8, 10)}/${iso.slice(5, 7)}/${iso.slice(0, 4)}`;
+    }
+
+    // meta = { rowId, kind: 'd'|'w'|'m', starts } as for the notes plugin. The
+    // day chart plots a window of its dates, so its index is shifted by the
+    // window start.
+    function openPointModal(meta, chart, localIndex) {
+        const row = findRow(meta.rowId);
+        if (!row) return;
+        const index = localIndex + (meta.kind === 'd' ? DayWindow.startIndex() : 0);
+        const start = meta.starts[index];
+        if (!start) return;
+        const end = meta.kind === 'd' ? start : meta.kind === 'w' ? addDaysIso(start, 6) : lastDayOfMonthIso(start);
+        pointState = { row, start, end, data: null, sort: null };
+
+        const period = { d: 'daily', w: 'weekly', m: 'monthly' }[meta.kind];
+        document.getElementById('pointTitle').textContent = `${rowTitle(row)} - ${period}`;
+        document.getElementById('pointPeriod').textContent = start === end
+            ? `${chart.data.labels[localIndex]} - ${ukDate(start)}`
+            : `${chart.data.labels[localIndex]} - ${ukDate(start)} to ${ukDate(end)}`;
+
+        let fmt = rowFormatter(row);
+        let figures;
+        if (isStacked(row)) {
+            // Each series, then the column total (not on a 100% chart, where
+            // every column is 100), then the target.
+            if (row.pct) fmt = v => withCommas(v, row.decimals || 0) + '%';
+            figures = chart.data.datasets.filter(ds => ds.type === 'bar')
+                .map(ds => ({ label: ds.label, v: ds.data[localIndex] }));
+            if (!row.pct) {
+                const known = figures.map(f => f.v).filter(v => v !== null && v !== undefined && !isNaN(v));
+                figures.push({ label: 'Total', v: known.length ? known.reduce((a, b) => a + b, 0) : null });
+            }
+            const target = chart.data.datasets.find(ds => ds.label === 'Target');
+            if (target) figures.push({ label: 'Target', v: target.data[localIndex] });
+        } else {
+            const name = label => label === 'N-1' || label === 'Target' ? label : 'Value';
+            figures = chart.data.datasets
+                .map(ds => ({ label: name(ds.label), v: ds.data[localIndex] }))
+                .sort((p, q) => ['Value', 'Target', 'N-1'].indexOf(p.label) - ['Value', 'Target', 'N-1'].indexOf(q.label));
+        }
+        document.getElementById('pointFigures').innerHTML = figures
+            .map(f => `<span>${escHtml(f.label)}: <b>${f.v === null || f.v === undefined || isNaN(f.v) ? '-' : escHtml(fmt(f.v))}</b></span>`)
+            .join('');
+
+        const button = document.getElementById('viewVehiclesBtn');
+        button.style.display = row.vehicles ? '' : 'none';
+        button.disabled = false;
+        document.getElementById('pointStatus').textContent = row.vehicles ? ''
+            : 'View Vehicles is not set up for this chart.' + (isUserView() ? '' : ' Choose its date column in Edit Chart.');
+        document.getElementById('vehiclesWrap').classList.remove('show');
+        document.getElementById('vehiclesTable').innerHTML = '';
+        document.getElementById('vehiclesCsvBtn').style.display = 'none';
+        document.getElementById('pointModal').classList.add('open');
+    }
+
+    function closePointModal() {
+        pointState = null;
+        document.getElementById('pointModal').classList.remove('open');
+    }
+
+    // Clicking the dark area outside the box closes it, like Escape.
+    document.getElementById('pointModal').addEventListener('click', e => {
+        if (e.target.id === 'pointModal') closePointModal();
+    });
+    document.addEventListener('keydown', e => {
+        if (e.key === 'Escape' && pointState) closePointModal();
+    });
+
+    async function loadPointVehicles() {
+        if (!pointState) return;
+        const state = pointState;
+        const button = document.getElementById('viewVehiclesBtn');
+        const status = document.getElementById('pointStatus');
+        button.disabled = true;
+        status.innerHTML = '<i class="fas fa-sync-alt spin"></i> Loading vehicles...';
+        try {
+            const params = new URLSearchParams({ row_id: state.row.id, start: state.start, end: state.end });
+            const resp = await fetch(`${BASE_URL}/kpi/vehicles?${params}`).then(r => r.json());
+            if (pointState !== state) return;   // popup closed or moved on meanwhile
+            if (resp.status !== 'ok') throw new Error(resp.message || 'load failed');
+            state.data = resp;
+            const notes = [`${resp.rows.length.toLocaleString('en-GB')} vehicle${resp.rows.length === 1 ? '' : 's'}`];
+            if (resp.truncated) notes.push(`only the first ${resp.row_limit.toLocaleString('en-GB')} shown`);
+            if (resp.missing_columns.length) notes.push(`not in the table any more: ${resp.missing_columns.join(', ')}`);
+            status.textContent = notes.join(' - ');
+            renderVehiclesTable();
+            document.getElementById('vehiclesWrap').classList.add('show');
+            document.getElementById('vehiclesCsvBtn').style.display = resp.rows.length ? '' : 'none';
+        } catch (err) {
+            if (pointState === state) status.textContent = 'Could not load the vehicles: ' + err.message;
+        } finally {
+            if (pointState === state) button.disabled = false;
+        }
+    }
+
+    const VEHICLE_NUMBER_TYPES = ['NUMBER', 'FLOAT', 'DECIMAL', 'NUMERIC', 'INT', 'INTEGER', 'BIGINT', 'DOUBLE', 'REAL'];
+
+    // How a column's values show in the list, set per column in Settings.
+    const VEH_FORMATS = [
+        ['number', 'Number'], ['gbp', '£'], ['pct', '%'], ['text', 'Text'], ['date', 'Date'], ['datetime', 'Date & time'],
+        ['link', 'Hyperlink'],
+    ];
+    // Formats that hold a number: right-aligned, take decimals, can have a total.
+    const VEH_NUMBER_FORMATS = ['number', 'gbp', 'pct'];
+
+    // Starting format for a column with none saved, from its Snowflake type.
+    // IDs and years are numbers in Snowflake but read wrong with commas, so
+    // they start as text.
+    function defaultVehFormat(column, type) {
+        if (/(^|_)(URL|LINK)$/.test(column)) return 'link';
+        if (/(^|_)(ID|YEAR|NUMBER)$/.test(column)) return 'text';
+        if (type === 'DATE') return 'date';
+        if (type && type.startsWith('TIMESTAMP')) return 'datetime';
+        if (VEHICLE_NUMBER_TYPES.includes(type)) return 'number';
+        return 'text';
+    }
+
+    function colFormat(col) {
+        return col.format || defaultVehFormat(col.column, col.type);
+    }
+
+    // { html, num } for one cell. A value that does not suit the chosen
+    // format (e.g. text in a Number column) shows as it is.
+    function vehicleCell(value, col) {
+        if (value === null || value === undefined) return { html: '' };
+        if (typeof value === 'boolean') return { html: value ? 'Yes' : 'No' };
+        const format = colFormat(col);
+        const decimals = Number.isInteger(col.decimals) ? col.decimals : (Number.isInteger(value) ? 0 : 2);
+        if (typeof value === 'number' && format === 'number') return { html: escHtml(withCommas(value, decimals)), num: true };
+        // Minus before the £ sign: -£1,234.
+        if (typeof value === 'number' && format === 'gbp') {
+            return { html: escHtml((value < 0 ? '-£' : '£') + withCommas(Math.abs(value), decimals)), num: true };
+        }
+        if (typeof value === 'number' && format === 'pct') return { html: escHtml(withCommas(value * 100, decimals) + '%'), num: true };
+        const text = String(value);
+        // Hyperlink: just an icon that opens the address in a new tab; the full
+        // address shows on hover. Anything not starting http(s) shows as text.
+        if (format === 'link' && /^https?:\/\//i.test(text)) {
+            return { html: `<a class="veh-link" href="${escHtml(text)}" target="_blank" rel="noopener" title="${escHtml(text)}">`
+                + '<i class="fas fa-external-link-alt"></i></a>', link: true };
+        }
+        if (format === 'date' || format === 'datetime') {
+            if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(text)) {
+                return { html: format === 'datetime' ? `${ukDate(text)} ${text.slice(11, 16)}` : ukDate(text) };
+            }
+            if (/^\d{4}-\d{2}-\d{2}$/.test(text)) return { html: ukDate(text) };
+        }
+        if (/^https?:\/\//i.test(text)) {
+            return { html: `<a href="${escHtml(text)}" target="_blank" rel="noopener">Open</a>` };
+        }
+        return { html: escHtml(text), num: typeof value === 'number' };
+    }
+
+    // Click a heading to sort by it; click again to reverse. Blanks go last.
+    function sortVehicles(index) {
+        if (!pointState || !pointState.data) return;
+        const sort = pointState.sort;
+        pointState.sort = { index, dir: sort && sort.index === index ? -sort.dir : 1 };
+        renderVehiclesTable();
+    }
+
+    // The loaded vehicles in the order the table shows them.
+    function sortedVehicleRows() {
+        const { data, sort } = pointState;
+        if (!sort) return data.rows;
+        return [...data.rows].sort((p, q) => {
+            const a = p[sort.index], b = q[sort.index];
+            if (a === null || a === undefined) return 1;
+            if (b === null || b === undefined) return -1;
+            return (a < b ? -1 : a > b ? 1 : 0) * sort.dir;
+        });
+    }
+
+    function csvEscape(v) {
+        if (v === null || v === undefined) return '';
+        const s = String(v);
+        return /[",\r\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+    }
+
+    // The list as shown (same columns, headings and sort), with the raw values
+    // rather than the display formatting, so numbers stay numbers in Excel.
+    function downloadVehiclesCsv() {
+        if (!pointState || !pointState.data) return;
+        const { data, row, start, end } = pointState;
+        const header = data.columns.map(c => csvEscape(c.label)).join(',');
+        // Only the shown columns: a row may also carry its grey-out flag at the end.
+        // Cells blanked on grey rows in the list are blank in the file as well.
+        const isGrey = r => !!(data.grey_flag && r[data.columns.length]);
+        const lines = sortedVehicleRows().map(r => data.columns.map((c, i) =>
+            csvEscape(c.blank_grey && isGrey(r) ? null : r[i])).join(','));
+        // Byte order mark first so Excel reads the file as UTF-8 (e.g. £ signs).
+        const blob = new Blob(['﻿' + [header, ...lines].join('\r\n')], { type: 'text/csv;charset=utf-8;' });
+        const slug = rowTitle(row).replace(/[^A-Za-z0-9]+/g, '_').replace(/^_+|_+$/g, '').toLowerCase();
+        const period = start === end ? start : `${start}_to_${end}`;
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `vehicles_${slug}_${period}.csv`;
+        a.click();
+        URL.revokeObjectURL(url);
+    }
+
+    function renderVehiclesTable() {
+        const { data, sort } = pointState;
+        const rows = sortedVehicleRows();
+        const numCols = data.columns.map(c => VEH_NUMBER_FORMATS.includes(colFormat(c)));
+        const head = data.columns.map((c, i) => {
+            const mark = sort && sort.index === i ? (sort.dir === 1 ? '&#9650;' : '&#9660;') : '';
+            return `<th${numCols[i] ? ' class="num"' : ''} onclick="sortVehicles(${i})" title="${escHtml(c.column)}">${escHtml(c.label)}<span class="sort-mark">${mark}</span></th>`;
+        }).join('');
+        // A row matched by the Settings grey-out rule (e.g. a cancelled deal)
+        // carries true as one extra value after its shown columns.
+        // Columns set to "Blank on grey rows" show nothing on those rows, e.g. the
+        // price and price position of a cancelled deal, which are read from the
+        // vehicle record and so show a later price, not the one at the order.
+        const isGrey = r => !!(data.grey_flag && r[data.columns.length]);
+        const body = rows.map(r => (isGrey(r) ? '<tr class="grey-row">' : '<tr>') + data.columns.map((c, i) => {
+            const cell = c.blank_grey && isGrey(r) ? { html: '' } : vehicleCell(r[i], c);
+            const cls = cell.num ? 'num' : cell.link ? 'link' : '';
+            return `<td${cls ? ` class="${cls}"` : ''}>${cell.html}</td>`;
+        }).join('') + '</tr>').join('');
+        document.getElementById('vehiclesTable').innerHTML =
+            `<thead><tr>${head}</tr></thead><tbody>${body}</tbody>${vehiclesSummaryRow(data.columns, rows, isGrey)}`;
+    }
+
+    // Row under the list with each column's Total or Average (set per column in
+    // Settings), over every vehicle loaded. Blanks are left out of an average,
+    // and so are cells blanked on grey rows, so the figure matches the chart.
+    // The first cell says what the row is when that column has no figure itself.
+    function vehiclesSummaryRow(columns, rows, isGrey) {
+        if (!columns.some(c => c.summary === 'sum' || c.summary === 'avg') || !rows.length) return '';
+        const cells = columns.map((c, i) => {
+            if (c.summary !== 'sum' && c.summary !== 'avg') return { html: '' };
+            const values = rows.filter(r => !(c.blank_grey && isGrey(r)))
+                .map(r => r[i]).filter(v => typeof v === 'number');
+            if (!values.length) return { html: '', num: true };
+            const total = values.reduce((a, b) => a + b, 0);
+            const cell = vehicleCell(c.summary === 'sum' ? total : total / values.length, c);
+            const kind = c.summary === 'sum' ? 'Total' : 'Average';
+            return { ...cell, title: `${kind} of ${values.length.toLocaleString('en-GB')} vehicle${values.length === 1 ? '' : 's'}` };
+        });
+        if (!cells[0].html) cells[0] = { html: 'Total / average' };
+        return '<tfoot><tr>' + cells.map(cell =>
+            `<td${cell.num ? ' class="num"' : ''}${cell.title ? ` title="${escHtml(cell.title)}"` : ''}>${cell.html}</td>`
+        ).join('') + '</tr></tfoot>';
+    }
+
+    // Live table and columns for the View Vehicles setup in Edit Chart and Settings.
+    async function fetchVehicleColumns(table) {
+        const params = table ? '?' + new URLSearchParams({ table }) : '';
+        const resp = await fetch(`${BASE_URL}/kpi/vehicle-columns${params}`).then(r => r.json());
+        if (resp.status !== 'ok') throw new Error(resp.message || 'could not read the vehicle columns');
+        return resp;
     }
 
     // ── Line chart builder ────────────────────────────────────────────────────
@@ -1159,6 +1860,10 @@
                     responsive: true,
                     maintainAspectRatio: false,
                     interaction: { mode: 'index', intersect: false },
+                    // Clicking anywhere over a point opens its popup (see openPointModal).
+                    onClick: (evt, elements, chart) => {
+                        if (opts.notes && elements.length) openPointModal(opts.notes, chart, elements[0].index);
+                    },
                     // Tilted labels on the highest points need room at the top.
                     layout: { padding: { top: angle ? 22 : 4 } },
                     plugins: {
@@ -1171,7 +1876,12 @@
                                     if (c.dataset.label === 'N-1' && n1Labels) {
                                         return `N-1 (${n1Labels[c.dataIndex]}): ${fmt(v)}`;
                                     }
-                                    return c.dataset.label + ': ' + fmt(v);
+                                    if (c.dataset.label === 'N-1' || c.dataset.label === 'Target') {
+                                        return c.dataset.label + ': ' + fmt(v);
+                                    }
+                                    // The chart's own line: the title is already above the
+                                    // chart, so the figure only.
+                                    return fmt(v);
                                 },
                                 // The axis is scaled from the data, so a target outside
                                 // it is clipped and Chart.js drops it from the tooltip.
@@ -1215,6 +1925,219 @@
         return day ? makeDayChart(labels, datasets, targetData, build) : build(labels, datasets, targetData);
     }
 
+    // ── Stacked column charts ───────────────────────────────────────────────
+    // chart_type 'stacked': one segment per series (row.series), month / week /
+    // day like every chart, no N-1. Each series is fetched with the same
+    // /kpi/custom-data call as a line chart and the page stacks them.
+    const isStacked = row => row.chart_type === 'stacked';
+    // A series past the theme's last colour: grey, never a repeated colour, so
+    // two series never look alike.
+    const SERIES_SPARE_COLOUR = '#9aa0a6';
+
+    function themeById(id) {
+        return themes.find(t => t.id === id) || themes[0] || { id: '', name: '', colours: [] };
+    }
+
+    // Each series' colour: its own if set, else the theme's colour in the same
+    // position, so a series keeps its colour when others are added after it.
+    function seriesColours(row) {
+        const theme = themeById(row.theme);
+        return (row.series || []).map((s, i) => s.colour || theme.colours[i] || SERIES_SPARE_COLOUR);
+    }
+
+    function seriesLabel(s) { return s.label || s.metric; }
+
+    function fetchStackedData(row) {
+        const cur = !!row.include_current;
+        return Promise.all(row.series.map(s => fetchMetricData(s.source || 'snowflake', s.metric, row.agg, 'none', cur)))
+            .then(results => {
+                const bad = results.findIndex(r => r.status !== 'ok');
+                if (bad >= 0) return { ...results[bad], message: `${seriesLabel(row.series[bad])}: ${results[bad].message}` };
+                return {
+                    ...results[0],
+                    stale_date: results.map(r => r.stale_date).find(Boolean) || null,
+                    stacked: results.map(r => ({ m: r.monthly_values, w: r.weekly_values, d: r.values })),
+                };
+            });
+    }
+
+    // Target line for a stacked chart: one figure per day, against the column
+    // total. Weeks and months add it up on Sum charts (7 days, days in the
+    // month); Average charts and 100% charts use the figure as it is.
+    function stackedTargets(row, d, periods) {
+        const t = row.target_mode === 'fixed' ? row.stack_target : null;
+        if (t === null || t === undefined) return { m: null, w: null, d: null };
+        const same = labels => labels.map(() => t);
+        if (row.pct || row.agg === 'avg') return { m: same(periods.m.labels), w: same(periods.w.labels), d: same(periods.d.labels) };
+        const daysIn = first => Number(lastDayOfMonthIso(first).slice(8, 10));
+        return {
+            m: (d.monthly_starts || []).map(f => t * daysIn(f)),
+            w: periods.w.labels.map(() => t * 7),
+            d: same(periods.d.labels),
+        };
+    }
+
+    function renderStackedRow(row, d) {
+        const pct = !!row.pct;
+        const decimals = row.decimals || 0;
+        const fmt = pct ? (v => withCommas(v, decimals) + '%') : rowFormatter(row);
+        const tickFmt = pct ? (v => v.toLocaleString('en-GB', { maximumFractionDigits: 1 }) + '%') : rowTickFormatter(row);
+        // Days after today have no figures yet; their columns stay empty.
+        const pastOnly = arr => (arr || []).map((v, i) => d.dates[i] <= d.today ? v : null);
+        const periods = {
+            m: { labels: d.monthly_labels, series: d.stacked.map(s => s.m), starts: d.monthly_starts || [] },
+            w: { labels: d.weekly_labels, series: d.stacked.map(s => s.w), starts: d.weekly_starts || [] },
+            d: { labels: d.dates.map(dateLabel), series: d.stacked.map(s => pastOnly(s.d)), starts: d.dates },
+        };
+        Object.values(periods).forEach(p => {
+            p.totals = p.labels.map((_, i) => {
+                const known = p.series.map(s => s[i]).filter(v => v !== null && v !== undefined);
+                return known.length ? known.reduce((a, b) => a + b, 0) : null;
+            });
+            // 100%: each segment becomes its share of the column.
+            if (pct) p.series = p.series.map(s => s.map((v, i) =>
+                v === null || v === undefined || !p.totals[i] ? null : v / p.totals[i] * 100));
+        });
+        const targets = stackedTargets(row, d, periods);
+        const ranges = pct
+            ? ['m', 'w', 'd'].map(() => ({ yMin: 0, yMax: 100, unit: 20 }))
+            : calcRowRanges(['m', 'w', 'd'].map(k => ({ series: [periods[k].totals], min: (row.y_min || {})[k], max: (row.y_max || {})[k] })),
+                row.agg, sharedAxisValue(row.y_min), sharedAxisValue(row.y_max));
+        const existing = rowCharts[row.id] || [];
+        const opts = { fmt, tickFmt, pct, colours: seriesColours(row), names: row.series.map(seriesLabel), segLabels: !!row.seg_labels };
+        rowCharts[row.id] = ['m', 'w', 'd'].map((k, i) => buildStackedChart(`cv-${row.id}-${k}`, periods[k], targets[k], existing[i],
+            { ...opts, range: ranges[i], day: k === 'd', notes: { rowId: row.id, kind: k, starts: periods[k].starts } }));
+        updateDayTitles();
+        DayWindow.updateScrollers();
+    }
+
+    // Dark text on light segments, white on dark ones (text never takes the
+    // series colour itself).
+    function textOn(hex) {
+        const n = parseInt(String(hex).slice(1), 16);
+        const lum = 0.299 * ((n >> 16) & 255) + 0.587 * ((n >> 8) & 255) + 0.114 * (n & 255);
+        return lum > 150 ? '#0f172a' : '#ffffff';
+    }
+
+    // Labels on a stacked chart: each column's total above it (not on a 100%
+    // chart), and, when the chart asks for it, each segment's value inside it
+    // where the segment is tall enough to hold the text. Series hidden by
+    // clicking the legend are left out of the total.
+    function makeStackLabelsPlugin(opts) {
+        return {
+            id: 'stackLabels',
+            afterDatasetsDraw(chart) {
+                const { ctx } = chart;
+                const bars = chart.data.datasets
+                    .map((ds, i) => ({ ds, meta: chart.getDatasetMeta(i), visible: chart.isDatasetVisible(i) }))
+                    .filter(b => b.ds.type === 'bar' && b.visible);
+                if (!bars.length) return;
+                ctx.save();
+                ctx.textAlign = 'center';
+                for (let i = 0; i < chart.data.labels.length; i++) {
+                    if (opts.segLabels) {
+                        ctx.font = '600 9px DM Sans, system-ui, sans-serif';
+                        ctx.textBaseline = 'middle';
+                        bars.forEach(b => {
+                            const v = b.ds.data[i], el = b.meta.data[i];
+                            if (v === null || v === undefined || !el || Math.abs(el.base - el.y) < 12) return;
+                            ctx.fillStyle = textOn(b.ds.backgroundColor);
+                            ctx.fillText(opts.fmt(v), el.x, (el.y + el.base) / 2);
+                        });
+                    }
+                    if (opts.pct) continue;
+                    const known = bars.filter(b => b.ds.data[i] !== null && b.ds.data[i] !== undefined && b.meta.data[i]);
+                    if (!known.length) continue;
+                    const total = known.reduce((a, b) => a + b.ds.data[i], 0);
+                    const top = Math.min(...known.map(b => b.meta.data[i].y));
+                    ctx.font = 'bold 10px DM Sans, system-ui, sans-serif';
+                    ctx.textBaseline = 'bottom';
+                    ctx.fillStyle = '#0f172a';
+                    ctx.fillText(opts.fmt(total), known[0].meta.data[i].x, top - 3);
+                }
+                ctx.restore();
+            },
+        };
+    }
+
+    // p = { labels, series: [[values per point], ...] }. Series are stacked
+    // bottom-up in list order; a white 2px line separates the segments.
+    function buildStackedChart(canvasId, p, target, existingChart, opts) {
+        const { yMin, yMax, unit } = opts.range;
+        const ctx = document.getElementById(canvasId).getContext('2d');
+        if (existingChart) existingChart.destroy();
+        const datasets = p.series.map((data, i) => ({
+            type: 'bar',
+            label: opts.names[i],
+            data,
+            backgroundColor: opts.colours[i],
+            borderColor: '#ffffff',
+            borderWidth: { top: 2, right: 0, bottom: 0, left: 0 },
+            borderSkipped: false,
+            stack: 'total',
+            order: 2,
+            categoryPercentage: 0.85,
+            barPercentage: 0.85,
+        }));
+        if (hasValues(target)) {
+            datasets.push({
+                type: 'line', label: 'Target', data: target, stack: 'target', order: 1,
+                borderColor: '#e53e3e', borderWidth: 1.5, pointRadius: 0, fill: false, tension: 0, spanGaps: true,
+            });
+        }
+        const build = (labels, sets) => new Chart(ctx, {
+            type: 'bar',
+            data: { labels, datasets: sets },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                interaction: { mode: 'index', intersect: false },
+                onClick: (evt, elements, chart) => {
+                    if (opts.notes && elements.length) openPointModal(opts.notes, chart, elements[0].index);
+                },
+                // Room for the totals above the tallest column.
+                layout: { padding: { top: opts.pct ? 4 : 14 } },
+                plugins: {
+                    legend: {
+                        display: true, position: 'top', align: 'start',
+                        labels: { boxWidth: 10, boxHeight: 10, padding: 8, font: { size: 10 } },
+                    },
+                    tooltip: {
+                        callbacks: {
+                            label: c => {
+                                const v = c.parsed.y;
+                                return v === null || isNaN(v) ? null : `${c.dataset.label}: ${opts.fmt(v)}`;
+                            },
+                            footer: items => {
+                                if (opts.pct) return '';
+                                const segs = items.filter(i => i.dataset.type === 'bar' && i.parsed.y !== null && !isNaN(i.parsed.y));
+                                return segs.length ? 'Total: ' + opts.fmt(segs.reduce((a, i) => a + i.parsed.y, 0)) : '';
+                            },
+                        },
+                    },
+                },
+                scales: {
+                    x: {
+                        stacked: true,
+                        border: { display: false },
+                        grid: { display: false },
+                        ticks: { font: { size: 10 }, maxRotation: 45, minRotation: 30 },
+                    },
+                    y: {
+                        stacked: true,
+                        min: yMin,
+                        max: yMax,
+                        border: { display: false },
+                        grid: { color: 'rgba(0,0,0,0.06)' },
+                        ticks: { font: { size: 10 }, stepSize: unit, callback: v => opts.tickFmt(v) },
+                    },
+                },
+            },
+            plugins: [PLOT_FRAME_PLUGIN, makeStackLabelsPlugin(opts), ...(opts.notes ? [makeNotesPlugin(opts.notes)] : [])],
+        });
+        return opts.day ? makeDayChart(p.labels, datasets, target, build) : build(p.labels, datasets);
+    }
+
     // Day chart heading, e.g. "Orders - daily". No date range: the axis
     // labels already show which days are on screen.
     function updateDayTitles() {
@@ -1253,6 +2176,8 @@
         document.getElementById('chartModalError').classList.remove('show');
         document.getElementById('removeChartBtn').style.display = row ? '' : 'none';
         document.getElementById('importFile').value = '';
+        // Cleared first so the last chart's weighting is not carried over.
+        document.getElementById('weightSelect').innerHTML = '';
 
         // Metric list. Can be changed on an existing chart (e.g. a copy pointed
         // at another metric); the chart then uses the new metric's targets.
@@ -1312,13 +2237,211 @@
             fillPositionOptions();
             prepareTargetSection(rowSource(row), row.metric, rowTargetMode(row));
             updateRatioUi();
+            updateWeightUi(row.weight_by || '');
         } else {
             document.getElementById('subtitleInput').value = '';
             fillAxisInputs(Y_MIN_INPUTS, 'yMinAll', null);
             fillAxisInputs(Y_MAX_INPUTS, 'yMaxAll', null);
             onMetricChange();
         }
+        openVehSetup(row);
+        openChartTypeSetup(row);
         document.getElementById('chartModal').classList.add('open');
+    }
+
+    // ── View Vehicles setup in the Edit Chart popup ──
+    // vehDraft is the chart's setting as edited: { date_column ('' = off), filters }.
+    // The table's columns load after the popup opens; until then the saved
+    // values still show, so saving early keeps them.
+    let vehDraft = { date_column: '', filters: [] };
+    let vehColumns = null;   // [{ column, type }] of the vehicle table, or null while loading
+    let vehTable = '';
+
+    // Operators offered for each kind of column, as [operator, label]. The
+    // kind comes from the column's Snowflake type, so a true/false column only
+    // offers is true / is false and a filter cannot be set up wrongly.
+    const EMPTY_OPS = [['is empty', 'is empty'], ['is not empty', 'is not empty']];
+    const VEH_FILTER_OPS = {
+        bool: [['is true', 'is true'], ['is false', 'is false'], ...EMPTY_OPS],
+        num: [['=', 'equals'], ['!=', 'does not equal'], ['>', 'greater than'], ['>=', 'at least'],
+              ['<', 'less than'], ['<=', 'at most'], ['in', 'is one of'], ['not in', 'is not one of'], ...EMPTY_OPS],
+        date: [['=', 'on'], ['!=', 'not on'], ['<', 'before'], ['<=', 'on or before'],
+               ['>', 'after'], ['>=', 'on or after'], ...EMPTY_OPS],
+        text: [['=', 'equals'], ['!=', 'does not equal'], ['contains', 'contains'],
+               ['in', 'is one of'], ['not in', 'is not one of'], ...EMPTY_OPS],
+    };
+    const VEH_NO_VALUE_OPS = ['is true', 'is false', 'is empty', 'is not empty'];
+    const VEH_DATE_TYPES = ['DATE', 'TIMESTAMP_NTZ', 'TIMESTAMP_LTZ', 'TIMESTAMP_TZ', 'TIMESTAMP'];
+
+    // 'bool' | 'num' | 'date' | 'text', or null when the column's type is not
+    // known (columns still loading, or the column has gone from the table).
+    function vehColumnKind(column) {
+        const col = (vehColumns || []).find(c => c.column === column);
+        if (!col) return null;
+        if (col.type === 'BOOLEAN') return 'bool';
+        if (VEHICLE_NUMBER_TYPES.includes(col.type)) return 'num';
+        if (VEH_DATE_TYPES.includes(col.type)) return 'date';
+        return 'text';
+    }
+
+    // Unknown type: every operator, so a saved filter still shows as it is.
+    function vehOpsFor(kind) {
+        if (kind) return VEH_FILTER_OPS[kind];
+        const seen = new Set();
+        return Object.values(VEH_FILTER_OPS).flat().filter(([op]) => !seen.has(op) && seen.add(op));
+    }
+
+    function openVehSetup(row) {
+        vehDraft = row && row.vehicles
+            ? JSON.parse(JSON.stringify({ filters: [], ...row.vehicles }))
+            : { date_column: '', filters: [] };
+        vehColumns = null;
+        // Other charts with View Vehicles set up, to copy their date column and filters.
+        const sources = layout.rows.filter(r => r.vehicles && (!row || r.id !== row.id));
+        document.getElementById('vehCopyField').style.display = sources.length ? '' : 'none';
+        document.getElementById('vehCopySelect').innerHTML = '<option value="">(choose a chart)</option>'
+            + sources.map(r => {
+                const count = (r.vehicles.filters || []).length;
+                return `<option value="${escHtml(r.id)}">${escHtml(rowTitle(r))} (${count} filter${count === 1 ? '' : 's'})</option>`;
+            }).join('');
+        document.getElementById('vehTableHint').textContent = 'Loading the vehicle table columns...';
+        renderVehSetup();
+        fetchVehicleColumns().then(resp => {
+            if (!chartModalState) return;
+            vehColumns = resp.columns;
+            vehTable = resp.table;
+            document.getElementById('vehTableHint').textContent =
+                `Matched to the clicked day, week or month. From ${vehTable}; the table and the columns `
+                + 'the list shows are set in Settings.';
+            renderVehSetup();
+        }).catch(err => {
+            document.getElementById('vehTableHint').textContent = 'Could not read the vehicle table: ' + err.message;
+        });
+    }
+
+    // Options for a column select, keeping a saved column that is not in the
+    // list (still loading, or gone from the table) so it is not lost.
+    function vehColumnOptions(columns, selected) {
+        const names = columns.map(c => c.column);
+        let html = columns.map(c =>
+            `<option value="${escHtml(c.column)}">${escHtml(c.column)}</option>`).join('');
+        if (selected && !names.includes(selected)) {
+            const note = vehColumns ? ' (not in the table)' : '';
+            html = `<option value="${escHtml(selected)}">${escHtml(selected)}${note}</option>` + html;
+        }
+        return html;
+    }
+
+    function renderVehSetup() {
+        const all = vehColumns || [];
+        const dateSelect = document.getElementById('vehDateSelect');
+        dateSelect.innerHTML = '<option value="">(off - no View Vehicles button)</option>'
+            + vehColumnOptions(all.filter(c => VEH_DATE_TYPES.includes(c.type)), vehDraft.date_column);
+        dateSelect.value = vehDraft.date_column || '';
+        document.getElementById('vehFiltersField').style.display = vehDraft.date_column ? '' : 'none';
+
+        vehDraft.filters.forEach(fitFilterToKind);
+        document.getElementById('vehFilterList').innerHTML = vehDraft.filters.map((f, i) => {
+            const kind = vehColumnKind(f.column);
+            const noValue = VEH_NO_VALUE_OPS.includes(f.op);
+            const ops = vehOpsFor(kind).map(([op, label]) =>
+                `<option value="${escHtml(op)}" ${op === f.op ? 'selected' : ''}>${escHtml(label)}</option>`).join('');
+            // A list ("is one of") is typed as text whatever the column holds.
+            const list = f.op === 'in' || f.op === 'not in';
+            const inputType = !list && kind === 'num' ? 'number' : !list && kind === 'date' ? 'date' : 'text';
+            const placeholder = noValue ? '(no value)' : list ? 'a, b, c' : '';
+            return `
+                <div class="veh-filter">
+                    <select onchange="onVehFilterColumn(${i}, this.value)">
+                        <option value="">(choose a column)</option>${vehColumnOptions(all, f.column)}
+                    </select>
+                    <select onchange="vehDraft.filters[${i}].op = this.value; renderVehSetup()">${ops}</select>
+                    <input type="${inputType}" ${inputType === 'number' ? 'step="any"' : ''} maxlength="500"
+                           value="${escHtml(noValue ? '' : f.value || '')}" placeholder="${placeholder}"
+                           ${noValue ? 'disabled' : ''}
+                           oninput="vehDraft.filters[${i}].value = this.value">
+                    <button type="button" class="btn btn-remove-chart" title="Remove filter"
+                            onclick="removeVehFilter(${i})"><i class="fas fa-trash"></i></button>
+                </div>`;
+        }).join('');
+        // Selected values set after the HTML so a saved column shows chosen.
+        document.querySelectorAll('#vehFilterList .veh-filter').forEach((el, i) => {
+            el.querySelector('select').value = vehDraft.filters[i].column || '';
+        });
+    }
+
+    // A filter saved with an operator its column's kind does not offer, e.g.
+    // INTEREST_FREE "equals FALSE" from before operators followed the type:
+    // a true/false comparison becomes is true / is false, anything else falls
+    // back to the kind's first operator. Saved when the chart is next saved.
+    function fitFilterToKind(f) {
+        const kind = vehColumnKind(f.column);
+        if (!kind) return;
+        const ops = VEH_FILTER_OPS[kind].map(([op]) => op);
+        if (ops.includes(f.op)) return;
+        const flag = { true: true, yes: true, 1: true, false: false, no: false, 0: false }[String(f.value || '').trim().toLowerCase()];
+        if (kind === 'bool' && (f.op === '=' || f.op === '!=') && flag !== undefined) {
+            f.op = (flag === (f.op === '=')) ? 'is true' : 'is false';
+        } else {
+            f.op = ops[0];
+        }
+        f.value = '';
+    }
+
+    // A new column keeps the operator if its kind offers it; otherwise the
+    // filter starts again on that kind's first operator with no value.
+    function onVehFilterColumn(i, column) {
+        const f = vehDraft.filters[i];
+        f.column = column;
+        const ops = vehOpsFor(vehColumnKind(column)).map(([op]) => op);
+        if (!ops.includes(f.op)) {
+            f.op = ops[0];
+            f.value = '';
+        }
+        renderVehSetup();
+    }
+
+    // Replaces this chart's View Vehicles date column and filters with another
+    // chart's. Only the popup changes; Save stores it as usual.
+    function copyVehSetup(rowId) {
+        const select = document.getElementById('vehCopySelect');
+        const source = rowId ? findRow(rowId) : null;
+        select.value = '';
+        if (!source || !source.vehicles) return;
+        if ((vehDraft.date_column || vehDraft.filters.length)
+            && !confirm(`Replace this chart's View Vehicles date column and filters with those from ${rowTitle(source)}?`)) return;
+        vehDraft = JSON.parse(JSON.stringify({ filters: [], ...source.vehicles }));
+        renderVehSetup();
+    }
+
+    function onVehDateChange() {
+        vehDraft.date_column = document.getElementById('vehDateSelect').value;
+        renderVehSetup();
+    }
+
+    function addVehFilter() {
+        vehDraft.filters.push({ column: '', op: '=', value: '' });
+        renderVehSetup();
+    }
+
+    function removeVehFilter(i) {
+        vehDraft.filters.splice(i, 1);
+        renderVehSetup();
+    }
+
+    // The chart's vehicles setting to save, or null when View Vehicles is off.
+    function readVehSetup() {
+        if (!vehDraft.date_column) return null;
+        const filters = vehDraft.filters.map(f => ({
+            column: f.column,
+            op: f.op,
+            value: VEH_NO_VALUE_OPS.includes(f.op) ? '' : String(f.value || '').trim(),
+        }));
+        filters.forEach(f => {
+            if (!f.column) throw new Error('Choose a column for each View Vehicles filter, or remove it.');
+            if (!VEH_NO_VALUE_OPS.includes(f.op) && !f.value) throw new Error(`Enter a value for the ${f.column} filter.`);
+        });
+        return { date_column: vehDraft.date_column, filters };
     }
 
     // Adding: a new metric resets the defaults to suit it. Editing: the
@@ -1402,6 +2525,7 @@
         if (divide && !chartModalState.wasRatio) onRatioAsChange();
         chartModalState.wasRatio = !!divide;
         updateRatioUi();
+        updateWeightUi();
         updateYMaxPlaceholders();
     }
 
@@ -1461,7 +2585,8 @@
             if (resp.status !== 'ok') throw new Error(resp.message || 'load failed');
             chartModalState.stored = resp;
             // A ratio chart's box holds its own target, not the metric's.
-            if (!selectedDivide() && resp.fixed !== null && resp.fixed !== undefined) {
+            // A stacked chart's box holds its own target too.
+            if (!selectedDivide() && chartTypeValue() !== 'stacked' && resp.fixed !== null && resp.fixed !== undefined) {
                 document.getElementById('fixedTargetInput').value = resp.fixed;
             }
             showImportSummary(resp.imported);
@@ -1608,7 +2733,31 @@
         const avg = radioValue('aggRadio', 'sum') === 'avg';
         document.getElementById('yMinShared').style.display = avg ? '' : 'none';
         document.getElementById('yMinPerPeriod').style.display = avg ? 'none' : '';
+        updateWeightUi();
         updateYMaxPlaceholders();
+    }
+
+    // "Weight weeks and months by": only for a plain (not divided) Average
+    // chart on daily_summary. The list is every daily_summary metric; the
+    // current choice is kept in the list even if its column has gone.
+    function updateWeightUi(selected) {
+        const select = document.getElementById('weightSelect');
+        const current = selected !== undefined ? selected : select.value;
+        const m = selectedMetric() || {};
+        const show = radioValue('aggRadio', 'sum') === 'avg' && m.source === 'snowflake' && !selectedDivide()
+            && chartTypeValue() === 'line';
+        document.getElementById('weightField').style.display = show ? '' : 'none';
+        const columns = metricsCatalogue.filter(c => c.source === 'snowflake').map(c => c.column);
+        if (current && !columns.includes(current)) columns.unshift(current);
+        select.innerHTML = '<option value="">(none - plain average of the daily figures)</option>'
+            + columns.map(c => `<option value="${escHtml(c)}">${escHtml(c)}</option>`).join('');
+        select.value = current || '';
+    }
+
+    // The chart's weight_by to save, or '' for none.
+    function readWeightBy() {
+        return document.getElementById('weightField').style.display === 'none' ? ''
+            : document.getElementById('weightSelect').value;
     }
 
     function fillAxisInputs(inputs, sharedId, byPeriod) {
@@ -1647,7 +2796,7 @@
     function updateYMaxPlaceholders() {
         const ids = { ...Y_MAX_INPUTS, all: 'yMaxAll' };
         Object.values(ids).forEach(id => { document.getElementById(id).placeholder = 'Auto'; });
-        if (!chartModalState || !chartModalState.rowId) return;
+        if (!chartModalState || !chartModalState.rowId || chartTypeValue() === 'stacked') return;
         const row = findRow(chartModalState.rowId);
         const d = row && customRowData[row.id];
         const m = selectedMetric();
@@ -1664,8 +2813,209 @@
         else ['m', 'w', 'd'].forEach((k, i) => show(Y_MAX_INPUTS[k], ranges[i]));
     }
 
+    // ── Chart type in the Edit Chart popup ───────────────────────────────────
+    // Line charts use the metric / divide-by / weight fields; stacked charts
+    // use the series list, colour theme and the 100% / segment label options.
+    // Both share the title, section, Sum/Average, format, axis, target (fixed
+    // only on a stacked chart, against the column total) and View Vehicles.
+    let seriesDraft = [];   // [{ source, metric, label, colour (null = theme) }]
+
+    function chartTypeValue() {
+        return document.getElementById('chartTypeSelect').value;
+    }
+
+    function openChartTypeSetup(row) {
+        const stacked = !!row && isStacked(row);
+        document.getElementById('chartTypeSelect').value = stacked ? 'stacked' : 'line';
+        seriesDraft = stacked ? JSON.parse(JSON.stringify(row.series || [])) : [];
+        document.getElementById('themeSelect').innerHTML = themes.map(t =>
+            `<option value="${escHtml(t.id)}">${escHtml(t.name)}</option>`).join('');
+        document.getElementById('themeSelect').value = stacked && row.theme ? row.theme : (themes[0] ? themes[0].id : '');
+        document.getElementById('pctInput').checked = stacked && !!row.pct;
+        document.getElementById('segLabelsInput').checked = stacked && !!row.seg_labels;
+        if (stacked) {
+            const t = row.stack_target;
+            document.getElementById('fixedTargetInput').value = t === null || t === undefined ? '' : t;
+            setRadio('targetMode', row.target_mode === 'fixed' ? 'fixed' : 'none');
+        }
+        applyChartTypeUi();
+    }
+
+    // Switching type keeps everything typed; a new stacked chart starts with
+    // the metric that was chosen for the line chart as its first series.
+    function onChartTypeChange() {
+        if (chartTypeValue() === 'stacked' && !seriesDraft.length) {
+            const m = selectedMetric();
+            if (m) seriesDraft.push({ source: m.source, metric: m.column, label: '', colour: null });
+            if (!['none', 'fixed'].includes(radioValue('targetMode', 'none'))) setRadio('targetMode', 'none');
+        }
+        applyChartTypeUi();
+    }
+
+    function applyChartTypeUi() {
+        const stacked = chartTypeValue() === 'stacked';
+        document.querySelectorAll('#chartModal .stacked-only').forEach(el => { el.style.display = stacked ? '' : 'none'; });
+        document.querySelectorAll('#chartModal .line-only').forEach(el => { el.style.display = stacked ? 'none' : ''; });
+        if (stacked) {
+            const hide = id => { document.getElementById(id).style.display = 'none'; };
+            ['ratioAsField', 'weightField', 'targetModeImport', 'targetModeSnowflake', 'importField', 'ratioTargetHint'].forEach(hide);
+            document.getElementById('fixedTargetHint').style.display = '';
+            document.getElementById('fixedTargetLabel').textContent = 'Fixed target (per day, against the column total)';
+            document.getElementById('targetSharedNote').textContent = 'Belongs to this chart only.';
+            if (!['none', 'fixed'].includes(radioValue('targetMode', 'none'))) setRadio('targetMode', 'none');
+            renderSeriesList();
+        } else {
+            // Back to a line chart: the line chart's own rules for these fields.
+            updateRatioUi();
+            updateWeightUi();
+            const m = selectedMetric();
+            if (m && chartModalState && chartModalState.metricKey) {
+                const cut = chartModalState.metricKey.indexOf('|');
+                document.getElementById('targetSharedNote').textContent =
+                    `Fixed and imported figures belong to ${SOURCE_LABELS[chartModalState.metricKey.slice(0, cut)]}: `
+                    + `${chartModalState.metricKey.slice(cut + 1)}, so every chart on it shares them.`;
+            }
+        }
+        updateYMaxPlaceholders();
+    }
+
+    // Options for a series' metric list: every metric, grouped by source,
+    // keeping a saved one that has gone from the list.
+    function seriesMetricOptions(s) {
+        const key = s.metric ? metricKey(s.source || 'snowflake', s.metric) : '';
+        const group = source => {
+            const items = metricsCatalogue.filter(m => m.source === source);
+            if (!items.length) return '';
+            return `<optgroup label="${source === 'snowflake' ? 'Snowflake - daily_summary' : 'SharePoint'}">`
+                + items.map(m => {
+                    const k = metricKey(m.source, m.column);
+                    return `<option value="${escHtml(k)}" ${k === key ? 'selected' : ''}>${escHtml(m.column)}</option>`;
+                }).join('') + '</optgroup>';
+        };
+        const missing = key && !metricsByKey[key] ? `<option value="${escHtml(key)}" selected>${escHtml(s.metric)}</option>` : '';
+        return '<option value="">(choose a metric)</option>' + missing + group('snowflake') + group('sharepoint');
+    }
+
+    function renderSeriesList() {
+        const theme = themeById(document.getElementById('themeSelect').value);
+        const last = seriesDraft.length - 1;
+        document.getElementById('seriesList').innerHTML = seriesDraft.map((s, i) => {
+            const themeColour = theme.colours[i] || SERIES_SPARE_COLOUR;
+            const colour = s.colour || themeColour;
+            return `
+                <div class="series-row">
+                    <select onchange="onSeriesMetric(${i}, this.value)">${seriesMetricOptions(s)}</select>
+                    <input type="text" maxlength="60" value="${escHtml(s.label || '')}" placeholder="${escHtml(s.metric || 'Legend name')}"
+                           title="Name in the legend" oninput="seriesDraft[${i}].label = this.value">
+                    <input type="color" value="${escHtml(colour)}" class="${s.colour ? 'series-own' : ''}"
+                           title="${s.colour ? 'Own colour - Reset goes back to the theme' : 'Theme colour - pick one to override it'}"
+                           onchange="seriesDraft[${i}].colour = this.value; renderSeriesList()">
+                    <button type="button" class="btn btn-edit" title="Back to the theme colour" onclick="seriesDraft[${i}].colour = null; renderSeriesList()"
+                            ${s.colour ? '' : 'disabled'}><i class="fas fa-undo"></i></button>
+                    <button type="button" class="btn btn-edit" title="Move down the stack" onclick="moveSeries(${i}, -1)"
+                            ${i === 0 ? 'disabled' : ''}><i class="fas fa-arrow-up"></i></button>
+                    <button type="button" class="btn btn-edit" title="Move up the stack" onclick="moveSeries(${i}, 1)"
+                            ${i === last ? 'disabled' : ''}><i class="fas fa-arrow-down"></i></button>
+                    <button type="button" class="btn btn-remove-chart" title="Remove series" onclick="seriesDraft.splice(${i}, 1); renderSeriesList()">
+                        <i class="fas fa-trash"></i></button>
+                </div>`;
+        }).join('') || '<div class="point-status" style="padding:2px 0 6px;">No series yet.</div>';
+    }
+
+    function onSeriesMetric(i, key) {
+        const cut = key.indexOf('|');
+        seriesDraft[i].source = cut > 0 ? key.slice(0, cut) : 'snowflake';
+        seriesDraft[i].metric = cut > 0 ? key.slice(cut + 1) : '';
+        renderSeriesList();
+    }
+
+    function addSeries() {
+        seriesDraft.push({ source: 'snowflake', metric: '', label: '', colour: null });
+        renderSeriesList();
+    }
+
+    function moveSeries(i, step) {
+        const j = i + step;
+        if (j < 0 || j >= seriesDraft.length) return;
+        [seriesDraft[i], seriesDraft[j]] = [seriesDraft[j], seriesDraft[i]];
+        renderSeriesList();
+    }
+
+    async function saveStackedChart() {
+        const existing = chartModalState.rowId ? findRow(chartModalState.rowId) : null;
+        document.getElementById('chartModalError').classList.remove('show');
+        const series = seriesDraft.filter(s => s.metric).map(s => ({
+            source: s.source || 'snowflake', metric: s.metric, label: String(s.label || '').trim(), colour: s.colour || null,
+        }));
+        if (!series.length) { showChartError('Add at least one series.'); return; }
+        if (series.length !== seriesDraft.length) { showChartError('Choose a metric for each series, or remove it.'); return; }
+        let yMin, yMax;
+        try {
+            yMin = readAxis(Y_MIN_INPUTS, 'yMinAll');
+            yMax = readAxis(Y_MAX_INPUTS, 'yMaxAll');
+        } catch (err) { showChartError(err.message); return; }
+        if (['m', 'w', 'd'].some(k => yMax[k] !== null && yMax[k] <= (yMin[k] || 0))) {
+            showChartError('Each axis maximum must be above its minimum (0 when the minimum is blank).');
+            return;
+        }
+        const mode = radioValue('targetMode', 'none') === 'fixed' ? 'fixed' : 'none';
+        const raw = document.getElementById('fixedTargetInput').value.trim();
+        const target = raw === '' ? null : Number(raw);
+        if (target !== null && (isNaN(target) || target < 0)) { showChartError('The fixed target must be a number of 0 or more.'); return; }
+        if (mode === 'fixed' && target === null) { showChartError('Enter a fixed figure, or choose No target.'); return; }
+        let vehicles;
+        try { vehicles = readVehSetup(); } catch (err) { showChartError(err.message); return; }
+
+        const title = document.getElementById('titleInput').value.trim()
+            || series.map(seriesLabel).join(' / ').slice(0, 100);
+        const updated = {
+            ...(existing || { id: 'c' + Date.now().toString(36), type: 'custom' }),
+            chart_type: 'stacked',
+            // The first series stands in as the chart's metric for anything
+            // that reads one (notes, titles).
+            source: series[0].source,
+            metric: series[0].metric,
+            series,
+            theme: document.getElementById('themeSelect').value || null,
+            pct: document.getElementById('pctInput').checked,
+            seg_labels: document.getElementById('segLabelsInput').checked,
+            title,
+            subtitle: document.getElementById('subtitleInput').value.trim(),
+            agg: radioValue('aggRadio', 'sum'),
+            include_current: document.getElementById('includeCurrentInput').checked,
+            fmt: document.getElementById('fmtSelect').value,
+            decimals: parseInt(document.getElementById('decimalsSelect').value, 10),
+            invert: document.getElementById('invertSelect').value === '1',
+            target_mode: mode,
+            stack_target: mode === 'fixed' ? target : null,
+            y_min: yMin,
+            y_max: yMax,
+        };
+        ['divide_by', 'ratio_as', 'ratio_target', 'weight_by', 'vehicles'].forEach(k => delete updated[k]);
+        if (vehicles) updated.vehicles = vehicles;
+        const rows = placeRow(layout.rows, updated,
+            document.getElementById('sectionSelect').value,
+            parseInt(document.getElementById('positionSelect').value, 10));
+
+        const button = document.getElementById('chartSaveBtn');
+        button.disabled = true;
+        try {
+            await saveLayout(rows);
+            layout.rows = rows;
+            const row = findRow(updated.id);
+            closeChartModal();
+            if (existing) rebuildCustomRow(row, true);
+            else { renderLayout(); loadCustomRow(row); }
+        } catch (err) {
+            showChartError('Save failed: ' + err.message);
+        } finally {
+            button.disabled = false;
+        }
+    }
+
     async function saveChartModal() {
         if (!chartModalState) return;
+        if (chartTypeValue() === 'stacked') return saveStackedChart();
         const existing = chartModalState.rowId ? findRow(chartModalState.rowId) : null;
         const m = selectedMetric();
         const source = m ? m.source : (existing && rowSource(existing));
@@ -1690,6 +3040,8 @@
         if (mode === 'fixed' && fixed === null) { showChartError('Enter a fixed figure, or choose another target option.'); return; }
         const divide = selectedDivide();
         if (!divide && mode === 'import' && !stored.imported) { showChartError('Import a CSV first, or choose another target option.'); return; }
+        let vehicles;
+        try { vehicles = readVehSetup(); } catch (err) { showChartError(err.message); return; }
 
         const updated = {
             ...(existing || { id: 'c' + Date.now().toString(36), type: 'custom' }),
@@ -1716,6 +3068,12 @@
             updated.ratio_as = document.getElementById('ratioAsSelect').value;
             updated.ratio_target = fixed;
         }
+        delete updated.vehicles;
+        if (vehicles) updated.vehicles = vehicles;
+        ['chart_type', 'series', 'theme', 'pct', 'seg_labels', 'stack_target'].forEach(k => delete updated[k]);
+        delete updated.weight_by;
+        const weightBy = readWeightBy();
+        if (weightBy) updated.weight_by = weightBy;
         const rows = placeRow(layout.rows, updated,
             document.getElementById('sectionSelect').value,
             parseInt(document.getElementById('positionSelect').value, 10));
@@ -1742,7 +3100,7 @@
             const ratioKey = r => JSON.stringify([r.divide_by || null, r.ratio_as || null, r.ratio_target ?? null]);
             const needsData = !existing || existing.metric !== row.metric || rowSource(existing) !== row.source
                 || existing.agg !== row.agg || !!existing.include_current !== !!row.include_current || rowTargetMode(existing) !== row.target_mode
-                || ratioKey(existing) !== ratioKey(row);
+                || ratioKey(existing) !== ratioKey(row) || (existing.weight_by || '') !== (row.weight_by || '');
             if (existing) rebuildCustomRow(row, needsData);
             else {
                 renderLayout();
@@ -1808,7 +3166,16 @@
     const SETTING_INPUTS = {
         months: 'setMonths', weeks: 'setWeeks', days_window: 'setDaysWindow',
         days_total: 'setDaysTotal', label_angle: 'setLabelAngle',
+        section_font_px: 'setSectionFont', title_font_px: 'setTitleFont',
     };
+
+    // Section heading and chart title sizes (Settings > Appearance), applied
+    // to the whole page through two CSS variables.
+    function applyAppearance() {
+        const root = document.documentElement.style;
+        if (settings.section_font_px) root.setProperty('--kpi-section-font', settings.section_font_px + 'px');
+        if (settings.title_font_px) root.setProperty('--kpi-title-font', settings.title_font_px + 'px');
+    }
 
     function openSettingsModal() {
         Object.entries(SETTING_INPUTS).forEach(([name, id]) => {
@@ -1820,10 +3187,384 @@
         const lim = name => settingLimits[name] ? `${settingLimits[name][0]}-${settingLimits[name][1]}` : '';
         document.getElementById('settingsHint').textContent =
             `Months ${lim('months')}, weeks ${lim('weeks')}, days available ${lim('days_total')}. `
-            + 'Months and weeks include the current one. Days available includes the 10 days ahead of today '
+            + 'Months and weeks include the current one, and the next one is added after it. Days available includes the 10 days ahead of today '
             + 'shown for the target line. Data label angle: 0 is flat, -40 tilts the labels up to the right.';
+        document.getElementById('appearanceHint').textContent =
+            `Section heading ${lim('section_font_px')} px (e.g. "Upper Funnel"), chart title ${lim('title_font_px')} px. `
+            + 'Applies to the KPI page for everyone.';
+        sectionDraft = SECTIONS.map(name => ({ name, from: name }));
+        renderSectionDraft();
+        loadVehColumnDraft();
+        loadThemeDraft();
+        restoreSettingsGroups();
         document.getElementById('settingsError').classList.remove('show');
         document.getElementById('settingsModal').classList.add('open');
+    }
+
+    // ── Colour themes (Settings > Appearance) ────────────────────────────────
+    // Edited as a copy; Save sends the whole list. A chart whose theme is
+    // deleted falls back to the first theme.
+    let themeDraft = [];
+
+    function loadThemeDraft() {
+        themeDraft = JSON.parse(JSON.stringify(themes));
+        renderThemeDraft();
+    }
+
+    function renderThemeDraft() {
+        const uses = id => layout.rows.filter(r => isStacked(r) && (r.theme || (themes[0] && themes[0].id)) === id).length;
+        document.getElementById('themeList').innerHTML = themeDraft.map((t, i) => {
+            const swatches = t.colours.map((c, j) => `
+                <span class="theme-swatch">
+                    <input type="color" value="${escHtml(c)}" title="Colour ${j + 1}" onchange="themeDraft[${i}].colours[${j}] = this.value">
+                    <button type="button" title="Remove this colour" onclick="removeThemeColour(${i}, ${j})">&times;</button>
+                </span>`).join('');
+            const n = uses(t.id);
+            return `
+                <div class="theme-row">
+                    <input type="text" maxlength="40" value="${escHtml(t.name)}" oninput="themeDraft[${i}].name = this.value">
+                    <div class="theme-swatches">
+                        ${swatches}
+                        <button type="button" class="btn btn-edit" title="Add a colour" onclick="addThemeColour(${i})"><i class="fas fa-plus"></i></button>
+                    </div>
+                    <span class="theme-uses">${n} chart${n === 1 ? '' : 's'}</span>
+                    <button type="button" class="btn btn-remove-chart" title="Delete theme" onclick="removeThemeDraft(${i})"
+                            ${themeDraft.length === 1 ? 'disabled' : ''}><i class="fas fa-trash"></i></button>
+                </div>`;
+        }).join('');
+    }
+
+    function addThemeDraft() {
+        themeDraft.push({ id: 't' + Date.now().toString(36), name: 'New theme', colours: ['#2a78d6', '#eb6834', '#1baf7a'] });
+        renderThemeDraft();
+    }
+
+    function removeThemeDraft(i) {
+        const t = themeDraft[i];
+        const n = layout.rows.filter(r => isStacked(r) && r.theme === t.id).length;
+        if (n && !confirm(`${n} chart${n === 1 ? ' uses' : 's use'} "${t.name}". They will use the first theme instead. Delete it?`)) return;
+        themeDraft.splice(i, 1);
+        renderThemeDraft();
+    }
+
+    function addThemeColour(i) {
+        if (themeDraft[i].colours.length >= 20) return;
+        themeDraft[i].colours.push('#9aa0a6');
+        renderThemeDraft();
+    }
+
+    function removeThemeColour(i, j) {
+        if (themeDraft[i].colours.length <= 1) return;
+        themeDraft[i].colours.splice(j, 1);
+        renderThemeDraft();
+    }
+
+    async function saveThemeDraft() {
+        const payload = themeDraft.map(t => ({ id: t.id, name: String(t.name || '').trim(), colours: t.colours }));
+        if (JSON.stringify(payload) === JSON.stringify(themes.map(t => ({ id: t.id, name: t.name, colours: t.colours })))) return;
+        const resp = await fetch(BASE_URL + '/kpi/themes', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ themes: payload }),
+        }).then(r => r.json());
+        if (resp.status !== 'ok') throw new Error(resp.message || 'Colour themes save failed');
+        themes = resp.themes;
+        themeDraft = JSON.parse(JSON.stringify(themes));
+        // Stacked charts pick up the new colours without new data.
+        layout.rows.filter(isStacked).forEach(r => { if (customRowData[r.id]) renderCustomRow(r, customRowData[r.id]); });
+    }
+
+    // Settings tabs. The popup reopens on the tab last used this visit.
+    let settingsTab = 'setGroupPeriods';
+
+    function showSettingsTab(id) {
+        settingsTab = id;
+        document.querySelectorAll('#settingsModal .settings-pane').forEach(p => p.classList.toggle('active', p.id === id));
+        document.querySelectorAll('#settingsModal .settings-tabs button').forEach(b => b.classList.toggle('active', b.dataset.tab === id));
+    }
+
+    function restoreSettingsGroups() {
+        showSettingsTab(settingsTab);
+    }
+
+    // ── View Vehicles columns (edited in the Settings popup) ─────────────────
+    // vehViewDraft = { table, shown: [{ column, label, format, decimals }],
+    // live: [{ column, type }], saved: the setting as loaded, to tell whether
+    // anything changed }. null while loading or when the columns could not be
+    // read; Save then leaves the stored setting alone.
+    let vehViewDraft = null;
+
+    function vehViewPayload(draft) {
+        return { table: draft.table, columns: draft.shown.map(c => ({
+            column: c.column, label: c.label.trim(), format: c.format, decimals: c.decimals,
+            // A column switched away from number or % drops its total.
+            summary: VEH_NUMBER_FORMATS.includes(c.format) ? (c.summary || 'none') : 'none',
+            blank_grey: !!c.blank_grey })),
+            grey_rules: (draft.grey_rules || []).map(r => ({
+                column: r.column, op: r.op,
+                value: VEH_NO_VALUE_OPS.includes(r.op) ? '' : String(r.value || '').trim() })) };
+    }
+
+    // A saved column, with a format and decimals filled in where it has none
+    // (saved before formats existed, or just added).
+    function vehColumnSetting(c, type) {
+        const format = c.format || defaultVehFormat(c.column, type);
+        const decimals = Number.isInteger(c.decimals) ? c.decimals : (type === 'FLOAT' || format === 'pct' ? 2 : 0);
+        return { column: c.column, label: c.label || '', format, decimals, summary: c.summary || 'none',
+                 blank_grey: !!c.blank_grey };
+    }
+
+    async function loadVehColumnDraft(table) {
+        vehViewDraft = null;
+        document.getElementById('vehColSearch').value = '';
+        document.getElementById('vehShownList').innerHTML = '<div class="point-status" style="padding:6px;">Loading columns...</div>';
+        document.getElementById('vehHiddenList').innerHTML = '';
+        try {
+            const resp = await fetchVehicleColumns(table);
+            const types = Object.fromEntries(resp.columns.map(c => [c.column, c.type]));
+            const shownBefore = table ? [] : resp.view.columns;
+            vehViewDraft = {
+                table: resp.table,
+                shown: shownBefore.map(c => vehColumnSetting(c, types[c.column])),
+                live: resp.columns,
+                grey_rules: JSON.parse(JSON.stringify(resp.view.grey_rules || [])),
+                saved: JSON.stringify(vehViewPayload({ table: resp.view.table,
+                    shown: resp.view.columns.map(c => ({ column: c.column, label: c.label || '',
+                        format: c.format, decimals: c.decimals, summary: c.summary, blank_grey: c.blank_grey })),
+                    grey_rules: resp.view.grey_rules || [] })),
+            };
+            renderGreyRules();
+            const select = document.getElementById('vehTableSelect');
+            const tables = resp.tables.includes(resp.table) ? resp.tables : [resp.table, ...resp.tables];
+            select.innerHTML = tables.map(t => `<option value="${escHtml(t)}">${escHtml(t)}</option>`).join('');
+            select.value = resp.table;
+            renderVehColumnDraft();
+        } catch (err) {
+            document.getElementById('vehShownList').innerHTML =
+                `<div class="point-status" style="padding:6px;">Could not read the columns: ${escHtml(err.message)}</div>`;
+        }
+    }
+
+    // ── Grey-out rules (Settings) ──
+    // A row is greyed out when ANY rule matches. Each rule is a column, an
+    // operator suited to the column's type, and a value, as for chart filters.
+    function greyRuleKind(column) {
+        const col = vehViewDraft ? vehViewDraft.live.find(c => c.column === column) : null;
+        if (!col) return null;
+        if (col.type === 'BOOLEAN') return 'bool';
+        if (VEHICLE_NUMBER_TYPES.includes(col.type)) return 'num';
+        if (VEH_DATE_TYPES.includes(col.type)) return 'date';
+        return 'text';
+    }
+
+    function renderGreyRules() {
+        if (!vehViewDraft) return;
+        const columns = vehViewDraft.live.map(c => c.column);
+        document.getElementById('vehGreyList').innerHTML = vehViewDraft.grey_rules.map((r, i) => {
+            const kind = greyRuleKind(r.column);
+            const ops = vehOpsFor(kind);
+            // A saved operator the column's type does not offer moves to the first one.
+            if (kind && !ops.some(([op]) => op === r.op)) { r.op = ops[0][0]; r.value = ''; }
+            const noValue = VEH_NO_VALUE_OPS.includes(r.op);
+            const list = r.op === 'in' || r.op === 'not in';
+            const inputType = !list && kind === 'num' ? 'number' : !list && kind === 'date' ? 'date' : 'text';
+            const cols = (r.column && !columns.includes(r.column) ? [r.column] : []).concat(columns);
+            return `
+                <div class="veh-filter">
+                    <select onchange="onGreyRuleColumn(${i}, this.value)">
+                        <option value="">(choose a column)</option>
+                        ${cols.map(c => `<option value="${escHtml(c)}" ${c === r.column ? 'selected' : ''}>${escHtml(c)}${columns.includes(c) ? '' : ' (not in the table)'}</option>`).join('')}
+                    </select>
+                    <select onchange="vehViewDraft.grey_rules[${i}].op = this.value; renderGreyRules()">
+                        ${ops.map(([op, label]) => `<option value="${escHtml(op)}" ${op === r.op ? 'selected' : ''}>${escHtml(label)}</option>`).join('')}
+                    </select>
+                    <input type="${inputType}" ${inputType === 'number' ? 'step="any"' : ''} maxlength="500"
+                           value="${escHtml(noValue ? '' : r.value || '')}" placeholder="${noValue ? '(no value)' : list ? 'a, b, c' : ''}"
+                           ${noValue ? 'disabled' : ''} oninput="vehViewDraft.grey_rules[${i}].value = this.value">
+                    <button type="button" class="btn btn-remove-chart" title="Remove rule"
+                            onclick="vehViewDraft.grey_rules.splice(${i}, 1); renderGreyRules()"><i class="fas fa-trash"></i></button>
+                </div>`;
+        }).join('') || '<div class="point-status" style="padding:2px 0 6px;">No rules - no rows are greyed out.</div>';
+    }
+
+    function addGreyRule() {
+        if (!vehViewDraft) return;
+        vehViewDraft.grey_rules.push({ column: '', op: '=', value: '' });
+        renderGreyRules();
+    }
+
+    function onGreyRuleColumn(i, column) {
+        const r = vehViewDraft.grey_rules[i];
+        r.column = column;
+        const ops = vehOpsFor(greyRuleKind(column)).map(([op]) => op);
+        if (!ops.includes(r.op)) { r.op = ops[0]; r.value = ''; }
+        renderGreyRules();
+    }
+
+    // A different table has different columns, so its list starts empty.
+    function onVehTableChange() {
+        const table = document.getElementById('vehTableSelect').value;
+        if (vehViewDraft && vehViewDraft.shown.length
+            && !confirm('Switching table clears the chosen columns. Carry on?')) {
+            document.getElementById('vehTableSelect').value = vehViewDraft.table;
+            return;
+        }
+        loadVehColumnDraft(table);
+    }
+
+    function renderVehColumnDraft() {
+        if (!vehViewDraft) return;
+        const types = Object.fromEntries(vehViewDraft.live.map(c => [c.column, c.type]));
+        const shown = vehViewDraft.shown;
+        document.getElementById('vehShownHead').textContent = `Shown, in order (${shown.length})`;
+        document.getElementById('vehShownList').innerHTML = shown.length ? shown.map((c, i) => {
+            const missing = !types[c.column];
+            const formats = VEH_FORMATS.map(([value, label]) =>
+                `<option value="${value}" ${value === c.format ? 'selected' : ''}>${label}</option>`).join('');
+            const decimals = [0, 1, 2, 3, 4].map(n =>
+                `<option value="${n}" ${n === c.decimals ? 'selected' : ''}>${n} dp</option>`).join('');
+            const hasDecimals = VEH_NUMBER_FORMATS.includes(c.format);
+            // Totals and averages only make sense on number and % columns.
+            const summaries = [['none', 'No total'], ['sum', 'Total'], ['avg', 'Average']].map(([value, label]) =>
+                `<option value="${value}" ${value === (hasDecimals ? c.summary : 'none') ? 'selected' : ''}>${label}</option>`).join('');
+            return `
+                <div class="veh-col-item${missing ? ' missing' : ''}">
+                    <span class="veh-col-name" title="${escHtml(c.column)}${missing ? ' - not in the table' : ''}">${escHtml(c.column)}</span>
+                    <input type="text" maxlength="60" value="${escHtml(c.label)}" placeholder="${escHtml(c.column)}"
+                           title="Heading in the list" oninput="vehViewDraft.shown[${i}].label = this.value">
+                    <select class="veh-col-format" title="How the values show"
+                            onchange="vehViewDraft.shown[${i}].format = this.value; renderVehColumnDraft()">${formats}</select>
+                    <select class="veh-col-decimals" title="Decimal places (number and %)" ${hasDecimals ? '' : 'disabled'}
+                            onchange="vehViewDraft.shown[${i}].decimals = parseInt(this.value, 10)">${decimals}</select>
+                    <select class="veh-col-summary" title="Figure in the row at the bottom of the list" ${hasDecimals ? '' : 'disabled'}
+                            onchange="vehViewDraft.shown[${i}].summary = this.value">${summaries}</select>
+                    <label class="veh-col-blank" title="Leave this column blank on grey-out rows (e.g. cancelled deals), and out of its total or average">
+                        <input type="checkbox" ${c.blank_grey ? 'checked' : ''}
+                               onchange="vehViewDraft.shown[${i}].blank_grey = this.checked"> Blank on grey</label>
+                    <button type="button" class="btn btn-edit" title="Move up" onclick="moveVehColumn(${i}, -1)"
+                            ${i === 0 ? 'disabled' : ''}><i class="fas fa-arrow-up"></i></button>
+                    <button type="button" class="btn btn-edit" title="Move down" onclick="moveVehColumn(${i}, 1)"
+                            ${i === shown.length - 1 ? 'disabled' : ''}><i class="fas fa-arrow-down"></i></button>
+                    <button type="button" class="btn btn-remove-chart" title="Stop showing" onclick="hideVehColumn(${i})">
+                        <i class="fas fa-times"></i></button>
+                </div>`;
+        }).join('') : '<div class="point-status" style="padding:6px;">No columns chosen yet. Add them from the list on the right.</div>';
+
+        const shownNames = new Set(shown.map(c => c.column));
+        const search = document.getElementById('vehColSearch').value.trim().toUpperCase();
+        document.getElementById('vehHiddenList').innerHTML = vehViewDraft.live
+            .filter(c => !shownNames.has(c.column) && (!search || c.column.includes(search)))
+            .map(c => `
+                <div class="veh-col-item">
+                    <span class="veh-col-name" title="${escHtml(c.column)}">${escHtml(c.column)}</span>
+                    <span class="veh-col-type">${escHtml(c.type.toLowerCase())}</span>
+                    <button type="button" class="btn btn-edit" onclick="showVehColumn('${escHtml(c.column)}')">
+                        <i class="fas fa-plus"></i> Add</button>
+                </div>`).join('');
+    }
+
+    function moveVehColumn(i, step) {
+        const shown = vehViewDraft.shown, j = i + step;
+        if (j < 0 || j >= shown.length) return;
+        [shown[i], shown[j]] = [shown[j], shown[i]];
+        renderVehColumnDraft();
+    }
+
+    function hideVehColumn(i) {
+        vehViewDraft.shown.splice(i, 1);
+        renderVehColumnDraft();
+    }
+
+    function showVehColumn(column) {
+        const live = vehViewDraft.live.find(c => c.column === column);
+        vehViewDraft.shown.push(vehColumnSetting({ column }, live ? live.type : null));
+        renderVehColumnDraft();
+    }
+
+    async function saveVehColumnDraft() {
+        if (!vehViewDraft) return;
+        const payload = vehViewPayload(vehViewDraft);
+        if (JSON.stringify(payload) === vehViewDraft.saved) return;
+        const resp = await fetch(BASE_URL + '/kpi/vehicle-view', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ view: payload }),
+        }).then(r => r.json());
+        if (resp.status !== 'ok') throw new Error(resp.message || 'View Vehicles columns save failed');
+        vehViewDraft.saved = JSON.stringify(payload);
+    }
+
+    // ── Sections (edited in the Settings popup) ──────────────────────────────
+    // Each item is { name, from }: `from` is the name it had when the popup
+    // opened (null for a new one), so the server can carry charts across a rename.
+    let sectionDraft = [];
+
+    function renderSectionDraft() {
+        const last = sectionDraft.length - 1;
+        document.getElementById('sectionList').innerHTML = sectionDraft.map((s, i) => {
+            const charts = s.from ? layout.rows.filter(r => r.section === s.from).length : 0;
+            const removeTitle = charts ? 'Move or remove its charts first' : 'Remove section';
+            return `
+                <div class="section-item">
+                    <input type="text" maxlength="60" value="${escHtml(s.name)}"
+                           oninput="sectionDraft[${i}].name = this.value">
+                    <span class="section-count">${charts} chart${charts === 1 ? '' : 's'}</span>
+                    <button type="button" class="btn btn-edit" title="Move up"
+                            onclick="moveSectionDraft(${i}, -1)" ${i === 0 ? 'disabled' : ''}>
+                        <i class="fas fa-arrow-up"></i></button>
+                    <button type="button" class="btn btn-edit" title="Move down"
+                            onclick="moveSectionDraft(${i}, 1)" ${i === last ? 'disabled' : ''}>
+                        <i class="fas fa-arrow-down"></i></button>
+                    <button type="button" class="btn btn-remove-chart" title="${removeTitle}"
+                            onclick="removeSectionDraft(${i})" ${charts ? 'disabled' : ''}>
+                        <i class="fas fa-trash"></i></button>
+                </div>`;
+        }).join('');
+    }
+
+    function addSectionDraft() {
+        sectionDraft.push({ name: '', from: null });
+        renderSectionDraft();
+        const inputs = document.querySelectorAll('#sectionList input');
+        inputs[inputs.length - 1].focus();
+    }
+
+    function moveSectionDraft(i, step) {
+        const j = i + step;
+        if (j < 0 || j >= sectionDraft.length) return;
+        [sectionDraft[i], sectionDraft[j]] = [sectionDraft[j], sectionDraft[i]];
+        renderSectionDraft();
+    }
+
+    function removeSectionDraft(i) {
+        sectionDraft.splice(i, 1);
+        renderSectionDraft();
+    }
+
+    function sectionsChanged() {
+        return sectionDraft.length !== SECTIONS.length
+            || sectionDraft.some((s, i) => s.from !== SECTIONS[i] || s.name.trim() !== SECTIONS[i]);
+    }
+
+    async function saveSections() {
+        const resp = await fetch(BASE_URL + '/kpi/sections', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ sections: sectionDraft.map(s => ({ name: s.name.trim(), from: s.from })) }),
+        }).then(r => r.json());
+        if (resp.status !== 'ok') throw new Error(resp.message || 'section save failed');
+        SECTIONS = resp.sections;
+        layout = resp.layout;
+        renderLayout();
+        // Drop the blocks of sections that were renamed or removed. renderLayout
+        // has already moved their charts into the new blocks.
+        const keep = new Set(SECTIONS.map(sectionDomId));
+        document.querySelectorAll('#sectionsContainer > .category-section').forEach(el => {
+            if (!keep.has(el.id)) el.remove();
+        });
+        // Saved: the popup's list now starts from the saved names.
+        sectionDraft = SECTIONS.map(name => ({ name, from: name }));
+        renderSectionDraft();
     }
 
     function closeSettingsModal() {
@@ -1844,6 +3585,10 @@
         const button = document.getElementById('settingsSaveBtn');
         button.disabled = true;
         try {
+            blockSaveIfLoadFailed();
+            if (sectionsChanged()) await saveSections();
+            await saveVehColumnDraft();
+            await saveThemeDraft();
             const resp = await fetch(BASE_URL + '/kpi/settings', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -1852,6 +3597,7 @@
             if (resp.status !== 'ok') throw new Error(resp.message || 'save failed');
             const needsData = ['months', 'weeks', 'days_total'].some(k => resp.settings[k] !== settings[k]);
             settings = resp.settings;
+            applyAppearance();
             DayWindow.reset();
             closeSettingsModal();
             // Periods change what the server sends; the window and angle are
