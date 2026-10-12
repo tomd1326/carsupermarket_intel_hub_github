@@ -267,6 +267,17 @@
             font-size: 0.82rem; font-weight: 600; color: #475569; cursor: pointer;
         }
         .view-toggle button.active { background: #fff; color: #0f172a; box-shadow: 0 1px 2px rgba(15,23,42,0.15); }
+        /* Data Labels On / Off on each chart row: the same switch, sized to the
+           row's other buttons. Its own class, since setPageView() resets every
+           .view-toggle button. */
+        .labels-toggle { display: inline-flex; align-items: center; background: #e2e8f0; border-radius: 6px; padding: 2px; gap: 2px; }
+        .labels-toggle-name { font-size: 0.74rem; font-weight: 700; color: #475569; padding: 0 6px; }
+        .labels-toggle button {
+            border: none; background: transparent; border-radius: 5px; padding: 2px 9px;
+            font-size: 0.74rem; font-weight: 700; color: #475569; cursor: pointer;
+        }
+        .labels-toggle button.active { background: #fff; color: #0f172a; box-shadow: 0 1px 2px rgba(15,23,42,0.15); cursor: default; }
+        .chart-row.collapsed .labels-toggle { display: none; }
         body.user-view .admin-only, body.user-view .chart-row-admin { display: none !important; }
         /* Settings popup: tabs down the left, one pane showing on the right. The
            box keeps one height whichever tab is open, so it does not jump. */
@@ -853,16 +864,35 @@
             metricsCatalogue = metricsResp.metrics || [];
             metricsByKey = Object.fromEntries(metricsCatalogue.map(m => [metricKey(m.source, m.column), m]));
         } catch (err) {
-            layoutLoadFailed = true;
-            setPageLoading(false);
-            document.getElementById('loadIcon').classList.remove('spin');
-            document.getElementById('statusText').textContent =
-                'Layout load failed - saving is turned off so the saved charts are not overwritten. ' + err.message;
+            showLayoutError('Layout load failed', err);
             return;
         }
         layoutLoaded = true;
-        renderLayout();
+        try {
+            renderLayout();
+        } catch (err) {
+            // Without this the error only reaches the browser console and the
+            // page sits on "Loading" for good.
+            showLayoutError('Charts could not be shown', err);
+            return;
+        }
         loadAll();
+    }
+
+    // Stops the page loading, turns saving off, shows the reason in the
+    // status line and writes it to the server log (CloudWatch).
+    function showLayoutError(what, err) {
+        layoutLoadFailed = true;
+        setPageLoading(false);
+        document.getElementById('loadIcon').classList.remove('spin');
+        document.getElementById('statusText').textContent =
+            what + ' - saving is turned off so the saved charts are not overwritten. ' + err.message;
+        console.error(err);
+        fetch(BASE_URL + '/kpi/client-error', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ message: what + ': ' + err.message, stack: err.stack || '' }),
+        }).catch(() => {});
     }
     document.addEventListener('DOMContentLoaded', init);
 
@@ -891,6 +921,13 @@
         });
 
         // Place rows into section bodies, in layout order
+        const missing = [...new Set(layout.rows
+            .filter(row => !document.getElementById(sectionDomId(row.section)))
+            .map(row => row.section))];
+        if (missing.length) {
+            throw new Error('Charts are saved in section(s) that are not in the section list: '
+                + missing.join(', ') + '. Sections on this page: ' + SECTIONS.join(', ') + '.');
+        }
         layout.rows.forEach(row => {
             document.getElementById(sectionDomId(row.section)).querySelector('.category-body')
                 .appendChild(getRowElement(row));
@@ -955,6 +992,14 @@
             <button type="button" class="chart-title-btn" onclick="copyChartBelow('${row.id}')">
                 <i class="fas fa-copy"></i> Copy Chart Below
             </button>` : '';
+        // For everyone, in both views. See setDataLabels for who it changes.
+        const labelsToggle = `
+            <span class="labels-toggle" role="group" aria-label="Data labels"
+                  title="${IS_ADMIN ? 'Show or hide the figures on these charts. Sets the default for everyone' : 'Show or hide the figures on these charts'}">
+                <span class="labels-toggle-name">Data Labels</span>
+                <button type="button" class="${dataLabelsOn(row) ? 'active' : ''}" onclick="setDataLabels('${row.id}', true)">On</button>
+                <button type="button" class="${dataLabelsOn(row) ? '' : 'active'}" onclick="setDataLabels('${row.id}', false)">Off</button>
+            </span>`;
         // Hide / show is for everyone; the title shows next to it so a
         // collapsed row still says what it is.
         const toggleButton = `
@@ -964,7 +1009,7 @@
             </button>`;
         if (isRowCollapsed(row.id)) el.classList.add('collapsed');
         el.innerHTML = `
-            <div class="chart-row-actions">${toggleButton}${editButton ? `<span class="chart-row-admin">${editButton}</span>` : ''}</div>
+            <div class="chart-row-actions">${toggleButton}${labelsToggle}${editButton ? `<span class="chart-row-admin">${editButton}</span>` : ''}</div>
             <div class="charts-row">
                 ${card('monthly', 'm')}
                 ${card('weekly', 'w')}
@@ -1213,6 +1258,7 @@
             fmt: rowFormatter(row),
             tickFmt: rowTickFormatter(row),
             invert: !!row.invert,
+            dataLabels: dataLabelsOn(row),
         };
 
         const ranges = calcRowRanges(rangeSpecs(d, row.y_min, row.y_max), row.agg,
@@ -1914,7 +1960,7 @@
                 plugins: [
                     makeBgPlugin(invert, chartTarget),
                     PLOT_FRAME_PLUGIN,
-                    makeDataLabelPlugin(canvasId + 'Labels', seriesLabel, 10, fmt, () => settings.label_angle),
+                    ...(opts.dataLabels ? [makeDataLabelPlugin(canvasId + 'Labels', seriesLabel, 10, fmt, () => settings.label_angle)] : []),
                     ...(opts.notes ? [makeNotesPlugin(opts.notes)] : [])
                 ]
             });
@@ -2004,7 +2050,8 @@
             : calcRowRanges(['m', 'w', 'd'].map(k => ({ series: [periods[k].totals], min: (row.y_min || {})[k], max: (row.y_max || {})[k] })),
                 row.agg, sharedAxisValue(row.y_min), sharedAxisValue(row.y_max));
         const existing = rowCharts[row.id] || [];
-        const opts = { fmt, tickFmt, pct, colours: seriesColours(row), names: row.series.map(seriesLabel), segLabels: !!row.seg_labels };
+        const opts = { fmt, tickFmt, pct, colours: seriesColours(row), names: row.series.map(seriesLabel),
+                       segLabels: !!row.seg_labels, dataLabels: dataLabelsOn(row) };
         rowCharts[row.id] = ['m', 'w', 'd'].map((k, i) => buildStackedChart(`cv-${row.id}-${k}`, periods[k], targets[k], existing[i],
             { ...opts, range: ranges[i], day: k === 'd', notes: { rowId: row.id, kind: k, starts: periods[k].starts } }));
         updateDayTitles();
@@ -2027,6 +2074,7 @@
         return {
             id: 'stackLabels',
             afterDatasetsDraw(chart) {
+                if (!opts.dataLabels) return;
                 const { ctx } = chart;
                 const bars = chart.data.datasets
                     .map((ds, i) => ({ ds, meta: chart.getDatasetMeta(i), visible: chart.isDatasetVisible(i) }))
@@ -2096,7 +2144,7 @@
                     if (opts.notes && elements.length) openPointModal(opts.notes, chart, elements[0].index);
                 },
                 // Room for the totals above the tallest column.
-                layout: { padding: { top: opts.pct ? 4 : 14 } },
+                layout: { padding: { top: opts.pct || !opts.dataLabels ? 4 : 14 } },
                 plugins: {
                     legend: {
                         display: true, position: 'top', align: 'start',
@@ -3121,6 +3169,42 @@
     // Duplicate a chart row, settings and all, directly under the original in
     // the same section. Fixed and imported targets belong to the metric, so
     // the copy shares them; a ratio chart's own target is copied with the row.
+    // Figures drawn on a row's charts (line point values, stacked column
+    // totals and segment values). The admin's choice is saved on the row and
+    // is everyone's default; a row saved before this setting existed shows
+    // them. Anyone else can change it for themselves, kept in their browser
+    // only, the same way collapsed rows are.
+    const DATA_LABELS_KEY = 'kpiDataLabels';
+    function ownDataLabels() {
+        try { return JSON.parse(localStorage.getItem(DATA_LABELS_KEY) || '{}') || {}; }
+        catch (e) { return {}; }
+    }
+    function dataLabelsOn(row) {
+        const own = IS_ADMIN ? undefined : ownDataLabels()[row.id];
+        return typeof own === 'boolean' ? own : row.data_labels !== false;
+    }
+
+    async function setDataLabels(rowId, on) {
+        const row = findRow(rowId);
+        if (!row || dataLabelsOn(row) === on) return;   // already showing that
+        if (!IS_ADMIN) {
+            const own = ownDataLabels();
+            own[rowId] = on;
+            try { localStorage.setItem(DATA_LABELS_KEY, JSON.stringify(own)); } catch (e) {}
+            rebuildCustomRow(row, false);
+            return;
+        }
+        const rows = layout.rows.map(r => r.id === rowId ? { ...r, data_labels: on } : r);
+        try {
+            await saveLayout(rows);
+        } catch (err) {
+            document.getElementById('statusText').textContent = 'Data labels change failed: ' + err.message;
+            return;
+        }
+        layout.rows = rows;
+        rebuildCustomRow(findRow(rowId), false);
+    }
+
     async function copyChartBelow(rowId) {
         const row = findRow(rowId);
         if (!row) return;

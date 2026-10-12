@@ -1622,6 +1622,8 @@ def _validate_layout(layout: dict, sections: list) -> str | None:
             return "bad invert"
         if not isinstance(row.get("include_current", False), bool):
             return "bad include_current"
+        if not isinstance(row.get("data_labels", True), bool):
+            return "bad data_labels"
         if row.get("fmt", "num") not in ("num", "pct", "pct100", "k", "km"):
             return f"bad fmt: {row.get('fmt')}"
         decimals = row.get("decimals", 0)
@@ -1681,8 +1683,9 @@ def _validate_layout(layout: dict, sections: list) -> str | None:
 
 
 def _read_kpi_layout_value(key: str):
-    # Layout and settings always live in the PROD cluster so local/dev edits
-    # and prod serve the same dashboard
+    # Layout and settings live in the PROD cluster so local edits and prod
+    # serve the same dashboard. The deployed dev Lambda cannot reach PROD, so
+    # it keeps its own copy in the dev cluster.
     with get_prod_pricer_connection() as conn:
         with conn.cursor() as cur:
             cur.execute("CREATE TABLE IF NOT EXISTS kpi_layout (key VARCHAR(50) PRIMARY KEY, value TEXT)")
@@ -1724,7 +1727,7 @@ def kpi_layout_get(request: Request, user: str = Depends(require_page_api('kpi')
         layout = _read_kpi_layout_value('layout') or KPI_DEFAULT_LAYOUT
         settings = _kpi_settings(_read_kpi_layout_value('settings'))
         notes = _read_kpi_layout_value('notes') or []
-        sections = _read_kpi_layout_value('sections') or KPI_DEFAULT_SECTIONS
+        sections = _kpi_sections(layout)
         themes = _read_kpi_layout_value('themes') or KPI_DEFAULT_THEMES
     except Exception as e:
         # Report it rather than serving an empty layout: the page saves the
@@ -1801,7 +1804,7 @@ def kpi_layout_save(request: Request, payload: dict, user: str = Depends(require
         return {"status": "error", "message": "Only the admin can change the KPI charts"}
     layout = (payload or {}).get("layout")
     try:
-        sections = _read_kpi_layout_value('sections') or KPI_DEFAULT_SECTIONS
+        sections = _kpi_sections(_read_kpi_layout_value('layout') or KPI_DEFAULT_LAYOUT)
         err = _validate_layout(layout or {}, sections)
         if err:
             return {"status": "error", "message": err}
@@ -1810,6 +1813,28 @@ def kpi_layout_save(request: Request, payload: dict, user: str = Depends(require
     except Exception as e:
         logger.error(f"KPI layout save failed: {e}")
         return {"status": "error", "message": str(e)}
+
+
+@router.post("/kpi/client-error")
+def kpi_client_error(request: Request, payload: dict, user: str = Depends(require_page_api('kpi'))):
+    """Logs an error the KPI page hit in the browser, which would otherwise
+    only show in that user's browser console."""
+    message = str((payload or {}).get("message", ""))[:1000]
+    stack = str((payload or {}).get("stack", ""))[:4000]
+    logger.error(f"KPI page error for {user}: {message}\n{stack}")
+    return {"status": "ok"}
+
+
+def _kpi_sections(layout: dict) -> list:
+    """The saved section list, plus any section a chart is in that the list
+    is missing (e.g. no list saved yet, so the defaults are used). Without
+    this the page has nowhere to put that chart and fails to load."""
+    sections = list(_read_kpi_layout_value('sections') or KPI_DEFAULT_SECTIONS)
+    for row in layout.get("rows", []):
+        name = row.get("section")
+        if isinstance(name, str) and name and name not in sections:
+            sections.append(name)
+    return sections
 
 
 def _section_slug(name: str) -> str:
@@ -1851,8 +1876,8 @@ def kpi_sections_save(request: Request, payload: dict, user: str = Depends(requi
                 return {"status": "error", "message": "bad section"}
             renames[old] = name
     try:
-        current = _read_kpi_layout_value('sections') or KPI_DEFAULT_SECTIONS
         layout = _read_kpi_layout_value('layout') or KPI_DEFAULT_LAYOUT
+        current = _kpi_sections(layout)
         rows = layout.get("rows", [])
         for old in renames:
             if old not in current:
