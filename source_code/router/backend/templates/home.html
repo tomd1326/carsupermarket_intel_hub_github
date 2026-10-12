@@ -106,7 +106,7 @@
         <div class="menu-grid">
             {% for page in pages %}
             <a href="{{ BASE_URL }}{{ page.path }}" class="btn menu-btn">
-                {{ page.label }}
+                {{ page_name(page.key) }}
             </a>
             {% endfor %}
             {% if is_admin %}

@@ -629,6 +629,56 @@ def delete_user_and_access(conn, username: str) -> None:
         raise
 
 
+# ── Page names ───────────────────────────────────────────────────────────────
+# Names the admin has given the pages, set on the Settings > Page Names screen.
+# A page with no row uses the label in page_registry. Lives in the PROD pricer
+# DB, like the KPI layout, so every environment shows the same names.
+
+def _ensure_page_names_table(conn) -> None:
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS page_names (
+                page_key   VARCHAR(64)  PRIMARY KEY,
+                label      VARCHAR(100) NOT NULL,
+                updated_at TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+                updated_by VARCHAR(100)
+            )
+            """
+        )
+    conn.commit()
+
+
+def load_page_names(conn) -> dict:
+    """Returns {page_key: label} for every renamed page."""
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT page_key, label FROM page_names")
+            return dict(cur.fetchall())
+    except psycopg2.errors.UndefinedTable:
+        conn.rollback()
+        return {}
+
+
+def save_page_names(conn, names: dict, updated_by: str) -> None:
+    """Replace the stored names in one transaction. names is {page_key: label};
+    a page left out goes back to its default name."""
+    _ensure_page_names_table(conn)
+    try:
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM page_names")
+            if names:
+                psycopg2.extras.execute_values(
+                    cur,
+                    "INSERT INTO page_names (page_key, label, updated_by) VALUES %s",
+                    [(key, label, updated_by) for key, label in names.items()],
+                )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+
+
 @contextmanager
 def get_prod_pricer_connection():
     """Always connects to prod pricer DB — used for analytics reads (user_sessions, user_events)."""

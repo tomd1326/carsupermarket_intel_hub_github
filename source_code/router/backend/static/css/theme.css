@@ -119,6 +119,10 @@
     padding: 13px 18px;
 }
 
+/* Green CSV download button, the same on every page that exports a table. */
+.btn-csv { background-color: var(--c-success); border: 1px solid var(--c-success); color: var(--c-surface); font-weight: 600; font-size: 0.9em; padding: 7px 18px; }
+.btn-csv:hover { background-color: var(--c-success-hover); border-color: var(--c-success-hover); color: var(--c-surface); }
+
 /* Small "i" marker after a column heading, explaining what the column means.
    Sized in em so it tracks whatever font size the table is rendered at.
 
