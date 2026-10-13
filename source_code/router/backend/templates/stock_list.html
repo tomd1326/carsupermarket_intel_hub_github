@@ -48,7 +48,7 @@
             padding-left: 10px;
             margin-left: 10px;
         }
-        .filter-group:first-child { border-left: none; padding-left: 0; margin-left: 0; }
+        .filter-bar > .filter-group:first-child { border-left: none; padding-left: 0; margin-left: 0; }
         .filter-btn, .missing-btn { border-radius: 20px; padding: 2px 10px; font-size: 13px; }
         /* Missing buttons switch off with a second click. Bootstrap's outline
            hover fills the button dark grey, so a button just switched off still
@@ -149,19 +149,15 @@
 
         .summary-bar { display: flex; align-items: center; gap: 24px; flex-wrap: wrap; margin-bottom: 10px; }
         .summary-item { font-size: 13px; }
-        /* Shared Back / Home / nav button size across all pages */
     </style>
 </head>
 <body>
     <div id="resize-ghost"></div>
-    {{ account_nav(user) }}
+    {{ account_nav(user, show_back=True) }}
 
     <div class="controls">
         <div class="page-header">
             <h2>{{ page_name('stock_list') }}</h2>
-            <a href="javascript:history.back()" class="btn btn-outline-secondary nav-btn">
-                <i class="fas fa-arrow-left me-1"></i>Back
-            </a>
             <button id="fetchBtn" class="btn btn-primary btn-sm" onclick="fetchData(true)">
                 <i class="fas fa-sync-alt me-1"></i>Refresh Data
             </button>
@@ -180,7 +176,6 @@
             <div class="summary-bar" id="summary-bar">
                 <span class="summary-item"><strong>Total Stock:</strong> <span id="sum-stock">—</span></span>
                 <span class="summary-item" style="color:#374151"><strong>Total Ordered:</strong> <span id="sum-ordered">—</span></span>
-                <span class="text-muted small" id="sum-filtered-note" style="display:none">(filtered view)</span>
             </div>
 
             <div class="filter-bar">
@@ -214,6 +209,7 @@
                 </div>
                 <div class="filter-group" style="border-left:none;margin-left:16px;gap:8px">
                     <span id="row-count" class="toolbar-text"></span>
+                    <span class="text-muted small" id="sum-filtered-note" style="display:none">(filtered view)</span>
                     <button class="btn btn-sm btn-outline-secondary" onclick="clearAllFilters()">Clear Filters</button>
                     <span class="toolbar-text ms-2">Font</span>
                     <button class="btn btn-outline-secondary btn-sm px-2 py-0" onclick="changeFontSize(-1)">−</button>
@@ -245,8 +241,12 @@
                 </div>
                 <div class="modal-body">
                     <div id="settings-error" class="alert alert-danger d-none py-1 small"></div>
+                    <div id="settings-loading" class="section-loading" role="status" aria-live="polite">
+                        <i class="fas fa-sync-alt spin" aria-hidden="true"></i> Loading settings...
+                    </div>
+                    <div id="settings-content" class="d-none">
                     <h6 class="settings-section">Columns</h6>
-                    <p class="text-muted small mb-2">Columns of <strong>PRODUCT_VEHICLE_JOURNEY.BUYING_REQUIREMENTS</strong>.
+                    <p class="text-muted small mb-2">Columns of <strong>PRODUCT_VEHICLE_JOURNEY.CURRENT_STOCK</strong>.
                         The heading box sets the name shown on the page; leave it empty to show the column name.</p>
                     <div id="colEditor"><div class="text-muted small">Loading columns&hellip;</div></div>
 
@@ -257,10 +257,17 @@
                     <div id="filterEditor"></div>
                     <button type="button" class="btn btn-sm btn-outline-primary mt-2" onclick="addFilterDraft()">
                         <i class="fas fa-plus"></i> Add filter</button>
+
+                    <h6 class="settings-section mt-4">Hard filters</h6>
+                    <p class="text-muted small mb-2">These rules apply to the Snowflake data for everyone, including the totals and CSV export. They do not appear as buttons on the page. All rules must match.</p>
+                    <div id="hardFilterEditor"></div>
+                    <button type="button" class="btn btn-sm btn-outline-primary mt-2" onclick="addHardFilterDraft()">
+                        <i class="fas fa-plus"></i> Add hard filter</button>
+                    </div>
                 </div>
                 <div class="modal-footer">
                     <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
-                    <button type="button" class="btn btn-primary" id="settingsSaveBtn" onclick="saveSettings()">Save</button>
+                    <button type="button" class="btn btn-primary" id="settingsSaveBtn" onclick="saveSettings()" disabled>Save</button>
                 </div>
             </div>
         </div>
