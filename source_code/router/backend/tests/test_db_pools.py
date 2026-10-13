@@ -1,8 +1,8 @@
 """Which connection pool each DB accessor uses, per environment.
 
 The risk this covers is a pool being shared where the two ends point at
-different Aurora clusters — in particular analytics reads, which must always
-reach PROD even when the app is running against dev.
+different Aurora clusters — in particular KPI layout and page-name reads, which
+reach PROD from local but use the dev cluster on the deployed dev Lambda.
 
 Run from source_code/router/backend:
     poetry run pytest tests/test_db_pools.py
@@ -80,10 +80,18 @@ def test_prod_kpi_uses_merged_pool():
         assert db_utils._get_prod_pricer_pool() is db_utils._get_pool()
 
 
-def test_dev_kpi_keeps_separate_prod_pricer_pool():
-    with _env(AWS_REGION='us-east-2'):
+def test_deployed_dev_kpi_uses_dev_pool():
+    # The dev Lambda cannot reach the prod cluster, so it reads dev.
+    with _env(AWS_REGION='us-east-2', AWS_LAMBDA_FUNCTION_NAME='vle-router-dev'):
+        assert db_utils._get_prod_pricer_pool() is db_utils._get_pool()
+        assert db_utils._get_pool().host == _SECRETS[DEV_SECRET]['endpoint']
+
+
+@pytest.mark.parametrize('env', [{'LOCAL_ENV': '1'}, {}], ids=['LOCAL_ENV=1', 'python main.py'])
+def test_local_kpi_keeps_separate_prod_pricer_pool(env):
+    with _env(**env):
         kpi = db_utils._get_prod_pricer_pool()
         assert kpi is not db_utils._get_pool()
-        # Analytics must still read prod even though the app is on dev.
+        # Local still reads prod (over the VPN) while the main pool is on dev.
         assert kpi.host == _SECRETS[PROD_SECRET]['endpoint']
         assert db_utils._get_pool().host == _SECRETS[DEV_SECRET]['endpoint']

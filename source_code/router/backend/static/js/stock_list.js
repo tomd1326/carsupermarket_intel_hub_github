@@ -5,22 +5,6 @@ function fmtGBP(v) {
     const n = Number(v);
     return (n < 0 ? '-£' : '£') + Math.abs(n).toLocaleString('en-GB', { minimumFractionDigits: 0, maximumFractionDigits: 0 });
 }
-function fmtInt(v) {
-    if (v == null) return '—';
-    return Math.round(Number(v)).toLocaleString('en-GB');
-}
-function fmtPct(v) {
-    if (v == null) return '—';
-    return Number(v).toFixed(1) + '%';
-}
-function normaliseFuel(raw) {
-    const s = String(raw ?? '').toLowerCase();
-    if (s.includes('petrol'))              return 'Petrol';
-    if (s.includes('diesel'))              return 'Diesel';
-    if (s.includes('electric') || s==='ev') return 'Electric';
-    if (s.includes('hybrid'))              return 'Hybrid';
-    return raw || '—';
-}
 function vehicleStatus(raw) {
     const s = String(raw ?? '').toUpperCase();
     if (s === 'ORDERED') return 'Ordered';
@@ -33,14 +17,41 @@ function statusRank(status) {
     if (status === 'Delivered') return 2;
     return 3;
 }
+function fmtDate(v) {
+    return v ? String(v).slice(0, 10).split('-').reverse().join('/') : '—';
+}
+
+// Formats a column can use, set per column in Settings.
+const COLUMN_FORMATS = [
+    ['text', 'Text'], ['number', 'Number'], ['gbp', '£'], ['pct', '%'],
+    ['date', 'Date'], ['link', 'Link button'], ['status', 'Stock / Ordered / Delivered'],
+];
+const NUMBER_FORMATS = ['number', 'gbp', 'pct'];
+const DEFAULT_WIDTH = 90;
 
 /* ── State ───────────────────────────────────────────────────────────────── */
 let allRows       = [];
-let sortCol       = 'deriv';   // default: alphabetical by make/model/deriv
+let colIdx        = {};    // column name -> position in a data row
+let viewColumns   = [];    // Settings columns: [{column, label, format, decimals, width}]
+let sortCol       = null;  // a column name
 let sortAsc       = true;
 let currentFontPx = 12;
-const activeFilters = { status: 'All', band: 'All', fuel: 'All' };
-const _today = new Date(); _today.setHours(0,0,0,0);
+// Chosen value per button group: 'status', plus 'col:<COLUMN>' for each
+// Settings filter. 'All' means not filtering.
+const activeFilters = { status: 'All' };
+const missingFilters = { cap: false, at: false };   // No CAP Data / No AT Data toggles
+let customFilters = [];    // Settings filters: [{column, label, description}]
+const FILTER_DROPDOWN_OVER = 15;   // more values than this -> a dropdown, not buttons
+const BLANK_KEY = '__BLANK__';
+
+// A row's value for a column name, or null where the data has no such column.
+function val(r, name) {
+    const i = colIdx[name];
+    return i === undefined ? null : r[i];
+}
+function derivText(r) {
+    return ((val(r, 'MAKE_MODEL') || '') + ' ' + (val(r, 'CAP_DERIVATIVE') || '')).toLowerCase();
+}
 
 /* ── Snowflake status ────────────────────────────────────────────────────── */
 function setStatus(state) {
@@ -59,28 +70,40 @@ function setStatus(state) {
 /* ── Fetch ───────────────────────────────────────────────────────────────── */
 async function fetchData(force = false) {
     const btn = document.getElementById('fetchBtn');
-    if (btn) { btn.disabled = true; btn.innerHTML = '<i class="fas fa-sync-alt me-1"></i>Loading…'; }
-    document.getElementById('fetch-loading').style.display = 'block';
+    if (btn) { btn.disabled = true; btn.innerHTML = '<i class="fas fa-sync-alt spin me-1"></i>Refresh Data'; }
+    document.body.classList.add('page-is-loading');
     document.getElementById('data-section').style.display  = 'none';
     document.getElementById('table-wrap').classList.add('d-none');
     document.getElementById('table-error').classList.add('d-none');
     setStatus('running');
     try {
-        const url  = BASE_URL + '/buying-requirements/sf-data' + (force ? '?force=true' : '');
+        const url  = BASE_URL + '/stock-list/data' + (force ? '?force=true' : '');
         const res  = await fetch(url);
         if (!res.ok) throw new Error('HTTP ' + res.status);
         const data = await res.json();
-        if (data.status !== 'ok') throw new Error(data.detail || 'Unknown error');
+        if (data.status !== 'ok') throw new Error(data.message || 'Unknown error');
         allRows = data.rows;
-        setStatus('done');
-        if (data.cached_at) {
-            const d = new Date(data.cached_at * 1000);
-            document.getElementById('sf-status').title = 'Cached at ' + d.toLocaleTimeString('en-GB');
+        colIdx  = Object.fromEntries(data.columns.map((c, i) => [c, i]));
+        // Columns saved in Settings but not in the table yet are left off.
+        viewColumns = data.view.filter(c => c.column in colIdx);
+        if (!viewColumns.some(c => c.column === sortCol)) {
+            sortCol = viewColumns.some(c => c.column === 'MAKE_MODEL_DERIVATIVE')
+                ? 'MAKE_MODEL_DERIVATIVE' : (viewColumns[0] || {}).column || null;
+            sortAsc = true;
         }
-        // Apex updated at — max vehicle_updated_at (r[28]) across all rows
+        customFilters = data.filters || [];
+        buildHeader();
+        buildCustomFilters();
+        setStatus('done');
+        const sfEl = document.getElementById('sf-status');
+        sfEl.title = data.cached_at ? 'Cached at ' + new Date(data.cached_at * 1000).toLocaleTimeString('en-GB') : '';
+        if (data.missing && data.missing.length) {
+            sfEl.title += (sfEl.title ? '\n' : '') + 'Not in the table, so not shown: ' + data.missing.join(', ');
+        }
+        // Apex updated at — latest VEHICLE_UPDATED_AT across all rows
         let maxApex = null;
         allRows.forEach(r => {
-            const v = r[28];
+            const v = val(r, 'VEHICLE_UPDATED_AT');
             if (v && (!maxApex || v > maxApex)) maxApex = v;
         });
         if (maxApex) {
@@ -89,13 +112,14 @@ async function fetchData(force = false) {
                 d.toLocaleDateString('en-GB') + ' ' + d.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
             document.getElementById('apex-updated').style.display = '';
         }
-        document.getElementById('fetch-loading').style.display = 'none';
+        document.body.classList.remove('page-is-loading');
         document.getElementById('data-section').style.display  = '';
         document.getElementById('table-wrap').classList.remove('d-none');
         applyFilters();
+        fitTableWrap();
     } catch (e) {
         setStatus('error');
-        document.getElementById('fetch-loading').style.display = 'none';
+        document.body.classList.remove('page-is-loading');
         const errEl = document.getElementById('table-error');
         errEl.textContent = 'Failed to load data: ' + e.message;
         errEl.classList.remove('d-none');
@@ -105,20 +129,17 @@ async function fetchData(force = false) {
 }
 
 /* ── Summary bar ─────────────────────────────────────────────────────────── */
-function updateSummary(filtered) {
-    let stock = 0, ordered = 0, delivered = 0;
-    filtered.forEach(r => {
-        const s = vehicleStatus(r[21]);
-        if (s === 'Stock')     stock++;
-        else if (s === 'Ordered')   ordered++;
-        else if (s === 'Delivered') delivered++;
+function updateSummary() {
+    // These totals cover all loaded stock, regardless of page filters.
+    let ordered = 0;
+    allRows.forEach(r => {
+        const s = vehicleStatus(val(r, 'VEHICLE_STATUS'));
+        if (s === 'Ordered') ordered++;
     });
-    document.getElementById('sum-stock').textContent     = stock.toLocaleString('en-GB');
-    document.getElementById('sum-ordered').textContent   = ordered.toLocaleString('en-GB');
-    document.getElementById('sum-delivered').textContent = delivered.toLocaleString('en-GB');
-    const dosVal = parseInt(document.getElementById('dosInput')?.value) || 0;
-    const anyFilter = activeFilters.status !== 'All' || activeFilters.band !== 'All' ||
-                      activeFilters.fuel !== 'All' || dosVal > 0 ||
+    document.getElementById('sum-stock').textContent   = allRows.length.toLocaleString('en-GB');
+    document.getElementById('sum-ordered').textContent = ordered.toLocaleString('en-GB');
+    const anyFilter = Object.values(activeFilters).some(v => v !== 'All' && (!Array.isArray(v) || v.length > 0)) ||
+                      missingFilters.cap || missingFilters.at ||
                       (document.getElementById('searchInput')?.value ?? '') !== '';
     document.getElementById('sum-filtered-note').style.display = anyFilter ? '' : 'none';
 }
@@ -126,50 +147,91 @@ function updateSummary(filtered) {
 /* ── Filters ─────────────────────────────────────────────────────────────── */
 function applyFilters() {
     const search  = (document.getElementById('searchInput')?.value ?? '').toLowerCase();
-    const maxDays = parseInt(document.getElementById('dosInput')?.value) || 0;
-    const clearBtn = document.getElementById('dosClearBtn');
-    if (clearBtn) clearBtn.style.display = maxDays > 0 ? '' : 'none';
 
     const filtered = allRows.filter(r => {
-        const status = vehicleStatus(r[21]);
-        const band   = r[3] || '';
-        const fuel   = normaliseFuel(r[2]);
-        if (activeFilters.status !== 'All' && status !== activeFilters.status) return false;
-        if (activeFilters.band   !== 'All' && band   !== activeFilters.band)   return false;
-        if (activeFilters.fuel   !== 'All' && fuel   !== activeFilters.fuel)   return false;
-        // Days of Sales: only filters Ordered/Delivered rows — Stock always passes
-        if (maxDays > 0 && status !== 'Stock') {
-            const orderRaw = r[17];
-            if (!orderRaw) return false;
-            const orderDate = new Date(String(orderRaw).slice(0, 10));
-            orderDate.setHours(0,0,0,0);
-            const days = Math.round((_today - orderDate) / 86400000);
-            if (days > maxDays) return false;
+        const status = vehicleStatus(val(r, 'VEHICLE_STATUS'));
+        const statuses = activeFilters.status;
+        if (statuses !== 'All' && !statuses.includes(status)) return false;
+        for (const f of customFilters) {
+            const want = activeFilters['col:' + f.column];
+            if (want && want !== 'All' && !want.includes(filterKey(val(r, f.column)))) return false;
         }
+        if (missingFilters.cap && val(r, 'CAP_LIVE_CLEAN_LATEST') != null)              return false;
+        if (missingFilters.at  && val(r, 'AUTOTRADER_LATEST_RETAIL_VALUATION') != null) return false;
         if (search) {
-            const deriv = (r[1] || '').toLowerCase();
-            const vrm   = (r[18] || '').toLowerCase();
-            if (!deriv.includes(search) && !vrm.includes(search)) return false;
+            const vrm = (val(r, 'VRM') || '').toLowerCase();
+            if (!derivText(r).includes(search) && !vrm.includes(search)) return false;
         }
         return true;
     });
-    updateSummary(filtered);
+    updateSummary();
     renderTable(filtered);
 }
 
-function clearDosFilter() {
-    document.getElementById('dosInput').value = '';
-    document.getElementById('dosClearBtn').style.display = 'none';
-    applyFilters();
+/* ── Settings filters (one button group per column) ─────────────────────── */
+// The value a row is matched on: the cell as text, blank for empty.
+function filterKey(v) {
+    return v == null || v === '' ? BLANK_KEY : String(v);
+}
+function filterValueText(key) {
+    if (key === BLANK_KEY) return '(blank)';
+    if (key === 'interest_free') return '0%';
+    return key;
 }
 
+function buildCustomFilters() {
+    const holder = document.getElementById('custom-filters');
+    holder.innerHTML = '';
+    const esc = ColumnEditor.esc;
+    customFilters.forEach(f => {
+        const group = 'col:' + f.column;
+        // Every value found in the loaded data, numbers in number order.
+        const keys = [...new Set(allRows.map(r => filterKey(val(r, f.column))))];
+        const numeric = keys.every(k => k === BLANK_KEY || !isNaN(Number(k)));
+        keys.sort((a, b) => {
+            if (a === BLANK_KEY) return 1;
+            if (b === BLANK_KEY) return -1;
+            return numeric ? Number(a) - Number(b) : a.localeCompare(b);
+        });
+        const selected = activeFilters[group];
+        if (selected !== 'All' && (!Array.isArray(selected) || selected.some(k => !keys.includes(k)))) activeFilters[group] = 'All';
+        const chosen = activeFilters[group];
+
+        const title = esc(f.label || f.column) + (f.description
+            ? ` <span class="info-mark" data-info="${esc(f.description)}">i</span>` : '');
+        let controls;
+        if (keys.length > FILTER_DROPDOWN_OVER) {
+            controls = `<select class="form-select form-select-sm filter-select" data-group="${esc(group)}">
+                <option value="All">All</option>
+                ${keys.map(k => `<option value="${esc(k)}" ${Array.isArray(chosen) && chosen.includes(k) ? 'selected' : ''}>${esc(filterValueText(k))}</option>`).join('')}
+            </select>`;
+        } else {
+            controls = ['All', ...keys].map(k => `<button class="btn btn-sm ${(k === 'All' && chosen === 'All') || (Array.isArray(chosen) && chosen.includes(k)) ? 'btn-dark' : 'btn-outline-secondary'} filter-btn"
+                data-group="${esc(group)}" data-value="${esc(k)}">${esc(k === 'All' ? 'All' : filterValueText(k))}</button>`).join('');
+        }
+        const div = document.createElement('div');
+        div.className = 'filter-group titled';
+        div.innerHTML = `<span class="filter-title">${title}</span><div class="filter-buttons">${controls}</div>`;
+        holder.appendChild(div);
+    });
+}
+
+document.addEventListener('change', e => {
+    const sel = e.target.closest('.filter-select');
+    if (!sel) return;
+    activeFilters[sel.dataset.group] = sel.value === 'All' ? 'All' : [sel.value];
+    applyFilters();
+});
+
 function clearAllFilters() {
-    activeFilters.status = 'All';
-    activeFilters.band   = 'All';
-    activeFilters.fuel   = 'All';
+    Object.keys(activeFilters).forEach(k => { activeFilters[k] = 'All'; });
+    document.querySelectorAll('.filter-select').forEach(sel => { sel.value = 'All'; });
+    missingFilters.cap = missingFilters.at = false;
+    document.querySelectorAll('.missing-btn').forEach(btn => {
+        btn.classList.remove('btn-dark');
+        btn.classList.add('btn-outline-secondary');
+    });
     document.getElementById('searchInput').value = '';
-    document.getElementById('dosInput').value    = '';
-    document.getElementById('dosClearBtn').style.display = 'none';
     document.querySelectorAll('.filter-btn').forEach(btn => {
         const isAll = btn.dataset.value === 'All';
         btn.classList.toggle('btn-dark', isAll);
@@ -179,54 +241,59 @@ function clearAllFilters() {
 }
 
 document.addEventListener('click', e => {
+    const btn = e.target.closest('.missing-btn');
+    if (!btn) return;
+    const key = btn.dataset.missing;
+    missingFilters[key] = !missingFilters[key];
+    btn.classList.toggle('btn-dark', missingFilters[key]);
+    btn.classList.toggle('btn-outline-secondary', !missingFilters[key]);
+    applyFilters();
+});
+
+document.addEventListener('click', e => {
     const btn = e.target.closest('.filter-btn');
     if (!btn) return;
     const group = btn.dataset.group;
     const value = btn.dataset.value;
     if (!group || !value) return;
-    activeFilters[group] = value;
-    document.querySelectorAll(`.filter-btn[data-group="${group}"]`).forEach(b => {
-        b.classList.toggle('btn-dark', b.dataset.value === value);
-        b.classList.toggle('btn-outline-secondary', b.dataset.value !== value);
+    if (value === 'All') {
+        activeFilters[group] = 'All';
+    } else if (e.ctrlKey || e.metaKey) {
+        const selected = activeFilters[group] === 'All' ? [] : [...activeFilters[group]];
+        const index = selected.indexOf(value);
+        if (index < 0) selected.push(value);
+        else selected.splice(index, 1);
+        activeFilters[group] = selected.length ? selected : 'All';
+    } else {
+        activeFilters[group] = [value];
+    }
+    const chosen = activeFilters[group];
+    document.querySelectorAll(`.filter-btn[data-group="${CSS.escape(group)}"]`).forEach(b => {
+        const selected = chosen === 'All' ? b.dataset.value === 'All' : chosen.includes(b.dataset.value);
+        b.classList.toggle('btn-dark', selected);
+        b.classList.toggle('btn-outline-secondary', !selected);
     });
     applyFilters();
 });
 
 /* ── Sort ────────────────────────────────────────────────────────────────── */
-function getSortValue(r, col) {
-    const status = vehicleStatus(r[21]);
-    if (col === 'deriv')          return (r[1] || '').toLowerCase();
-    if (col === 'price_band')     return (r[3] || '').toLowerCase();
-    if (col === 'vrm')            return (r[18] || '').toLowerCase();
-    if (col === 'status')         return statusRank(status);
-    if (col === 'fuel')           return normaliseFuel(r[2]).toLowerCase();
-    if (col === 'location')       return (r[23] || '').toLowerCase();
-    if (col === 'delivered')      return r[27] || '';
-    if (col === 'supplier')       return (r[19] || '').toLowerCase();
-    if (col === 'dfr')            return r[24] || '';
-    if (col === 'mileage')        return Number(r[25]) || 0;
-    if (col === 'dis')            return Number(r[7])  || 0;
-    if (col === 'dts')            return Number(r[8])  || 0;
-    if (col === 'purchase_price') return Number(r[12]) || 0;
-    if (col === 'cap_clean')      return Number(r[30]) || 0;
-    if (col === 'cap_pct')        return (r[12] && r[30]) ? r[12] / r[30] : 0;
-    if (col === 'sell_price')     return Number(r[13]) || 0;
-    if (col === 'at_ptm')         return Number(r[14]) || 0;
-    if (col === 'at_ptm_pct')     return Number(r[15]) || 0;
-    if (col === 'at_rating')      return Number(r[16]) || 0;
-    if (col === 'gpu_m')          return Number(r[22]) || 0;
-    return '';
+function getSortValue(r, c) {
+    const v = val(r, c.column);
+    if (c.format === 'status') return statusRank(vehicleStatus(v));
+    if (NUMBER_FORMATS.includes(c.format)) return Number(v) || 0;
+    return String(v ?? '').toLowerCase();
 }
 
 function sortRows(rows) {
+    const c = viewColumns.find(col => col.column === sortCol);
+    if (!c) return rows;
     return [...rows].sort((a, b) => {
-        const av = getSortValue(a, sortCol);
-        const bv = getSortValue(b, sortCol);
+        const av = getSortValue(a, c);
+        const bv = getSortValue(b, c);
         let cmp = av < bv ? -1 : av > bv ? 1 : 0;
-        // secondary: always alphabetical on deriv
-        if (cmp === 0 && sortCol !== 'deriv') {
-            const ad = (a[1] || '').toLowerCase();
-            const bd = (b[1] || '').toLowerCase();
+        // secondary: always alphabetical on make / model / derivative
+        if (cmp === 0) {
+            const ad = derivText(a), bd = derivText(b);
             cmp = ad < bd ? -1 : ad > bd ? 1 : 0;
         }
         return sortAsc ? cmp : -cmp;
@@ -249,22 +316,56 @@ function updateSortIndicators() {
     });
 }
 
-document.querySelectorAll('#stock-table thead th[data-sort]').forEach(th => {
-    th.addEventListener('click', e => {
-        if (e.target.classList.contains('resize-handle')) return;
-        const col = th.dataset.sort;
-        if (sortCol === col) {
-            sortAsc = !sortAsc;
-        } else {
-            sortCol = col;
-            sortAsc = true;
+/* ── Header (built from the Settings columns) ────────────────────────────── */
+function buildHeader() {
+    const colgroup = document.getElementById('stock-cols');
+    const headRow  = document.getElementById('stock-head');
+    colgroup.innerHTML = '';
+    headRow.innerHTML  = '';
+    viewColumns.forEach(c => {
+        const col = document.createElement('col');
+        col.style.width = (c.width || DEFAULT_WIDTH) + 'px';
+        colgroup.appendChild(col);
+
+        const th = document.createElement('th');
+        th.title = c.column;
+        if (c.format !== 'link') {
+            th.dataset.sort = c.column;
+            th.addEventListener('click', e => {
+                if (e.target.classList.contains('resize-handle')) return;
+                if (sortCol === c.column) sortAsc = !sortAsc;
+                else { sortCol = c.column; sortAsc = true; }
+                updateSortIndicators();
+                applyFilters();
+            });
         }
-        updateSortIndicators();
-        applyFilters();
+        th.appendChild(document.createTextNode(c.label || c.column));
+        if (c.format !== 'link') {
+            const arrow = document.createElement('span');
+            arrow.className = 'sort-arrow';
+            th.appendChild(arrow);
+        }
+        headRow.appendChild(th);
     });
-});
+    initResize();
+    updateSortIndicators();
+    syncTableWidth();
+}
 
 /* ── Column resize ───────────────────────────────────────────────────────── */
+// The table scrolls inside .table-wrap both ways. Its horizontal scrollbar sits
+// at the bottom of that box, so the box is sized to end at the bottom of the
+// window — otherwise the bar is below the fold and only reachable after
+// scrolling the whole page down.
+const TABLE_BOTTOM_GAP = 32;   // white space left between the table and the window bottom, px
+function fitTableWrap() {
+    const wrap = document.getElementById('table-wrap');
+    if (wrap.classList.contains('d-none')) return;
+    const top = wrap.getBoundingClientRect().top + window.scrollY;
+    wrap.style.maxHeight = Math.max(200, window.innerHeight - top - TABLE_BOTTOM_GAP) + 'px';
+}
+window.addEventListener('resize', fitTableWrap);
+
 function syncTableWidth() {
     const table = document.getElementById('stock-table');
     const cols  = table.querySelectorAll('colgroup col');
@@ -273,7 +374,7 @@ function syncTableWidth() {
     table.style.width = total + 'px';
 }
 
-(function initResize() {
+function initResize() {
     const ghost   = document.getElementById('resize-ghost');
     const table   = document.getElementById('stock-table');
     const cols    = Array.from(table.querySelectorAll('colgroup col'));
@@ -332,72 +433,104 @@ function syncTableWidth() {
             window.addEventListener('blur',        onBlur);
         });
     });
-})();
+}
 
 /* ── Render ──────────────────────────────────────────────────────────────── */
+function fillCell(td, c, v) {
+    const dp = Number.isInteger(c.decimals) ? c.decimals : 0;
+    switch (c.format) {
+        case 'gbp':
+            td.className = 'col-right';
+            td.textContent = fmtGBP(v);
+            if (v != null && v < 0) td.style.color = '#dc2626';
+            return;
+        case 'number':
+            td.className = 'col-right';
+            td.textContent = v == null ? '—'
+                : Number(v).toLocaleString('en-GB', { minimumFractionDigits: dp, maximumFractionDigits: dp });
+            return;
+        case 'pct':
+            td.className = 'col-right';
+            td.textContent = v == null ? '—' : (Number(v) * 100).toFixed(dp) + '%';
+            return;
+        case 'date':
+            td.className = 'col-left';
+            td.textContent = fmtDate(v);
+            return;
+        case 'status':
+            td.className = 'col-left';
+            td.textContent = vehicleStatus(v);
+            return;
+        case 'link':
+            td.className = 'col-center';
+            if (v) {
+                const a = document.createElement('a');
+                a.href = v; a.target = '_blank';
+                a.textContent = c.label || 'Open'; a.className = 'apex-link';
+                td.appendChild(a);
+            }
+            return;
+        default:
+            td.className = 'col-left';
+            td.textContent = v === 'interest_free' ? '0%' : (v == null || v === '' ? '—' : String(v));
+    }
+}
+
+let shownRows = [];   // the rows in the table, filtered and sorted — what the CSV exports
+
 function renderTable(rows) {
     const sorted = sortRows(rows);
+    shownRows = sorted;
     const tbody  = document.getElementById('stock-tbody');
     tbody.innerHTML = '';
 
     sorted.forEach(r => {
-        const status = vehicleStatus(r[21]);
-        const fuel   = normaliseFuel(r[2]);
-        const deriv  = (r[1] || '').split(' / ').slice(0, -1).join(' / ');
+        const status = vehicleStatus(val(r, 'VEHICLE_STATUS'));
         const tr     = document.createElement('tr');
 
         if (status === 'Delivered')       tr.classList.add('vehicle-row-sold');
         else if (status === 'Ordered')    tr.classList.add('vehicle-row-ordered');
-        else if (r[3] === 'interest_free') tr.classList.add('vehicle-row-if');
+        else if (val(r, 'PRICE_BAND') === 'interest_free') tr.classList.add('vehicle-row-if');
 
-        const td = (text, cls) => {
-            const el = document.createElement('td');
-            el.textContent = text;
-            if (cls) el.className = cls;
-            tr.appendChild(el);
-            return el;
-        };
-        const tdLink = (text, href) => {
-            const el = document.createElement('td');
-            el.className = 'col-center';
-            if (href) {
-                const a = document.createElement('a');
-                a.href = href; a.target = '_blank';
-                a.textContent = text; a.className = 'apex-link';
-                el.appendChild(a);
-            }
-            tr.appendChild(el);
-        };
-
-        td(deriv, 'col-left');
-        td(r[3] === 'interest_free' ? '0%' : (r[3] || '—'), 'col-left');
-        td(r[18] || '—', 'col-left');
-        td(status, 'col-left');
-        tdLink('Apex',   r[20] || null);
-        tdLink('Portal', r[26] || null);
-        td(fuel, 'col-left');
-        td(r[23] || '—', 'col-left');
-        td(r[27] ? r[27].slice(0,10).split('-').reverse().join('/') : '—', 'col-left');
-        td(r[19] || '—', 'col-left');
-        td(r[24] ? r[24].slice(0,10).split('-').reverse().join('/') : '—', 'col-left');
-        td(r[25] != null ? Number(r[25]).toLocaleString('en-GB') : '—', 'col-right');
-        td(r[7]  != null ? fmtInt(r[7])  : '—', 'col-right');
-        td(r[8]  != null ? fmtInt(r[8])  : '—', 'col-right');
-        td(r[12] != null && r[12] !== 0 ? fmtGBP(r[12]) : '—', 'col-right');
-        td(r[30] != null && r[30] !== 0 ? fmtGBP(r[30]) : '—', 'col-right');
-        td((r[12] && r[30]) ? ((r[12]/r[30])*100).toFixed(1)+'%' : '—', 'col-right');
-        td(r[13] != null && r[13] !== 0 ? fmtGBP(r[13]) : '—', 'col-right');
-        td(r[14] != null ? fmtGBP(r[14]) : '—', 'col-right');
-        td((r[13] && r[14]) ? fmtPct((r[13]/r[14])*100) : '—', 'col-right');
-        td(r[16] != null ? fmtInt(r[16]) : '—', 'col-right');
-        const gpuTd = td(r[22] != null ? fmtGBP(r[22]) : '—', 'col-right');
-        if (r[22] != null && r[22] < 0) gpuTd.style.color = '#dc2626';
-
+        viewColumns.forEach(c => {
+            const td = document.createElement('td');
+            fillCell(td, c, val(r, c.column));
+            tr.appendChild(td);
+        });
         tbody.appendChild(tr);
     });
 
     document.getElementById('row-count').textContent =
         sorted.length.toLocaleString('en-GB') + ' vehicles';
+}
+
+/* ── CSV export ──────────────────────────────────────────────────────────── */
+function csvEscape(v) {
+    if (v === null || v === undefined) return '';
+    const s = String(v);
+    return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+}
+
+// The rows and columns on screen, with the Settings headings. Raw values (not
+// the formatted display) so numbers stay numeric; status and the 0% price band
+// are written as shown on the page.
+function csvValue(c, v) {
+    if (c.format === 'status') return vehicleStatus(v);
+    if (c.format === 'date' && v) return String(v).slice(0, 10);
+    if (v === 'interest_free') return '0%';
+    return v;
+}
+
+function downloadCsv() {
+    const header = viewColumns.map(c => csvEscape(c.label || c.column)).join(',');
+    const lines = shownRows.map(r => viewColumns.map(c => csvEscape(csvValue(c, val(r, c.column)))).join(','));
+    const blob = new Blob(['﻿' + [header, ...lines].join('\r\n')], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `stock_list_${new Date().toISOString().slice(0,10)}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
 }
 
 /* ── Font size ───────────────────────────────────────────────────────────── */
@@ -407,10 +540,177 @@ function changeFontSize(delta) {
     document.getElementById('fontSizeLabel').textContent  = currentFontPx + 'px';
 }
 
+/* ── Settings: columns and filters (admin only) ──────────────────────────── */
+let columnEditor = null;
+let filterDraft = [];      // [{column, label, description}] being edited
+let filterLiveColumns = []; // every column of the table, for the filter dropdowns
+let hardFilterDraft = [];  // [{column, operator, value}] applied in Snowflake
+
+function renderHardFilterDraft() {
+    const esc = ColumnEditor.esc;
+    const names = filterLiveColumns.map(c => c.column);
+    const operators = [
+        ['equals', 'Equals'], ['not_equals', 'Does not equal'], ['contains', 'Contains'],
+        ['is_blank', 'Is blank'], ['is_not_blank', 'Is not blank'],
+    ];
+    document.getElementById('hardFilterEditor').innerHTML = hardFilterDraft.map((f, i) => {
+        const cols = (f.column && !names.includes(f.column) ? [f.column] : []).concat(names);
+        return `<div class="filter-edit-row">
+            <select title="Column to restrict" onchange="hardFilterDraft[${i}].column = this.value">
+                <option value="">(choose a column)</option>
+                ${cols.map(c => `<option value="${esc(c)}" ${c === f.column ? 'selected' : ''}>${esc(c)}${names.includes(c) ? '' : ' (not in the table)'}</option>`).join('')}
+            </select>
+            <select title="Comparison" onchange="hardFilterDraft[${i}].operator = this.value; renderHardFilterDraft()">
+                ${operators.map(([op, label]) => `<option value="${op}" ${op === f.operator ? 'selected' : ''}>${label}</option>`).join('')}
+            </select>
+            <input type="text" class="f-desc" maxlength="200" value="${esc(f.value || '')}" placeholder="Value"
+                   oninput="hardFilterDraft[${i}].value = this.value"
+                   ${f.operator === 'is_blank' || f.operator === 'is_not_blank' ? 'disabled' : ''}>
+            <button type="button" class="btn btn-sm btn-outline-danger" title="Remove" onclick="hardFilterDraft.splice(${i}, 1); renderHardFilterDraft()">
+                <i class="fas fa-times"></i></button>
+        </div>`;
+    }).join('') || '<div class="text-muted small">No hard filters added yet.</div>';
+}
+
+function addHardFilterDraft() {
+    hardFilterDraft.push({ column: '', operator: 'equals', value: '' });
+    renderHardFilterDraft();
+}
+
+function renderFilterDraft() {
+    const esc = ColumnEditor.esc;
+    const names = filterLiveColumns.map(c => c.column);
+    const last = filterDraft.length - 1;
+    document.getElementById('filterEditor').innerHTML = filterDraft.map((f, i) => {
+        // A saved column no longer in the table still shows, marked.
+        const cols = (f.column && !names.includes(f.column) ? [f.column] : []).concat(names);
+        return `
+            <div class="filter-edit-row">
+                <select title="Column the filter's buttons come from" onchange="filterDraft[${i}].column = this.value">
+                    <option value="">(choose a column)</option>
+                    ${cols.map(c => `<option value="${esc(c)}" ${c === f.column ? 'selected' : ''}>${esc(c)}${names.includes(c) ? '' : ' (not in the table)'}</option>`).join('')}
+                </select>
+                <input type="text" class="f-label" maxlength="60" value="${esc(f.label || '')}" placeholder="Title (empty: column name)"
+                       oninput="filterDraft[${i}].label = this.value">
+                <input type="text" class="f-desc" maxlength="300" value="${esc(f.description || '')}" placeholder="Description (shown on the i)"
+                       oninput="filterDraft[${i}].description = this.value">
+                <button type="button" class="btn btn-sm btn-outline-secondary" title="Move up" onclick="moveFilterDraft(${i}, -1)"
+                        ${i === 0 ? 'disabled' : ''}><i class="fas fa-arrow-up"></i></button>
+                <button type="button" class="btn btn-sm btn-outline-secondary" title="Move down" onclick="moveFilterDraft(${i}, 1)"
+                        ${i === last ? 'disabled' : ''}><i class="fas fa-arrow-down"></i></button>
+                <button type="button" class="btn btn-sm btn-outline-danger" title="Remove" onclick="filterDraft.splice(${i}, 1); renderFilterDraft()">
+                    <i class="fas fa-times"></i></button>
+            </div>`;
+    }).join('') || '<div class="text-muted small">No filters added yet.</div>';
+}
+
+function addFilterDraft() {
+    filterDraft.push({ column: '', label: '', description: '' });
+    renderFilterDraft();
+}
+
+function moveFilterDraft(i, step) {
+    const j = i + step;
+    if (j < 0 || j >= filterDraft.length) return;
+    [filterDraft[i], filterDraft[j]] = [filterDraft[j], filterDraft[i]];
+    renderFilterDraft();
+}
+
+function settingsError(message) {
+    const el = document.getElementById('settings-error');
+    el.textContent = message || '';
+    el.classList.toggle('d-none', !message);
+}
+
+async function openSettings() {
+    settingsError('');
+    columnEditor = null;
+    filterDraft = [];
+    hardFilterDraft = [];
+    document.getElementById('settings-loading').classList.remove('d-none');
+    document.getElementById('settings-content').classList.add('d-none');
+    document.getElementById('settingsSaveBtn').disabled = true;
+    document.getElementById('colEditor').innerHTML = '';
+    document.getElementById('filterEditor').innerHTML = '';
+    document.getElementById('hardFilterEditor').innerHTML = '';
+    bootstrap.Modal.getOrCreateInstance(document.getElementById('settingsModal')).show();
+    try {
+        const resp = await fetch(BASE_URL + '/stock-list/columns').then(r => r.json());
+        if (resp.status !== 'ok') throw new Error(resp.message || 'Could not read the columns');
+        // Widths dragged on the page since loading are kept when saving.
+        const widths = {};
+        document.querySelectorAll('#stock-cols col').forEach((col, i) => {
+            if (viewColumns[i]) widths[viewColumns[i].column] = parseInt(col.style.width) || DEFAULT_WIDTH;
+        });
+        // ColumnEditor measures column-name widths while it renders. Its
+        // container must be visible or every measured width is zero.
+        document.getElementById('settings-content').classList.remove('d-none');
+        columnEditor = new ColumnEditor(document.getElementById('colEditor'), {
+            live: resp.columns,
+            shown: resp.view.map(c => ({ ...c, width: widths[c.column] || c.width || DEFAULT_WIDTH })),
+            formats: COLUMN_FORMATS,
+            numberFormats: NUMBER_FORMATS,
+            newColumn: (column, type) => ({
+                column, label: '', decimals: 0, width: DEFAULT_WIDTH,
+                format: ['NUMBER', 'FLOAT'].includes(type) ? 'number'
+                      : ['DATE', 'TIMESTAMP_NTZ', 'TIMESTAMP_LTZ', 'TIMESTAMP_TZ'].includes(type) ? 'date' : 'text',
+            }),
+        });
+        filterLiveColumns = resp.columns;
+        filterDraft = (resp.filters || []).map(f => ({ ...f }));
+        renderFilterDraft();
+        hardFilterDraft = (resp.hard_filters || []).map(f => ({ ...f }));
+        renderHardFilterDraft();
+        document.getElementById('settingsSaveBtn').disabled = false;
+    } catch (e) {
+        document.getElementById('colEditor').innerHTML = '';
+        document.getElementById('settings-content').classList.add('d-none');
+        settingsError(e.message);
+    } finally {
+        document.getElementById('settings-loading').classList.add('d-none');
+    }
+}
+
+async function saveSettings() {
+    if (!columnEditor) return;
+    const btn = document.getElementById('settingsSaveBtn');
+    btn.disabled = true;
+    settingsError('');
+    try {
+        const hardFilters = hardFilterDraft.map(f => ({
+            column: f.column, operator: f.operator, value: (f.value || '').trim() }));
+        const hardResp = await fetch(BASE_URL + '/stock-list/hard-filters', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ hard_filters: hardFilters }),
+        }).then(r => r.json());
+        if (hardResp.status !== 'ok') throw new Error(hardResp.message || 'Hard filters save failed');
+        // Filters first: a filter with no column chosen stops the save before
+        // anything is written.
+        const filters = filterDraft.map(f => ({
+            column: f.column, label: (f.label || '').trim(), description: (f.description || '').trim() }));
+        const fResp = await fetch(BASE_URL + '/stock-list/filters', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ filters }),
+        }).then(r => r.json());
+        if (fResp.status !== 'ok') throw new Error(fResp.message || 'Filters save failed');
+        const resp = await fetch(BASE_URL + '/stock-list/columns', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ columns: columnEditor.columns() }),
+        }).then(r => r.json());
+        if (resp.status !== 'ok') throw new Error(resp.message || 'Save failed');
+        bootstrap.Modal.getOrCreateInstance(document.getElementById('settingsModal')).hide();
+        fetchData();
+    } catch (e) {
+        settingsError(e.message);
+    } finally {
+        btn.disabled = false;
+    }
+}
+
 /* ── Boot ────────────────────────────────────────────────────────────────── */
 document.getElementById('searchInput').addEventListener('keydown', e => { if (e.key === 'Enter') applyFilters(); });
-document.getElementById('dosInput').addEventListener('keydown',    e => { if (e.key === 'Enter') applyFilters(); });
 
-updateSortIndicators();
-syncTableWidth();
 fetchData();

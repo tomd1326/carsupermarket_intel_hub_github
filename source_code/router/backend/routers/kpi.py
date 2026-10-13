@@ -1164,12 +1164,16 @@ def kpi_custom_data(request: Request, metric: str, agg: str = "sum", source: str
                     target_mode: str = "snowflake", months: int = KPI_DEFAULT_SETTINGS["months"],
                     weeks: int = KPI_DEFAULT_SETTINGS["weeks"],
                     days: int = KPI_DEFAULT_SETTINGS["days_total"],
-                    include_current: bool = False,
+                    current_month: bool = False,
+                    current_week: bool = False,
+                    current_day: bool = False,
                     refresh: str = "",
                     weight_by: str = "",
                     user: str = Depends(require_page_api('kpi'))):
     """Daily/weekly/monthly series for one metric, plus its N-1 and target.
-    include_current: also fill the current (part-elapsed) week and month.
+    current_month / current_week / current_day: also fill the current
+    (part-elapsed) month, week or day. Today only has stock figures in
+    daily_summary; other columns are NULL until tomorrow's build.
     refresh: Load Data's click token — re-reads the column list once per click.
     weight_by: on an Average chart, a daily_summary count column to weight
     each day by, so a week or month is the average over every vehicle rather
@@ -1284,13 +1288,16 @@ def kpi_custom_data(request: Request, metric: str, agg: str = "sum", source: str
         month_abbrs = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']
 
         # ── Daily ─────────────────────────────────────────────────────────────
-        values = [_round(value_at(d)) for d in dates]
+        # Today is left empty unless the chart asks for it; future days always
+        # are (only their N-1 and target are shown).
+        values = [None if d > today or (d == today and not current_day) else _round(value_at(d))
+                  for d in dates]
         values_n1 = [_round(daily_n1_at(d)) for d in dates]
 
         # ── Monthly (current month left empty — it is part elapsed — unless
         # the chart asks for it; next month always empty) ────────────────────
         first_of_this_month = today.replace(day=1)
-        monthly_values = [None if f > first_of_this_month or (f == first_of_this_month and not include_current)
+        monthly_values = [None if f > first_of_this_month or (f == first_of_this_month and not current_month)
                           else _period(_month_dates(f))
                           for f in month_firsts]
         monthly_labels = [month_abbrs[f.month - 1] + ' ' + str(f.year)[2:] for f in month_firsts]
@@ -1302,7 +1309,7 @@ def kpi_custom_data(request: Request, metric: str, agg: str = "sum", source: str
         current_week_monday = _week_monday_of(today)
         weekly_labels = [f"W{m.isocalendar()[1]} ({m.day}-{month_abbrs[m.month-1]})" for m in week_mondays]
         weekly_n1_labels = [f"W{pm.isocalendar()[1]} ({pm.day}-{month_abbrs[pm.month-1]})" for pm in prev_week_mondays]
-        weekly_values = [None if m > current_week_monday or (m == current_week_monday and not include_current)
+        weekly_values = [None if m > current_week_monday or (m == current_week_monday and not current_week)
                          else _period(_week_dates(m))
                          for m in week_mondays]
         weekly_values_n1 = [_period(_week_dates(pm)) for pm in prev_week_mondays]
@@ -1620,8 +1627,17 @@ def _validate_layout(layout: dict, sections: list) -> str | None:
             return "bad subtitle"
         if not isinstance(row.get("invert", False), bool):
             return "bad invert"
-        if not isinstance(row.get("include_current", False), bool):
+        # Which current (part-elapsed) periods to show: {"m": bool, "w": bool,
+        # "d": bool}. Rows saved before the day option hold a single bool,
+        # meaning month and week.
+        current = row.get("include_current", False)
+        if isinstance(current, dict):
+            if set(current) - {"m", "w", "d"} or not all(isinstance(v, bool) for v in current.values()):
+                return "bad include_current"
+        elif not isinstance(current, bool):
             return "bad include_current"
+        if not isinstance(row.get("data_labels", True), bool):
+            return "bad data_labels"
         if row.get("fmt", "num") not in ("num", "pct", "pct100", "k", "km"):
             return f"bad fmt: {row.get('fmt')}"
         decimals = row.get("decimals", 0)
@@ -1681,8 +1697,9 @@ def _validate_layout(layout: dict, sections: list) -> str | None:
 
 
 def _read_kpi_layout_value(key: str):
-    # Layout and settings always live in the PROD cluster so local/dev edits
-    # and prod serve the same dashboard
+    # Layout and settings live in the PROD cluster so local edits and prod
+    # serve the same dashboard. The deployed dev Lambda cannot reach PROD, so
+    # it keeps its own copy in the dev cluster.
     with get_prod_pricer_connection() as conn:
         with conn.cursor() as cur:
             cur.execute("CREATE TABLE IF NOT EXISTS kpi_layout (key VARCHAR(50) PRIMARY KEY, value TEXT)")
@@ -1724,7 +1741,7 @@ def kpi_layout_get(request: Request, user: str = Depends(require_page_api('kpi')
         layout = _read_kpi_layout_value('layout') or KPI_DEFAULT_LAYOUT
         settings = _kpi_settings(_read_kpi_layout_value('settings'))
         notes = _read_kpi_layout_value('notes') or []
-        sections = _read_kpi_layout_value('sections') or KPI_DEFAULT_SECTIONS
+        sections = _kpi_sections(layout)
         themes = _read_kpi_layout_value('themes') or KPI_DEFAULT_THEMES
     except Exception as e:
         # Report it rather than serving an empty layout: the page saves the
@@ -1801,7 +1818,7 @@ def kpi_layout_save(request: Request, payload: dict, user: str = Depends(require
         return {"status": "error", "message": "Only the admin can change the KPI charts"}
     layout = (payload or {}).get("layout")
     try:
-        sections = _read_kpi_layout_value('sections') or KPI_DEFAULT_SECTIONS
+        sections = _kpi_sections(_read_kpi_layout_value('layout') or KPI_DEFAULT_LAYOUT)
         err = _validate_layout(layout or {}, sections)
         if err:
             return {"status": "error", "message": err}
@@ -1810,6 +1827,28 @@ def kpi_layout_save(request: Request, payload: dict, user: str = Depends(require
     except Exception as e:
         logger.error(f"KPI layout save failed: {e}")
         return {"status": "error", "message": str(e)}
+
+
+@router.post("/kpi/client-error")
+def kpi_client_error(request: Request, payload: dict, user: str = Depends(require_page_api('kpi'))):
+    """Logs an error the KPI page hit in the browser, which would otherwise
+    only show in that user's browser console."""
+    message = str((payload or {}).get("message", ""))[:1000]
+    stack = str((payload or {}).get("stack", ""))[:4000]
+    logger.error(f"KPI page error for {user}: {message}\n{stack}")
+    return {"status": "ok"}
+
+
+def _kpi_sections(layout: dict) -> list:
+    """The saved section list, plus any section a chart is in that the list
+    is missing (e.g. no list saved yet, so the defaults are used). Without
+    this the page has nowhere to put that chart and fails to load."""
+    sections = list(_read_kpi_layout_value('sections') or KPI_DEFAULT_SECTIONS)
+    for row in layout.get("rows", []):
+        name = row.get("section")
+        if isinstance(name, str) and name and name not in sections:
+            sections.append(name)
+    return sections
 
 
 def _section_slug(name: str) -> str:
@@ -1851,8 +1890,8 @@ def kpi_sections_save(request: Request, payload: dict, user: str = Depends(requi
                 return {"status": "error", "message": "bad section"}
             renames[old] = name
     try:
-        current = _read_kpi_layout_value('sections') or KPI_DEFAULT_SECTIONS
         layout = _read_kpi_layout_value('layout') or KPI_DEFAULT_LAYOUT
+        current = _kpi_sections(layout)
         rows = layout.get("rows", [])
         for old in renames:
             if old not in current:
@@ -1901,13 +1940,17 @@ def kpi_settings_save(request: Request, payload: dict, user: str = Depends(requi
 # with the charts — each click runs one query for that date range only.
 #
 # What is set where, all on the page:
-#   Settings popup  - the vehicle table and its columns, in order, with
-#                     headings ('vehicle_view' in kpi_layout, shared by every
-#                     chart)
-#   Edit Chart      - the chart's date column and filters (row["vehicles"])
+#   Settings popup  - for each vehicle table, the columns to show, in order,
+#                     with headings, and the grey-out rules ('vehicle_view' in
+#                     kpi_layout, a list keyed by the real table name)
+#   Edit Chart      - the chart's table, date column, filters and whether the
+#                     list is a date range or a single-day snapshot
+#                     (row["vehicles"])
 #
-# Table and column names are checked against INFORMATION_SCHEMA before any
-# query runs, so they can be put into the SQL; filter values are always
+# Each chart picks its own table (shown by its real Snowflake name); the columns
+# for that table are configured once in Settings and reused by every chart that
+# uses it. Table and column names are checked against INFORMATION_SCHEMA before
+# any query runs, so they can be put into the SQL; filter values are always
 # bound as parameters.
 
 _VEHICLE_DB = "PROD_CARSUPERMARKET_DB"
@@ -1924,7 +1967,7 @@ _VEHICLE_FORMATS = {"number", "gbp", "pct", "text", "date", "datetime", "link"}
 
 
 def _vehicle_view_config(stored) -> dict:
-    """The stored View Vehicles setting with defaults filled in. grey_rules:
+    """One table's View Vehicles setting with defaults filled in. grey_rules:
     [{column, op, value}] like a chart filter; a row matching ANY of them shows
     in light grey (cancelled deals by default), checked whether or not the
     column is shown. A setting saved with the older single grey_column /
@@ -1940,15 +1983,45 @@ def _vehicle_view_config(stored) -> dict:
             "grey_rules": grey_rules}
 
 
+def _vehicle_views(stored) -> list:
+    """Every saved per-table View Vehicles config, as a list of
+    {table, columns, grey_rules}. The older single-view dict (one global table,
+    shared by every chart) is migrated to a one-element list. Later entries for
+    the same table win, so a save that re-adds a table replaces its config."""
+    if isinstance(stored, dict):
+        stored = [stored]
+    if not isinstance(stored, list):
+        stored = []
+    by_table = {}
+    for entry in stored:
+        if not isinstance(entry, dict):
+            continue
+        view = _vehicle_view_config(entry)
+        by_table[view["table"]] = view
+    return list(by_table.values())
+
+
+def _vehicle_view_for_table(stored, table: str) -> dict:
+    """The saved config for one table, or an empty default if none is saved yet
+    (so a newly picked table lists nothing until its columns are set up)."""
+    for view in _vehicle_views(stored):
+        if view["table"] == table:
+            return view
+    return {"table": table, "columns": [], "grey_rules": []}
+
+
 def _vehicle_tables() -> list:
     """Every table and view in the PRODUCT_ schemas, as SCHEMA.TABLE."""
+    # Snowflake's LIKE has no default escape character, so the escape must be
+    # named: without ESCAPE, 'PRODUCT\_%' looks for a literal backslash and
+    # matches nothing, leaving the picker with only the table already chosen.
     with SnowflakeClient() as sf:
         rows, _ = sf.execute(f"""
             SELECT table_schema, table_name
             FROM {_VEHICLE_DB}.INFORMATION_SCHEMA.TABLES
-            WHERE table_schema LIKE %s
+            WHERE table_schema LIKE %s ESCAPE '!'
             ORDER BY table_schema, table_name
-        """, ["PRODUCT\\_%"])
+        """, ["PRODUCT!_%"])
     return [f"{r[0]}.{r[1]}" for r in rows]
 
 
@@ -2003,11 +2076,19 @@ def _validate_vehicle_view(view) -> str | None:
 
 
 def _validate_row_vehicles(vehicles) -> str | None:
-    """A chart's View Vehicles setting: its date column and filters."""
+    """A chart's View Vehicles setting: its table, date column, filters and
+    whether the list is a date range or a single-day snapshot. An absent table
+    falls back to the default table, and an absent date_mode to a range, so
+    charts saved before this feel no change."""
     if vehicles is None:
         return None
-    if not isinstance(vehicles, dict) or set(vehicles) - {"date_column", "filters"}:
+    if not isinstance(vehicles, dict) or set(vehicles) - {"table", "date_column", "filters", "date_mode"}:
         return "bad vehicles setting"
+    table = vehicles.get("table")
+    if table is not None and (not isinstance(table, str) or not re.fullmatch(rf"{_IDENTIFIER}\.{_IDENTIFIER}", table)):
+        return "bad vehicle table"
+    if vehicles.get("date_mode", "range") not in ("range", "snapshot"):
+        return "bad date mode"
     date_column = vehicles.get("date_column")
     if not isinstance(date_column, str) or not re.fullmatch(_IDENTIFIER, date_column):
         return "Choose the date column for View Vehicles"
@@ -2090,24 +2171,29 @@ def _json_cell(value):
 
 @router.get("/kpi/vehicle-columns")
 def kpi_vehicle_columns(request: Request, table: str = "", user: str = Depends(require_page_api('kpi'))):
-    """Live table list and the chosen table's columns, read when the Settings or
-    Edit Chart popup opens, so columns added to the table show up straight away."""
+    """Live table list, the saved per-table configs, and the chosen table's
+    columns, read when the Settings or Edit Chart popup opens so columns added to
+    a table show up straight away. `table` picks which table's columns to return
+    (defaults to the first saved config, or the default table)."""
     try:
-        view = _vehicle_view_config(_read_kpi_layout_value('vehicle_view'))
-        table = table or view["table"]
+        stored = _read_kpi_layout_value('vehicle_view')
+        views = _vehicle_views(stored)
+        table = table or (views[0]["table"] if views else _VEHICLE_TABLE_DEFAULT)
+        view = _vehicle_view_for_table(stored, table)
         columns = _vehicle_table_columns(table)
         tables = _vehicle_tables() if is_admin(user) else []
     except Exception as e:
         message = getattr(e, "detail", None) or str(e)
         logger.error(f"KPI vehicle columns failed: {message}")
         return {"status": "error", "message": message}
-    return {"status": "ok", "view": view, "table": table, "tables": tables,
+    return {"status": "ok", "view": view, "views": views, "table": table, "tables": tables,
             "columns": [{"column": c, "type": t} for c, t in columns]}
 
 
 @router.post("/kpi/vehicle-view")
 def kpi_vehicle_view_save(request: Request, payload: dict, user: str = Depends(require_page_api('kpi'))):
-    """The vehicle table and the columns View Vehicles shows. Admin only."""
+    """One table's View Vehicles columns, saved (added or replaced) in the list.
+    Admin only."""
     if not is_admin(user):
         return {"status": "error", "message": "Only the admin can change the View Vehicles columns"}
     view = (payload or {}).get("view")
@@ -2117,18 +2203,24 @@ def kpi_vehicle_view_save(request: Request, payload: dict, user: str = Depends(r
     try:
         if not _vehicle_table_columns(view["table"]):
             return {"status": "error", "message": f"Table {view['table']} was not found"}
-        _write_kpi_layout_value('vehicle_view', view)
+        view = _vehicle_view_config(view)
+        views = [v for v in _vehicle_views(_read_kpi_layout_value('vehicle_view')) if v["table"] != view["table"]]
+        views.append(view)
+        _write_kpi_layout_value('vehicle_view', views)
     except Exception as e:
         logger.error(f"KPI vehicle view save failed: {e}")
         return {"status": "error", "message": str(e)}
-    return {"status": "ok", "view": _vehicle_view_config(view)}
+    return {"status": "ok", "view": view, "views": views}
 
 
 @router.get("/kpi/vehicles")
 def kpi_vehicles(request: Request, row_id: str, start: str, end: str,
                  user: str = Depends(require_page_api('kpi'))):
-    """The vehicles behind one chart point: the chart's saved date column and
-    filters, between start and end (inclusive), with the Settings columns."""
+    """The vehicles behind one chart point: the chart's own table, date column
+    and filters, with that table's Settings columns. A range list covers start
+    to end (inclusive); a snapshot list is the single end day, so a weekly or
+    monthly point on a per-vehicle-per-day table (stock) returns one day rather
+    than every vehicle times every day."""
     try:
         start_date = datetime.date.fromisoformat(start)
         end_date = datetime.date.fromisoformat(end)
@@ -2144,24 +2236,28 @@ def kpi_vehicles(request: Request, row_id: str, start: str, end: str,
         vehicles = row.get("vehicles")
         if not vehicles:
             return {"status": "error", "message": "View Vehicles is not set up for this chart"}
-        view = _vehicle_view_config(_read_kpi_layout_value('vehicle_view'))
-        live = dict(_vehicle_table_columns(view["table"]))
+        table = vehicles.get("table") or _VEHICLE_TABLE_DEFAULT
+        view = _vehicle_view_for_table(_read_kpi_layout_value('vehicle_view'), table)
+        live = dict(_vehicle_table_columns(table))
         if not live:
-            return {"status": "error", "message": f"Table {view['table']} was not found"}
+            return {"status": "error", "message": f"Table {table} was not found"}
 
         # Ticked columns that have since gone from the table are left out
         # rather than failing the whole list.
         shown = [c for c in view["columns"] if c["column"] in live]
         missing = [c["column"] for c in view["columns"] if c["column"] not in live]
         if not shown:
-            return {"status": "error", "message": "No View Vehicles columns are chosen - set them in Settings"}
+            return {"status": "error", "message": f"No View Vehicles columns are set up for {table} - set them in Settings"}
         date_col = vehicles["date_column"]
         if date_col not in live:
-            return {"status": "error", "message": f"Date column {date_col} is not in {view['table']}"}
-        where, params = [f"{date_col}::DATE BETWEEN %s AND %s"], [start_date.isoformat(), end_date.isoformat()]
+            return {"status": "error", "message": f"Date column {date_col} is not in {table}"}
+        if vehicles.get("date_mode", "range") == "snapshot":
+            where, params = [f"{date_col}::DATE = %s"], [end_date.isoformat()]
+        else:
+            where, params = [f"{date_col}::DATE BETWEEN %s AND %s"], [start_date.isoformat(), end_date.isoformat()]
         for f in vehicles.get("filters", []):
             if f["column"] not in live:
-                return {"status": "error", "message": f"Filter column {f['column']} is not in {view['table']}"}
+                return {"status": "error", "message": f"Filter column {f['column']} is not in {table}"}
             try:
                 sql, values = _filter_sql(f, live[f["column"]])
             except ValueError as e:
@@ -2192,7 +2288,7 @@ def kpi_vehicles(request: Request, row_id: str, start: str, end: str,
         with SnowflakeClient() as sf:
             rows, _ = sf.execute(f"""
                 SELECT {select_cols}
-                FROM {_VEHICLE_DB}.{view['table']}
+                FROM {_VEHICLE_DB}.{table}
                 WHERE {' AND '.join(where)}
                 ORDER BY {date_col}
                 LIMIT {_VEHICLE_ROW_LIMIT + 1}
@@ -2214,6 +2310,8 @@ def kpi_vehicles(request: Request, row_id: str, start: str, end: str,
         "truncated": len(rows) > _VEHICLE_ROW_LIMIT,
         "row_limit": _VEHICLE_ROW_LIMIT,
         "missing_columns": missing,
+        "table": table,
+        "date_mode": vehicles.get("date_mode", "range"),
     }
 
 

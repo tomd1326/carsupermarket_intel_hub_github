@@ -91,15 +91,22 @@ def _get_pool() -> psycopg2.pool.ThreadedConnectionPool:
 
 
 def _get_prod_pricer_pool() -> psycopg2.pool.ThreadedConnectionPool:
-    """Pool for analytics reads, which always target the PROD pricer DB.
+    """Pool for reads that target the PROD pricer DB when it can be reached.
 
     On the prod Lambda that is the same cluster, user and database as the main
     pool, so the two share one pool and the container opens one set of
-    connections instead of two. In dev and local this must stay a separate pool:
-    there the main pool points at the dev cluster while analytics still has to
-    read prod, so sharing would silently read the wrong cluster.
+    connections instead of two.
+
+    The deployed dev Lambda (us-east-2) has no network route to the prod
+    cluster in eu-west-1, so there it also uses the main pool, which is the dev
+    cluster. Deployed dev therefore has its own KPI layout and page names.
+
+    Only local (over the VPN) keeps a separate pool that reads prod while the
+    main pool points at dev. AWS sets AWS_LAMBDA_FUNCTION_NAME in every Lambda
+    and never locally; LOCAL_ENV cannot be used, since `python main.py` runs
+    locally without it.
     """
-    if _is_prod_lambda():
+    if _is_prod_lambda() or os.getenv('AWS_LAMBDA_FUNCTION_NAME'):
         return _get_pool()
 
     global _prod_pricer_pool
@@ -681,7 +688,7 @@ def save_page_names(conn, names: dict, updated_by: str) -> None:
 
 @contextmanager
 def get_prod_pricer_connection():
-    """Always connects to prod pricer DB — used for analytics reads (user_sessions, user_events)."""
+    """Connects to the prod pricer DB on prod and local; the dev DB on the deployed dev Lambda."""
     try:
         pool = _get_prod_pricer_pool()
     except UnauthorizedSSOTokenError:

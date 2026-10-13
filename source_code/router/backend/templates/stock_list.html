@@ -21,10 +21,24 @@
         .filter-bar {
             display: flex;
             flex-wrap: wrap;
-            align-items: center;
+            align-items: flex-end;   /* button rows line up along the bottom */
             gap: 6px 0;
             margin-bottom: 10px;
         }
+        /* Titled groups: the title on its own line, the buttons in a row below. */
+        .filter-group.titled { flex-direction: column; align-items: flex-start; gap: 3px; }
+        .filter-title { font-size: 0.875em; font-weight: 600; line-height: 1.2; }
+        .filter-buttons { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
+        .filter-buttons select { width: auto; max-width: 220px; }
+
+        /* Settings popup */
+        .settings-section { font-weight: 700; color: #334155; border-bottom: 1px solid #e2e8f0; padding-bottom: 4px; }
+        .filter-edit-row { display: flex; align-items: center; gap: 6px; padding: 3px 0; font-size: 0.8rem; }
+        .filter-edit-row select, .filter-edit-row input { padding: 3px 7px; border: 1px solid #cbd5e1; border-radius: 5px; font-size: 0.78rem; }
+        .filter-edit-row select { width: 300px; }
+        .filter-edit-row .f-label { width: 170px; }
+        .filter-edit-row .f-desc { flex: 1; min-width: 200px; }
+        .filter-edit-row .btn { padding: 2px 7px; font-size: 0.72rem; }
         .filter-group {
             display: flex;
             align-items: center;
@@ -34,14 +48,21 @@
             padding-left: 10px;
             margin-left: 10px;
         }
-        .filter-group:first-child { border-left: none; padding-left: 0; margin-left: 0; }
-        .filter-btn { border-radius: 20px; padding: 2px 10px; font-size: 13px; }
+        .filter-bar > .filter-group:first-child { border-left: none; padding-left: 0; margin-left: 0; }
+        .filter-btn, .missing-btn { border-radius: 20px; padding: 2px 10px; font-size: 13px; }
+        /* Missing buttons switch off with a second click. Bootstrap's outline
+           hover fills the button dark grey, so a button just switched off still
+           looked on while the mouse was over it — light grey instead. */
+        .missing-btn.btn-outline-secondary:hover,
+        .missing-btn.btn-outline-secondary:focus,
+        .missing-btn.btn-outline-secondary:active { background: #e9ecef; color: #6c757d; box-shadow: none; }
 
         .table-wrap {
             overflow-x: auto;
             overflow-y: auto;
-            max-height: 78vh;
-            padding: 0 32px 24px 32px;
+            max-height: 78vh; /* replaced by fitTableWrap() in stock_list.js */
+            padding: 0 32px;
+            margin-bottom: 32px; /* matches TABLE_BOTTOM_GAP in stock_list.js */
         }
 
         #stock-table {
@@ -83,7 +104,9 @@
         }
         #stock-table td:first-child { border-left: 1px solid #b0b0b0; }
         #stock-table td.col-right  { text-align: right; }
-        #stock-table td.col-center { text-align: center; }
+        /* Link-button cells: less side padding so the Apex / Portal buttons fit
+           their narrow columns, and no "..." marker if a button is a touch wider. */
+        #stock-table td.col-center { text-align: center; padding-left: 2px; padding-right: 2px; text-overflow: clip; }
         #stock-table .vehicle-row-sold td    { background: #fde8d8; color: #000; }
         #stock-table .vehicle-row-ordered td { background: #d1d5db; color: #000; }
         #stock-table .vehicle-row-if td      { background: #bfdbfe; color: #000; }
@@ -123,90 +146,78 @@
         }
 
         #row-count { white-space: nowrap; }
-        #dosInput::-webkit-inner-spin-button,
-        #dosInput::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
 
         .summary-bar { display: flex; align-items: center; gap: 24px; flex-wrap: wrap; margin-bottom: 10px; }
         .summary-item { font-size: 13px; }
-        /* Shared Back / Home / nav button size across all pages */
     </style>
 </head>
 <body>
     <div id="resize-ghost"></div>
-    {{ account_nav(user) }}
+    {{ account_nav(user, show_back=True) }}
 
     <div class="controls">
-        <div class="d-flex align-items-center gap-3 mb-3">
-            <h2 class="mb-0" style="font-size:20px;font-weight:700">{{ page_name('stock_list') }}</h2>
-            <a href="javascript:history.back()" class="btn btn-outline-secondary nav-btn">
-                <i class="fas fa-arrow-left me-1"></i>Back
-            </a>
+        <div class="page-header">
+            <h2>{{ page_name('stock_list') }}</h2>
             <button id="fetchBtn" class="btn btn-primary btn-sm" onclick="fetchData(true)">
                 <i class="fas fa-sync-alt me-1"></i>Refresh Data
             </button>
-            <span id="sf-status" class="text-muted small"><i class="fas fa-snowflake me-1 text-info"></i>Snowflake</span>
-            <span id="apex-updated" class="text-muted small" style="display:none">Apex data updated: <strong id="apex-updated-val"></strong></span>
+            {% if is_admin %}
+            <button class="btn btn-outline-secondary btn-sm" onclick="openSettings()">
+                <i class="fas fa-cog me-1"></i>Settings
+            </button>
+            {% endif %}
+            <span id="sf-status" class="toolbar-text"><i class="fas fa-snowflake me-1 text-info"></i>Snowflake</span>
+            <span id="apex-updated" class="toolbar-text" style="display:none">Apex data updated: <strong id="apex-updated-val"></strong></span>
         </div>
 
-        <div id="fetch-loading" class="text-muted small mb-3">
-            <span class="spinner-border spinner-border-sm me-2"></span>Loading&hellip;
-        </div>
+        <div class="page-loading"><i class="fas fa-sync-alt spin"></i> Loading...</div>
 
         <div id="data-section" style="display:none">
             <div class="summary-bar" id="summary-bar">
-                <span class="summary-item d-flex align-items-center gap-2">
-                    <strong>Days of Sales</strong>
-                    <input type="number" id="dosInput" class="form-control form-control-sm" style="width:70px;-moz-appearance:textfield" min="1" step="1" placeholder="days" onclick="this.select()">
-                    <button class="btn btn-sm btn-outline-secondary" onclick="applyFilters()">Apply</button>
-                    <button class="btn btn-sm btn-outline-secondary" id="dosClearBtn" style="display:none" onclick="clearDosFilter()">Clear</button>
-                </span>
-                <span class="summary-item" style="border-left:1.5px solid #cbd5e1;padding-left:16px"><strong>Total Stock:</strong> <span id="sum-stock">—</span></span>
+                <span class="summary-item"><strong>Total Stock:</strong> <span id="sum-stock">—</span></span>
                 <span class="summary-item" style="color:#374151"><strong>Total Ordered:</strong> <span id="sum-ordered">—</span></span>
-                <span class="summary-item" style="color:#b45309"><strong>Total Delivered:</strong> <span id="sum-delivered">—</span></span>
-                <span class="text-muted small" id="sum-filtered-note" style="display:none">(filtered view)</span>
             </div>
 
             <div class="filter-bar">
-                <div class="filter-group">
-                    <span class="fw-semibold small">Status</span>
+                <div class="filter-group titled">
+                    <span class="filter-title">Status</span>
+                    <div class="filter-buttons">
                     <button class="btn btn-sm btn-dark filter-btn" data-group="status" data-value="All">All</button>
                     <button class="btn btn-sm btn-outline-secondary filter-btn" data-group="status" data-value="Stock">Stock</button>
                     <button class="btn btn-sm btn-outline-secondary filter-btn" data-group="status" data-value="Ordered">Ordered</button>
-                    <button class="btn btn-sm btn-outline-secondary filter-btn" data-group="status" data-value="Delivered">Delivered</button>
+                    </div>
                 </div>
-                <div class="filter-group">
-                    <span class="fw-semibold small">Price Band</span>
-                    <button class="btn btn-sm btn-dark filter-btn" data-group="band" data-value="All">All</button>
-                    <button class="btn btn-sm btn-outline-secondary filter-btn" data-group="band" data-value="<10k">&lt;10k</button>
-                    <button class="btn btn-sm btn-outline-secondary filter-btn" data-group="band" data-value="10-12.5k">10-12.5k</button>
-                    <button class="btn btn-sm btn-outline-secondary filter-btn" data-group="band" data-value="12.5-15k">12.5-15k</button>
-                    <button class="btn btn-sm btn-outline-secondary filter-btn" data-group="band" data-value="15-20k">15-20k</button>
-                    <button class="btn btn-sm btn-outline-secondary filter-btn" data-group="band" data-value="20-25k">20-25k</button>
-                    <button class="btn btn-sm btn-outline-secondary filter-btn" data-group="band" data-value="25-30k">25-30k</button>
-                    <button class="btn btn-sm btn-outline-secondary filter-btn" data-group="band" data-value="30k+">30k+</button>
-                    <button class="btn btn-sm btn-outline-secondary filter-btn" data-group="band" data-value="interest_free">0%</button>
+                <!-- Filters added in Settings, built by stock_list.js. display:contents
+                     so each group sits in the filter bar like the fixed ones. -->
+                <div id="custom-filters" style="display:contents"></div>
+                <div class="filter-group titled">
+                    <span class="filter-title">Missing</span>
+                    <!-- On/off, independent of each other: both on shows cars missing both. -->
+                    <div class="filter-buttons">
+                    <button class="btn btn-sm btn-outline-secondary missing-btn" data-missing="cap"
+                            title="No CAP Live Clean value">CAP Data</button>
+                    <button class="btn btn-sm btn-outline-secondary missing-btn" data-missing="at"
+                            title="No Autotrader retail valuation">AT Data</button>
+                    </div>
                 </div>
-                <div class="filter-group">
-                    <span class="fw-semibold small">Fuel</span>
-                    <button class="btn btn-sm btn-dark filter-btn" data-group="fuel" data-value="All">All</button>
-                    <button class="btn btn-sm btn-outline-secondary filter-btn" data-group="fuel" data-value="Petrol">Petrol</button>
-                    <button class="btn btn-sm btn-outline-secondary filter-btn" data-group="fuel" data-value="Diesel">Diesel</button>
-                    <button class="btn btn-sm btn-outline-secondary filter-btn" data-group="fuel" data-value="Hybrid">Hybrid</button>
-                    <button class="btn btn-sm btn-outline-secondary filter-btn" data-group="fuel" data-value="Electric">Electric</button>
-                </div>
-                <div class="filter-group">
-                    <span class="fw-semibold small">Search</span>
+                <div class="filter-group titled">
+                    <span class="filter-title">Search</span>
+                    <div class="filter-buttons">
                     <input type="text" id="searchInput" class="form-control form-control-sm" style="width:140px" placeholder="Make / Model / VRM">
                     <button class="btn btn-sm btn-outline-secondary" onclick="applyFilters()">Search</button>
+                    </div>
                 </div>
                 <div class="filter-group" style="border-left:none;margin-left:16px;gap:8px">
-                    <span id="row-count" class="small text-muted"></span>
+                    <span id="row-count" class="toolbar-text"></span>
+                    <span class="text-muted small" id="sum-filtered-note" style="display:none">(filtered view)</span>
                     <button class="btn btn-sm btn-outline-secondary" onclick="clearAllFilters()">Clear Filters</button>
-                    <span class="small text-muted ms-2">Font</span>
+                    <span class="toolbar-text ms-2">Font</span>
                     <button class="btn btn-outline-secondary btn-sm px-2 py-0" onclick="changeFontSize(-1)">−</button>
-                    <span id="fontSizeLabel" class="small text-muted" style="min-width:28px;text-align:center">12px</span>
+                    <span id="fontSizeLabel" class="toolbar-text" style="min-width:34px;text-align:center">12px</span>
                     <button class="btn btn-outline-secondary btn-sm px-2 py-0" onclick="changeFontSize(1)">+</button>
                 </div>
+                <!-- Pushed to the right-hand end of the filter bar. -->
+                <button class="btn btn-csv" style="margin-left:auto" onclick="downloadCsv()"><i class="fas fa-download"></i> CSV</button>
             </div>
         </div>
     </div>
@@ -214,62 +225,57 @@
     <div id="table-error" class="alert alert-danger d-none mx-4 mt-2"></div>
     <div class="table-wrap d-none mt-3" id="table-wrap">
         <table id="stock-table">
-            <colgroup>
-                <col style="width:280px"><!-- make/model/deriv -->
-                <col style="width:65px"> <!-- price band -->
-                <col style="width:75px"> <!-- vrm -->
-                <col style="width:68px"> <!-- status -->
-                <col style="width:46px"> <!-- apex -->
-                <col style="width:52px"> <!-- portal -->
-                <col style="width:65px"> <!-- fuel -->
-                <col style="width:110px"><!-- location -->
-                <col style="width:80px"> <!-- delivered -->
-                <col style="width:72px"> <!-- supplier -->
-                <col style="width:80px"> <!-- dfr -->
-                <col style="width:62px"> <!-- mileage -->
-                <col style="width:40px"> <!-- dis -->
-                <col style="width:40px"> <!-- dts -->
-                <col style="width:90px"> <!-- purchase price -->
-                <col style="width:90px"> <!-- cap live clean -->
-                <col style="width:55px"> <!-- cap % -->
-                <col style="width:80px"> <!-- sell price -->
-                <col style="width:80px"> <!-- at ptm -->
-                <col style="width:58px"> <!-- at ptm % -->
-                <col style="width:48px"> <!-- at rating -->
-                <col style="width:68px"> <!-- gpu-m -->
-            </colgroup>
-            <thead>
-                <tr>
-                    <th data-sort="deriv">Make / Model / Derivative</th>
-                    <th data-sort="price_band">Price Band<span class="sort-arrow"></span></th>
-                    <th data-sort="vrm">VRM<span class="sort-arrow"></span></th>
-                    <th data-sort="status">Status<span class="sort-arrow"></span></th>
-                    <th>Apex</th>
-                    <th>Portal</th>
-                    <th data-sort="fuel">Fuel<span class="sort-arrow"></span></th>
-                    <th data-sort="location">Location<span class="sort-arrow"></span></th>
-                    <th data-sort="delivered">Delivered<span class="sort-arrow"></span></th>
-                    <th data-sort="supplier">Supplier<span class="sort-arrow"></span></th>
-                    <th data-sort="dfr">DFR<span class="sort-arrow"></span></th>
-                    <th data-sort="mileage">Mileage<span class="sort-arrow"></span></th>
-                    <th data-sort="dis">DIS<span class="sort-arrow"></span></th>
-                    <th data-sort="dts">DTS<span class="sort-arrow"></span></th>
-                    <th data-sort="purchase_price">Purchase Price<span class="sort-arrow"></span></th>
-                    <th data-sort="cap_clean">CAP Live Clean<span class="sort-arrow"></span></th>
-                    <th data-sort="cap_pct">CAP %<span class="sort-arrow"></span></th>
-                    <th data-sort="sell_price">Sell Price<span class="sort-arrow"></span></th>
-                    <th data-sort="at_ptm">AT PTM<span class="sort-arrow"></span></th>
-                    <th data-sort="at_ptm_pct">AT PTM %<span class="sort-arrow"></span></th>
-                    <th data-sort="at_rating">AT Rating<span class="sort-arrow"></span></th>
-                    <th data-sort="gpu_m">GPU-M<span class="sort-arrow"></span></th>
-                </tr>
-            </thead>
+            <!-- Columns are built from the Settings columns (stock_list.js). -->
+            <colgroup id="stock-cols"></colgroup>
+            <thead><tr id="stock-head"></tr></thead>
             <tbody id="stock-tbody"></tbody>
         </table>
     </div>
 
+    <div class="modal fade" id="settingsModal" tabindex="-1" aria-hidden="true">
+        <div class="modal-dialog modal-xl" style="max-width:min(1500px, 95vw)">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">Stock List settings</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body">
+                    <div id="settings-error" class="alert alert-danger d-none py-1 small"></div>
+                    <div id="settings-loading" class="section-loading" role="status" aria-live="polite">
+                        <i class="fas fa-sync-alt spin" aria-hidden="true"></i> Loading settings...
+                    </div>
+                    <div id="settings-content" class="d-none">
+                    <h6 class="settings-section">Columns</h6>
+                    <p class="text-muted small mb-2">Columns of <strong>PRODUCT_VEHICLE_JOURNEY.CURRENT_STOCK</strong>.
+                        The heading box sets the name shown on the page; leave it empty to show the column name.</p>
+                    <div id="colEditor"><div class="text-muted small">Loading columns&hellip;</div></div>
+
+                    <h6 class="settings-section mt-4">Filters</h6>
+                    <p class="text-muted small mb-2">Each filter is a row of buttons on the page, one for every value
+                        found in its column (a dropdown when there are more than 15). The description shows when
+                        hovering the "i" next to the filter's title. Status, Missing and Search are always shown.</p>
+                    <div id="filterEditor"></div>
+                    <button type="button" class="btn btn-sm btn-outline-primary mt-2" onclick="addFilterDraft()">
+                        <i class="fas fa-plus"></i> Add filter</button>
+
+                    <h6 class="settings-section mt-4">Hard filters</h6>
+                    <p class="text-muted small mb-2">These rules apply to the Snowflake data for everyone, including the totals and CSV export. They do not appear as buttons on the page. All rules must match.</p>
+                    <div id="hardFilterEditor"></div>
+                    <button type="button" class="btn btn-sm btn-outline-primary mt-2" onclick="addHardFilterDraft()">
+                        <i class="fas fa-plus"></i> Add hard filter</button>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <button type="button" class="btn btn-primary" id="settingsSaveBtn" onclick="saveSettings()" disabled>Save</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
     <script>window.BASE_URL = "{{ BASE_URL }}";</script>
+    <script src="{{ static_url('js/column_editor.js') }}"></script>
     <script src="{{ BASE_URL }}/static/js/stock_list.js"></script>
 </body>
 </html>
