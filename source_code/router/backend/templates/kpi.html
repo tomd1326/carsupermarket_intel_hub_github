@@ -124,25 +124,21 @@
             cursor: pointer; color: #6b7280; padding: 0 2px; margin-top: -4px;
         }
         .modal-close-x:hover { color: #111; }
-        .page-loading {
-            display: none; position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
-            align-items: center; gap: 16px; font-size: 1.8rem; font-weight: 600; color: #64748b;
-        }
-        .page-is-loading .page-loading { display: flex; }
-        /* Own spin rather than Font Awesome's fa-spin, which stops moving when
-           Windows has animations turned off */
-        .spin { display: inline-block; animation: css-spin 0.8s linear infinite; }
+        /* .page-loading and .spin: shared style in theme.css. */
         /* Hidden, not removed, so charts drawn during the load still get their real size */
         .page-is-loading #sectionsContainer { visibility: hidden; }
 
         /* ── Point popup and View Vehicles ──────────────────────────────────── */
         .chart-wrap canvas { cursor: pointer; }
-        .modal-box.point-modal { width: 1400px; max-width: 96vw; max-height: 86vh; display: flex; flex-direction: column; }
+        /* Narrow until the vehicles load, then full width for the table. */
+        .modal-box.point-modal { width: 560px; max-width: 96vw; max-height: 86vh; display: flex; flex-direction: column; }
+        .modal-box.point-modal.has-vehicles { width: 1400px; }
         .modal-overlay#pointModal { padding-top: 6vh; }
         .point-figures { display: flex; gap: 22px; flex-wrap: wrap; font-size: 0.86rem; color: #334155; margin-bottom: 12px; }
         .point-figures b { color: #0f172a; }
         .point-actions { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
         .point-status { font-size: 0.82rem; color: #64748b; }
+        .point-inspect { display: block; margin-top: 3px; color: #b45309; }
         /* Scroll container with no border or top padding: the frame is drawn
            on the table itself, and a sticky header pins flush to this box's
            top edge, so rows never show through a gap above it. */
@@ -259,15 +255,21 @@
            row. A touch darker under the pointer so the hover still shows. */
         .vehicles-table tbody tr.grey-row td { background: #e5e7eb; }
         .vehicles-table tbody tr.grey-row:hover td { background: #d9dce1; }
-        /* Admin View / User View switch (admin only). User View hides every
-           editing control, so the admin sees the page as everyone else does. */
-        .view-toggle { display: inline-flex; background: #e2e8f0; border-radius: 8px; padding: 3px; gap: 2px; }
-        .view-toggle button {
-            border: none; background: transparent; border-radius: 6px; padding: 5px 12px;
-            font-size: 0.82rem; font-weight: 600; color: #475569; cursor: pointer;
+        /* Admin View / User View switch: shared style in theme.css. */
+        /* Keep every toolbar label at the shared chart button size. */
+        .top-bar .btn, .top-bar .view-toggle button, .top-bar .status-text { font-size: 0.9rem; }
+        /* Data Labels On / Off on each chart row: the same switch, sized to the
+           row's other buttons. Its own class, since setPageView() resets every
+           .view-toggle button. */
+        .labels-toggle { display: inline-flex; align-items: center; background: #e2e8f0; border-radius: 6px; padding: 2px; gap: 2px; }
+        .labels-toggle-name { font-size: 0.74rem; font-weight: 700; color: #475569; padding: 0 6px; }
+        .labels-toggle button {
+            border: none; background: transparent; border-radius: 5px; padding: 2px 9px;
+            font-size: 0.74rem; font-weight: 700; color: #475569; cursor: pointer;
         }
-        .view-toggle button.active { background: #fff; color: #0f172a; box-shadow: 0 1px 2px rgba(15,23,42,0.15); }
-        body.user-view .admin-only, body.user-view .chart-row-admin { display: none !important; }
+        .labels-toggle button.active { background: #fff; color: #0f172a; box-shadow: 0 1px 2px rgba(15,23,42,0.15); cursor: default; }
+        .chart-row.collapsed .labels-toggle { display: none; }
+        body.user-view .chart-row-admin { display: none !important; }
         /* Settings popup: tabs down the left, one pane showing on the right. The
            box keeps one height whichever tab is open, so it does not jump. */
         .settings-body { display: grid; grid-template-columns: 170px minmax(0, 1fr); gap: 22px; min-height: 62vh; }
@@ -427,9 +429,11 @@
                     </div>
                 </div>
                 <div class="modal-field">
-                    <label>Current week / month</label>
+                    <label>Show current (part-period so far)</label>
                     <div class="agg-options">
-                        <label><input type="checkbox" id="includeCurrentInput"> Show (part-period so far)</label>
+                        <label><input type="checkbox" id="includeCurrentMonthInput"> Month</label>
+                        <label><input type="checkbox" id="includeCurrentWeekInput"> Week</label>
+                        <label><input type="checkbox" id="includeCurrentDayInput"> Day</label>
                     </div>
                 </div>
                 <div class="modal-field span-2" id="weightField">
@@ -559,14 +563,27 @@
             <div class="chart-modal-col">
             <div class="modal-section-title">View Vehicles</div>
             <div class="modal-field" id="vehCopyField">
-                <label for="vehCopySelect">Copy View Vehicles filters from</label>
+                <label for="vehCopySelect">Copy View Vehicles setup from</label>
                 <select id="vehCopySelect" onchange="copyVehSetup(this.value)"></select>
-                <div class="modal-hint">Copies that chart's date column and filters only.</div>
+                <div class="modal-hint">Copies that chart's table, date column, dates and filters.</div>
+            </div>
+            <div class="modal-field">
+                <label for="vehChartTableSelect">Vehicle table</label>
+                <select id="vehChartTableSelect" onchange="onVehChartTableChange()"></select>
+                <div class="modal-hint" id="vehTableHint"></div>
             </div>
             <div class="modal-field">
                 <label for="vehDateSelect">Date column</label>
                 <select id="vehDateSelect" onchange="onVehDateChange()"></select>
-                <div class="modal-hint" id="vehTableHint"></div>
+                <div class="modal-hint">(off) hides the View Vehicles button for this chart.</div>
+            </div>
+            <div class="modal-field" id="vehDateModeField">
+                <label for="vehDateMode">Dates</label>
+                <select id="vehDateMode" onchange="vehDraft.date_mode = this.value">
+                    <option value="range">Range - every day in the clicked week or month</option>
+                    <option value="snapshot">Snapshot - the single last day only</option>
+                </select>
+                <div class="modal-hint">Use Snapshot for stock levels (one row per vehicle per day), so a week or month does not return every vehicle times every day.</div>
             </div>
             <div class="modal-field" id="vehFiltersField">
                 <label>Filters (all must match)</label>
@@ -689,6 +706,7 @@
             <div class="modal-field">
                 <label for="vehTableSelect">Vehicle table</label>
                 <select id="vehTableSelect" onchange="onVehTableChange()"></select>
+                <div class="modal-hint">Each chart picks its own table in Edit Chart. Set up one table's columns here, Save, then switch to the next - each table is saved separately.</div>
             </div>
             <div class="modal-field">
                 <label>Grey out rows where any of these match</label>
@@ -853,16 +871,35 @@
             metricsCatalogue = metricsResp.metrics || [];
             metricsByKey = Object.fromEntries(metricsCatalogue.map(m => [metricKey(m.source, m.column), m]));
         } catch (err) {
-            layoutLoadFailed = true;
-            setPageLoading(false);
-            document.getElementById('loadIcon').classList.remove('spin');
-            document.getElementById('statusText').textContent =
-                'Layout load failed - saving is turned off so the saved charts are not overwritten. ' + err.message;
+            showLayoutError('Layout load failed', err);
             return;
         }
         layoutLoaded = true;
-        renderLayout();
+        try {
+            renderLayout();
+        } catch (err) {
+            // Without this the error only reaches the browser console and the
+            // page sits on "Loading" for good.
+            showLayoutError('Charts could not be shown', err);
+            return;
+        }
         loadAll();
+    }
+
+    // Stops the page loading, turns saving off, shows the reason in the
+    // status line and writes it to the server log (CloudWatch).
+    function showLayoutError(what, err) {
+        layoutLoadFailed = true;
+        setPageLoading(false);
+        document.getElementById('loadIcon').classList.remove('spin');
+        document.getElementById('statusText').textContent =
+            what + ' - saving is turned off so the saved charts are not overwritten. ' + err.message;
+        console.error(err);
+        fetch(BASE_URL + '/kpi/client-error', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ message: what + ': ' + err.message, stack: err.stack || '' }),
+        }).catch(() => {});
     }
     document.addEventListener('DOMContentLoaded', init);
 
@@ -891,6 +928,13 @@
         });
 
         // Place rows into section bodies, in layout order
+        const missing = [...new Set(layout.rows
+            .filter(row => !document.getElementById(sectionDomId(row.section)))
+            .map(row => row.section))];
+        if (missing.length) {
+            throw new Error('Charts are saved in section(s) that are not in the section list: '
+                + missing.join(', ') + '. Sections on this page: ' + SECTIONS.join(', ') + '.');
+        }
         layout.rows.forEach(row => {
             document.getElementById(sectionDomId(row.section)).querySelector('.category-body')
                 .appendChild(getRowElement(row));
@@ -955,6 +999,14 @@
             <button type="button" class="chart-title-btn" onclick="copyChartBelow('${row.id}')">
                 <i class="fas fa-copy"></i> Copy Chart Below
             </button>` : '';
+        // For everyone, in both views. See setDataLabels for who it changes.
+        const labelsToggle = `
+            <span class="labels-toggle" role="group" aria-label="Data labels"
+                  title="${IS_ADMIN ? 'Show or hide the figures on these charts. Sets the default for everyone' : 'Show or hide the figures on these charts'}">
+                <span class="labels-toggle-name">Data Labels</span>
+                <button type="button" class="${dataLabelsOn(row) ? 'active' : ''}" onclick="setDataLabels('${row.id}', true)">On</button>
+                <button type="button" class="${dataLabelsOn(row) ? '' : 'active'}" onclick="setDataLabels('${row.id}', false)">Off</button>
+            </span>`;
         // Hide / show is for everyone; the title shows next to it so a
         // collapsed row still says what it is.
         const toggleButton = `
@@ -964,7 +1016,7 @@
             </button>`;
         if (isRowCollapsed(row.id)) el.classList.add('collapsed');
         el.innerHTML = `
-            <div class="chart-row-actions">${toggleButton}${editButton ? `<span class="chart-row-admin">${editButton}</span>` : ''}</div>
+            <div class="chart-row-actions">${toggleButton}${labelsToggle}${editButton ? `<span class="chart-row-admin">${editButton}</span>` : ''}</div>
             <div class="charts-row">
                 ${card('monthly', 'm')}
                 ${card('weekly', 'w')}
@@ -1020,13 +1072,35 @@
     }
 
     // ── Data loading ─────────────────────────────────────────────────────────
-    function fetchMetricData(source, metric, agg, targetMode, includeCurrent = false, weightBy = '') {
+    // Which current (part-elapsed) periods a chart shows. Rows saved before the
+    // day option hold a single true/false, meaning month and week.
+    function rowCurrent(row) {
+        const c = row.include_current;
+        if (c && typeof c === 'object') return { m: !!c.m, w: !!c.w, d: !!c.d };
+        return { m: !!c, w: !!c, d: false };
+    }
+
+    const CURRENT_INPUTS = { m: 'includeCurrentMonthInput', w: 'includeCurrentWeekInput', d: 'includeCurrentDayInput' };
+
+    function setCurrentInputs(cur) {
+        Object.entries(CURRENT_INPUTS).forEach(([k, id]) => { document.getElementById(id).checked = !!cur[k]; });
+    }
+
+    function readCurrentInputs() {
+        const cur = {};
+        Object.entries(CURRENT_INPUTS).forEach(([k, id]) => { cur[k] = document.getElementById(id).checked; });
+        return cur;
+    }
+
+    function fetchMetricData(source, metric, agg, targetMode, current = {}, weightBy = '') {
         const params = new URLSearchParams({
             source,
             metric,
             agg,
             target_mode: targetMode,
-            include_current: includeCurrent ? '1' : '0',
+            current_month: current.m ? '1' : '0',
+            current_week: current.w ? '1' : '0',
+            current_day: current.d ? '1' : '0',
             refresh: loadToken,
             months: settings.months,
             weeks: settings.weeks,
@@ -1038,7 +1112,7 @@
 
     function fetchRowData(row) {
         if (isStacked(row)) return fetchStackedData(row);
-        const cur = !!row.include_current;
+        const cur = rowCurrent(row);
         if (!row.divide_by) return fetchMetricData(rowSource(row), row.metric, row.agg, rowTargetMode(row), cur, row.weight_by || '');
         return Promise.all([
             fetchMetricData(rowSource(row), row.metric, row.agg, 'none', cur),
@@ -1213,6 +1287,7 @@
             fmt: rowFormatter(row),
             tickFmt: rowTickFormatter(row),
             invert: !!row.invert,
+            dataLabels: dataLabelsOn(row),
         };
 
         const ranges = calcRowRanges(rangeSpecs(d, row.y_min, row.y_max), row.agg,
@@ -1592,6 +1667,7 @@
         document.getElementById('pointStatus').textContent = row.vehicles ? ''
             : 'View Vehicles is not set up for this chart.' + (isUserView() ? '' : ' Choose its date column in Edit Chart.');
         document.getElementById('vehiclesWrap').classList.remove('show');
+        document.querySelector('#pointModal .point-modal').classList.remove('has-vehicles');
         document.getElementById('vehiclesTable').innerHTML = '';
         document.getElementById('vehiclesCsvBtn').style.display = 'none';
         document.getElementById('pointModal').classList.add('open');
@@ -1626,8 +1702,19 @@
             const notes = [`${resp.rows.length.toLocaleString('en-GB')} vehicle${resp.rows.length === 1 ? '' : 's'}`];
             if (resp.truncated) notes.push(`only the first ${resp.row_limit.toLocaleString('en-GB')} shown`);
             if (resp.missing_columns.length) notes.push(`not in the table any more: ${resp.missing_columns.join(', ')}`);
-            status.textContent = notes.join(' - ');
+            // When the chart figure is an average, a ratio or a %, or the list is
+            // a weekly/monthly snapshot (one day, not the whole period), the rows
+            // do not add up to the point - so say the list is for inspection and
+            // does not reconcile to it. A plain count over the full range does.
+            const snapshot = (resp.date_mode || (state.row.vehicles || {}).date_mode) === 'snapshot';
+            const notSum = state.row.agg === 'avg' || state.row.pct || !!state.row.divide_by;
+            let inspect = '';
+            if (notSum) inspect = 'For inspection - the chart figure is an average, so these rows do not add up to it.';
+            else if (snapshot && state.start !== state.end) inspect = `For inspection - a single-day snapshot (${ukDate(state.end)}), not every day in the period.`;
+            status.innerHTML = escHtml(notes.join(' - '))
+                + (inspect ? `<span class="point-inspect">${escHtml(inspect)}</span>` : '');
             renderVehiclesTable();
+            document.querySelector('#pointModal .point-modal').classList.add('has-vehicles');
             document.getElementById('vehiclesWrap').classList.add('show');
             document.getElementById('vehiclesCsvBtn').style.display = resp.rows.length ? '' : 'none';
         } catch (err) {
@@ -1914,7 +2001,7 @@
                 plugins: [
                     makeBgPlugin(invert, chartTarget),
                     PLOT_FRAME_PLUGIN,
-                    makeDataLabelPlugin(canvasId + 'Labels', seriesLabel, 10, fmt, () => settings.label_angle),
+                    ...(opts.dataLabels ? [makeDataLabelPlugin(canvasId + 'Labels', seriesLabel, 10, fmt, () => settings.label_angle)] : []),
                     ...(opts.notes ? [makeNotesPlugin(opts.notes)] : [])
                 ]
             });
@@ -1948,7 +2035,7 @@
     function seriesLabel(s) { return s.label || s.metric; }
 
     function fetchStackedData(row) {
-        const cur = !!row.include_current;
+        const cur = rowCurrent(row);
         return Promise.all(row.series.map(s => fetchMetricData(s.source || 'snowflake', s.metric, row.agg, 'none', cur)))
             .then(results => {
                 const bad = results.findIndex(r => r.status !== 'ok');
@@ -2004,7 +2091,8 @@
             : calcRowRanges(['m', 'w', 'd'].map(k => ({ series: [periods[k].totals], min: (row.y_min || {})[k], max: (row.y_max || {})[k] })),
                 row.agg, sharedAxisValue(row.y_min), sharedAxisValue(row.y_max));
         const existing = rowCharts[row.id] || [];
-        const opts = { fmt, tickFmt, pct, colours: seriesColours(row), names: row.series.map(seriesLabel), segLabels: !!row.seg_labels };
+        const opts = { fmt, tickFmt, pct, colours: seriesColours(row), names: row.series.map(seriesLabel),
+                       segLabels: !!row.seg_labels, dataLabels: dataLabelsOn(row) };
         rowCharts[row.id] = ['m', 'w', 'd'].map((k, i) => buildStackedChart(`cv-${row.id}-${k}`, periods[k], targets[k], existing[i],
             { ...opts, range: ranges[i], day: k === 'd', notes: { rowId: row.id, kind: k, starts: periods[k].starts } }));
         updateDayTitles();
@@ -2027,6 +2115,7 @@
         return {
             id: 'stackLabels',
             afterDatasetsDraw(chart) {
+                if (!opts.dataLabels) return;
                 const { ctx } = chart;
                 const bars = chart.data.datasets
                     .map((ds, i) => ({ ds, meta: chart.getDatasetMeta(i), visible: chart.isDatasetVisible(i) }))
@@ -2061,7 +2150,7 @@
     }
 
     // p = { labels, series: [[values per point], ...] }. Series are stacked
-    // bottom-up in list order; a white 2px line separates the segments.
+    // bottom-up in list order, with no borders between the segments.
     function buildStackedChart(canvasId, p, target, existingChart, opts) {
         const { yMin, yMax, unit } = opts.range;
         const ctx = document.getElementById(canvasId).getContext('2d');
@@ -2071,8 +2160,7 @@
             label: opts.names[i],
             data,
             backgroundColor: opts.colours[i],
-            borderColor: '#ffffff',
-            borderWidth: { top: 2, right: 0, bottom: 0, left: 0 },
+            borderWidth: 0,
             borderSkipped: false,
             stack: 'total',
             order: 2,
@@ -2096,7 +2184,7 @@
                     if (opts.notes && elements.length) openPointModal(opts.notes, chart, elements[0].index);
                 },
                 // Room for the totals above the tallest column.
-                layout: { padding: { top: opts.pct ? 4 : 14 } },
+                layout: { padding: { top: opts.pct || !opts.dataLabels ? 4 : 14 } },
                 plugins: {
                     legend: {
                         display: true, position: 'top', align: 'start',
@@ -2227,7 +2315,7 @@
             document.getElementById('subtitleInput').value = row.subtitle || '';
             document.getElementById('sectionSelect').value = row.section;
             setRadio('aggRadio', row.agg);
-            document.getElementById('includeCurrentInput').checked = !!row.include_current;
+            setCurrentInputs(rowCurrent(row));
             document.getElementById('invertSelect').value = row.invert ? '1' : '0';
             document.getElementById('fmtSelect').value = row.fmt || 'num';
             document.getElementById('decimalsSelect').value = String(row.decimals || 0);
@@ -2250,10 +2338,11 @@
     }
 
     // ── View Vehicles setup in the Edit Chart popup ──
-    // vehDraft is the chart's setting as edited: { date_column ('' = off), filters }.
-    // The table's columns load after the popup opens; until then the saved
-    // values still show, so saving early keeps them.
-    let vehDraft = { date_column: '', filters: [] };
+    // vehDraft is the chart's setting as edited:
+    // { table, date_column ('' = off), filters, date_mode: 'range'|'snapshot' }.
+    // The chosen table's columns load after the popup opens; until then the
+    // saved values still show, so saving early keeps them.
+    let vehDraft = { table: '', date_column: '', filters: [], date_mode: 'range' };
     let vehColumns = null;   // [{ column, type }] of the vehicle table, or null while loading
     let vehTable = '';
 
@@ -2293,10 +2382,10 @@
 
     function openVehSetup(row) {
         vehDraft = row && row.vehicles
-            ? JSON.parse(JSON.stringify({ filters: [], ...row.vehicles }))
-            : { date_column: '', filters: [] };
+            ? JSON.parse(JSON.stringify({ filters: [], date_mode: 'range', ...row.vehicles }))
+            : { table: '', date_column: '', filters: [], date_mode: 'range' };
         vehColumns = null;
-        // Other charts with View Vehicles set up, to copy their date column and filters.
+        // Other charts with View Vehicles set up, to copy their whole setup.
         const sources = layout.rows.filter(r => r.vehicles && (!row || r.id !== row.id));
         document.getElementById('vehCopyField').style.display = sources.length ? '' : 'none';
         document.getElementById('vehCopySelect').innerHTML = '<option value="">(choose a chart)</option>'
@@ -2304,19 +2393,37 @@
                 const count = (r.vehicles.filters || []).length;
                 return `<option value="${escHtml(r.id)}">${escHtml(rowTitle(r))} (${count} filter${count === 1 ? '' : 's'})</option>`;
             }).join('');
-        document.getElementById('vehTableHint').textContent = 'Loading the vehicle table columns...';
         renderVehSetup();
-        fetchVehicleColumns().then(resp => {
+        loadVehChartColumns(vehDraft.table);
+    }
+
+    // Loads the columns of the chart's chosen table (empty table = the server's
+    // default or first configured one), fills the table dropdown, and re-renders.
+    function loadVehChartColumns(table) {
+        vehColumns = null;
+        document.getElementById('vehTableHint').textContent = 'Loading the table columns...';
+        renderVehSetup();
+        return fetchVehicleColumns(table).then(resp => {
             if (!chartModalState) return;
             vehColumns = resp.columns;
             vehTable = resp.table;
+            vehDraft.table = vehDraft.table || resp.table;
+            const tables = resp.tables.length ? resp.tables : [resp.table];
+            const list = tables.includes(vehDraft.table) ? tables : [vehDraft.table, ...tables];
+            const select = document.getElementById('vehChartTableSelect');
+            select.innerHTML = list.map(t => `<option value="${escHtml(t)}">${escHtml(t)}</option>`).join('');
+            select.value = vehDraft.table;
             document.getElementById('vehTableHint').textContent =
-                `Matched to the clicked day, week or month. From ${vehTable}; the table and the columns `
-                + 'the list shows are set in Settings.';
+                'The columns the list shows are set per table in Settings. The clicked day, week or month is matched on the date column.';
             renderVehSetup();
         }).catch(err => {
             document.getElementById('vehTableHint').textContent = 'Could not read the vehicle table: ' + err.message;
         });
+    }
+
+    function onVehChartTableChange() {
+        vehDraft.table = document.getElementById('vehChartTableSelect').value;
+        loadVehChartColumns(vehDraft.table);
     }
 
     // Options for a column select, keeping a saved column that is not in the
@@ -2338,6 +2445,8 @@
         dateSelect.innerHTML = '<option value="">(off - no View Vehicles button)</option>'
             + vehColumnOptions(all.filter(c => VEH_DATE_TYPES.includes(c.type)), vehDraft.date_column);
         dateSelect.value = vehDraft.date_column || '';
+        document.getElementById('vehDateMode').value = vehDraft.date_mode || 'range';
+        document.getElementById('vehDateModeField').style.display = vehDraft.date_column ? '' : 'none';
         document.getElementById('vehFiltersField').style.display = vehDraft.date_column ? '' : 'none';
 
         vehDraft.filters.forEach(fitFilterToKind);
@@ -2401,17 +2510,18 @@
         renderVehSetup();
     }
 
-    // Replaces this chart's View Vehicles date column and filters with another
-    // chart's. Only the popup changes; Save stores it as usual.
+    // Replaces this chart's whole View Vehicles setup (table, date column, dates
+    // and filters) with another chart's. Only the popup changes; Save stores it
+    // as usual.
     function copyVehSetup(rowId) {
         const select = document.getElementById('vehCopySelect');
         const source = rowId ? findRow(rowId) : null;
         select.value = '';
         if (!source || !source.vehicles) return;
         if ((vehDraft.date_column || vehDraft.filters.length)
-            && !confirm(`Replace this chart's View Vehicles date column and filters with those from ${rowTitle(source)}?`)) return;
-        vehDraft = JSON.parse(JSON.stringify({ filters: [], ...source.vehicles }));
-        renderVehSetup();
+            && !confirm(`Replace this chart's View Vehicles setup with that from ${rowTitle(source)}?`)) return;
+        vehDraft = JSON.parse(JSON.stringify({ filters: [], date_mode: 'range', ...source.vehicles }));
+        loadVehChartColumns(vehDraft.table);
     }
 
     function onVehDateChange() {
@@ -2441,7 +2551,8 @@
             if (!f.column) throw new Error('Choose a column for each View Vehicles filter, or remove it.');
             if (!VEH_NO_VALUE_OPS.includes(f.op) && !f.value) throw new Error(`Enter a value for the ${f.column} filter.`);
         });
-        return { date_column: vehDraft.date_column, filters };
+        return { table: vehDraft.table || undefined, date_column: vehDraft.date_column,
+                 filters, date_mode: vehDraft.date_mode === 'snapshot' ? 'snapshot' : 'range' };
     }
 
     // Adding: a new metric resets the defaults to suit it. Editing: the
@@ -2458,7 +2569,7 @@
         const suggested = m.suggested_agg || 'sum';
         setRadio('aggRadio', suggested);
         // Averages and rates read fine part-way through a period; totals do not.
-        document.getElementById('includeCurrentInput').checked = suggested === 'avg';
+        setCurrentInputs({ m: suggested === 'avg', w: suggested === 'avg', d: suggested === 'avg' });
         showYMinInputs();
         document.getElementById('fmtSelect').value = 'num';
         document.getElementById('decimalsSelect').value = suggested === 'avg' ? '1' : '0';
@@ -2982,7 +3093,7 @@
             title,
             subtitle: document.getElementById('subtitleInput').value.trim(),
             agg: radioValue('aggRadio', 'sum'),
-            include_current: document.getElementById('includeCurrentInput').checked,
+            include_current: readCurrentInputs(),
             fmt: document.getElementById('fmtSelect').value,
             decimals: parseInt(document.getElementById('decimalsSelect').value, 10),
             invert: document.getElementById('invertSelect').value === '1',
@@ -3050,7 +3161,7 @@
             title: document.getElementById('titleInput').value.trim() || metric,
             subtitle: document.getElementById('subtitleInput').value.trim(),
             agg: radioValue('aggRadio', 'sum'),
-            include_current: document.getElementById('includeCurrentInput').checked,
+            include_current: readCurrentInputs(),
             fmt: document.getElementById('fmtSelect').value,
             decimals: parseInt(document.getElementById('decimalsSelect').value, 10),
             invert: document.getElementById('invertSelect').value === '1',
@@ -3099,7 +3210,7 @@
 
             const ratioKey = r => JSON.stringify([r.divide_by || null, r.ratio_as || null, r.ratio_target ?? null]);
             const needsData = !existing || existing.metric !== row.metric || rowSource(existing) !== row.source
-                || existing.agg !== row.agg || !!existing.include_current !== !!row.include_current || rowTargetMode(existing) !== row.target_mode
+                || existing.agg !== row.agg || JSON.stringify(rowCurrent(existing)) !== JSON.stringify(rowCurrent(row)) || rowTargetMode(existing) !== row.target_mode
                 || ratioKey(existing) !== ratioKey(row) || (existing.weight_by || '') !== (row.weight_by || '');
             if (existing) rebuildCustomRow(row, needsData);
             else {
@@ -3121,6 +3232,48 @@
     // Duplicate a chart row, settings and all, directly under the original in
     // the same section. Fixed and imported targets belong to the metric, so
     // the copy shares them; a ratio chart's own target is copied with the row.
+    // Figures drawn on a row's charts (line point values, stacked column
+    // totals and segment values). The admin's choice is saved on the row and
+    // is everyone's default; a row saved before this setting existed shows
+    // them. Anyone else can change it for themselves, kept in their browser
+    // only, the same way collapsed rows are.
+    const DATA_LABELS_KEY = 'kpiDataLabels';
+    function ownDataLabels() {
+        try { return JSON.parse(localStorage.getItem(DATA_LABELS_KEY) || '{}') || {}; }
+        catch (e) { return {}; }
+    }
+    function dataLabelsOn(row) {
+        const own = IS_ADMIN ? undefined : ownDataLabels()[row.id];
+        return typeof own === 'boolean' ? own : row.data_labels !== false;
+    }
+
+    async function setDataLabels(rowId, on) {
+        const row = findRow(rowId);
+        if (!row || dataLabelsOn(row) === on) return;   // already showing that
+        if (!IS_ADMIN) {
+            const own = ownDataLabels();
+            own[rowId] = on;
+            try { localStorage.setItem(DATA_LABELS_KEY, JSON.stringify(own)); } catch (e) {}
+            rebuildCustomRow(row, false);
+            return;
+        }
+        // Redraw straight away and save in the background: waiting for the save
+        // first made the switch feel slow. Put it back if the save fails.
+        const before = layout.rows;
+        const rows = before.map(r => r.id === rowId ? { ...r, data_labels: on } : r);
+        layout.rows = rows;
+        rebuildCustomRow(findRow(rowId), false);
+        try {
+            await saveLayout(rows);
+        } catch (err) {
+            if (layout.rows === rows) {
+                layout.rows = before;
+                rebuildCustomRow(findRow(rowId), false);
+            }
+            document.getElementById('statusText').textContent = 'Data labels change failed: ' + err.message;
+        }
+    }
+
     async function copyChartBelow(rowId) {
         const row = findRow(rowId);
         if (!row) return;
@@ -3322,7 +3475,8 @@
         try {
             const resp = await fetchVehicleColumns(table);
             const types = Object.fromEntries(resp.columns.map(c => [c.column, c.type]));
-            const shownBefore = table ? [] : resp.view.columns;
+            // Each table keeps its own saved columns; switching table loads them.
+            const shownBefore = resp.view.columns;
             vehViewDraft = {
                 table: resp.table,
                 shown: shownBefore.map(c => vehColumnSetting(c, types[c.column])),
@@ -3401,11 +3555,14 @@
         renderGreyRules();
     }
 
-    // A different table has different columns, so its list starts empty.
+    // Each table's columns are saved separately. Switching loads the other
+    // table's saved setup; any unsaved edits to the current one are lost, so
+    // warn first (Save, with the Settings Save button, keeps them).
     function onVehTableChange() {
         const table = document.getElementById('vehTableSelect').value;
-        if (vehViewDraft && vehViewDraft.shown.length
-            && !confirm('Switching table clears the chosen columns. Carry on?')) {
+        if (vehViewDraft && table === vehViewDraft.table) return;
+        if (vehViewDraft && JSON.stringify(vehViewPayload(vehViewDraft)) !== vehViewDraft.saved
+            && !confirm(`Unsaved changes to ${vehViewDraft.table} will be lost - Save first to keep them. Switch table anyway?`)) {
             document.getElementById('vehTableSelect').value = vehViewDraft.table;
             return;
         }

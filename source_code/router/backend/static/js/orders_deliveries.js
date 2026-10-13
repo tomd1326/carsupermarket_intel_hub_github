@@ -1104,6 +1104,7 @@ const BASE_URL = window.BASE_URL;
                     </div>
                 </div>
                 <div class="vehicle-modal-body">
+                    <div class="spinner-wrap" id="vehicle-modal-loading"><div class="css-spinner"></div><div style="margin-top:12px;font-size:0.9rem;">Loading vehicles...</div></div>
                     <table class="vehicle-modal-table" id="vehicle-modal-table"></table>
                 </div>`;
             modal.querySelector('.vehicle-modal-close').addEventListener('click', closeVehicleModal);
@@ -1131,8 +1132,18 @@ const BASE_URL = window.BASE_URL;
 
             document.body.appendChild(backdrop);
             document.body.appendChild(modal);
-            renderModalTable();
             document.addEventListener('keydown', vehicleModalKeydown);
+
+            // Building the table for a large group (Grand Total over every
+            // month is 6000+ rows) blocks the page for a few seconds, so let
+            // the popup and its spinner paint first. requestAnimationFrame
+            // runs before the paint; the setTimeout inside it runs after.
+            requestAnimationFrame(() => setTimeout(() => {
+                // Closed, or replaced by another View click, while waiting
+                if (document.getElementById('vehicle-modal') !== modal) return;
+                renderModalTable();
+                modal.querySelector('#vehicle-modal-loading')?.remove();
+            }, 0));
         }
 
         // ── Slicer rendering & interaction ──────────────────────────────────
