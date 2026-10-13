@@ -78,16 +78,21 @@
 </head>
 <body>
     {{ account_nav(user) }}
-    <div style="position:fixed;top:14px;right:24px;z-index:1040;display:flex;align-items:center;gap:8px">
-        <a href="{{ BASE_URL }}/buying-requirements" class="btn btn-primary btn-sm">Go to Buying Requirements</a>
-        <a href="javascript:history.back()" class="btn btn-outline-secondary nav-btn">
-            <i class="fas fa-arrow-left me-1"></i>Back
-        </a>
-    </div>
-
     <div class="container mt-4">
-        <div class="mb-3">
-            <h2 class="mb-0">{{ page_name('tasks') }}</h2>
+        <div class="page-header">
+            <h2>{{ page_name('tasks') }}</h2>
+            <a href="javascript:history.back()" class="btn btn-outline-secondary nav-btn">
+                <i class="fas fa-arrow-left me-1"></i>Back
+            </a>
+            <a href="{{ BASE_URL }}/buying-requirements" class="btn btn-primary btn-sm">Go to Buying Requirements</a>
+            {% if is_admin %}
+            <!-- Admin View shows the admin-only columns and buttons; User View
+                 hides them to see the page as everyone else does. -->
+            <div class="view-toggle" role="group" aria-label="View">
+                <button type="button" data-view="admin" onclick="setPageView('admin')">Admin View</button>
+                <button type="button" data-view="user" onclick="setPageView('user')">User View</button>
+            </div>
+            {% endif %}
         </div>
         <p class="mb-1 fw-bold">Upload File</p>
         <form id="uploadForm" action="{{ BASE_URL }}/upload-task" method="post">
@@ -149,11 +154,11 @@
                 <col style="width:11%">
                 <col style="width:6%">
                 <col style="width:8%">
-                {% if is_admin %}<col style="width:8%">{% endif %}
+                {% if is_admin %}<col class="admin-only" style="width:8%">{% endif %}
                 <col>
                 <col style="width:6%">
-                {% if is_admin %}<col style="width:7%">{% endif %}
-                {% if user == 'tdrayson' %}<col style="width:6%">{% endif %}
+                {% if is_admin %}<col class="admin-only" style="width:7%">{% endif %}
+                {% if user == 'tdrayson' %}<col class="admin-only" style="width:6%">{% endif %}
                 <col style="width:4%">
                 <col style="width:7%">
                 <col style="width:8%">
@@ -208,7 +213,7 @@
                             <a href="#" class="btn btn-secondary btn-sm disabled" aria-disabled="true"><i class="fa fa-download"></i></a>
                         {% endif %}
                         {% if user == 'tdrayson' and task.get('error_log_s3') %}
-                            <a href="#" class="btn btn-outline-warning btn-sm" title="View API error log" onclick="showErrorLog({{ task.task_id }}); return false;"><i class="fa fa-exclamation-triangle"></i></a>
+                            <a href="#" class="btn btn-outline-warning btn-sm admin-only" title="View API error log" onclick="showErrorLog({{ task.task_id }}); return false;"><i class="fa fa-exclamation-triangle"></i></a>
                         {% endif %}
                         {% if task.status in ('pending', 'created') %}
                             <a href="#" class="btn btn-outline-danger btn-sm" title="Delete task" onclick="deleteTask({{ task.task_id }}); return false;"><i class="fa fa-trash"></i></a>
@@ -293,7 +298,7 @@
             }
             {% if user == 'tdrayson' %}
             if (task.error_log_s3) {
-                html += ` <a href="#" class="btn btn-outline-warning btn-sm" title="View API error log" onclick="showErrorLog(${task.task_id}); return false;"><i class="fa fa-exclamation-triangle"></i></a>`;
+                html += ` <a href="#" class="btn btn-outline-warning btn-sm admin-only" title="View API error log" onclick="showErrorLog(${task.task_id}); return false;"><i class="fa fa-exclamation-triangle"></i></a>`;
             }
             {% endif %}
             if (task.status === 'pending' || task.status === 'created') {
@@ -560,6 +565,20 @@
 
         const _isAdmin = {{ 'true' if is_admin else 'false' }};
         const _isTdrayson = {{ 'true' if user == 'tdrayson' else 'false' }};
+
+        // ── Admin View / User View (admin only), as on the KPI page ──
+        // Kept in this browser only.
+        const PAGE_VIEW_KEY = 'supplierStockEvaluatorView';
+        function setPageView(view) {
+            document.body.classList.toggle('user-view', view === 'user');
+            document.querySelectorAll('.view-toggle button').forEach(b => b.classList.toggle('active', b.dataset.view === view));
+            try { localStorage.setItem(PAGE_VIEW_KEY, view); } catch (e) {}
+        }
+        if (_isAdmin) {
+            let savedView = 'admin';
+            try { savedView = localStorage.getItem(PAGE_VIEW_KEY) || 'admin'; } catch (e) {}
+            setPageView(savedView);
+        }
         let _knownTaskStates = {};
 
         function _renderTaskRows(data) {
