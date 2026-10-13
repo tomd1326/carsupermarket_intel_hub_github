@@ -129,17 +129,16 @@ async function fetchData(force = false) {
 }
 
 /* ── Summary bar ─────────────────────────────────────────────────────────── */
-function updateSummary(filtered) {
-    // Delivered vehicles are left out by the server, so only these two remain.
-    let stock = 0, ordered = 0;
-    filtered.forEach(r => {
+function updateSummary() {
+    // These totals cover all loaded stock, regardless of page filters.
+    let ordered = 0;
+    allRows.forEach(r => {
         const s = vehicleStatus(val(r, 'VEHICLE_STATUS'));
-        if (s === 'Stock')        stock++;
-        else if (s === 'Ordered') ordered++;
+        if (s === 'Ordered') ordered++;
     });
-    document.getElementById('sum-stock').textContent   = stock.toLocaleString('en-GB');
+    document.getElementById('sum-stock').textContent   = allRows.length.toLocaleString('en-GB');
     document.getElementById('sum-ordered').textContent = ordered.toLocaleString('en-GB');
-    const anyFilter = Object.values(activeFilters).some(v => v !== 'All') ||
+    const anyFilter = Object.values(activeFilters).some(v => v !== 'All' && (!Array.isArray(v) || v.length > 0)) ||
                       missingFilters.cap || missingFilters.at ||
                       (document.getElementById('searchInput')?.value ?? '') !== '';
     document.getElementById('sum-filtered-note').style.display = anyFilter ? '' : 'none';
@@ -151,10 +150,11 @@ function applyFilters() {
 
     const filtered = allRows.filter(r => {
         const status = vehicleStatus(val(r, 'VEHICLE_STATUS'));
-        if (activeFilters.status !== 'All' && status !== activeFilters.status) return false;
+        const statuses = activeFilters.status;
+        if (statuses !== 'All' && !statuses.includes(status)) return false;
         for (const f of customFilters) {
             const want = activeFilters['col:' + f.column];
-            if (want && want !== 'All' && filterKey(val(r, f.column)) !== want) return false;
+            if (want && want !== 'All' && !want.includes(filterKey(val(r, f.column)))) return false;
         }
         if (missingFilters.cap && val(r, 'CAP_LIVE_CLEAN_LATEST') != null)              return false;
         if (missingFilters.at  && val(r, 'AUTOTRADER_LATEST_RETAIL_VALUATION') != null) return false;
@@ -164,7 +164,7 @@ function applyFilters() {
         }
         return true;
     });
-    updateSummary(filtered);
+    updateSummary();
     renderTable(filtered);
 }
 
@@ -193,7 +193,8 @@ function buildCustomFilters() {
             if (b === BLANK_KEY) return -1;
             return numeric ? Number(a) - Number(b) : a.localeCompare(b);
         });
-        if (!keys.includes(activeFilters[group])) activeFilters[group] = 'All';
+        const selected = activeFilters[group];
+        if (selected !== 'All' && (!Array.isArray(selected) || selected.some(k => !keys.includes(k)))) activeFilters[group] = 'All';
         const chosen = activeFilters[group];
 
         const title = esc(f.label || f.column) + (f.description
@@ -202,10 +203,10 @@ function buildCustomFilters() {
         if (keys.length > FILTER_DROPDOWN_OVER) {
             controls = `<select class="form-select form-select-sm filter-select" data-group="${esc(group)}">
                 <option value="All">All</option>
-                ${keys.map(k => `<option value="${esc(k)}" ${k === chosen ? 'selected' : ''}>${esc(filterValueText(k))}</option>`).join('')}
+                ${keys.map(k => `<option value="${esc(k)}" ${Array.isArray(chosen) && chosen.includes(k) ? 'selected' : ''}>${esc(filterValueText(k))}</option>`).join('')}
             </select>`;
         } else {
-            controls = ['All', ...keys].map(k => `<button class="btn btn-sm ${k === chosen ? 'btn-dark' : 'btn-outline-secondary'} filter-btn"
+            controls = ['All', ...keys].map(k => `<button class="btn btn-sm ${(k === 'All' && chosen === 'All') || (Array.isArray(chosen) && chosen.includes(k)) ? 'btn-dark' : 'btn-outline-secondary'} filter-btn"
                 data-group="${esc(group)}" data-value="${esc(k)}">${esc(k === 'All' ? 'All' : filterValueText(k))}</button>`).join('');
         }
         const div = document.createElement('div');
@@ -218,7 +219,7 @@ function buildCustomFilters() {
 document.addEventListener('change', e => {
     const sel = e.target.closest('.filter-select');
     if (!sel) return;
-    activeFilters[sel.dataset.group] = sel.value;
+    activeFilters[sel.dataset.group] = sel.value === 'All' ? 'All' : [sel.value];
     applyFilters();
 });
 
@@ -255,10 +256,22 @@ document.addEventListener('click', e => {
     const group = btn.dataset.group;
     const value = btn.dataset.value;
     if (!group || !value) return;
-    activeFilters[group] = value;
+    if (value === 'All') {
+        activeFilters[group] = 'All';
+    } else if (e.ctrlKey || e.metaKey) {
+        const selected = activeFilters[group] === 'All' ? [] : [...activeFilters[group]];
+        const index = selected.indexOf(value);
+        if (index < 0) selected.push(value);
+        else selected.splice(index, 1);
+        activeFilters[group] = selected.length ? selected : 'All';
+    } else {
+        activeFilters[group] = [value];
+    }
+    const chosen = activeFilters[group];
     document.querySelectorAll(`.filter-btn[data-group="${CSS.escape(group)}"]`).forEach(b => {
-        b.classList.toggle('btn-dark', b.dataset.value === value);
-        b.classList.toggle('btn-outline-secondary', b.dataset.value !== value);
+        const selected = chosen === 'All' ? b.dataset.value === 'All' : chosen.includes(b.dataset.value);
+        b.classList.toggle('btn-dark', selected);
+        b.classList.toggle('btn-outline-secondary', !selected);
     });
     applyFilters();
 });
@@ -531,6 +544,38 @@ function changeFontSize(delta) {
 let columnEditor = null;
 let filterDraft = [];      // [{column, label, description}] being edited
 let filterLiveColumns = []; // every column of the table, for the filter dropdowns
+let hardFilterDraft = [];  // [{column, operator, value}] applied in Snowflake
+
+function renderHardFilterDraft() {
+    const esc = ColumnEditor.esc;
+    const names = filterLiveColumns.map(c => c.column);
+    const operators = [
+        ['equals', 'Equals'], ['not_equals', 'Does not equal'], ['contains', 'Contains'],
+        ['is_blank', 'Is blank'], ['is_not_blank', 'Is not blank'],
+    ];
+    document.getElementById('hardFilterEditor').innerHTML = hardFilterDraft.map((f, i) => {
+        const cols = (f.column && !names.includes(f.column) ? [f.column] : []).concat(names);
+        return `<div class="filter-edit-row">
+            <select title="Column to restrict" onchange="hardFilterDraft[${i}].column = this.value">
+                <option value="">(choose a column)</option>
+                ${cols.map(c => `<option value="${esc(c)}" ${c === f.column ? 'selected' : ''}>${esc(c)}${names.includes(c) ? '' : ' (not in the table)'}</option>`).join('')}
+            </select>
+            <select title="Comparison" onchange="hardFilterDraft[${i}].operator = this.value; renderHardFilterDraft()">
+                ${operators.map(([op, label]) => `<option value="${op}" ${op === f.operator ? 'selected' : ''}>${label}</option>`).join('')}
+            </select>
+            <input type="text" class="f-desc" maxlength="200" value="${esc(f.value || '')}" placeholder="Value"
+                   oninput="hardFilterDraft[${i}].value = this.value"
+                   ${f.operator === 'is_blank' || f.operator === 'is_not_blank' ? 'disabled' : ''}>
+            <button type="button" class="btn btn-sm btn-outline-danger" title="Remove" onclick="hardFilterDraft.splice(${i}, 1); renderHardFilterDraft()">
+                <i class="fas fa-times"></i></button>
+        </div>`;
+    }).join('') || '<div class="text-muted small">No hard filters added yet.</div>';
+}
+
+function addHardFilterDraft() {
+    hardFilterDraft.push({ column: '', operator: 'equals', value: '' });
+    renderHardFilterDraft();
+}
 
 function renderFilterDraft() {
     const esc = ColumnEditor.esc;
@@ -581,8 +626,13 @@ async function openSettings() {
     settingsError('');
     columnEditor = null;
     filterDraft = [];
-    document.getElementById('colEditor').innerHTML = '<div class="text-muted small">Loading columns&hellip;</div>';
+    hardFilterDraft = [];
+    document.getElementById('settings-loading').classList.remove('d-none');
+    document.getElementById('settings-content').classList.add('d-none');
+    document.getElementById('settingsSaveBtn').disabled = true;
+    document.getElementById('colEditor').innerHTML = '';
     document.getElementById('filterEditor').innerHTML = '';
+    document.getElementById('hardFilterEditor').innerHTML = '';
     bootstrap.Modal.getOrCreateInstance(document.getElementById('settingsModal')).show();
     try {
         const resp = await fetch(BASE_URL + '/stock-list/columns').then(r => r.json());
@@ -592,6 +642,9 @@ async function openSettings() {
         document.querySelectorAll('#stock-cols col').forEach((col, i) => {
             if (viewColumns[i]) widths[viewColumns[i].column] = parseInt(col.style.width) || DEFAULT_WIDTH;
         });
+        // ColumnEditor measures column-name widths while it renders. Its
+        // container must be visible or every measured width is zero.
+        document.getElementById('settings-content').classList.remove('d-none');
         columnEditor = new ColumnEditor(document.getElementById('colEditor'), {
             live: resp.columns,
             shown: resp.view.map(c => ({ ...c, width: widths[c.column] || c.width || DEFAULT_WIDTH })),
@@ -606,9 +659,15 @@ async function openSettings() {
         filterLiveColumns = resp.columns;
         filterDraft = (resp.filters || []).map(f => ({ ...f }));
         renderFilterDraft();
+        hardFilterDraft = (resp.hard_filters || []).map(f => ({ ...f }));
+        renderHardFilterDraft();
+        document.getElementById('settingsSaveBtn').disabled = false;
     } catch (e) {
         document.getElementById('colEditor').innerHTML = '';
+        document.getElementById('settings-content').classList.add('d-none');
         settingsError(e.message);
+    } finally {
+        document.getElementById('settings-loading').classList.add('d-none');
     }
 }
 
@@ -618,6 +677,14 @@ async function saveSettings() {
     btn.disabled = true;
     settingsError('');
     try {
+        const hardFilters = hardFilterDraft.map(f => ({
+            column: f.column, operator: f.operator, value: (f.value || '').trim() }));
+        const hardResp = await fetch(BASE_URL + '/stock-list/hard-filters', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ hard_filters: hardFilters }),
+        }).then(r => r.json());
+        if (hardResp.status !== 'ok') throw new Error(hardResp.message || 'Hard filters save failed');
         // Filters first: a filter with no column chosen stops the save before
         // anything is written.
         const filters = filterDraft.map(f => ({

@@ -94,11 +94,11 @@ def stock_list(request: Request, user: str = Depends(require_page('stock_list'))
 # ── Stock List columns ───────────────────────────────────────────────────────
 # Which columns show, in what order, with what heading and format, is set in
 # the page's Settings popup and stored in kpi_layout under 'stock_list_columns'.
-# The table itself is fixed: buying_requirements (uk_dbt_product_data
-# buying_requirements__p). Column names are checked against INFORMATION_SCHEMA
+# The table itself is fixed: current_stock (uk_dbt_product_data
+# current_stock__p). Column names are checked against INFORMATION_SCHEMA
 # before they go into the SQL.
 
-_STOCK_TABLE = "PRODUCT_VEHICLE_JOURNEY.BUYING_REQUIREMENTS"
+_STOCK_TABLE = "PRODUCT_VEHICLE_JOURNEY.CURRENT_STOCK"
 # Always fetched, shown or not: the Status and Missing filters, summary counts,
 # search, the interest-free row colour and the "Apex data updated" time read them.
 _STOCK_FIXED_COLUMNS = ["VEHICLE_STATUS", "PRICE_BAND",
@@ -109,6 +109,7 @@ _STOCK_MAX_COLUMNS = 100
 # Filters added in Settings ('stock_list_filters' in kpi_layout): one button
 # group per column, a button for each value found in the data.
 _STOCK_MAX_FILTERS = 20
+_STOCK_HARD_FILTER_OPS = {"equals", "not_equals", "contains", "is_blank", "is_not_blank"}
 
 # Used until the columns are first saved in Settings. Matches the page as it was
 # before the columns became editable.
@@ -121,12 +122,11 @@ STOCK_DEFAULT_COLUMNS = [
     {"column": "AUTOTRADER_PORTAL_LINK", "label": "Portal", "format": "link", "decimals": 0, "width": 52},
     {"column": "FUEL_TYPE", "label": "Fuel", "format": "text", "decimals": 0, "width": 65},
     {"column": "VEHICLE_LOCATION", "label": "Location", "format": "text", "decimals": 0, "width": 110},
-    {"column": "INVOICE_POSTED_DATE", "label": "Delivered", "format": "date", "decimals": 0, "width": 80},
     {"column": "SUPPLIER_NAME", "label": "Supplier", "format": "text", "decimals": 0, "width": 72},
     {"column": "DATE_FIRST_REGISTERED", "label": "DFR", "format": "date", "decimals": 0, "width": 80},
     {"column": "MILEAGE", "label": "Mileage", "format": "number", "decimals": 0, "width": 62},
-    {"column": "DAYS_IN_STOCK_ACKNOWLEDGED", "label": "DIS", "format": "number", "decimals": 0, "width": 40},
-    {"column": "DAYS_ADVERTISED_ACKNOWLEDGED", "label": "DTS", "format": "number", "decimals": 0, "width": 40},
+    {"column": "DAYS_IN_STOCK", "label": "DIS", "format": "number", "decimals": 0, "width": 40},
+    {"column": "DAYS_ADVERTISED", "label": "DTS", "format": "number", "decimals": 0, "width": 40},
     {"column": "PURCHASE_PRICE_INC_VAT", "label": "Purchase Price", "format": "gbp", "decimals": 0, "width": 90},
     {"column": "CAP_LIVE_CLEAN_LATEST", "label": "CAP Live Clean", "format": "gbp", "decimals": 0, "width": 90},
     {"column": "PURCHASE_PRICE_CAP_LIVE_CLEAN_PERCENT", "label": "CAP %", "format": "pct", "decimals": 1, "width": 55},
@@ -137,8 +137,7 @@ STOCK_DEFAULT_COLUMNS = [
     {"column": "GPU_M", "label": "GPU-M", "format": "gbp", "decimals": 0, "width": 68},
 ]
 
-# One cached result per set of columns. Fresh for as long as the Buying
-# Requirements data is; Refresh Data skips it.
+# One cached result per set of columns. Refresh Data skips it.
 _stock_cache: dict = {"key": None, "columns": None, "rows": None, "cached_at": 0.0}
 _stock_cache_lock = threading.Lock()
 
@@ -176,6 +175,45 @@ def _stock_filters_saved() -> list:
     return kpi._read_kpi_layout_value('stock_list_filters') or []
 
 
+def _stock_hard_filters_saved() -> list:
+    return kpi._read_kpi_layout_value('stock_list_hard_filters') or []
+
+
+def _validate_stock_hard_filters(filters, live: set) -> str | None:
+    if not isinstance(filters, list) or len(filters) > _STOCK_MAX_FILTERS:
+        return f"Choose at most {_STOCK_MAX_FILTERS} hard filters"
+    for f in filters:
+        if not isinstance(f, dict) or set(f) != {"column", "operator", "value"}:
+            return "Bad hard filter"
+        column, operator, value = f["column"], f["operator"], f["value"]
+        if not isinstance(column, str) or column not in live:
+            return f"Hard filter column is not in the table: {column}"
+        if operator not in _STOCK_HARD_FILTER_OPS:
+            return f"Bad hard filter comparison: {operator}"
+        if not isinstance(value, str) or len(value) > 200:
+            return "Hard filter values must be text of at most 200 characters"
+        if operator not in {"is_blank", "is_not_blank"} and not value:
+            return "Enter a value for each hard filter"
+    return None
+
+
+def _stock_hard_filter_sql(filters: list) -> tuple[list, list]:
+    clauses, params = [], []
+    for f in filters:
+        column, operator, value = f["column"], f["operator"], f["value"]
+        if operator == "is_blank":
+            clauses.append(f"({column} IS NULL OR TO_VARCHAR({column}) = '')")
+        elif operator == "is_not_blank":
+            clauses.append(f"({column} IS NOT NULL AND TO_VARCHAR({column}) <> '')")
+        elif operator == "contains":
+            clauses.append(f"CONTAINS(TO_VARCHAR({column}), %s)")
+            params.append(value)
+        else:
+            clauses.append(f"TO_VARCHAR({column}) {'=' if operator == 'equals' else '<>'} %s")
+            params.append(value)
+    return clauses, params
+
+
 def _validate_stock_filters(filters) -> str | None:
     if not isinstance(filters, list) or len(filters) > _STOCK_MAX_FILTERS:
         return f"At most {_STOCK_MAX_FILTERS} filters"
@@ -200,17 +238,37 @@ def _validate_stock_filters(filters) -> str | None:
 
 @router.get("/stock-list/columns")
 def stock_list_columns(request: Request, user: str = Depends(require_page_api('stock_list'))):
-    """The saved columns and filters, and every column of buying_requirements,
+    """The saved columns and filters, and every column of current_stock,
     for the Settings popup."""
     try:
         live = kpi._vehicle_table_columns(_STOCK_TABLE)
         saved = _stock_columns_saved()
         filters = _stock_filters_saved()
+        hard_filters = _stock_hard_filters_saved()
     except Exception as e:
         logger.error(f"Stock list columns failed: {e}")
         return {"status": "error", "message": str(e)}
-    return {"status": "ok", "view": saved, "filters": filters, "table": _STOCK_TABLE,
+    return {"status": "ok", "view": saved, "filters": filters, "hard_filters": hard_filters, "table": _STOCK_TABLE,
             "columns": [{"column": c, "type": t} for c, t in live]}
+
+
+@router.post("/stock-list/hard-filters")
+def stock_list_hard_filters_save(request: Request, payload: dict, user: str = Depends(require_page_api('stock_list'))):
+    if not is_admin(user):
+        return {"status": "error", "message": "Only the admin can change the Stock List hard filters"}
+    filters = (payload or {}).get("hard_filters")
+    try:
+        live = {c for c, _ in kpi._vehicle_table_columns(_STOCK_TABLE)}
+        err = _validate_stock_hard_filters(filters, live)
+        if err:
+            return {"status": "error", "message": err}
+        kpi._write_kpi_layout_value('stock_list_hard_filters', filters)
+        with _stock_cache_lock:
+            _stock_cache["key"] = None
+    except Exception as e:
+        logger.error(f"Stock list hard filters save failed: {e}")
+        return {"status": "error", "message": str(e)}
+    return {"status": "ok", "hard_filters": filters}
 
 
 @router.post("/stock-list/filters")
@@ -253,23 +311,27 @@ def stock_list_data(request: Request, force: bool = False, user: str = Depends(r
     try:
         view = _stock_columns_saved()
         filters = _stock_filters_saved()
+        hard_filters = _stock_hard_filters_saved()
         live = {c for c, _ in kpi._vehicle_table_columns(_STOCK_TABLE)}
         if not live:
             return {"status": "error", "message": f"Table {_STOCK_TABLE} was not found"}
+        err = _validate_stock_hard_filters(hard_filters, live)
+        if err:
+            return {"status": "error", "message": err}
         wanted = list(dict.fromkeys(_STOCK_FIXED_COLUMNS + [c["column"] for c in view]
                                     + [f["column"] for f in filters]))
         select = [c for c in wanted if c in live]
         missing = [c for c in dict.fromkeys([c["column"] for c in view] + [f["column"] for f in filters])
                    if c not in live]
         filters = [f for f in filters if f["column"] in live]
-        key = tuple(select)
+        key = (tuple(select), tuple((f["column"], f["operator"], f["value"]) for f in hard_filters))
         with _stock_cache_lock:
             cache = dict(_stock_cache)
         if force or cache["key"] != key or not _sf_cache_is_fresh(cache["cached_at"]):
             with SnowflakeClient() as sf:
-                # Delivered (SOLD) vehicles are never shown on this page.
-                rows, _ = sf.execute(f"SELECT {', '.join(select)} FROM {kpi._VEHICLE_DB}.{_STOCK_TABLE} "
-                                     "WHERE VEHICLE_STATUS IS DISTINCT FROM 'SOLD'")
+                clauses, params = _stock_hard_filter_sql(hard_filters)
+                where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
+                rows, _ = sf.execute(f"SELECT {', '.join(select)} FROM {kpi._VEHICLE_DB}.{_STOCK_TABLE}{where}", params)
             cache = {"key": key, "columns": select, "cached_at": time.time(),
                      "rows": [[kpi._json_cell(v) for v in r] for r in rows]}
             with _stock_cache_lock:

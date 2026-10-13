@@ -6,9 +6,14 @@
 {%- endmacro %}
 
 {# Every page calls account_nav, so the popup scroll lock rides along with it. #}
-{% macro account_nav(user_name=None) -%}
+{% macro account_nav(user_name=None, show_back=False) -%}
 <script src="{{ static_url('js/popup_scroll_lock.js') }}" defer></script>
 <div class="account-nav">
+    {% if show_back %}
+    <a href="javascript:history.back()" class="btn btn-outline-secondary nav-btn">
+        <i class="fas fa-arrow-left me-1"></i>Back
+    </a>
+    {% endif %}
     {{ home_button() }}
     {% if user_name %}
     <span class="account-user">{{ user_name }}</span>

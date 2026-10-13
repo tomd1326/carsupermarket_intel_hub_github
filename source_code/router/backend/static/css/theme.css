@@ -195,6 +195,8 @@
     z-index: 1030;
 }
 .page-is-loading .page-loading { display: flex; }
+/* Loading message inside a panel or settings popup. */
+.section-loading { display: flex; align-items: center; justify-content: center; gap: 12px; min-height: 180px; font-size: 1.25rem; font-weight: 600; color: #64748b; }
 /* Own spin rather than Font Awesome's fa-spin, which stops moving when
    Windows has animations turned off */
 .spin { display: inline-block; animation: css-spin 0.8s linear infinite; }
