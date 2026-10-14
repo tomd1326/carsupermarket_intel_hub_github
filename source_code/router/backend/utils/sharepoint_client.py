@@ -32,6 +32,34 @@ _ID_CACHE_TTL_SECONDS = 12 * 60 * 60
 _id_cache_lock = threading.Lock()
 
 
+# Sheet values last read, with the file's last-saved time at that read, for
+# get_worksheet_values_if_changed. Also saved to S3 when a key is given, so a
+# fresh Lambda can reuse another's read.
+_SHEET_CACHE: dict = {}
+_sheet_cache_lock = threading.Lock()
+_SHEET_S3_BUCKET = "aa-raw-sources-uk"
+
+
+def _sheet_s3_load(s3_key: str) -> dict | None:
+    try:
+        import boto3, json
+        obj = boto3.client("s3", region_name="eu-west-1").get_object(Bucket=_SHEET_S3_BUCKET, Key=s3_key)
+        return json.loads(obj["Body"].read())
+    except Exception:
+        return None
+
+
+def _sheet_s3_save(s3_key: str, entry: dict) -> None:
+    try:
+        import boto3, json
+        boto3.client("s3", region_name="eu-west-1").put_object(
+            Bucket=_SHEET_S3_BUCKET, Key=s3_key,
+            Body=json.dumps(entry, default=str).encode(), ContentType="application/json",
+        )
+    except Exception as e:
+        logger.warning("SharePoint sheet S3 save failed for %s: %s", s3_key, e)
+
+
 def _id_cache_get(key):
     with _id_cache_lock:
         entry = _ID_CACHE.get(key)
@@ -188,6 +216,33 @@ class SharePointClient:
         item_id = item["id"]
         return drive_id, item_id
 
+    def get_last_modified_by_url(self, sharepoint_url: str) -> str:
+        """When the file at sharepoint_url was last saved (ISO string). One small
+        call that does not open the workbook, so a file can be checked for
+        changes before paying for a slow read."""
+        encoded = base64.urlsafe_b64encode(sharepoint_url.encode()).rstrip(b"=").decode()
+        url = f"https://graph.microsoft.com/v1.0/shares/u!{encoded}/driveItem?$select=lastModifiedDateTime"
+        resp = requests.get(url, headers=self._headers, timeout=30)
+        resp.raise_for_status()
+        return resp.json()["lastModifiedDateTime"]
+
+    def get_last_modified(self, subfolder: str, filename: str) -> str:
+        """Same as get_last_modified_by_url, for a file found by folder and name
+        on this client's site. Uses the cached site/drive/item IDs, so it is
+        one small call once those are known."""
+        for attempt in (1, 2):
+            site_id = self._get_site_id()
+            drive_id = self._get_drive_id(site_id)
+            item_id = self._get_item_id(drive_id, subfolder, filename)
+            url = f"https://graph.microsoft.com/v1.0/drives/{drive_id}/items/{item_id}?$select=lastModifiedDateTime"
+            resp = requests.get(url, headers=self._headers, timeout=30)
+            if resp.status_code in (404, 410) and attempt == 1:
+                # File deleted and recreated: its cached ID is gone. Re-resolve once.
+                self._drop_cached_ids(subfolder, filename)
+                continue
+            resp.raise_for_status()
+            return resp.json()["lastModifiedDateTime"]
+
     def get_table_rows(self, table_name: str, sharepoint_url: str = None,
                        subfolder: str = None, filename: str = None) -> list[dict]:
         """
@@ -311,3 +366,43 @@ class SharePointClient:
                 filename, sheet_name, len(values), resolve_secs + read_secs, resolve_secs, read_secs,
             )
             return values
+
+    def get_worksheet_values_if_changed(self, subfolder: str, filename: str, sheet_name: str,
+                                        max_col: str = "Z", max_row: int = 2000,
+                                        s3_key: str = None) -> list[list]:
+        """
+        get_worksheet_values, but the slow range read only happens when the file
+        has been saved since the last read. First asks when the file was last
+        saved (one small call that does not open the workbook); if that matches
+        the last read, held in memory or in S3 at s3_key, those values are
+        returned instead.
+
+        If the last-saved check fails, falls back to a normal read.
+        """
+        key = (self.TEAM_SITE, subfolder, filename, sheet_name, max_col, max_row)
+        try:
+            modified = self.get_last_modified(subfolder, filename)
+        except Exception as e:
+            logger.warning("SharePoint '%s': last-saved check failed, reading anyway: %s", filename, e)
+            modified = None
+        if modified:
+            with _sheet_cache_lock:
+                held = _SHEET_CACHE.get(key)
+            if not (held and held.get("modified") == modified) and s3_key:
+                held = _sheet_s3_load(s3_key)
+            if held and held.get("modified") == modified:
+                with _sheet_cache_lock:
+                    _SHEET_CACHE[key] = held
+                logger.info("SharePoint '%s' sheet '%s': not saved since last read (%s), reusing it",
+                            filename, sheet_name, modified)
+                return held["values"]
+        values = self.get_worksheet_values(subfolder, filename, sheet_name, max_col=max_col, max_row=max_row)
+        if modified:
+            # The last-saved time is taken before the read, so a save made during
+            # the read shows as a change next time and is read then.
+            entry = {"modified": modified, "values": values}
+            with _sheet_cache_lock:
+                _SHEET_CACHE[key] = entry
+            if s3_key:
+                _sheet_s3_save(s3_key, entry)
+        return values

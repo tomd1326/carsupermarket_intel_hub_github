@@ -66,6 +66,19 @@
                         </tr>
                     </thead>
                     <tbody>
+                        <tr class="table-light">
+                            <td colspan="7">
+                                <form method="post" action="{{ BASE_URL }}/settings/add-user" class="d-flex gap-2 align-items-center flex-wrap">
+                                    <input type="hidden" name="redirect_to" value="users">
+                                    <input type="text" name="new_username" class="form-control form-control-sm" placeholder="Username" style="width:140px;" autocomplete="off">
+                                    <input type="text" name="new_first_name" class="form-control form-control-sm" placeholder="First name" style="width:120px;" autocomplete="off">
+                                    <input type="text" name="new_last_name" class="form-control form-control-sm" placeholder="Last name" style="width:120px;" autocomplete="off">
+                                    <input type="email" name="new_email" class="form-control form-control-sm" placeholder="Email" style="width:220px;" autocomplete="off">
+                                    <input type="password" name="new_password" class="form-control form-control-sm" placeholder="Password" style="width:160px;">
+                                    <button type="submit" class="btn btn-sm btn-success">Add User</button>
+                                </form>
+                            </td>
+                        </tr>
                         {% for u in all_users %}
                         {% set d = user_details.get(u, {}) %}
                         <tr>
@@ -101,19 +114,6 @@
                         <tr>
                             <td colspan="7" class="text-end">
                                 <button type="submit" form="details-form" class="btn btn-sm btn-primary">Save Names &amp; Emails</button>
-                            </td>
-                        </tr>
-                        <tr class="table-light">
-                            <td colspan="7">
-                                <form method="post" action="{{ BASE_URL }}/settings/add-user" class="d-flex gap-2 align-items-center flex-wrap">
-                                    <input type="hidden" name="redirect_to" value="users">
-                                    <input type="text" name="new_username" class="form-control form-control-sm" placeholder="Username" style="width:140px;" autocomplete="off">
-                                    <input type="text" name="new_first_name" class="form-control form-control-sm" placeholder="First name" style="width:120px;" autocomplete="off">
-                                    <input type="text" name="new_last_name" class="form-control form-control-sm" placeholder="Last name" style="width:120px;" autocomplete="off">
-                                    <input type="email" name="new_email" class="form-control form-control-sm" placeholder="Email" style="width:220px;" autocomplete="off">
-                                    <input type="password" name="new_password" class="form-control form-control-sm" placeholder="Password" style="width:160px;">
-                                    <button type="submit" class="btn btn-sm btn-success">Add User</button>
-                                </form>
                             </td>
                         </tr>
                     </tbody>
