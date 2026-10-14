@@ -12,6 +12,7 @@
     <link href="{{ static_url('css/charts.css') }}" rel="stylesheet">
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
     <script src="{{ static_url('js/charts.js') }}"></script>
+    <script src="{{ static_url('js/kpi_targets.js') }}"></script>
     <!-- Chart styles shared with other chart pages live in charts.css; only
          what exists on this page alone belongs here. -->
     <style>
@@ -25,7 +26,52 @@
            (applyAppearance sets the two variables); the fallbacks are the
            shared charts.css sizes. */
         .category-header { font-size: var(--kpi-section-font, 0.82rem); }
+        /* Sections show as tabs along the top; one section's charts at a time. */
+        /* Stays pinned to the top of the window while the charts scroll under it.
+           Background is the page's own (#f1f5f9, charts.css) so it hides the
+           charts passing behind; padding-top keeps the tabs off the window edge. */
+        .kpi-tabs {
+            display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 12px;
+            border-bottom: 1px solid #cbd5e1;
+            position: sticky; top: var(--kpi-top-bar-h, 0px); z-index: 20;
+            background: #f1f5f9; padding-top: 8px;
+        }
+        .kpi-tab {
+            display: flex; align-items: center; gap: 8px;
+            padding: 8px 16px; margin-bottom: -1px; cursor: pointer;
+            background: #e2e8f0; border: 1px solid #cbd5e1; border-radius: 8px 8px 0 0;
+            font-size: var(--kpi-section-font, 0.82rem); font-weight: 700; color: #475569;
+        }
+        .kpi-tab:hover { background: #d1d9e2; }
+        .kpi-tab.active { background: #fff; color: #0f172a; border-bottom-color: #fff; }
+        .at-strip { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 12px; }
+        /* Size from Settings > Appearance ("Autotrader Figures Size"); padding
+           and the figure are in em so the box keeps its shape at any size. */
+        .at-stat {
+            display: flex; align-items: baseline; gap: 0.6em; line-height: 1.2;
+            padding: 0.3em 0.9em; background: #fff; border: 1px solid #cbd5e1; border-radius: 6px;
+            font-size: var(--kpi-at-font, 0.85rem); color: #475569;
+        }
+        .at-stat strong { font-size: 1.15em; color: #0f172a; }
+        /* Capped: Excel's "Bad" style (light red fill, dark red text). */
+        .at-stat.at-stat-bad { background: #ffc7ce; border-color: #f4a3ad; color: #9c0006; }
+        .at-stat.at-stat-bad strong { color: #9c0006; }
+        .at-strip-note { align-self: center; font-size: 0.78rem; color: #94a3b8; }
+        /* New or copied chart: a blue glow that pulses twice then fades. Colour
+           only, so nothing is left behind when the animation ends. */
+        @keyframes row-flash {
+            0%, 50%, 100% { box-shadow: 0 0 0 0 rgba(42, 120, 214, 0); background-color: transparent; }
+            20%, 70% { box-shadow: 0 0 0 4px rgba(42, 120, 214, 0.55); background-color: rgba(42, 120, 214, 0.08); }
+        }
+        .chart-row.row-flash { animation: row-flash 2s ease-in-out; border-radius: 10px; }
+        #sectionsContainer .category-header { display: none; }
+        #sectionsContainer .category-body { margin-top: 0; }
         .chart-card h2 { font-size: var(--kpi-title-font, 0.88rem); }
+        .chart-card-subtitle { font-size: var(--kpi-subtitle-font, 0.78rem); }
+        .chart-period {
+            flex: none; white-space: nowrap; color: #475569; font-weight: 600;
+            font-size: var(--kpi-period-font, 0.75rem);
+        }
         /* Row title slightly bigger than the shared 0.86rem. */
         .chart-row-title.kpi-row-title { font-size: 0.95rem; }
         /* Two columns side by side (chart settings | axis + target) so the popup
@@ -68,8 +114,8 @@
         .note-tip .note-tip-text { white-space: pre-wrap; margin-top: 2px; }
         @media (max-width: 900px) { .chart-modal-cols { grid-template-columns: 1fr; } }
         .modal-section-title {
-            font-size: 0.82rem; font-weight: 700; color: #64748b; text-transform: uppercase;
-            letter-spacing: 0.04em; border-bottom: 1px solid #e2e8f0;
+            font-size: 0.82rem; font-weight: 700; color: #64748b;
+            border-bottom: 1px solid #e2e8f0;
             padding-bottom: 4px; margin: 6px 0 10px;
         }
         .modal-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0 14px; }
@@ -86,11 +132,31 @@
         }
         .section-item .btn { padding: 3px 9px; font-size: 0.78rem; }
         .section-item .section-count { font-size: 0.76rem; color: #64748b; width: 62px; text-align: right; }
+        .chart-list-section { font-size: 0.78rem; font-weight: 700; color: #64748b; margin: 10px 0 4px; }
+        .chart-list-section:first-child { margin-top: 0; }
+        .chart-item { display: flex; align-items: center; gap: 6px; margin-bottom: 4px; font-size: 0.85rem; }
+        .chart-item label { display: flex; align-items: center; gap: 4px; margin: 0; font-weight: 400; width: 58px; }
+        .chart-item .chart-item-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .chart-item.is-hidden .chart-item-title { color: #94a3b8; }
+        .chart-item select { width: 150px; padding: 3px 6px; border: 1px solid #cbd5e1; border-radius: 6px; }
+        .chart-item .btn { padding: 3px 9px; font-size: 0.78rem; }
         .section-add-btn { padding: 4px 12px; font-size: 0.8rem; margin: 2px 0 8px; }
-        .import-row { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
-        .import-row input[type="file"] { flex: 1; min-width: 0; font-size: 0.8rem; }
-        .import-row .btn { padding: 4px 12px; font-size: 0.8rem; }
-        .import-summary { font-size: 0.8rem; color: #334155; }
+        .target-dates-overlay { z-index: 210; }
+        .target-paste {
+            width: 100%; box-sizing: border-box; font-family: Consolas, monospace; font-size: 0.8rem;
+            padding: 6px 8px; border: 1px solid #cbd5e1; border-radius: 6px; resize: vertical;
+        }
+        .targets-table { margin-top: 8px; }
+        .targets-table td.num { text-align: right; }
+        .targets-table .target-warn { color: #b45309; }
+        .input-target-row { display: flex; align-items: center; gap: 8px; font-size: 0.8rem; margin-top: 4px; }
+        .input-target-row span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .calc-row { display: flex; gap: 6px; margin-top: 4px; }
+        .calc-row select { flex: 1; min-width: 0; }
+        .calc-row input { width: 90px; }
+        .input-with-unit { display: flex; align-items: center; gap: 6px; }
+        .input-with-unit input { flex: 1; min-width: 0; }
+        .input-unit { font-size: 0.85rem; font-weight: 600; color: #475569; white-space: nowrap; }
         .btn-remove-chart {
             background: #fff; border: 1px solid #fca5a5; color: #b91c1c; font-weight: 700;
             border-radius: 6px; padding: 7px 16px; font-size: 0.9rem;
@@ -225,6 +291,8 @@
         }
         .theme-swatch:hover button { display: block; }
         .theme-row .btn { padding: 3px 9px; font-size: 0.78rem; }
+        .theme-transparency { display: flex; align-items: center; gap: 5px; margin: 0; font-size: 0.78rem; font-weight: 400; color: #475569; white-space: nowrap; }
+        .theme-transparency input { width: 56px; padding: 4px 6px; border: 1px solid #cbd5e1; border-radius: 6px; font-size: 0.8rem; }
         .theme-row .theme-uses { font-size: 0.76rem; color: #64748b; white-space: nowrap; }
         /* Wide enough for the longest column names (about 45 characters) with
            the heading, format and order controls beside them. */
@@ -250,14 +318,31 @@
         .veh-grey-row { display: flex; align-items: center; gap: 8px; }
         .veh-grey-row select, .veh-grey-row input { flex: 1; min-width: 0; }
         .veh-grey-row span { font-size: 0.82rem; color: #64748b; }
+        /* Added metrics under Metric / Divided by: "+ [metric] [x]". */
+        .plus-row { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
+        .plus-row span { font-weight: 600; color: #64748b; }
+        .plus-row select { flex: 1; min-width: 0; }
+        .plus-add { margin-top: 6px; align-self: flex-start; }
         /* Rows matched by the Settings grey-out rule (cancelled deals). */
         /* Light grey fill only; the text stays the same colour as every other
            row. A touch darker under the pointer so the hover still shows. */
         .vehicles-table tbody tr.grey-row td { background: #e5e7eb; }
         .vehicles-table tbody tr.grey-row:hover td { background: #d9dce1; }
         /* Admin View / User View switch: shared style in theme.css. */
-        /* Keep every toolbar label at the shared chart button size. */
-        .top-bar .btn, .top-bar .view-toggle button, .top-bar .status-text { font-size: 0.9rem; }
+        /* Top bar: three columns so the page's buttons sit in the centre. The
+           account strip is normally placed absolutely at the top right of the
+           page; here it sits in the bar so it stays on screen with it. */
+        .kpi-top-bar { display: grid; grid-template-columns: 1fr auto 1fr; gap: 16px; }
+        .top-bar-left { display: flex; align-items: center; gap: 16px; min-width: 0; }
+        .top-bar-actions { display: flex; align-items: center; gap: 10px; }
+        .kpi-top-bar .account-nav { position: static; justify-self: end; }
+        /* One size for every button and label in the bar (Settings > Appearance,
+           "Top bar size"). Padding is in em so it grows with the text. */
+        .kpi-top-bar .btn, .kpi-top-bar .account-nav .nav-btn {
+            font-size: var(--kpi-toolbar-font, 0.88rem); line-height: 1.3; padding: 0.45em 1em;
+        }
+        .kpi-top-bar .view-toggle button { font-size: var(--kpi-toolbar-font, 0.88rem); line-height: 1.3; padding: 0.3em 0.9em; }
+        .kpi-top-bar .status-text, .kpi-top-bar .account-nav { font-size: var(--kpi-toolbar-font, 0.88rem); }
         /* Data Labels On / Off on each chart row: the same switch, sized to the
            row's other buttons. Its own class, since setPageView() resets every
            .view-toggle button. */
@@ -282,15 +367,33 @@
         .settings-tabs button.active { background: var(--c-table-header-bg); color: var(--c-table-header-text); }
         .settings-pane { display: none; }
         .settings-pane.active { display: block; }
+        /* Buttons along the top of the Charts tab, one per sub-section. */
+        .chart-subtabs { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; padding-bottom: 10px; border-bottom: 1px solid #e2e8f0; }
+        .chart-subtabs button {
+            background: #fff; border: 1px solid #cbd5e1; border-radius: 6px; padding: 5px 12px;
+            font-size: 0.82rem; font-weight: 600; color: #475569; cursor: pointer;
+        }
+        .chart-subtabs button:hover { background: #f1f5f9; color: #0f172a; }
+        .chart-subtabs button.active {
+            background: var(--c-table-header-bg); color: var(--c-table-header-text); border-color: var(--c-table-header-bg);
+        }
+        .chart-subpane { display: none; }
+        .chart-subpane.active { display: block; }
+        .setting-colour { width: 100%; height: 32px; padding: 2px; border: 1px solid #cbd5e1; border-radius: 6px; cursor: pointer; }
         .veh-col-search { width: 100%; padding: 5px 9px; border: 1px solid #cbd5e1; border-radius: 6px; margin-bottom: 6px; font-size: 0.82rem; }
         .veh-col-head { font-size: 0.8rem; font-weight: 700; color: #334155; margin-bottom: 4px; }
     </style>
 </head>
 <body>
-    {{ account_nav(user) }}
-    <div class="top-bar">
-        <h1>{{ page_name('kpi') }}</h1>
-        <button class="btn btn-load" id="loadBtn" onclick="loadAll()">
+    <!-- Title and status on the left, the page's buttons in the centre, Home /
+         user / Logout on the right. The whole bar stays at the top when scrolling. -->
+    <div class="top-bar kpi-top-bar" id="kpiTopBar">
+        <div class="top-bar-left">
+            <h1>{{ page_name('kpi') }}</h1>
+            <span class="status-text" id="statusText"></span>
+        </div>
+        <div class="top-bar-actions">
+        <button class="btn btn-load" id="loadBtn" onclick="loadAll(true)">
             <i class="fas fa-sync-alt" id="loadIcon"></i> Load Data
         </button>
         {% if kpi_is_admin %}
@@ -308,13 +411,14 @@
         </button>
         <button class="btn btn-edit admin-only" onclick="openNotesModal()">
             <i class="fas fa-sticky-note"></i> Notes
-        </button>
-        {% endif %}
-        <span class="status-text" id="statusText"></span>
+        </button>        {% endif %}
+        </div>
+        {{ account_nav(user) }}
     </div>
 
     <div class="page-content page-is-loading" id="pageContent">
         <div class="page-loading"><i class="fas fa-sync-alt spin"></i> Loading...</div>
+        <div id="sectionTabs" class="kpi-tabs" role="tablist"></div>
         <div id="sectionsContainer"></div>
     </div>
 
@@ -363,7 +467,7 @@
             <div class="modal-section-title">Chart</div>
             <div class="modal-grid">
                 <div class="modal-field span-2">
-                    <label for="chartTypeSelect">Chart type</label>
+                    <label for="chartTypeSelect">Chart Type</label>
                     <select id="chartTypeSelect" onchange="onChartTypeChange()">
                         <option value="line">Line - one metric, with N-1 and target</option>
                         <option value="stacked">Stacked columns - several metrics</option>
@@ -371,21 +475,21 @@
                 </div>
                 <!-- Stacked charts only -->
                 <div class="modal-field span-2 stacked-only" id="seriesField">
-                    <label>Series (first is the bottom of the stack)</label>
+                    <label>Series (First Is The Bottom Of The Stack)</label>
                     <div id="seriesList"></div>
                     <button type="button" class="btn btn-edit section-add-btn" onclick="addSeries()">
-                        <i class="fas fa-plus"></i> Add series
+                        <i class="fas fa-plus"></i> Add Series
                     </button>
                 </div>
                 <div class="modal-field stacked-only">
-                    <label for="themeSelect">Colour theme</label>
+                    <label for="themeSelect">Colour Theme</label>
                     <select id="themeSelect" onchange="renderSeriesList()"></select>
                 </div>
                 <div class="modal-field stacked-only">
                     <label>Show</label>
                     <div class="agg-options">
-                        <label><input type="checkbox" id="pctInput"> Each column as 100%</label>
-                        <label><input type="checkbox" id="segLabelsInput"> Values in segments</label>
+                        <label><input type="checkbox" id="pctInput" onchange="onPctChange()"> Each Column As 100%</label>
+                        <label><input type="checkbox" id="segLabelsInput"> Values In Segments</label>
                     </div>
                 </div>
                 <!-- Line charts only -->
@@ -393,13 +497,19 @@
                     <label for="metricSelect">Metric</label>
                     <select id="metricSelect" onchange="onMetricChange()"></select>
                     <div class="metric-desc" id="metricDesc"></div>
+                    <div id="metricPlusList"></div>
+                    <button type="button" class="btn btn-sm plus-add" id="metricPlusBtn" onclick="addPlus('metric')">
+                        <i class="fas fa-plus"></i> Add Metric</button>
                 </div>
                 <div class="modal-field line-only">
-                    <label for="divideSelect">Divided by</label>
+                    <label for="divideSelect">Divided By</label>
                     <select id="divideSelect" onchange="onDivideChange()"></select>
+                    <div id="dividePlusList"></div>
+                    <button type="button" class="btn btn-sm plus-add" id="dividePlusBtn" onclick="addPlus('divide')">
+                        <i class="fas fa-plus"></i> Add Metric</button>
                 </div>
                 <div class="modal-field" id="ratioAsField">
-                    <label for="ratioAsSelect">Show result as</label>
+                    <label for="ratioAsSelect">Show Result As</label>
                     <select id="ratioAsSelect" onchange="onRatioAsChange()">
                         <option value="pct">Percentage (x 100)</option>
                         <option value="dec">Decimal</option>
@@ -410,7 +520,7 @@
                     <input type="text" id="titleInput" maxlength="100">
                 </div>
                 <div class="modal-field span-2">
-                    <label for="subtitleInput">Subtitle (optional)</label>
+                    <label for="subtitleInput">Subtitle (Optional)</label>
                     <input type="text" id="subtitleInput" maxlength="200">
                 </div>
                 <div class="modal-field">
@@ -418,18 +528,18 @@
                     <select id="sectionSelect" onchange="fillPositionOptions()"></select>
                 </div>
                 <div class="modal-field">
-                    <label for="positionSelect">Position in section</label>
+                    <label for="positionSelect">Position In Section</label>
                     <select id="positionSelect"></select>
                 </div>
                 <div class="modal-field">
-                    <label>Weekly / monthly figure</label>
+                    <label>Weekly / Monthly Figure</label>
                     <div class="agg-options">
                         <label><input type="radio" name="aggRadio" value="sum" onchange="showYMinInputs()"> Sum</label>
                         <label><input type="radio" name="aggRadio" value="avg" onchange="showYMinInputs()"> Average</label>
                     </div>
                 </div>
                 <div class="modal-field">
-                    <label>Show current (part-period so far)</label>
+                    <label>Show Current (Part-Period So Far)</label>
                     <div class="agg-options">
                         <label><input type="checkbox" id="includeCurrentMonthInput"> Month</label>
                         <label><input type="checkbox" id="includeCurrentWeekInput"> Week</label>
@@ -437,7 +547,7 @@
                     </div>
                 </div>
                 <div class="modal-field span-2" id="weightField">
-                    <label for="weightSelect">Weight weeks and months by</label>
+                    <label for="weightSelect">Weight Weeks And Months By</label>
                     <select id="weightSelect"></select>
                     <div class="modal-hint">
                         The count behind each day's average, so a week or month matches the
@@ -447,14 +557,14 @@
             </div>
             <div class="modal-grid three">
                 <div class="modal-field">
-                    <label for="invertSelect">Green when</label>
+                    <label for="invertSelect">Green When</label>
                     <select id="invertSelect">
-                        <option value="0">Above target</option>
-                        <option value="1">Below target</option>
+                        <option value="0">Above Target</option>
+                        <option value="1">Below Target</option>
                     </select>
                 </div>
                 <div class="modal-field">
-                    <label for="fmtSelect">Label format</label>
+                    <label for="fmtSelect">Label Format</label>
                     <select id="fmtSelect">
                         <option value="num">Number</option>
                         <option value="pct">Percent (%) - value is already a %</option>
@@ -476,45 +586,45 @@
             </div>
 
             <div class="chart-modal-col">
-            <div class="modal-section-title">Vertical axis</div>
+            <div class="modal-section-title">Vertical Axis</div>
             <!-- Average charts share one scale, so they get one pair of boxes; Sum
                  charts get one per period because a month total dwarfs a day's. -->
             <div class="modal-grid" id="yMinShared">
                 <div class="modal-field">
-                    <label for="yMinAll">Minimum (all three)</label>
+                    <label for="yMinAll">Minimum (All Three)</label>
                     <input type="number" id="yMinAll" step="any" placeholder="0" oninput="updateYMaxPlaceholders()">
                 </div>
                 <div class="modal-field">
-                    <label for="yMaxAll">Maximum (all three)</label>
+                    <label for="yMaxAll">Maximum (All Three)</label>
                     <input type="number" id="yMaxAll" step="any" placeholder="Auto">
                 </div>
             </div>
             <div id="yMinPerPeriod">
                 <div class="modal-grid three">
                     <div class="modal-field">
-                        <label for="yMinM">Month min</label>
+                        <label for="yMinM">Month Min</label>
                         <input type="number" id="yMinM" step="any" placeholder="0" oninput="updateYMaxPlaceholders()">
                     </div>
                     <div class="modal-field">
-                        <label for="yMinW">Week min</label>
+                        <label for="yMinW">Week Min</label>
                         <input type="number" id="yMinW" step="any" placeholder="0" oninput="updateYMaxPlaceholders()">
                     </div>
                     <div class="modal-field">
-                        <label for="yMinD">Day min</label>
+                        <label for="yMinD">Day Min</label>
                         <input type="number" id="yMinD" step="any" placeholder="0" oninput="updateYMaxPlaceholders()">
                     </div>
                 </div>
                 <div class="modal-grid three">
                     <div class="modal-field">
-                        <label for="yMaxM">Month max</label>
+                        <label for="yMaxM">Month Max</label>
                         <input type="number" id="yMaxM" step="any" placeholder="Auto">
                     </div>
                     <div class="modal-field">
-                        <label for="yMaxW">Week max</label>
+                        <label for="yMaxW">Week Max</label>
                         <input type="number" id="yMaxW" step="any" placeholder="Auto">
                     </div>
                     <div class="modal-field">
-                        <label for="yMaxD">Day max</label>
+                        <label for="yMaxD">Day Max</label>
                         <input type="number" id="yMaxD" step="any" placeholder="Auto">
                     </div>
                 </div>
@@ -527,17 +637,52 @@
             <div class="modal-section-title">Target</div>
             <p class="modal-hint" id="targetSharedNote" style="margin:-4px 0 8px;"></p>
             <div class="modal-field">
-                <label>This chart's target line comes from</label>
+                <label>This Chart's Target Line Comes From</label>
                 <div class="agg-options" id="targetModes">
-                    <label><input type="radio" name="targetMode" value="none"> No target</label>
-                    <label><input type="radio" name="targetMode" value="fixed"> Fixed figure</label>
-                    <label id="targetModeImport"><input type="radio" name="targetMode" value="import"> Imported CSV</label>
-                    <label id="targetModeSnowflake"><input type="radio" name="targetMode" value="snowflake"> Snowflake target column</label>
+                    <label><input type="radio" name="targetMode" value="none"> No Target</label>
+                    <label><input type="radio" name="targetMode" value="fixed"> Fixed Figure</label>
+                    <label id="targetModeImport"><input type="radio" name="targetMode" value="import"> Per Date</label>
+                    <label id="targetModeSnowflake"><input type="radio" name="targetMode" value="snowflake"> Snowflake Target Column</label>
+                    <label id="targetModeInputs"><input type="radio" name="targetMode" value="inputs"> From Inputs</label>
+                    <label id="targetModeCalc"><input type="radio" name="targetMode" value="calc"> Calculated</label>
+                </div>
+            </div>
+            <div class="modal-field" id="calcField">
+                <label for="calcA">Calculated From</label>
+                <div class="calc-row">
+                    <select id="calcA" onchange="updateCalcValueInputs()"></select>
+                    <input type="number" id="calcAValue" step="any" placeholder="Figure">
+                </div>
+                <div class="calc-row">
+                    <select id="calcOp">
+                        <option value="times">Times</option>
+                        <option value="divide">Divided By</option>
+                    </select>
+                </div>
+                <div class="calc-row">
+                    <select id="calcB" onchange="updateCalcValueInputs()"></select>
+                    <input type="number" id="calcBValue" step="any" placeholder="Figure">
+                </div>
+                <div class="modal-hint">
+                    Two other targets combined, e.g. enquiries target times a conversion % chart's
+                    target, or a revenue target divided by an orders target. A % is used as a
+                    decimal (12% is 0.12), so type a figure that way too.
+                </div>
+            </div>
+            <div class="modal-field" id="inputTargetsField">
+                <label>Each Metric's Target</label>
+                <div id="inputTargetsList"></div>
+                <div class="modal-hint">
+                    The chart's target is each metric's target added and divided the same way as the
+                    figures. Set a metric's fixed or per-date target on a chart of that metric.
                 </div>
             </div>
             <div class="modal-field">
-                <label for="fixedTargetInput" id="fixedTargetLabel">Fixed target (per day)</label>
-                <input type="number" id="fixedTargetInput" min="0" step="any">
+                <label for="fixedTargetInput" id="fixedTargetLabel">Fixed Target (Per Day)</label>
+                <div class="input-with-unit">
+                    <input type="number" id="fixedTargetInput" min="0" step="any">
+                    <span class="input-unit" id="fixedTargetUnit"></span>
+                </div>
                 <div class="modal-hint" id="fixedTargetHint">
                     One figure for every date: added up for weeks and months on Sum charts,
                     the same figure on Average charts. Clear and Save to remove it.
@@ -547,33 +692,28 @@
                 </div>
             </div>
             <div class="modal-field" id="importField">
-                <label>Imported targets</label>
-                <div class="import-summary" id="importSummary">Nothing imported yet.</div>
-                <div class="import-row">
-                    <input type="file" id="importFile" accept=".csv,text/csv">
-                    <button type="button" class="btn btn-edit" id="importBtn" onclick="importTargets()">Import</button>
-                </div>
-                <div class="modal-hint">
-                    CSV of date, target per day (YYYY-MM-DD or DD/MM/YYYY, header row fine).
-                    Dates in the file are added or overwritten; saved straight away.
-                </div>
+                <label for="chartDatesInput">Per-Date Targets</label>
+                <textarea class="target-paste" id="chartDatesInput" rows="7" spellcheck="false"
+                          oninput="showPasteCheck('chartDatesInput', 'chartDatesCheck', chartPastePct())"></textarea>
+                <div class="modal-hint" id="chartDatesCheck"></div>
+                <div class="modal-hint" id="chartDatesHint"></div>
             </div>
             </div>
 
             <div class="chart-modal-col">
             <div class="modal-section-title">View Vehicles</div>
             <div class="modal-field" id="vehCopyField">
-                <label for="vehCopySelect">Copy View Vehicles setup from</label>
+                <label for="vehCopySelect">Copy View Vehicles Setup From</label>
                 <select id="vehCopySelect" onchange="copyVehSetup(this.value)"></select>
                 <div class="modal-hint">Copies that chart's table, date column, dates and filters.</div>
             </div>
             <div class="modal-field">
-                <label for="vehChartTableSelect">Vehicle table</label>
+                <label for="vehChartTableSelect">Vehicle Table</label>
                 <select id="vehChartTableSelect" onchange="onVehChartTableChange()"></select>
                 <div class="modal-hint" id="vehTableHint"></div>
             </div>
             <div class="modal-field">
-                <label for="vehDateSelect">Date column</label>
+                <label for="vehDateSelect">Date Column</label>
                 <select id="vehDateSelect" onchange="onVehDateChange()"></select>
                 <div class="modal-hint">(off) hides the View Vehicles button for this chart.</div>
             </div>
@@ -586,10 +726,10 @@
                 <div class="modal-hint">Use Snapshot for stock levels (one row per vehicle per day), so a week or month does not return every vehicle times every day.</div>
             </div>
             <div class="modal-field" id="vehFiltersField">
-                <label>Filters (all must match)</label>
+                <label>Filters (All Must Match)</label>
                 <div id="vehFilterList"></div>
                 <button type="button" class="btn btn-edit section-add-btn" onclick="addVehFilter()">
-                    <i class="fas fa-plus"></i> Add filter
+                    <i class="fas fa-plus"></i> Add Filter
                 </button>
                 <div class="modal-hint">
                     "is one of" takes a comma-separated list.
@@ -600,7 +740,7 @@
 
             <div class="modal-actions">
                 <button type="button" class="btn btn-remove-chart" id="removeChartBtn" onclick="removeChart()">
-                    <i class="fas fa-trash"></i> Remove chart
+                    <i class="fas fa-trash"></i> Remove Chart
                 </button>
                 <div class="spacer"></div>
                 <button type="button" class="btn btn-edit" onclick="closeChartModal()">Cancel</button>
@@ -618,14 +758,14 @@
             </div>
             <p class="modal-sub">Marks a date on the charts with a dotted line, e.g. a new finance deal or a change to which cars go on Autotrader. Hover the line to read the note.</p>
             <div class="modal-error" id="notesError"></div>
-            <div class="modal-section-title" id="noteFormTitle">Add note</div>
+            <div class="modal-section-title" id="noteFormTitle">Add Note</div>
             <div class="modal-grid">
                 <div class="modal-field">
                     <label for="noteDate">Date</label>
                     <input type="date" id="noteDate">
                 </div>
                 <div class="modal-field">
-                    <label for="noteRow">Show on</label>
+                    <label for="noteRow">Show On</label>
                     <select id="noteRow"></select>
                 </div>
                 <div class="modal-field span-2">
@@ -638,12 +778,33 @@
                 </div>
             </div>
             <div class="modal-actions" style="margin-top:0;">
-                <button type="button" class="btn btn-edit" id="noteCancelEditBtn" onclick="resetNoteForm()">Cancel edit</button>
+                <button type="button" class="btn btn-edit" id="noteCancelEditBtn" onclick="resetNoteForm()">Cancel Edit</button>
                 <div class="spacer"></div>
-                <button type="button" class="btn btn-apply" id="noteSaveBtn" onclick="saveNote()">Add note</button>
+                <button type="button" class="btn btn-apply" id="noteSaveBtn" onclick="saveNote()">Add Note</button>
             </div>
-            <div class="modal-section-title">Saved notes</div>
+            <div class="modal-section-title">Saved Notes</div>
             <div id="notesList"></div>
+        </div>
+    </div>
+
+    <!-- Per-date targets opened from Settings > Targets: view, paste over, Save.
+         Sits above the Settings popup. -->
+    <div class="modal-overlay target-dates-overlay" id="targetDatesModal">
+        <div class="modal-box notes-modal">
+            <div class="chart-modal-head">
+                <h2 id="targetDatesTitle">Targets</h2>
+                <button type="button" class="modal-close-x" onclick="closeTargetDatesModal()" aria-label="Close">&times;</button>
+            </div>
+            <p class="modal-sub" id="targetDatesSub"></p>
+            <div class="modal-error" id="targetDatesError"></div>
+            <textarea class="target-paste" id="targetDatesInput" rows="16" spellcheck="false"
+                      oninput="showPasteCheck('targetDatesInput', 'targetDatesCheck', targetDatesState && targetDatesState.pct)"></textarea>
+            <div class="modal-hint" id="targetDatesCheck"></div>
+            <div class="modal-actions">
+                <div class="spacer"></div>
+                <button type="button" class="btn btn-edit" onclick="closeTargetDatesModal()">Close</button>
+                <button type="button" class="btn btn-apply" id="targetDatesSaveBtn" onclick="saveTargetDatesModal()">Save</button>
+            </div>
         </div>
     </div>
 
@@ -660,41 +821,18 @@
                  Save covers every tab; switching tabs keeps what was typed. -->
             <div class="settings-body">
             <nav class="settings-tabs">
-                <button type="button" data-tab="setGroupPeriods" onclick="showSettingsTab(this.dataset.tab)">Chart Periods</button>
+                <button type="button" data-tab="setGroupCharts" onclick="showSettingsTab(this.dataset.tab)">Charts</button>
                 <button type="button" data-tab="setGroupSections" onclick="showSettingsTab(this.dataset.tab)">Sections</button>
+                <button type="button" data-tab="setGroupNames" onclick="showSettingsTab(this.dataset.tab)">Column Names</button>
+                <button type="button" data-tab="setGroupTargets" onclick="showSettingsTab(this.dataset.tab)">Targets</button>
                 <button type="button" data-tab="setGroupVehicles" onclick="showSettingsTab(this.dataset.tab)">View Vehicles</button>
                 <button type="button" data-tab="setGroupAppearance" onclick="showSettingsTab(this.dataset.tab)">Appearance</button>
             </nav>
             <div class="settings-panes">
-            <div class="settings-pane" id="setGroupPeriods">
-            <div class="settings-grid">
-                <div class="modal-field">
-                    <label for="setMonths">Months shown</label>
-                    <input type="number" id="setMonths" step="1">
-                </div>
-                <div class="modal-field">
-                    <label for="setWeeks">Weeks shown</label>
-                    <input type="number" id="setWeeks" step="1">
-                </div>
-                <div class="modal-field">
-                    <label for="setDaysWindow">Days shown at once</label>
-                    <input type="number" id="setDaysWindow" step="1">
-                </div>
-                <div class="modal-field">
-                    <label for="setDaysTotal">Days available to scroll</label>
-                    <input type="number" id="setDaysTotal" step="1">
-                </div>
-                <div class="modal-field">
-                    <label for="setLabelAngle">Data label angle (degrees)</label>
-                    <input type="number" id="setLabelAngle" step="1">
-                </div>
-            </div>
-            <div class="modal-hint" id="settingsHint"></div>
-            </div>
             <div class="settings-pane" id="setGroupSections">
             <div id="sectionList"></div>
             <button type="button" class="btn btn-edit section-add-btn" onclick="addSectionDraft()">
-                <i class="fas fa-plus"></i> Add section
+                <i class="fas fa-plus"></i> Add Section
             </button>
             <div class="modal-hint">
                 Type in a box to rename a section; its charts move with it. A section
@@ -702,27 +840,161 @@
                 Sections with no charts are hidden on the page.
             </div>
             </div>
+            <!-- Charts: the list of charts, then the settings every chart shares,
+                 one sub-section at a time (buttons along the top). -->
+            <div class="settings-pane" id="setGroupCharts">
+            <div class="chart-subtabs">
+                <button type="button" data-sub="chartSubList" onclick="showChartSubtab(this.dataset.sub)">Chart List</button>
+                <button type="button" data-sub="chartSubPeriods" onclick="showChartSubtab(this.dataset.sub)">Periods</button>
+                <button type="button" data-sub="chartSubLabels" onclick="showChartSubtab(this.dataset.sub)">Data Labels</button>
+                <button type="button" data-sub="chartSubLines" onclick="showChartSubtab(this.dataset.sub)">Lines</button>
+                <button type="button" data-sub="chartSubThemes" onclick="showChartSubtab(this.dataset.sub)">Colour Themes</button>
+            </div>
+            <div class="chart-subpane" id="chartSubList">
+            <div id="chartList"></div>
+            <div class="modal-hint">
+                Untick Show to hide a chart without deleting it; tick it again to bring it back.
+                Change a chart's section here or in Edit Chart; a chart moved to another section
+                goes to the bottom of it. The arrows move a chart within its section.
+            </div>
+            </div>
+            <div class="chart-subpane" id="chartSubPeriods">
+            <div class="settings-grid">
+                <div class="modal-field">
+                    <label for="setMonths">Months Shown</label>
+                    <input type="number" id="setMonths" step="1">
+                </div>
+                <div class="modal-field">
+                    <label for="setWeeks">Weeks Shown</label>
+                    <input type="number" id="setWeeks" step="1">
+                </div>
+                <div class="modal-field">
+                    <label for="setMonthsAfter">Months After The Current One</label>
+                    <input type="number" id="setMonthsAfter" step="1">
+                </div>
+                <div class="modal-field">
+                    <label for="setWeeksAfter">Weeks After The Current One</label>
+                    <input type="number" id="setWeeksAfter" step="1">
+                </div>
+                <div class="modal-field">
+                    <label for="setDaysAfter">Days After Today</label>
+                    <input type="number" id="setDaysAfter" step="1">
+                </div>
+                <div class="modal-field">
+                    <label for="setDaysWindow">Days Shown At Once</label>
+                    <input type="number" id="setDaysWindow" step="1">
+                </div>
+                <div class="modal-field">
+                    <label for="setDaysTotal">Days Available To Scroll</label>
+                    <input type="number" id="setDaysTotal" step="1">
+                </div>
+            </div>
+            <div class="modal-hint" id="settingsHint"></div>
+            </div>
+            <div class="chart-subpane" id="chartSubLabels">
+            <div class="settings-grid">
+                <div class="modal-field">
+                    <label for="setLabelAngle">Data Label Angle (Degrees)</label>
+                    <input type="number" id="setLabelAngle" step="1">
+                </div>
+                <div class="modal-field">
+                    <label for="setLabelBelow">Data Label Position</label>
+                    <select id="setLabelBelow">
+                        <option value="0">Above The Line</option>
+                        <option value="1">Below The Line</option>
+                    </select>
+                </div>
+            </div>
+            <div class="modal-hint">
+                The figures on each line chart's own line. Angle: 0 is flat, -40 tilts them up to the
+                right. Each figure is moved clear of the line where the line is steep.
+            </div>
+            </div>
+            <div class="chart-subpane" id="chartSubLines">
+            <div class="settings-grid">
+                <div class="modal-field">
+                    <label for="setMainLinePx">Main Line Thickness (px)</label>
+                    <input type="number" id="setMainLinePx" step="0.5">
+                </div>
+                <div class="modal-field">
+                    <label for="setMainLineColour">Main Line Colour</label>
+                    <input type="color" id="setMainLineColour" class="setting-colour">
+                </div>
+                <div class="modal-field">
+                    <label for="setN1LinePx">N-1 Line Thickness (px)</label>
+                    <input type="number" id="setN1LinePx" step="0.5">
+                </div>
+                <div class="modal-field">
+                    <label for="setN1LineColour">N-1 Line Colour</label>
+                    <input type="color" id="setN1LineColour" class="setting-colour">
+                </div>
+                <div class="modal-field">
+                    <label for="setTargetLinePx">Target Line Thickness (px)</label>
+                    <input type="number" id="setTargetLinePx" step="0.5">
+                </div>
+                <div class="modal-field">
+                    <label for="setTargetLineColour">Target Line Colour</label>
+                    <input type="color" id="setTargetLineColour" class="setting-colour">
+                </div>
+            </div>
+            <div class="modal-hint">
+                Every line chart. The target line's settings apply to stacked charts too. Thickness
+                goes in halves of a pixel, 0.5 to 8.
+            </div>
+            </div>
+            <div class="chart-subpane" id="chartSubThemes">
+            <div id="themeList"></div>
+            <button type="button" class="btn btn-edit section-add-btn" onclick="addThemeDraft()">
+                <i class="fas fa-plus"></i> Add Theme
+            </button>
+            <div class="modal-hint">
+                The series in a stacked chart take its theme's colours in order: the first series
+                the first colour, and so on. A series past the last colour is grey, so add colours
+                to a theme rather than repeat one. Click a colour to change it.
+            </div>
+            </div>
+            </div>
+            <div class="settings-pane" id="setGroupNames">
+            <div id="namesList"></div>
+            <button type="button" class="btn btn-edit section-add-btn" onclick="addNameDraft()">
+                <i class="fas fa-plus"></i> Add Name
+            </button>
+            <div class="modal-hint">
+                The name a raw column shows under on every chart: stacked chart legends and
+                the metric lists in Edit Chart. A name typed for a series in Edit Chart is
+                saved here too, so every chart using that column picks it up. Remove a name
+                to go back to the raw column.
+            </div>
+            </div>
+            <div class="settings-pane" id="setGroupTargets">
+            <div id="targetsList"></div>
+            <div class="modal-hint">
+                Every chart's target source, and every stored target with the charts using it. View
+                shows the per-date figures to check, paste over and save; changes here save straight
+                away, not with the Save button. Change a chart's target source in its Edit Chart.
+            </div>
+            </div>
             <div class="settings-pane" id="setGroupVehicles">
             <div class="modal-field">
-                <label for="vehTableSelect">Vehicle table</label>
+                <label for="vehTableSelect">Vehicle Table</label>
                 <select id="vehTableSelect" onchange="onVehTableChange()"></select>
                 <div class="modal-hint">Each chart picks its own table in Edit Chart. Set up one table's columns here, Save, then switch to the next - each table is saved separately.</div>
             </div>
             <div class="modal-field">
-                <label>Grey out rows where any of these match</label>
+                <label>Grey Out Rows Where Any Of These Match</label>
                 <div id="vehGreyList"></div>
                 <button type="button" class="btn btn-edit section-add-btn" onclick="addGreyRule()">
-                    <i class="fas fa-plus"></i> Add rule
+                    <i class="fas fa-plus"></i> Add Rule
                 </button>
                 <div class="modal-hint">Checked on every row whether or not the column is shown, e.g. INVOICE_STATUS equals STATUS_CANCELLED.</div>
             </div>
             <div class="veh-cols">
                 <div>
-                    <div class="veh-col-head" id="vehShownHead">Shown, in order</div>
+                    <div class="veh-col-head" id="vehShownHead">Shown, In Order</div>
                     <div class="veh-col-list" id="vehShownList"></div>
                 </div>
                 <div>
-                    <div class="veh-col-head">Not shown</div>
+                    <div class="veh-col-head">Not Shown</div>
                     <input type="text" class="veh-col-search" id="vehColSearch" placeholder="Search columns" oninput="renderVehColumnDraft()">
                     <div class="veh-col-list" id="vehHiddenList" style="height:302px;"></div>
                 </div>
@@ -739,25 +1011,35 @@
             <div class="settings-pane" id="setGroupAppearance">
             <div class="settings-grid">
                 <div class="modal-field">
-                    <label for="setSectionFont">Section heading size (px)</label>
+                    <label for="setSectionFont">Section Heading Size (px)</label>
                     <input type="number" id="setSectionFont" step="1">
                 </div>
                 <div class="modal-field">
-                    <label for="setTitleFont">Chart title size (px)</label>
+                    <label for="setTitleFont">Chart Title Size (px)</label>
                     <input type="number" id="setTitleFont" step="1">
+                </div>
+                <div class="modal-field">
+                    <label for="setSubtitleFont">Chart Subtitle Size (px)</label>
+                    <input type="number" id="setSubtitleFont" step="1">
+                </div>
+                <div class="modal-field">
+                    <label for="setPeriodFont">Chart Period Label Size (px)</label>
+                    <input type="number" id="setPeriodFont" step="1">
+                </div>
+                <div class="modal-field">
+                    <label for="setToolbarFont">Top Bar Size (px)</label>
+                    <input type="number" id="setToolbarFont" step="1">
+                </div>
+                <div class="modal-field">
+                    <label for="setAtFont">Autotrader Figures Size (px)</label>
+                    <input type="number" id="setAtFont" step="1">
+                </div>
+                <div class="modal-field">
+                    <label for="setLegendFont">Chart Legend Size (px)</label>
+                    <input type="number" id="setLegendFont" step="1">
                 </div>
             </div>
             <div class="modal-hint" id="appearanceHint"></div>
-            <div class="modal-section-title" style="margin-top:16px;">Colour themes</div>
-            <div id="themeList"></div>
-            <button type="button" class="btn btn-edit section-add-btn" onclick="addThemeDraft()">
-                <i class="fas fa-plus"></i> Add theme
-            </button>
-            <div class="modal-hint">
-                The series in a stacked chart take its theme's colours in order: the first series
-                the first colour, and so on. A series past the last colour is grey, so add colours
-                to a theme rather than repeat one. Click a colour to change it.
-            </div>
             </div>
             </div>
             </div>
@@ -788,6 +1070,18 @@
     let metricsByKey = {};
     // Colour themes for multi-series charts, from /kpi/layout (Settings > Appearance).
     let themes = [];
+    // Display names for raw columns, shared by every chart ({ 'source|column':
+    // name }), from /kpi/layout. Set in a stacked chart's series list or in
+    // Settings > Column Names.
+    let metricNames = {};
+    function metricName(source, column) {
+        return metricNames[metricKey(source || 'snowflake', column)] || column;
+    }
+    // Dropdown text: the name with the raw column after it, or just the column.
+    function metricOptionText(source, column) {
+        const name = metricNames[metricKey(source || 'snowflake', column)];
+        return name ? `${name} (${column})` : column;
+    }
     let rowCharts = {};        // rowId -> [Chart, Chart, Chart]
     const customRowEls = {};   // rowId -> element
     const customRowData = {};  // rowId -> last /kpi/custom-data response
@@ -800,7 +1094,7 @@
     }
 
     // Chart periods and label angle, shared by everyone, set by the admin.
-    let settings = { months: 14, weeks: 10, days_window: 35, days_total: 90, label_angle: 0 };
+    let settings = { months: 14, weeks: 10, days_window: 35, days_total: 90, label_angle: 0, label_below: 0 };
     let settingLimits = {};
 
     // Dates of the day charts (all rows share the same dates).
@@ -823,6 +1117,19 @@
     // Rows saved before target modes existed drew the Snowflake target column.
     function rowTargetMode(row) { return row.target_mode || 'snowflake'; }
     function rowMetricInfo(row) { return metricsByKey[metricKey(rowSource(row), row.metric)] || {}; }
+    // Metrics added to the chart's metric and to its divide-by metric, e.g.
+    // orders / (calls + emails): [{ source, metric }]. Sum charts only.
+    function rowPlus(row) { return row.metric_plus || []; }
+    function rowDividePlus(row) { return row.divide_by ? (row.divide_plus || []) : []; }
+    // A ratio chart or one with added metrics keeps its own target on the row
+    // (ratio_target): the stored targets each belong to a single metric.
+    function rowOwnTarget(row) { return !!row.divide_by || rowPlus(row).length > 0; }
+    // "orders / (calls + emails)": brackets only round a side of more than
+    // one metric, and only when there is a divide.
+    function formulaText(top, bottom) {
+        const side = names => names.length > 1 && bottom.length ? `(${names.join(' + ')})` : names.join(' + ');
+        return bottom.length ? `${side(top)} / ${side(bottom)}` : side(top);
+    }
 
     function sectionDomId(name) {
         return 'sec-' + name.toLowerCase().replace(/[^a-z0-9]+/g, '-');
@@ -868,6 +1175,7 @@
             settingLimits = layoutResp.setting_limits || {};
             chartNotes = layoutResp.notes || [];
             themes = layoutResp.themes || [];
+            metricNames = layoutResp.metric_names || {};
             metricsCatalogue = metricsResp.metrics || [];
             metricsByKey = Object.fromEntries(metricsCatalogue.map(m => [metricKey(m.source, m.column), m]));
         } catch (err) {
@@ -921,6 +1229,13 @@
                 header.onclick = () => toggleSection(name);
                 const body = document.createElement('div');
                 body.className = 'category-body open';
+                // Autotrader advert figures above the first chart. Created before
+                // any chart is added, so it stays first.
+                if (/autotrader/i.test(name)) {
+                    const strip = document.createElement('div');
+                    strip.className = 'at-strip';
+                    body.appendChild(strip);
+                }
                 sec.appendChild(header);
                 sec.appendChild(body);
             }
@@ -936,18 +1251,59 @@
                 + missing.join(', ') + '. Sections on this page: ' + SECTIONS.join(', ') + '.');
         }
         layout.rows.forEach(row => {
+            if (row.hidden) { dropRowElement(row.id); return; }
             document.getElementById(sectionDomId(row.section)).querySelector('.category-body')
                 .appendChild(getRowElement(row));
         });
 
-        // Hide sections with no charts (skip until layout has actually loaded,
-        // so sections stay visible rather than flashing away then back on first paint)
+        // One tab per section with shown charts (all sections until the layout
+        // has loaded); only the chosen tab's section is shown.
+        const tabNames = SECTIONS.filter(name => !layoutLoaded || shownRows().some(r => r.section === name));
+        if (!tabNames.includes(activeSection)) {
+            let saved = null;
+            try { saved = localStorage.getItem(ACTIVE_SECTION_KEY); } catch (e) {}
+            activeSection = tabNames.includes(saved) ? saved : tabNames[0];
+        }
+        document.getElementById('sectionTabs').innerHTML = tabNames.map((name, i) => `
+            <div class="kpi-tab ${name === activeSection ? 'active' : ''}" role="tab"
+                 aria-selected="${name === activeSection}" onclick="showSection(${i})">
+                ${escHtml(name)}
+            </div>`).join('');
+        sectionTabNames = tabNames;
         SECTIONS.forEach(name => {
-            const hasRows = layout.rows.some(r => r.section === name);
-            document.getElementById(sectionDomId(name)).style.display = (hasRows || !layoutLoaded) ? '' : 'none';
+            document.getElementById(sectionDomId(name)).style.display = name === activeSection ? '' : 'none';
         });
+        showAtAllowance();
 
         setTimeout(resizeAllCharts, 10);
+    }
+
+    // The section tab showing. Remembered in this browser only, so each person
+    // comes back to the tab they last used.
+    const ACTIVE_SECTION_KEY = 'kpiActiveSection';
+    let activeSection = null;
+    let sectionTabNames = [];
+
+    function showSection(i) {
+        activeSection = sectionTabNames[i];
+        try { localStorage.setItem(ACTIVE_SECTION_KEY, activeSection); } catch (e) {}
+        renderLayout();
+        redrawActiveSection();
+    }
+
+    // Charts on a tab that is not showing are drawn at zero width, so a
+    // resize is not enough when the tab is opened: redraw them from the data
+    // already loaded, once the tab is visible and has its real width.
+    function redrawActiveSection() {
+        requestAnimationFrame(() => {
+            shownRows()
+                .filter(r => r.section === activeSection && customRowData[r.id])
+                .forEach(r => {
+                    (rowCharts[r.id] || []).forEach(c => c && c.destroy());
+                    delete rowCharts[r.id];
+                    renderCustomRow(r, customRowData[r.id]);
+                });
+        });
     }
 
     function getRowElement(row) {
@@ -979,25 +1335,75 @@
         return row.title || row.metric;
     }
 
+    // Daily charts showing the 7-day average instead of each day's figure.
+    // Each person's own choice, kept in their browser, like collapsed rows.
+    const ROLLING_KEY = 'kpiRolling7';
+    function rollingRows() {
+        try { return new Set(JSON.parse(localStorage.getItem(ROLLING_KEY) || '[]')); }
+        catch (e) { return new Set(); }
+    }
+    function rollingOn(id) { return rollingRows().has(id); }
+
+    function setRolling(id, on) {
+        if (rollingOn(id) === on) return;
+        const set = rollingRows();
+        if (on) set.add(id); else set.delete(id);
+        try { localStorage.setItem(ROLLING_KEY, JSON.stringify([...set])); } catch (e) {}
+        const row = findRow(id);
+        if (row) rebuildCustomRow(row, false);
+    }
+
+    // Each point as the average of that day and the 6 before it. Blank days
+    // are left out of the average; the first 6 days have no full week before
+    // them, so they are blank. ownDayOnly: a day blank itself stays blank —
+    // today, unless the chart includes the current day, and future days —
+    // rather than showing the 6 days before it (the chart's own figures only;
+    // last year and the target still run through to the end).
+    function rolling7(values, ownDayOnly = false) {
+        if (!values) return values;
+        return values.map((v, i) => {
+            if (i < 6 || (ownDayOnly && (v === null || v === undefined))) return null;
+            const week = values.slice(i - 6, i + 1).filter(v => v !== null && v !== undefined);
+            return week.length ? week.reduce((a, b) => a + b, 0) / week.length : null;
+        });
+    }
+
     function buildCustomRowElement(row) {
         const el = document.createElement('div');
         el.className = 'chart-row';
         el.id = 'row-' + row.id;
         const title = rowTitle(row);
-        const card = (period, suffix, dayScroller = false) => chartCardHtml({
+        // The period (monthly / weekly / daily) sits at the right of the title
+        // line, apart from the title. The title h2 grows to push it across.
+        const card = (period, suffix, dayScroller = false, headExtra = '') => chartCardHtml({
             canvasId: `cv-${row.id}-${suffix}`,
             titleId: `t-${row.id}-${suffix}`,
-            title: `${title} - ${period}`,
+            title,
             subtitle: row.subtitle || '',
             dayScroller,
             legend: false,
+            headExtra: `<span class="chart-period" id="p-${row.id}-${suffix}">${escHtml(period)}</span>${headExtra}`,
         });
+        // Daily / 7-day average switch on the daily chart (line charts only).
+        const rolling = rollingOn(row.id);
+        const rollingToggle = isStacked(row) ? '' : `
+            <span class="labels-toggle" role="group" aria-label="Daily or 7-day average"
+                  title="Show each day's figure, or the average of that day and the 6 before it">
+                <button type="button" class="${rolling ? '' : 'active'}" onclick="setRolling('${row.id}', false)">Daily</button>
+                <button type="button" class="${rolling ? 'active' : ''}" onclick="setRolling('${row.id}', true)">7-day avg</button>
+            </span>`;
         const editButton = IS_ADMIN ? `
             <button type="button" class="chart-title-btn" onclick="openChartModal('${row.id}')">
                 <i class="fas fa-pen"></i> Edit Chart
             </button>
             <button type="button" class="chart-title-btn" onclick="copyChartBelow('${row.id}')">
                 <i class="fas fa-copy"></i> Copy Chart Below
+            </button>
+            <button type="button" class="chart-title-btn" title="Move these charts up the section" onclick="moveRow('${row.id}', -1)">
+                <i class="fas fa-arrow-up"></i> Up
+            </button>
+            <button type="button" class="chart-title-btn" title="Move these charts down the section" onclick="moveRow('${row.id}', 1)">
+                <i class="fas fa-arrow-down"></i> Down
             </button>` : '';
         // For everyone, in both views. See setDataLabels for who it changes.
         const labelsToggle = `
@@ -1018,9 +1424,9 @@
         el.innerHTML = `
             <div class="chart-row-actions">${toggleButton}${labelsToggle}${editButton ? `<span class="chart-row-admin">${editButton}</span>` : ''}</div>
             <div class="charts-row">
-                ${card('monthly', 'm')}
-                ${card('weekly', 'w')}
-                ${card('daily', 'd', true)}
+                ${card('Monthly', 'm')}
+                ${card('Weekly', 'w')}
+                ${card(isStacked(row) ? 'Daily' : '', 'd', true, rollingToggle)}
             </div>`;
         return el;
     }
@@ -1040,6 +1446,12 @@
         const el = customRowEls[id];
         if (el) el.remove();
         delete customRowEls[id];
+    }
+
+    // Charts not hidden in Settings > Charts. Hidden ones stay saved but are
+    // not drawn or loaded.
+    function shownRows() {
+        return layout.rows.filter(r => !r.hidden);
     }
 
     function findRow(id) {
@@ -1092,36 +1504,152 @@
         return cur;
     }
 
+    // Every chart's data request made in the same moment (e.g. all of them on
+    // Load Data) is collected and sent as one /kpi/custom-data-batch request,
+    // which reads Snowflake once for the lot. The same metric asked for twice
+    // with the same options is sent once and shared.
+    let metricBatch = null;   // { items: [], waiters: Map(key -> {index, promise, resolve}) }
+
     function fetchMetricData(source, metric, agg, targetMode, current = {}, weightBy = '') {
-        const params = new URLSearchParams({
-            source,
-            metric,
-            agg,
+        const item = {
+            source, metric, agg,
             target_mode: targetMode,
-            current_month: current.m ? '1' : '0',
-            current_week: current.w ? '1' : '0',
-            current_day: current.d ? '1' : '0',
-            refresh: loadToken,
-            months: settings.months,
-            weeks: settings.weeks,
-            days: settings.days_total,
-        });
-        if (weightBy) params.set('weight_by', weightBy);
-        return fetch(`${BASE_URL}/kpi/custom-data?${params}`).then(r => r.json());
+            current_month: !!current.m,
+            current_week: !!current.w,
+            current_day: !!current.d,
+            weight_by: weightBy || '',
+        };
+        if (!metricBatch) {
+            metricBatch = { items: [], waiters: new Map() };
+            setTimeout(sendMetricBatch, 0);
+        }
+        const key = JSON.stringify(item);
+        let w = metricBatch.waiters.get(key);
+        if (!w) {
+            let resolve;
+            const promise = new Promise(r => { resolve = r; });
+            w = { index: metricBatch.items.length, promise, resolve };
+            metricBatch.items.push(item);
+            metricBatch.waiters.set(key, w);
+        }
+        // Each chart gets its own copy, so one changing it cannot affect another.
+        return w.promise.then(d => structuredClone(d));
+    }
+
+    function sendMetricBatch() {
+        const batch = metricBatch;
+        metricBatch = null;
+        const settle = results => batch.waiters.forEach(w => w.resolve(results(w.index)));
+        fetch(`${BASE_URL}/kpi/custom-data-batch`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                items: batch.items,
+                refresh: loadToken,
+                sp_refresh: spRefreshToken,
+                months: settings.months,
+                weeks: settings.weeks,
+                days: settings.days_total,
+                months_after: settings.months_after,
+                weeks_after: settings.weeks_after,
+                days_after: settings.days_after,
+            }),
+        })
+            .then(r => r.json())
+            .then(d => {
+                if (d.status !== 'ok') throw new Error(d.message || 'load failed');
+                settle(i => d.results[i]);
+            })
+            .catch(err => settle(() => ({ status: 'error', message: String(err.message || err) })));
     }
 
     function fetchRowData(row) {
         if (isStacked(row)) return fetchStackedData(row);
         const cur = rowCurrent(row);
-        if (!row.divide_by) return fetchMetricData(rowSource(row), row.metric, row.agg, rowTargetMode(row), cur, row.weight_by || '');
-        return Promise.all([
-            fetchMetricData(rowSource(row), row.metric, row.agg, 'none', cur),
-            fetchMetricData(row.divide_by.source || 'snowflake', row.divide_by.metric, row.agg, 'none', cur),
-        ]).then(([num, den]) => {
+        if (!rowOwnTarget(row)) {
+            // Calculated: two other targets combined in the page (kpi_targets.js).
+            const calc = rowTargetMode(row) === 'calc';
+            const d = fetchMetricData(rowSource(row), row.metric, row.agg, calc ? 'none' : rowTargetMode(row), cur, row.weight_by || '');
+            return calc ? d.then(data => withCalcTarget(row, data)) : d;
+        }
+        // Each side is its metrics added together. Errors from any metric but
+        // the chart's own are named, so it is clear which one failed.
+        // From Inputs: each metric fetched with its own target (source picked
+        // per metric), then added and divided the same way as the figures.
+        const inputs = row.target_mode === 'inputs' ? rowInputTargets(row) : null;
+        const fetchSide = parts => Promise.all(parts.map((p, i) =>
+            fetchMetricData(p.source || 'snowflake', p.metric, row.agg,
+                inputs ? inputs[metricKey(p.source || 'snowflake', p.metric)] : 'none', cur).then(d =>
+                d.status === 'ok' || (parts === top && i === 0) ? d : { ...d, message: `${p.metric}: ${d.message}` })))
+            .then(sumData);
+        const top = [{ source: rowSource(row), metric: row.metric }, ...rowPlus(row)];
+        // Per Date: the chart's own pasted figures (kpi_targets.js).
+        const ownDates = d => (row.target_mode === 'import' ? withRowDateTargets(row, d) : d);
+        if (!row.divide_by) {
+            return fetchSide(top).then(d => {
+                if (d.status !== 'ok' || inputs) return d;
+                // Not divided, so the chart's Sum / Average decides, as on a
+                // plain chart. Sum: the fixed figure is per day, and a week's
+                // target is 7 days' worth, a month's that month's number of
+                // days' worth. Average: the same figure on every point. (A
+                // divided chart is a rate, so it is always the same figure on
+                // every point whatever Sum / Average says: see ratioData.)
+                const target = rowTargetFn(row);
+                const sum = row.agg === 'sum';
+                const daysInMonth = s => { const [y, m] = s.split('-').map(Number); return new Date(Date.UTC(y, m, 0)).getUTCDate(); };
+                const times = (list, n) => (list ? list.map((v, i) => (v === null || !sum ? v : v * n(i))) : null);
+                return ownDates({ ...d, values_target: target(d.dates),
+                                  weekly_values_target: times(target(d.weekly_labels), () => 7),
+                                  monthly_values_target: times(target(d.monthly_labels), i => daysInMonth(d.monthly_starts[i])) });
+            });
+        }
+        return Promise.all([fetchSide(top), fetchSide([row.divide_by, ...rowDividePlus(row)])]).then(([num, den]) => {
             if (num.status !== 'ok') return num;
-            if (den.status !== 'ok') return { ...den, message: `${row.divide_by.metric}: ${den.message}` };
-            return ratioData(row, num, den);
+            if (den.status !== 'ok') return den;
+            return ownDates(ratioData(row, num, den));
         });
+    }
+
+    // Several metrics' series added point by point. A point is blank only
+    // when every metric is blank there; one missing counts as 0. Last year
+    // is only kept when every metric has it.
+    function sumData(parts) {
+        const bad = parts.find(p => p.status !== 'ok');
+        if (bad) return bad;
+        if (parts.length === 1) return parts[0];
+        const add = key => {
+            const lists = parts.map(p => p[key]);
+            if (lists.some(l => !l)) return null;
+            return lists[0].map((_, i) => {
+                const vals = lists.map(l => l[i]).filter(v => v !== null && v !== undefined);
+                return vals.length ? vals.reduce((a, b) => a + b, 0) : null;
+            });
+        };
+        // Targets only add up where every metric has one: a target missing
+        // for one metric is unknown, not 0.
+        const addAll = key => {
+            const lists = parts.map(p => p[key]);
+            if (lists.some(l => !l)) return null;
+            return lists[0].map((_, i) => {
+                const vals = lists.map(l => l[i]);
+                return vals.some(v => v === null || v === undefined) ? null : vals.reduce((a, b) => a + b, 0);
+            });
+        };
+        const out = { ...parts[0], stale_date: parts.map(p => p.stale_date).find(Boolean) || parts[0].stale_date };
+        ['values', 'values_n1', 'monthly_values', 'monthly_values_n1', 'weekly_values', 'weekly_values_n1']
+            .forEach(key => { out[key] = add(key); });
+        ['values_target', 'monthly_values_target', 'weekly_values_target']
+            .forEach(key => { out[key] = addAll(key); });
+        return out;
+    }
+
+    // The target line of a chart that keeps its own target: the row's fixed
+    // figure on every point, or none. A ratio chart uses it as it is; an
+    // added-metrics chart scales it up for weeks and months (fetchRowData).
+    function rowTargetFn(row) {
+        return row.target_mode === 'fixed' && row.ratio_target !== null && row.ratio_target !== undefined
+            ? labels => labels.map(() => row.ratio_target)
+            : () => null;
     }
 
     // A ratio chart's series: each point of the metric divided by the same
@@ -1135,23 +1663,26 @@
             if (v === null || v === undefined || d === null || d === undefined || d === 0) return null;
             return v / d * scale;
         });
-        const target = row.target_mode === 'fixed' && row.ratio_target !== null && row.ratio_target !== undefined
-            ? labels => labels.map(() => row.ratio_target)
-            : () => null;
+        const target = rowTargetFn(row);
+        // From Inputs: a week's target is the week's numerator target over the
+        // week's divide-by target, as for the actuals.
+        const fromInputs = row.target_mode === 'inputs';
         const hasN1 = !!(num.values_n1 && den.values_n1);
         return {
             ...num,
             stale_date: num.stale_date || den.stale_date,
             values: divide(num.values, den.values),
             values_n1: hasN1 ? divide(num.values_n1, den.values_n1) : null,
-            values_target: target(num.dates),
+            values_target: fromInputs ? divide(num.values_target, den.values_target) : target(num.dates),
             monthly_values: divide(num.monthly_values, den.monthly_values),
             monthly_values_n1: num.monthly_values_n1 && den.monthly_values_n1
                 ? divide(num.monthly_values_n1, den.monthly_values_n1) : null,
-            monthly_values_target: target(num.monthly_labels),
+            monthly_values_target: fromInputs ? divide(num.monthly_values_target, den.monthly_values_target)
+                : target(num.monthly_labels),
             weekly_values: divide(num.weekly_values, den.weekly_values),
             weekly_values_n1: divide(num.weekly_values_n1, den.weekly_values_n1),
-            weekly_values_target: target(num.weekly_labels),
+            weekly_values_target: fromInputs ? divide(num.weekly_values_target, den.weekly_values_target)
+                : target(num.weekly_labels),
         };
     }
 
@@ -1183,13 +1714,48 @@
     // instead of using a list from before the table was last rebuilt.
     let loadToken = '';
 
-    function loadAll() {
+    // Shown at the top of any section with "Autotrader" in its name: the
+    // Car/Van advert allowance live from the Autotrader API (cars over it show
+    // as Capped), then Published, Capped and Unpublished from this morning's
+    // daily_summary figures.
+    let atStripHtml = '';
+    function showAtAllowance() {
+        document.querySelectorAll('.at-strip').forEach(el => { el.innerHTML = atStripHtml; });
+    }
+    function loadAtAllowance() {
+        const num = v => (v === null || v === undefined) ? '-' : Number(v).toLocaleString('en-GB');
+        const stat = (label, value, cls = '') => `<div class="at-stat${cls ? ' ' + cls : ''}">${label} <strong>${value}</strong></div>`;
+        fetch(BASE_URL + '/kpi/at-allowance')
+            .then(r => r.json())
+            .then(d => {
+                if (d.status !== 'ok') throw new Error(d.message);
+                const allowance = 'capacity' in d ? (d.capacity === null ? 'Unlimited' : num(d.capacity)) : 'Unavailable';
+                const c = d.counts || {};
+                const day = c.date ? new Date(c.date + 'T00:00:00').toLocaleDateString('en-GB') : null;
+                atStripHtml = stat('Advert Allowance', allowance)
+                    + stat('Published', num(c.published))
+                    + stat('Capped', num(c.capped), 'at-stat-bad')
+                    + stat('Unpublished', num(c.unpublished))
+                    + `<span class="at-strip-note">${day ? 'Published, Capped and Unpublished as at the morning of ' + day : 'Counts unavailable'}</span>`;
+            })
+            .catch(() => { atStripHtml = stat('Advert Allowance', 'Unavailable'); })
+            .finally(showAtAllowance);
+    }
+
+    // Set only when the Load Data button is clicked: the server then re-reads
+    // any SharePoint spreadsheet saved since its cached copy. A page load uses
+    // the cached copy, so it stays fast.
+    let spRefreshToken = '';
+
+    function loadAll(fromButton = false) {
         loadToken = String(Date.now());
+        spRefreshToken = fromButton ? loadToken : '';
+        loadAtAllowance();
         const btn    = document.getElementById('loadBtn');
         const icon   = document.getElementById('loadIcon');
         const status = document.getElementById('statusText');
         const container = document.getElementById('sectionsContainer');
-        const rows = layout.rows.slice();
+        const rows = shownRows();
         if (!rows.length) {
             btn.disabled = false;
             icon.classList.remove('spin');
@@ -1231,7 +1797,7 @@
     // Redraw every row from its last response, e.g. after the window or label
     // angle changes, which need no new data.
     function renderAllFromCache() {
-        layout.rows.forEach(row => {
+        shownRows().forEach(row => {
             if (customRowData[row.id]) renderCustomRow(row, customRowData[row.id]);
         });
     }
@@ -1278,6 +1844,12 @@
         if (!document.getElementById(`cv-${row.id}-m`)) return;   // row removed meanwhile
         kpiDates = d.dates;
         if (isStacked(row)) { renderStackedRow(row, d); return; }
+        // 7-day average on the daily chart only; the cached data is kept as
+        // loaded so switching back needs no reload.
+        if (rollingOn(row.id)) {
+            d = { ...d, values: rolling7(d.values, true), values_n1: rolling7(d.values_n1),
+                  values_target: rolling7(d.values_target) };
+        }
 
         const nulls = arr => arr.map(() => null);
         const dailyLabels = d.dates.map(dateLabel);
@@ -1352,10 +1924,16 @@
     // maximum worked out from all three periods' data together, keeping that
     // data central.
     // A typed maximum (spec.max / sharedMax) overrides the worked-out top.
+    //
+    // The axis is never forced up to 1 when there is data above zero: a small
+    // figure such as a decimal ratio (0.004 emails and calls per advert view)
+    // would otherwise sit flat along the bottom of a 0 to 1 axis. The 1 only
+    // guards an all-zero series.
     function calcRowRanges(specs, aggType = 'sum', sharedMin = null, sharedMax = null) {
         const values = spec => (spec.series || []).flatMap(_cleanVals);
-        if (aggType !== 'avg') return specs.map(spec => withFixedMax(offsetRange(values(spec), spec.min), spec.max));
-        const shared = withFixedMax(offsetRange(specs.flatMap(values), sharedMin), sharedMax);
+        const range = (vals, min) => offsetRange(vals, min, vals.some(v => v > (min || 0)) ? 0 : 1);
+        if (aggType !== 'avg') return specs.map(spec => withFixedMax(range(values(spec), spec.min), spec.max));
+        const shared = withFixedMax(range(specs.flatMap(values), sharedMin), sharedMax);
         return specs.map(() => shared);
     }
 
@@ -1501,8 +2079,8 @@
 
     function resetNoteForm() {
         noteEditingId = null;
-        document.getElementById('noteFormTitle').textContent = 'Add note';
-        document.getElementById('noteSaveBtn').textContent = 'Add note';
+        document.getElementById('noteFormTitle').textContent = 'Add Note';
+        document.getElementById('noteSaveBtn').textContent = 'Add Note';
         document.getElementById('noteCancelEditBtn').style.display = 'none';
         document.getElementById('noteDate').value = new Date().toISOString().slice(0, 10);
         document.getElementById('noteTitle').value = '';
@@ -1514,8 +2092,8 @@
         const note = chartNotes.find(n => n.id === id);
         if (!note) return;
         noteEditingId = id;
-        document.getElementById('noteFormTitle').textContent = 'Edit note';
-        document.getElementById('noteSaveBtn').textContent = 'Save note';
+        document.getElementById('noteFormTitle').textContent = 'Edit Note';
+        document.getElementById('noteSaveBtn').textContent = 'Save Note';
         document.getElementById('noteCancelEditBtn').style.display = '';
         document.getElementById('noteDate').value = note.date;
         document.getElementById('noteTitle').value = note.title;
@@ -1900,8 +2478,8 @@
                 label: 'N-1',
                 data: lyData,
                 fill: false,
-                borderColor: N1_COLOUR,
-                borderWidth: 1.5,
+                borderColor: settings.n1_line_colour || N1_COLOUR,
+                borderWidth: settings.n1_line_px || 1.5,
                 borderDash: [5, 4],
                 pointRadius: 0,
                 tension: 0,
@@ -1914,8 +2492,8 @@
                 label: 'Target',
                 data: targetData,
                 fill: false,
-                borderColor: '#e53e3e',
-                borderWidth: 1.5,
+                borderColor: settings.target_line_colour || '#e53e3e',
+                borderWidth: settings.target_line_px || 1.5,
                 borderDash: [],
                 pointRadius: 0,
                 tension: 0,
@@ -1927,10 +2505,10 @@
             label: seriesLabel,
             data: data,
             fill: false,
-            borderColor: '#0d3d6e',
-            borderWidth: 2.5,
+            borderColor: settings.main_line_colour || '#0d3d6e',
+            borderWidth: settings.main_line_px || 2.5,
             pointRadius: p => p.dataset.data[p.dataIndex] !== null ? 3 : 0,
-            pointBackgroundColor: '#0d3d6e',
+            pointBackgroundColor: settings.main_line_colour || '#0d3d6e',
             pointBorderColor: '#fff',
             pointBorderWidth: 1.5,
             tension: 0,
@@ -1940,6 +2518,7 @@
 
         const build = (chartLabels, chartDatasets, chartTarget) => {
             const angle = Number(settings.label_angle) || 0;
+            const below = opts.dataLabels && Number(settings.label_below) === 1;
             const chart = new Chart(ctx, {
                 type: 'line',
                 data: { labels: chartLabels, datasets: chartDatasets },
@@ -1951,8 +2530,8 @@
                     onClick: (evt, elements, chart) => {
                         if (opts.notes && elements.length) openPointModal(opts.notes, chart, elements[0].index);
                     },
-                    // Tilted labels on the highest points need room at the top.
-                    layout: { padding: { top: angle ? 22 : 4 } },
+                    // Tilted labels above the highest points need room at the top.
+                    layout: { padding: { top: !below && angle ? 22 : 4 } },
                     plugins: {
                         legend: { display: false },
                         tooltip: {
@@ -2001,7 +2580,8 @@
                 plugins: [
                     makeBgPlugin(invert, chartTarget),
                     PLOT_FRAME_PLUGIN,
-                    ...(opts.dataLabels ? [makeDataLabelPlugin(canvasId + 'Labels', seriesLabel, 10, fmt, () => settings.label_angle)] : []),
+                    ...(opts.dataLabels ? [makeDataLabelPlugin(canvasId + 'Labels', seriesLabel, 10, fmt, () => settings.label_angle,
+                        () => Number(settings.label_below) === 1)] : []),
                     ...(opts.notes ? [makeNotesPlugin(opts.notes)] : [])
                 ]
             });
@@ -2032,7 +2612,11 @@
         return (row.series || []).map((s, i) => s.colour || theme.colours[i] || SERIES_SPARE_COLOUR);
     }
 
-    function seriesLabel(s) { return s.label || s.metric; }
+    // The shared column name wins, so renaming it in Settings changes every
+    // chart; a label saved on the series before names were shared is next.
+    function seriesLabel(s) {
+        return metricNames[metricKey(s.source || 'snowflake', s.metric)] || s.label || s.metric;
+    }
 
     function fetchStackedData(row) {
         const cur = rowCurrent(row);
@@ -2092,7 +2676,9 @@
                 row.agg, sharedAxisValue(row.y_min), sharedAxisValue(row.y_max));
         const existing = rowCharts[row.id] || [];
         const opts = { fmt, tickFmt, pct, colours: seriesColours(row), names: row.series.map(seriesLabel),
-                       segLabels: !!row.seg_labels, dataLabels: dataLabelsOn(row) };
+                       transparency: themeById(row.theme).transparency || 0,
+                       // A 100% chart has no column totals, so its figures are the segment values.
+                       segLabels: !!row.seg_labels || !!row.pct, dataLabels: dataLabelsOn(row) };
         rowCharts[row.id] = ['m', 'w', 'd'].map((k, i) => buildStackedChart(`cv-${row.id}-${k}`, periods[k], targets[k], existing[i],
             { ...opts, range: ranges[i], day: k === 'd', notes: { rowId: row.id, kind: k, starts: periods[k].starts } }));
         updateDayTitles();
@@ -2100,11 +2686,21 @@
     }
 
     // Dark text on light segments, white on dark ones (text never takes the
-    // series colour itself).
-    function textOn(hex) {
+    // series colour itself). transparency (0-100 %) lightens the colour
+    // towards the white background behind it before deciding.
+    function textOn(hex, transparency = 0) {
         const n = parseInt(String(hex).slice(1), 16);
-        const lum = 0.299 * ((n >> 16) & 255) + 0.587 * ((n >> 8) & 255) + 0.114 * (n & 255);
+        const t = transparency / 100;
+        const mix = c => c * (1 - t) + 255 * t;
+        const lum = 0.299 * mix((n >> 16) & 255) + 0.587 * mix((n >> 8) & 255) + 0.114 * mix(n & 255);
         return lum > 150 ? '#0f172a' : '#ffffff';
+    }
+
+    // '#rrggbb' as rgba() with a theme's transparency %.
+    function withTransparency(hex, transparency) {
+        if (!transparency) return hex;
+        const n = parseInt(String(hex).slice(1), 16);
+        return `rgba(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}, ${1 - transparency / 100})`;
     }
 
     // Labels on a stacked chart: each column's total above it (not on a 100%
@@ -2121,17 +2717,24 @@
                     .map((ds, i) => ({ ds, meta: chart.getDatasetMeta(i), visible: chart.isDatasetVisible(i) }))
                     .filter(b => b.ds.type === 'bar' && b.visible);
                 if (!bars.length) return;
+                const SEG_FONT = '600 9px DM Sans, system-ui, sans-serif';
+                const TOTAL_FONT = 'bold 10px DM Sans, system-ui, sans-serif';
+                // A total may use the column's whole slot, gap included.
+                const slot = chart.scales.x.width / Math.max(1, chart.data.labels.length);
+                // Work out every label first: { text, x, y, font, colour, base, fits }.
+                const labels = [];
                 ctx.save();
-                ctx.textAlign = 'center';
                 for (let i = 0; i < chart.data.labels.length; i++) {
                     if (opts.segLabels) {
-                        ctx.font = '600 9px DM Sans, system-ui, sans-serif';
-                        ctx.textBaseline = 'middle';
+                        ctx.font = SEG_FONT;
                         bars.forEach(b => {
                             const v = b.ds.data[i], el = b.meta.data[i];
+                            // Too short a segment is just skipped, whatever the chart.
                             if (v === null || v === undefined || !el || Math.abs(el.base - el.y) < 12) return;
-                            ctx.fillStyle = textOn(b.ds.backgroundColor);
-                            ctx.fillText(opts.fmt(v), el.x, (el.y + el.base) / 2);
+                            const text = opts.fmt(v);
+                            labels.push({ text, x: el.x, y: (el.y + el.base) / 2, font: SEG_FONT, base: 'middle',
+                                          colour: textOn(b.ds.$hex, opts.transparency),
+                                          fits: !el.width || ctx.measureText(text).width <= el.width - 2 });
                         });
                     }
                     if (opts.pct) continue;
@@ -2139,11 +2742,22 @@
                     if (!known.length) continue;
                     const total = known.reduce((a, b) => a + b.ds.data[i], 0);
                     const top = Math.min(...known.map(b => b.meta.data[i].y));
-                    ctx.font = 'bold 10px DM Sans, system-ui, sans-serif';
-                    ctx.textBaseline = 'bottom';
-                    ctx.fillStyle = '#0f172a';
-                    ctx.fillText(opts.fmt(total), known[0].meta.data[i].x, top - 3);
+                    const text = opts.fmt(total);
+                    ctx.font = TOTAL_FONT;
+                    labels.push({ text, x: known[0].meta.data[i].x, y: top - 3, font: TOTAL_FONT, base: 'bottom',
+                                  colour: '#0f172a', fits: ctx.measureText(text).width <= slot - 2 });
                 }
+                // The daily chart shows all its labels or none: if any one is
+                // too wide for its column, none are drawn. The month and week
+                // charts just leave out the ones that do not fit.
+                const shown = opts.day && labels.some(l => !l.fits) ? [] : labels.filter(l => l.fits);
+                ctx.textAlign = 'center';
+                shown.forEach(l => {
+                    ctx.font = l.font;
+                    ctx.textBaseline = l.base;
+                    ctx.fillStyle = l.colour;
+                    ctx.fillText(l.text, l.x, l.y);
+                });
                 ctx.restore();
             },
         };
@@ -2159,7 +2773,8 @@
             type: 'bar',
             label: opts.names[i],
             data,
-            backgroundColor: opts.colours[i],
+            backgroundColor: withTransparency(opts.colours[i], opts.transparency),
+            $hex: opts.colours[i],   // solid colour, for the segment text
             borderWidth: 0,
             borderSkipped: false,
             stack: 'total',
@@ -2170,7 +2785,8 @@
         if (hasValues(target)) {
             datasets.push({
                 type: 'line', label: 'Target', data: target, stack: 'target', order: 1,
-                borderColor: '#e53e3e', borderWidth: 1.5, pointRadius: 0, fill: false, tension: 0, spanGaps: true,
+                borderColor: settings.target_line_colour || '#e53e3e', borderWidth: settings.target_line_px || 1.5,
+                pointRadius: 0, fill: false, tension: 0, spanGaps: true,
             });
         }
         const build = (labels, sets) => new Chart(ctx, {
@@ -2183,12 +2799,16 @@
                 onClick: (evt, elements, chart) => {
                     if (opts.notes && elements.length) openPointModal(opts.notes, chart, elements[0].index);
                 },
-                // Room for the totals above the tallest column.
-                layout: { padding: { top: opts.pct || !opts.dataLabels ? 4 : 14 } },
+                // The room for the totals above the tallest column is added
+                // under the legend (legendGap), not above it, where the
+                // padding would only push the legend down.
+                layout: { padding: { top: 4 } },
                 plugins: {
+                    legendGap: { gap: opts.pct || !opts.dataLabels ? 8 : 20 },
                     legend: {
                         display: true, position: 'top', align: 'start',
-                        labels: { boxWidth: 10, boxHeight: 10, padding: 8, font: { size: 10 } },
+                        // Size from Settings > Appearance; the colour box follows it.
+                        labels: { boxWidth: legendFontPx(), boxHeight: legendFontPx(), padding: 8, font: { size: legendFontPx() } },
                     },
                     tooltip: {
                         callbacks: {
@@ -2221,25 +2841,43 @@
                     },
                 },
             },
-            plugins: [PLOT_FRAME_PLUGIN, makeStackLabelsPlugin(opts), ...(opts.notes ? [makeNotesPlugin(opts.notes)] : [])],
+            plugins: [PLOT_FRAME_PLUGIN, LEGEND_GAP_PLUGIN, makeStackLabelsPlugin(opts), ...(opts.notes ? [makeNotesPlugin(opts.notes)] : [])],
         });
         return opts.day ? makeDayChart(p.labels, datasets, target, build) : build(p.labels, datasets);
     }
 
-    // Day chart heading, e.g. "Orders - daily". No date range: the axis
-    // labels already show which days are on screen.
+    // Space between the legend and the plot (options.plugins.legendGap.gap,
+    // px). Chart.js has no setting for it, so the legend's measured height is
+    // made taller by the gap.
+    const LEGEND_GAP_PLUGIN = {
+        id: 'legendGap',
+        beforeInit(chart, args, options) {
+            const legend = chart.legend;
+            if (!legend) return;
+            const fit = legend.fit;
+            legend.fit = function () {
+                fit.call(this);
+                this.height += options.gap || 0;
+            };
+        },
+    };
+
+    // Day chart period label. Line charts have none: their Daily / 7-Day Avg
+    // switch already says it. Stacked charts have no switch, so they show
+    // "Daily". No date range: the axis labels show which days are on screen.
     function updateDayTitles() {
         layout.rows.forEach(row => {
-            const title = document.getElementById(`t-${row.id}-d`);
-            if (title) title.textContent = `${rowTitle(row)} - daily`;
+            const period = document.getElementById(`p-${row.id}-d`);
+            if (period) period.textContent = isStacked(row) ? 'Daily' : '';
         });
     }
 
     // ── Add / Edit Chart popup (admin only) ───────────────────────────────────
-    // One popup for every chart setting, target included. Fixed and imported
-    // target figures belong to the METRIC (shared by every chart on it); which
-    // one a chart draws is the chart's own target_mode. Imported dates are kept
-    // when a chart switches to fixed, so it can switch back.
+    // One popup for every chart setting, target included. On a plain chart the
+    // fixed and per-date target figures belong to the METRIC (shared by every
+    // chart on it); which one a chart draws is the chart's own target_mode.
+    // Per-date figures are kept when a chart switches to fixed, so it can
+    // switch back. See kpi_targets.js for the per-date box and From Inputs.
 
     let chartModalState = null;   // { rowId (null = adding), stored, metricKey }
 
@@ -2256,27 +2894,101 @@
         return el ? el.value : fallback;
     }
 
+    // One source's metrics as an <optgroup> for the metric dropdowns.
+    function metricGroupHtml(source) {
+        const items = metricsCatalogue.filter(m => m.source === source);
+        if (!items.length) return '';
+        const options = items.map(m =>
+            `<option value="${escHtml(metricKey(m.source, m.column))}">${escHtml(metricOptionText(m.source, m.column))}</option>`).join('');
+        return `<optgroup label="${source === 'snowflake' ? 'Snowflake - daily_summary' : 'SharePoint - Daily Spend and Enquiries'}">${options}</optgroup>`;
+    }
+
+    function rowFormula(row) {
+        return formulaText([row.metric, ...rowPlus(row).map(p => p.metric)],
+            row.divide_by ? [row.divide_by.metric, ...rowDividePlus(row).map(p => p.metric)] : []);
+    }
+
+    const keyToMetric = key => {
+        const cut = key.indexOf('|');
+        return { source: key.slice(0, cut), metric: key.slice(cut + 1) };
+    };
+
+    // The added metrics as chosen in the popup, blanks left out. Divide-side
+    // ones only count while a divide-by metric is chosen.
+    function selectedPlus(side) {
+        if (!chartModalState || (side === 'divide' && !selectedDivide())) return [];
+        return chartModalState.plus[side].filter(Boolean).map(keyToMetric);
+    }
+
+    // A ratio chart, or one with added metrics: its target is on the chart.
+    function selectedOwnTarget() {
+        return !!selectedDivide() || selectedPlus('metric').length > 0;
+    }
+
+    // "+ [metric] [x]" rows under Metric and Divided by. Adding is for Sum
+    // charts only, so the Add buttons hide on Average; rows already there
+    // stay so they can be removed, and saving says why it cannot.
+    function renderPlusLists() {
+        if (!chartModalState) return;
+        const avg = radioValue('aggRadio', 'sum') === 'avg';
+        ['metric', 'divide'].forEach(side => {
+            const on = side === 'metric' || !!selectedDivide();
+            const listEl = document.getElementById(side + 'PlusList');
+            const keys = chartModalState.plus[side];
+            listEl.innerHTML = on ? keys.map((key, i) => {
+                const missing = key && !metricsByKey[key]
+                    ? `<option value="${escHtml(key)}">${escHtml(keyToMetric(key).metric)}</option>` : '';
+                return `<div class="plus-row"><span>+</span>
+                    <select onchange="setPlus('${side}', ${i}, this.value)">
+                        <option value="">(choose a metric)</option>${missing}${metricGroupHtml('snowflake')}${metricGroupHtml('sharepoint')}
+                    </select>
+                    <button type="button" class="btn btn-sm" title="Remove" onclick="removePlus('${side}', ${i})"><i class="fas fa-times"></i></button>
+                </div>`;
+            }).join('') : '';
+            listEl.querySelectorAll('select').forEach((s, i) => { s.value = keys[i]; });
+            document.getElementById(side + 'PlusBtn').style.display = on && !avg ? '' : 'none';
+        });
+    }
+
+    function addPlus(side) {
+        chartModalState.plus[side].push('');
+        renderPlusLists();
+    }
+
+    function setPlus(side, i, key) {
+        chartModalState.plus[side][i] = key;
+        onDivideChange();
+    }
+
+    function removePlus(side, i) {
+        chartModalState.plus[side].splice(i, 1);
+        onDivideChange();
+    }
+
     function openChartModal(rowId) {
         const row = rowId ? findRow(rowId) : null;
         if (rowId && !row) return;
-        chartModalState = { rowId: row ? row.id : null, stored: null, metricKey: null };
+        // dates: the per-date box's text for the metric's list and for the
+        // chart's own list (see showChartDates in kpi_targets.js); datesOrig:
+        // as loaded, to tell whether Save needs to write them.
+        chartModalState = { rowId: row ? row.id : null, stored: null, metricKey: null,
+                            dates: { metric: '', row: '' }, datesOrig: { metric: '', row: '' }, datesKind: null,
+                            loading: {},
+                            // Calculated target as saved, until its lists load (kpi_targets.js).
+                            calc: row && row.target_calc ? JSON.parse(JSON.stringify(row.target_calc)) : null,
+                            calcLoaded: false,
+                            inputTargets: { ...((row && row.input_targets) || {}) } };
         document.getElementById('chartModalTitle').textContent = row ? 'Edit Chart' : 'Add Chart';
         document.getElementById('chartModalError').classList.remove('show');
         document.getElementById('removeChartBtn').style.display = row ? '' : 'none';
-        document.getElementById('importFile').value = '';
+        if (row && !isStacked(row) && rowOwnTarget(row)) loadChartDates('row', { row_id: row.id });
         // Cleared first so the last chart's weighting is not carried over.
         document.getElementById('weightSelect').innerHTML = '';
 
         // Metric list. Can be changed on an existing chart (e.g. a copy pointed
         // at another metric); the chart then uses the new metric's targets.
         const metricSelect = document.getElementById('metricSelect');
-        const group = source => {
-            const items = metricsCatalogue.filter(m => m.source === source);
-            if (!items.length) return '';
-            const options = items.map(m =>
-                `<option value="${escHtml(metricKey(m.source, m.column))}">${escHtml(m.column)}</option>`).join('');
-            return `<optgroup label="${source === 'snowflake' ? 'Snowflake - daily_summary' : 'SharePoint - Daily Spend and Enquiries'}">${options}</optgroup>`;
-        };
+        const group = metricGroupHtml;
         metricSelect.innerHTML = group('snowflake') + group('sharepoint');
         if (row && !metricsByKey[metricKey(rowSource(row), row.metric)]) {
             // The column has gone from the list; keep it showing for this chart.
@@ -2299,11 +3011,16 @@
         divideSelect.value = divideKey;
         document.getElementById('ratioAsSelect').value = row && row.ratio_as === 'dec' ? 'dec' : 'pct';
         chartModalState.ratioTarget = row && row.ratio_target !== undefined ? row.ratio_target : null;
-        chartModalState.wasRatio = !!divideKey;
+        chartModalState.plus = {
+            metric: row ? rowPlus(row).map(p => metricKey(p.source || 'snowflake', p.metric)) : [],
+            divide: row ? rowDividePlus(row).map(p => metricKey(p.source || 'snowflake', p.metric)) : [],
+        };
+        chartModalState.wasRatio = !!row && rowOwnTarget(row);
+        chartModalState.wasDivide = !!divideKey;
         // The title the popup would fill in; a title still matching it follows
-        // the divide-by choice, a hand-typed one is left alone.
-        chartModalState.autoTitle = row
-            ? (row.divide_by ? `${row.metric} / ${row.divide_by.metric}` : row.metric) : null;
+        // the divide-by and added metric choices, a hand-typed one is left alone.
+        chartModalState.autoTitle = row ? rowFormula(row) : null;
+        renderPlusLists();
 
         document.getElementById('sectionSelect').innerHTML =
             SECTIONS.map(s => `<option value="${escHtml(s)}">${escHtml(s)}</option>`).join('');
@@ -2587,34 +3304,43 @@
         return { source: key.slice(0, cut), metric: key.slice(cut + 1) };
     }
 
-    // Shows the ratio settings when a divide-by metric is chosen. A ratio
-    // chart's target is one figure on the chart itself, so the imported and
-    // Snowflake target options (which belong to the metric) are hidden.
+    // Shows the ratio settings when a divide-by metric is chosen. A ratio or
+    // added-metrics chart's target is its own (a fixed figure or per-date
+    // figures on the chart), or From Inputs: each metric's own target, added
+    // and divided as the figures are. The Snowflake option is hidden for them.
     function updateRatioUi() {
-        const ratio = !!selectedDivide();
+        const ratio = selectedOwnTarget();
         const show = (id, on) => { document.getElementById(id).style.display = on ? '' : 'none'; };
-        show('ratioAsField', ratio);
-        show('targetModeImport', !ratio);
-        show('importField', !ratio);
-        show('fixedTargetHint', !ratio);
-        show('ratioTargetHint', ratio);
-        document.getElementById('fixedTargetLabel').textContent = ratio ? 'Fixed target' : 'Fixed target (per day)';
+        show('ratioAsField', !!selectedDivide());
+        show('targetModeImport', true);
+        // Only a divided chart's fixed figure is the same on every point; an
+        // added-metrics chart's, like a plain one's, is per day.
+        const divided = !!selectedDivide();
+        show('fixedTargetHint', !divided);
+        show('ratioTargetHint', divided);
+        document.getElementById('fixedTargetLabel').textContent = divided ? 'Fixed Target' : 'Fixed Target (Per Day)';
         if (ratio) {
             show('targetModeSnowflake', false);
-            document.getElementById('targetSharedNote').textContent = '';
-            if (!['none', 'fixed'].includes(radioValue('targetMode', 'none'))) setRadio('targetMode', 'none');
+            document.getElementById('targetSharedNote').textContent =
+                'Fixed and per-date figures here belong to this chart only. Every target is also listed in Settings > Targets.';
+            if (!['none', 'fixed', 'import', 'inputs'].includes(radioValue('targetMode', 'none'))) setRadio('targetMode', 'none');
+            show('targetModeCalc', false);
             const t = chartModalState.ratioTarget;
             document.getElementById('fixedTargetInput').value = t === null || t === undefined ? '' : t;
         } else if (chartModalState.metricKey) {
             const info = metricsByKey[chartModalState.metricKey] || {};
             show('targetModeSnowflake', !!info.has_target);
+            show('targetModeCalc', true);
+            if (radioValue('targetMode', 'none') === 'inputs') setRadio('targetMode', 'none');
             const cut = chartModalState.metricKey.indexOf('|');
             document.getElementById('targetSharedNote').textContent =
-                `Fixed and imported figures belong to ${SOURCE_LABELS[chartModalState.metricKey.slice(0, cut)]}: `
-                + `${chartModalState.metricKey.slice(cut + 1)}, so every chart on it shares them.`;
+                `Fixed and per-date figures belong to ${SOURCE_LABELS[chartModalState.metricKey.slice(0, cut)]}: `
+                + `${chartModalState.metricKey.slice(cut + 1)}, so every chart on it shares them. `
+                + 'Every target is also listed in Settings > Targets.';
             const fixed = chartModalState.stored ? chartModalState.stored.fixed : null;
             document.getElementById('fixedTargetInput').value = fixed === null || fixed === undefined ? '' : fixed;
         }
+        updateTargetFields();
     }
 
     function onDivideChange() {
@@ -2626,15 +3352,18 @@
         }
         const m = selectedMetric() || {};
         const divide = selectedDivide();
-        const autoTitle = divide ? `${m.column || ''} / ${divide.metric}` : (m.column || '');
+        const autoTitle = formulaText([m.column || '', ...selectedPlus('metric').map(p => p.metric)],
+            divide ? [divide.metric, ...selectedPlus('divide').map(p => p.metric)] : []);
         const titleInput = document.getElementById('titleInput');
         // Only replace a title the popup filled in, never one typed by hand.
         if (chartModalState.autoTitle === null || titleInput.value === chartModalState.autoTitle) {
             titleInput.value = autoTitle;
             chartModalState.autoTitle = autoTitle;
         }
-        if (divide && !chartModalState.wasRatio) onRatioAsChange();
-        chartModalState.wasRatio = !!divide;
+        if (divide && !chartModalState.wasDivide) onRatioAsChange();
+        chartModalState.wasDivide = !!divide;
+        chartModalState.wasRatio = selectedOwnTarget();
+        renderPlusLists();
         updateRatioUi();
         updateWeightUi();
         updateYMaxPlaceholders();
@@ -2645,6 +3374,7 @@
         document.getElementById('fmtSelect').value = pct ? 'pct' : 'num';
         document.getElementById('decimalsSelect').value = pct ? '1' : '2';
         updateYMaxPlaceholders();
+        updateFixedUnit();
     }
 
     // Positions 1..n within the chosen section. A chart staying in its own
@@ -2683,11 +3413,11 @@
         chartModalState.stored = null;
         const info = metricsByKey[key] || {};
         document.getElementById('targetSharedNote').textContent =
-            `Fixed and imported figures belong to ${SOURCE_LABELS[source]}: ${metric}, so every chart on it shares them.`;
+            `Fixed and per-date figures belong to ${SOURCE_LABELS[source]}: ${metric}, so every chart on it shares them.`;
         document.getElementById('targetModeSnowflake').style.display = info.has_target ? '' : 'none';
         setRadio('targetMode', mode === 'snowflake' && !info.has_target ? 'none' : mode);
         document.getElementById('fixedTargetInput').value = '';
-        document.getElementById('importSummary').textContent = 'Loading...';
+        loadChartDates('metric', { source, metric });
         try {
             const params = new URLSearchParams({ source, metric });
             const resp = await fetch(`${BASE_URL}/kpi/metric-target?${params}`).then(r => r.json());
@@ -2697,21 +3427,14 @@
             chartModalState.stored = resp;
             // A ratio chart's box holds its own target, not the metric's.
             // A stacked chart's box holds its own target too.
-            if (!selectedDivide() && chartTypeValue() !== 'stacked' && resp.fixed !== null && resp.fixed !== undefined) {
+            if (!selectedOwnTarget() && chartTypeValue() !== 'stacked' && resp.fixed !== null && resp.fixed !== undefined) {
                 document.getElementById('fixedTargetInput').value = resp.fixed;
             }
-            showImportSummary(resp.imported);
         } catch (err) {
             if (chartModalState && chartModalState.metricKey === key) {
                 showChartError('Could not load the stored targets: ' + err.message);
             }
         }
-    }
-
-    function showImportSummary(imported) {
-        document.getElementById('importSummary').textContent = imported
-            ? `${imported.count} dates stored, ${imported.first} to ${imported.last}.`
-            : 'Nothing imported yet.';
     }
 
     function closeChartModal() {
@@ -2720,12 +3443,27 @@
     }
 
     // Return saves the chart box. Skipped when a button has focus, so Return
-    // still presses that button (Cancel, Import, Remove), and while a save is
-    // already running.
+    // still presses that button (Cancel, Remove), in the per-date box (Return
+    // starts a new line there), and while a save is already running.
     document.getElementById('chartModal').addEventListener('keydown', e => {
-        if (e.key !== 'Enter' || e.target.tagName === 'BUTTON') return;
+        if (e.key !== 'Enter' || e.target.tagName === 'BUTTON' || e.target.tagName === 'TEXTAREA') return;
         e.preventDefault();
         if (!document.getElementById('chartSaveBtn').disabled) saveChartModal();
+    });
+
+    // Typing a fixed figure is remembered, so Save can switch No Target to Fixed.
+    document.getElementById('fixedTargetInput').addEventListener('input', () => {
+        if (chartModalState) chartModalState.fixedTyped = true;
+    });
+
+    // A different target source shows its own fields (kpi_targets.js).
+    document.querySelectorAll('#chartModal input[name="targetMode"]')
+        .forEach(r => r.addEventListener('change', updateTargetFields));
+    // The per-date box reads % figures by the chart's Format, and the fixed
+    // target box shows its unit.
+    document.getElementById('fmtSelect').addEventListener('change', () => {
+        showPasteCheck('chartDatesInput', 'chartDatesCheck', chartPastePct());
+        updateFixedUnit();
     });
 
     function showChartError(message) {
@@ -2734,116 +3472,12 @@
         box.classList.add('show');
     }
 
-    // ── CSV parsing ──
-    function splitCsvLine(line) {
-        const cells = [];
-        let cell = '', quoted = false;
-        for (let i = 0; i < line.length; i++) {
-            const ch = line[i];
-            if (ch === '"') {
-                if (quoted && line[i + 1] === '"') { cell += '"'; i++; }
-                else quoted = !quoted;
-            } else if (ch === ',' && !quoted) {
-                cells.push(cell); cell = '';
-            } else {
-                cell += ch;
-            }
-        }
-        cells.push(cell);
-        return cells.map(c => c.trim());
-    }
-
-    // YYYY-MM-DD, or DD/MM/YYYY as a UK spreadsheet saves it. Returns
-    // YYYY-MM-DD, or null when the text is not a real date.
-    function parseCsvDate(text) {
-        let y, m, d;
-        let match = /^(\d{4})-(\d{1,2})-(\d{1,2})$/.exec(text);
-        if (match) { [, y, m, d] = match.map(Number); }
-        else {
-            match = /^(\d{1,2})\/(\d{1,2})\/(\d{2}|\d{4})$/.exec(text);
-            if (!match) return null;
-            [, d, m, y] = match.map(Number);
-            if (y < 100) y += 2000;
-        }
-        const dt = new Date(Date.UTC(y, m - 1, d));
-        if (dt.getUTCFullYear() !== y || dt.getUTCMonth() !== m - 1 || dt.getUTCDate() !== d) return null;
-        return dt.toISOString().slice(0, 10);
-    }
-
-    function parseCsvNumber(text) {
-        const cleaned = String(text).replace(/[£,%\s]/g, '');
-        if (cleaned === '') return null;
-        const n = Number(cleaned);
-        return isNaN(n) ? null : n;
-    }
-
-    function parseTargetCsv(text) {
-        const lines = text.replace(/^﻿/, '').split(/\r?\n/);
-        const firstLine = lines.findIndex(l => l.trim());
-        const rows = [];
-        lines.forEach((line, index) => {
-            if (!line.trim()) return;
-            const cells = splitCsvLine(line);
-            const date = parseCsvDate(cells[0] || '');
-            if (!date) {
-                // The first line may be a header.
-                if (index === firstLine) return;
-                throw new Error(`Line ${index + 1}: cannot read the date "${cells[0]}"`);
-            }
-            const value = parseCsvNumber(cells[1] === undefined ? '' : cells[1]);
-            if (value === null) throw new Error(`Line ${index + 1}: cannot read the target "${cells[1] || ''}"`);
-            rows.push({ date, value });
-        });
-        if (!rows.length) throw new Error('No rows found in the file');
-        return rows;
-    }
-
-    async function importTargets() {
-        if (!chartModalState || !chartModalState.metricKey) return;
-        const m = metricsByKey[chartModalState.metricKey];
-        const source = m ? m.source : chartModalState.metricKey.split('|')[0];
-        const metric = m ? m.column : chartModalState.metricKey.slice(source.length + 1);
-        const file = document.getElementById('importFile').files[0];
-        document.getElementById('chartModalError').classList.remove('show');
-        if (!file) { showChartError('Choose a CSV file first.'); return; }
-
-        const button = document.getElementById('importBtn');
-        button.disabled = true;
-        try {
-            const rows = parseTargetCsv(await file.text());
-            const resp = await fetch(`${BASE_URL}/kpi/metric-target/import`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ source, metric, rows }),
-            }).then(r => r.json());
-            if (resp.status !== 'ok') throw new Error(resp.message || 'import failed');
-            if (chartModalState.stored) chartModalState.stored.imported = resp.imported;
-            else chartModalState.stored = { fixed: null, imported: resp.imported };
-            showImportSummary(resp.imported);
-            document.getElementById('importFile').value = '';
-            // Point the chart at what was just imported; Save confirms it.
-            setRadio('targetMode', 'import');
-            refreshRowsOnMetric(source, metric, ['import']);
-        } catch (err) {
-            showChartError('Import failed: ' + err.message);
-        } finally {
-            button.disabled = false;
-        }
-    }
-
-    // Figures are shared per metric, so every chart on it that draws them
-    // needs reloading after a change.
-    function refreshRowsOnMetric(source, metric, modes) {
-        layout.rows
-            .filter(r => rowSource(r) === source && r.metric === metric && modes.includes(rowTargetMode(r)))
-            .forEach(r => loadCustomRow(r));
-    }
-
     // One min/max pair for Average charts (they share one scale), three for Sum.
     function showYMinInputs() {
         const avg = radioValue('aggRadio', 'sum') === 'avg';
         document.getElementById('yMinShared').style.display = avg ? '' : 'none';
         document.getElementById('yMinPerPeriod').style.display = avg ? 'none' : '';
+        renderPlusLists();
         updateWeightUi();
         updateYMaxPlaceholders();
     }
@@ -2855,7 +3489,7 @@
         const select = document.getElementById('weightSelect');
         const current = selected !== undefined ? selected : select.value;
         const m = selectedMetric() || {};
-        const show = radioValue('aggRadio', 'sum') === 'avg' && m.source === 'snowflake' && !selectedDivide()
+        const show = radioValue('aggRadio', 'sum') === 'avg' && m.source === 'snowflake' && !selectedOwnTarget()
             && chartTypeValue() === 'line';
         document.getElementById('weightField').style.display = show ? '' : 'none';
         const columns = metricsCatalogue.filter(c => c.source === 'snowflake').map(c => c.column);
@@ -2900,6 +3534,7 @@
     }
 
     const divideId = div => div ? metricKey(div.source || 'snowflake', div.metric) : '';
+    const plusId = list => list.map(divideId).join(',');
 
     // Grey placeholder in each blank maximum box: the top the chart would get
     // from the minimum as typed. Only shown when the loaded data still matches
@@ -2914,6 +3549,8 @@
         const agg = radioValue('aggRadio', 'sum');
         if (!d || !m || m.column !== row.metric || m.source !== rowSource(row)
             || divideId(selectedDivide()) !== divideId(row.divide_by) || agg !== row.agg
+            || plusId(selectedPlus('metric')) !== plusId(rowPlus(row))
+            || plusId(selectedPlus('divide')) !== plusId(rowDividePlus(row))
             || (row.divide_by && (document.getElementById('ratioAsSelect').value === 'pct') !== (row.ratio_as === 'pct'))) return;
 
         let yMin;
@@ -2939,17 +3576,29 @@
         const stacked = !!row && isStacked(row);
         document.getElementById('chartTypeSelect').value = stacked ? 'stacked' : 'line';
         seriesDraft = stacked ? JSON.parse(JSON.stringify(row.series || [])) : [];
+        // The name box shows the shared column name.
+        seriesDraft.forEach(s => { s.label = seriesLabel(s) === s.metric ? '' : seriesLabel(s); });
         document.getElementById('themeSelect').innerHTML = themes.map(t =>
             `<option value="${escHtml(t.id)}">${escHtml(t.name)}</option>`).join('');
         document.getElementById('themeSelect').value = stacked && row.theme ? row.theme : (themes[0] ? themes[0].id : '');
         document.getElementById('pctInput').checked = stacked && !!row.pct;
-        document.getElementById('segLabelsInput').checked = stacked && !!row.seg_labels;
+        document.getElementById('segLabelsInput').checked = stacked && (!!row.seg_labels || !!row.pct);
+        onPctChange();
         if (stacked) {
             const t = row.stack_target;
             document.getElementById('fixedTargetInput').value = t === null || t === undefined ? '' : t;
             setRadio('targetMode', row.target_mode === 'fixed' ? 'fixed' : 'none');
         }
         applyChartTypeUi();
+    }
+
+    // A 100% chart always shows its segment values (it has no column totals),
+    // so the box is ticked and fixed while 100% is on.
+    function onPctChange() {
+        const pct = document.getElementById('pctInput').checked;
+        const seg = document.getElementById('segLabelsInput');
+        if (pct) seg.checked = true;
+        seg.disabled = pct;
     }
 
     // Switching type keeps everything typed; a new stacked chart starts with
@@ -2969,7 +3618,9 @@
         document.querySelectorAll('#chartModal .line-only').forEach(el => { el.style.display = stacked ? 'none' : ''; });
         if (stacked) {
             const hide = id => { document.getElementById(id).style.display = 'none'; };
-            ['ratioAsField', 'weightField', 'targetModeImport', 'targetModeSnowflake', 'importField', 'ratioTargetHint'].forEach(hide);
+            ['ratioAsField', 'weightField', 'targetModeImport', 'targetModeSnowflake', 'targetModeInputs',
+             'targetModeCalc', 'importField', 'inputTargetsField', 'calcField', 'ratioTargetHint'].forEach(hide);
+            document.getElementById('fixedTargetUnit').textContent = '';
             document.getElementById('fixedTargetHint').style.display = '';
             document.getElementById('fixedTargetLabel').textContent = 'Fixed target (per day, against the column total)';
             document.getElementById('targetSharedNote').textContent = 'Belongs to this chart only.';
@@ -2977,15 +3628,9 @@
             renderSeriesList();
         } else {
             // Back to a line chart: the line chart's own rules for these fields.
+            // updateRatioUi also sets the target note and fields.
             updateRatioUi();
             updateWeightUi();
-            const m = selectedMetric();
-            if (m && chartModalState && chartModalState.metricKey) {
-                const cut = chartModalState.metricKey.indexOf('|');
-                document.getElementById('targetSharedNote').textContent =
-                    `Fixed and imported figures belong to ${SOURCE_LABELS[chartModalState.metricKey.slice(0, cut)]}: `
-                    + `${chartModalState.metricKey.slice(cut + 1)}, so every chart on it shares them.`;
-            }
         }
         updateYMaxPlaceholders();
     }
@@ -3000,7 +3645,7 @@
             return `<optgroup label="${source === 'snowflake' ? 'Snowflake - daily_summary' : 'SharePoint'}">`
                 + items.map(m => {
                     const k = metricKey(m.source, m.column);
-                    return `<option value="${escHtml(k)}" ${k === key ? 'selected' : ''}>${escHtml(m.column)}</option>`;
+                    return `<option value="${escHtml(k)}" ${k === key ? 'selected' : ''}>${escHtml(metricOptionText(m.source, m.column))}</option>`;
                 }).join('') + '</optgroup>';
         };
         const missing = key && !metricsByKey[key] ? `<option value="${escHtml(key)}" selected>${escHtml(s.metric)}</option>` : '';
@@ -3017,7 +3662,8 @@
                 <div class="series-row">
                     <select onchange="onSeriesMetric(${i}, this.value)">${seriesMetricOptions(s)}</select>
                     <input type="text" maxlength="60" value="${escHtml(s.label || '')}" placeholder="${escHtml(s.metric || 'Legend name')}"
-                           title="Name in the legend" oninput="seriesDraft[${i}].label = this.value">
+                           title="Name in the legend. Shared: every chart using this column takes it (Settings > Column Names)"
+                           oninput="seriesDraft[${i}].label = this.value">
                     <input type="color" value="${escHtml(colour)}" class="${s.colour ? 'series-own' : ''}"
                            title="${s.colour ? 'Own colour - Reset goes back to the theme' : 'Theme colour - pick one to override it'}"
                            onchange="seriesDraft[${i}].colour = this.value; renderSeriesList()">
@@ -3037,6 +3683,7 @@
         const cut = key.indexOf('|');
         seriesDraft[i].source = cut > 0 ? key.slice(0, cut) : 'snowflake';
         seriesDraft[i].metric = cut > 0 ? key.slice(cut + 1) : '';
+        seriesDraft[i].label = metricNames[key] || '';
         renderSeriesList();
     }
 
@@ -3060,6 +3707,14 @@
         }));
         if (!series.length) { showChartError('Add at least one series.'); return; }
         if (series.length !== seriesDraft.length) { showChartError('Choose a metric for each series, or remove it.'); return; }
+        // Names typed here go to the shared column names (a cleared box
+        // removes that column's name); the series keeps no name of its own.
+        const names = { ...metricNames };
+        series.forEach(s => {
+            const key = metricKey(s.source, s.metric);
+            if (s.label) names[key] = s.label; else delete names[key];
+            s.label = '';
+        });
         let yMin, yMax;
         try {
             yMin = readAxis(Y_MIN_INPUTS, 'yMinAll');
@@ -3069,16 +3724,18 @@
             showChartError('Each axis maximum must be above its minimum (0 when the minimum is blank).');
             return;
         }
-        const mode = radioValue('targetMode', 'none') === 'fixed' ? 'fixed' : 'none';
         const raw = document.getElementById('fixedTargetInput').value.trim();
         const target = raw === '' ? null : Number(raw);
+        // A figure typed with No Target still chosen means Fixed.
+        const mode = radioValue('targetMode', 'none') === 'fixed'
+            || (radioValue('targetMode', 'none') === 'none' && chartModalState.fixedTyped && target !== null) ? 'fixed' : 'none';
         if (target !== null && (isNaN(target) || target < 0)) { showChartError('The fixed target must be a number of 0 or more.'); return; }
         if (mode === 'fixed' && target === null) { showChartError('Enter a fixed figure, or choose No target.'); return; }
         let vehicles;
         try { vehicles = readVehSetup(); } catch (err) { showChartError(err.message); return; }
 
         const title = document.getElementById('titleInput').value.trim()
-            || series.map(seriesLabel).join(' / ').slice(0, 100);
+            || series.map(s => names[metricKey(s.source, s.metric)] || s.metric).join(' / ').slice(0, 100);
         const updated = {
             ...(existing || { id: 'c' + Date.now().toString(36), type: 'custom' }),
             chart_type: 'stacked',
@@ -3102,7 +3759,7 @@
             y_min: yMin,
             y_max: yMax,
         };
-        ['divide_by', 'ratio_as', 'ratio_target', 'weight_by', 'vehicles'].forEach(k => delete updated[k]);
+        ['divide_by', 'divide_plus', 'metric_plus', 'ratio_as', 'ratio_target', 'weight_by', 'vehicles'].forEach(k => delete updated[k]);
         if (vehicles) updated.vehicles = vehicles;
         const rows = placeRow(layout.rows, updated,
             document.getElementById('sectionSelect').value,
@@ -3111,12 +3768,16 @@
         const button = document.getElementById('chartSaveBtn');
         button.disabled = true;
         try {
+            const namesChanged = await saveMetricNames(names);
             await saveLayout(rows);
             layout.rows = rows;
             const row = findRow(updated.id);
             closeChartModal();
+            activeSection = row.section;
             if (existing) rebuildCustomRow(row, true);
-            else { renderLayout(); loadCustomRow(row); }
+            else { renderLayout(); loadCustomRow(row); showNewRow(row.id); }
+            // Other stacked charts on the same columns take the new names.
+            if (namesChanged) redrawStackedFromCache(row.id);
         } catch (err) {
             showChartError('Save failed: ' + err.message);
         } finally {
@@ -3135,9 +3796,13 @@
         if (!metric) { showChartError('Choose a metric.'); return; }
 
         const stored = chartModalState.stored || {};
-        const mode = radioValue('targetMode', 'none');
+        let mode = radioValue('targetMode', 'none');
         const raw = document.getElementById('fixedTargetInput').value.trim();
-        const fixed = raw === '' ? null : Number(raw);
+        let fixed = raw === '' ? null : Number(raw);
+        // A figure typed in the fixed box with No Target still chosen means
+        // Fixed. Only a typed one: the box is filled in with the stored figure
+        // on opening, which must not switch a chart on by itself.
+        if (mode === 'none' && chartModalState.fixedTyped && fixed !== null) mode = 'fixed';
         let yMin, yMax;
         try {
             yMin = readAxis(Y_MIN_INPUTS, 'yMinAll');
@@ -3150,7 +3815,27 @@
         if (fixed !== null && (isNaN(fixed) || fixed < 0)) { showChartError('The fixed target must be a number of 0 or more.'); return; }
         if (mode === 'fixed' && fixed === null) { showChartError('Enter a fixed figure, or choose another target option.'); return; }
         const divide = selectedDivide();
-        if (!divide && mode === 'import' && !stored.imported) { showChartError('Import a CSV first, or choose another target option.'); return; }
+        const metricPlus = selectedPlus('metric');
+        const dividePlus = selectedPlus('divide');
+        const own = selectedOwnTarget();
+        if ((metricPlus.length || dividePlus.length) && radioValue('aggRadio', 'sum') !== 'sum') {
+            showChartError('Metrics can only be added together on a Sum chart. Choose Sum, or remove the added metrics.');
+            return;
+        }
+        // The per-date box is checked before anything is saved.
+        let pasted;
+        try { pasted = readChartDates(mode); } catch (err) { showChartError(err.message); return; }
+        // Every pasted date the same figure: saved as a fixed figure instead of
+        // a row per date, and the per-date list cleared (kpi_targets.js).
+        const same = mode === 'import' ? sameFigure(pasted.rows) : null;
+        if (same !== null) {
+            mode = 'fixed';
+            fixed = same;
+        }
+        let calc = null;
+        if (mode === 'calc') {
+            try { calc = readCalc(); } catch (err) { showChartError(err.message); return; }
+        }
         let vehicles;
         try { vehicles = readVehSetup(); } catch (err) { showChartError(err.message); return; }
 
@@ -3174,26 +3859,36 @@
         delete updated.divide_by;
         delete updated.ratio_as;
         delete updated.ratio_target;
+        delete updated.metric_plus;
+        delete updated.divide_plus;
         if (divide) {
             updated.divide_by = divide;
             updated.ratio_as = document.getElementById('ratioAsSelect').value;
-            updated.ratio_target = fixed;
+            if (dividePlus.length) updated.divide_plus = dividePlus;
         }
+        if (metricPlus.length) updated.metric_plus = metricPlus;
+        if (own) updated.ratio_target = fixed;
+        delete updated.input_targets;
+        if (own && mode === 'inputs') updated.input_targets = readInputTargets(updated);
+        delete updated.target_calc;
+        if (calc) updated.target_calc = calc;
         delete updated.vehicles;
         if (vehicles) updated.vehicles = vehicles;
         ['chart_type', 'series', 'theme', 'pct', 'seg_labels', 'stack_target'].forEach(k => delete updated[k]);
         delete updated.weight_by;
         const weightBy = readWeightBy();
         if (weightBy) updated.weight_by = weightBy;
-        const rows = placeRow(layout.rows, updated,
+        let rows = placeRow(layout.rows, updated,
             document.getElementById('sectionSelect').value,
             parseInt(document.getElementById('positionSelect').value, 10));
+        // Other charts drawing the metric's per-date list move to its fixed figure too.
+        if (same !== null && pasted.kind === 'metric') rows = switchMetricToFixed(rows, source, metric);
 
         const button = document.getElementById('chartSaveBtn');
         button.disabled = true;
         try {
             const storedFixed = stored.fixed === undefined ? null : stored.fixed;
-            const fixedChanged = !divide && fixed !== storedFixed;
+            const fixedChanged = !own && fixed !== storedFixed;
             if (fixedChanged) {
                 const resp = await fetch(`${BASE_URL}/kpi/metric-target/fixed`, {
                     method: 'POST',
@@ -3202,24 +3897,40 @@
                 }).then(r => r.json());
                 if (resp.status !== 'ok') throw new Error(resp.message || 'target save failed');
             }
+            // Per-date figures: the metric's on a plain chart, the chart's own
+            // (under its id) on a ratio or added-metrics chart.
+            const datesParams = pasted.kind === 'row' ? { row_id: updated.id } : { source, metric };
+            const datesChanged = pasted.changed || same !== null;
+            if (datesChanged && same === null) await saveTargetDates(datesParams, pasted.rows);
             // The page only changes once the server has the new layout.
             await saveLayout(rows);
             layout.rows = rows;
+            // Cleared only once no chart draws the list any more.
+            if (same !== null) await saveTargetDates(datesParams, []);
             const row = findRow(updated.id);
             closeChartModal();
+            // Moved to another section: follow it to that tab.
+            activeSection = row.section;
 
-            const ratioKey = r => JSON.stringify([r.divide_by || null, r.ratio_as || null, r.ratio_target ?? null]);
+            const ratioKey = r => JSON.stringify([r.divide_by || null, r.ratio_as || null, r.ratio_target ?? null,
+                rowPlus(r), rowDividePlus(r), r.input_targets || null, r.target_calc || null]);
             const needsData = !existing || existing.metric !== row.metric || rowSource(existing) !== row.source
                 || existing.agg !== row.agg || JSON.stringify(rowCurrent(existing)) !== JSON.stringify(rowCurrent(row)) || rowTargetMode(existing) !== row.target_mode
-                || ratioKey(existing) !== ratioKey(row) || (existing.weight_by || '') !== (row.weight_by || '');
+                || ratioKey(existing) !== ratioKey(row) || (existing.weight_by || '') !== (row.weight_by || '')
+                || (datesChanged && pasted.kind === 'row');
             if (existing) rebuildCustomRow(row, needsData);
             else {
                 renderLayout();
                 loadCustomRow(row);
+                showNewRow(row.id);
             }
             if (fixedChanged) refreshRowsOnMetric(source, metric, ['fixed']);
+            if (datesChanged && pasted.kind === 'metric') refreshRowsOnMetric(source, metric, ['import', 'fixed']);
             // A reload already started says "Loading..." until it finishes.
-            if (!needsData && !fixedChanged) {
+            if (same !== null) {
+                document.getElementById('statusText').textContent =
+                    'Every date had the same figure, so it was saved as a fixed figure.';
+            } else if (!needsData && !fixedChanged && !datesChanged) {
                 document.getElementById('statusText').textContent = 'Chart saved';
             }
         } catch (err) {
@@ -3230,8 +3941,9 @@
     }
 
     // Duplicate a chart row, settings and all, directly under the original in
-    // the same section. Fixed and imported targets belong to the metric, so
-    // the copy shares them; a ratio chart's own target is copied with the row.
+    // the same section. Fixed and per-date targets belong to the metric, so
+    // the copy shares them; a ratio chart's fixed target is copied with the
+    // row, its per-date figures (stored under the chart's id) are copied too.
     // Figures drawn on a row's charts (line point values, stacked column
     // totals and segment values). The admin's choice is saved on the row and
     // is everyone's default; a row saved before this setting existed shows
@@ -3274,6 +3986,34 @@
         }
     }
 
+    // Swap a chart row with the next shown row above (-1) or below (1) it in
+    // its section; hidden rows are stepped over. Nothing happens at either
+    // end. The page moves first and is put back if the save fails.
+    let moveSaving = false;
+    async function moveRow(rowId, step) {
+        if (moveSaving) return;
+        const row = findRow(rowId);
+        if (!row) return;
+        const visible = layout.rows.filter(r => r.section === row.section && !r.hidden);
+        const other = visible[visible.indexOf(row) + step];
+        if (!other) return;
+        const before = layout.rows;
+        const rows = [...before];
+        const a = rows.indexOf(row), b = rows.indexOf(other);
+        [rows[a], rows[b]] = [rows[b], rows[a]];
+        layout.rows = rows;
+        renderLayout();
+        moveSaving = true;
+        try {
+            await saveLayout(rows);
+        } catch (err) {
+            if (layout.rows === rows) { layout.rows = before; renderLayout(); }
+            document.getElementById('statusText').textContent = 'Move failed: ' + err.message;
+        } finally {
+            moveSaving = false;
+        }
+    }
+
     async function copyChartBelow(rowId) {
         const row = findRow(rowId);
         if (!row) return;
@@ -3286,6 +4026,12 @@
         const rows = [...layout.rows];
         rows.splice(rows.indexOf(row) + 1, 0, copy);
         try {
+            // A ratio or added-metrics chart's per-date figures are under its
+            // own id, so the copy needs its own set.
+            if (!isStacked(row) && rowOwnTarget(row)) {
+                const dates = await fetchTargetDates({ row_id: row.id });
+                if (dates.length) await saveTargetDates({ row_id: copy.id }, dates.map(([date, value]) => ({ date, value })));
+            }
             await saveLayout(rows);
         } catch (err) {
             document.getElementById('statusText').textContent = 'Copy failed: ' + err.message;
@@ -3294,6 +4040,21 @@
         layout.rows = rows;
         renderLayout();
         loadCustomRow(copy);
+        showNewRow(copy.id);
+    }
+
+    // A chart just added or copied: scroll it to the middle of the screen and
+    // flash it so it is clear where it went. After a frame so the row has its height.
+    function showNewRow(id) {
+        requestAnimationFrame(() => {
+            const el = customRowEls[id];
+            if (!el) return;
+            el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            el.classList.remove('row-flash');
+            void el.offsetWidth;
+            el.classList.add('row-flash');
+            el.addEventListener('animationend', () => el.classList.remove('row-flash'), { once: true });
+        });
     }
 
     async function removeChart() {
@@ -3318,17 +4079,49 @@
     // ── Settings modal (admin only) ───────────────────────────────────────────
     const SETTING_INPUTS = {
         months: 'setMonths', weeks: 'setWeeks', days_window: 'setDaysWindow',
-        days_total: 'setDaysTotal', label_angle: 'setLabelAngle',
+        days_total: 'setDaysTotal', label_angle: 'setLabelAngle', label_below: 'setLabelBelow',
+        months_after: 'setMonthsAfter', weeks_after: 'setWeeksAfter', days_after: 'setDaysAfter',
         section_font_px: 'setSectionFont', title_font_px: 'setTitleFont',
+        subtitle_font_px: 'setSubtitleFont', period_font_px: 'setPeriodFont',
+        toolbar_font_px: 'setToolbarFont', at_font_px: 'setAtFont',
+        legend_font_px: 'setLegendFont',
+        main_line_px: 'setMainLinePx', n1_line_px: 'setN1LinePx', target_line_px: 'setTargetLinePx',
+        main_line_colour: 'setMainLineColour', n1_line_colour: 'setN1LineColour',
+        target_line_colour: 'setTargetLineColour',
     };
+    // A setting's value from its box: a colour as #rrggbb, a thickness to the
+    // half pixel, everything else a whole number.
+    function readSettingInput(el) {
+        if (el.type === 'color') return el.value;
+        return el.step === '1' ? parseInt(el.value, 10) : parseFloat(el.value);
+    }
 
-    // Section heading and chart title sizes (Settings > Appearance), applied
-    // to the whole page through two CSS variables.
+    // Chart legend text size (Settings > Appearance). Read when a chart is
+    // built, so saving the setting redraws with it.
+    function legendFontPx() { return settings.legend_font_px || 10; }
+
+    // Section heading, chart title and subtitle sizes (Settings > Appearance),
+    // applied to the whole page through CSS variables.
     function applyAppearance() {
         const root = document.documentElement.style;
         if (settings.section_font_px) root.setProperty('--kpi-section-font', settings.section_font_px + 'px');
         if (settings.title_font_px) root.setProperty('--kpi-title-font', settings.title_font_px + 'px');
+        if (settings.subtitle_font_px) root.setProperty('--kpi-subtitle-font', settings.subtitle_font_px + 'px');
+        if (settings.period_font_px) root.setProperty('--kpi-period-font', settings.period_font_px + 'px');
+        if (settings.toolbar_font_px) root.setProperty('--kpi-toolbar-font', settings.toolbar_font_px + 'px');
+        if (settings.at_font_px) root.setProperty('--kpi-at-font', settings.at_font_px + 'px');
     }
+
+    // The section tabs pin just under the top bar, so they need its height.
+    // Watched rather than read once: the Top Bar Size setting and window
+    // width both change it.
+    (function trackTopBarHeight() {
+        const bar = document.getElementById('kpiTopBar');
+        const set = () => document.documentElement.style.setProperty(
+            '--kpi-top-bar-h', bar.getBoundingClientRect().height + 'px');
+        new ResizeObserver(set).observe(bar);
+        set();
+    })();
 
     function openSettingsModal() {
         Object.entries(SETTING_INPUTS).forEach(([name, id]) => {
@@ -3340,15 +4133,23 @@
         const lim = name => settingLimits[name] ? `${settingLimits[name][0]}-${settingLimits[name][1]}` : '';
         document.getElementById('settingsHint').textContent =
             `Months ${lim('months')}, weeks ${lim('weeks')}, days available ${lim('days_total')}. `
-            + 'Months and weeks include the current one, and the next one is added after it. Days available includes the 10 days ahead of today '
-            + 'shown for the target line. Data label angle: 0 is flat, -40 tilts the labels up to the right.';
+            + 'Months and weeks shown include the current one. The "after" boxes add that many periods after the current one, '
+            + `with no figures yet but their last year and target lines (months ${lim('months_after')}, weeks ${lim('weeks_after')}, `
+            + `days ${lim('days_after')}). Days available includes the days after today.`;
         document.getElementById('appearanceHint').textContent =
-            `Section heading ${lim('section_font_px')} px (e.g. "Upper Funnel"), chart title ${lim('title_font_px')} px. `
+            `Section heading ${lim('section_font_px')} px (e.g. "Upper Funnel"), chart title ${lim('title_font_px')} px, `
+            + `chart subtitle ${lim('subtitle_font_px')} px (the optional line under a chart title), `
+            + `chart period label ${lim('period_font_px')} px (monthly / weekly / daily at the right of the title), `
+            + `top bar ${lim('toolbar_font_px')} px (every button and label in the bar at the top), `
+            + `Autotrader figures ${lim('at_font_px')} px (Advert Allowance, Published, Capped, Unpublished), `
+            + `chart legend ${lim('legend_font_px')} px (the series names above stacked charts). `
             + 'Applies to the KPI page for everyone.';
         sectionDraft = SECTIONS.map(name => ({ name, from: name }));
+        loadChartDraft();
         renderSectionDraft();
         loadVehColumnDraft();
         loadThemeDraft();
+        loadNamesDraft();
         restoreSettingsGroups();
         document.getElementById('settingsError').classList.remove('show');
         document.getElementById('settingsModal').classList.add('open');
@@ -3380,6 +4181,11 @@
                         ${swatches}
                         <button type="button" class="btn btn-edit" title="Add a colour" onclick="addThemeColour(${i})"><i class="fas fa-plus"></i></button>
                     </div>
+                    <label class="theme-transparency" title="How see-through the colours are: 0 is solid">
+                        Transparency
+                        <input type="number" min="0" max="90" step="5" value="${t.transparency || 0}"
+                               oninput="themeDraft[${i}].transparency = this.value"> %
+                    </label>
                     <span class="theme-uses">${n} chart${n === 1 ? '' : 's'}</span>
                     <button type="button" class="btn btn-remove-chart" title="Delete theme" onclick="removeThemeDraft(${i})"
                             ${themeDraft.length === 1 ? 'disabled' : ''}><i class="fas fa-trash"></i></button>
@@ -3413,8 +4219,12 @@
     }
 
     async function saveThemeDraft() {
-        const payload = themeDraft.map(t => ({ id: t.id, name: String(t.name || '').trim(), colours: t.colours }));
-        if (JSON.stringify(payload) === JSON.stringify(themes.map(t => ({ id: t.id, name: t.name, colours: t.colours })))) return;
+        const transparency = t => {
+            const n = parseInt(t.transparency, 10);
+            return isNaN(n) ? 0 : Math.min(90, Math.max(0, n));
+        };
+        const payload = themeDraft.map(t => ({ id: t.id, name: String(t.name || '').trim(), colours: t.colours, transparency: transparency(t) }));
+        if (JSON.stringify(payload) === JSON.stringify(themes.map(t => ({ id: t.id, name: t.name, colours: t.colours, transparency: transparency(t) })))) return;
         const resp = await fetch(BASE_URL + '/kpi/themes', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -3424,20 +4234,108 @@
         themes = resp.themes;
         themeDraft = JSON.parse(JSON.stringify(themes));
         // Stacked charts pick up the new colours without new data.
-        layout.rows.filter(isStacked).forEach(r => { if (customRowData[r.id]) renderCustomRow(r, customRowData[r.id]); });
+        redrawStackedFromCache();
+    }
+
+    function redrawStackedFromCache(skipId = null) {
+        shownRows().filter(r => isStacked(r) && r.id !== skipId)
+            .forEach(r => { if (customRowData[r.id]) renderCustomRow(r, customRowData[r.id]); });
+    }
+
+    // ── Column names (Settings > Column Names) ──────────────────────────────
+    // Saves the whole shared list if it differs from the one loaded; true
+    // when it was saved.
+    async function saveMetricNames(names) {
+        if (JSON.stringify(names) === JSON.stringify(metricNames)) return false;
+        const resp = await fetch(BASE_URL + '/kpi/metric-names', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ names }),
+        }).then(r => r.json());
+        if (resp.status !== 'ok') throw new Error(resp.message || 'Column names save failed');
+        metricNames = resp.names;
+        return true;
+    }
+
+    // Edited as a list of { key ('source|column'), name }; Save sends it all.
+    let namesDraft = [];
+
+    function loadNamesDraft() {
+        namesDraft = Object.entries(metricNames)
+            .map(([key, name]) => ({ key, name }))
+            .sort((a, b) => a.key.split('|')[1].localeCompare(b.key.split('|')[1]));
+        renderNamesDraft();
+    }
+
+    function renderNamesDraft() {
+        const options = key => {
+            const missing = key && !metricsByKey[key]
+                ? `<option value="${escHtml(key)}">${escHtml(key.slice(key.indexOf('|') + 1))}</option>` : '';
+            const group = source => {
+                const items = metricsCatalogue.filter(m => m.source === source);
+                if (!items.length) return '';
+                return `<optgroup label="${source === 'snowflake' ? 'Snowflake - daily_summary' : 'SharePoint'}">`
+                    + items.map(m => `<option value="${escHtml(metricKey(m.source, m.column))}">${escHtml(m.column)}</option>`).join('')
+                    + '</optgroup>';
+            };
+            return '<option value="">(choose a column)</option>' + missing + group('snowflake') + group('sharepoint');
+        };
+        const list = document.getElementById('namesList');
+        list.innerHTML = namesDraft.map((n, i) => `
+            <div class="series-row">
+                <select onchange="namesDraft[${i}].key = this.value">${options(n.key)}</select>
+                <input type="text" maxlength="60" value="${escHtml(n.name)}" placeholder="Name shown on charts"
+                       oninput="namesDraft[${i}].name = this.value">
+                <button type="button" class="btn btn-remove-chart" title="Remove name" onclick="namesDraft.splice(${i}, 1); renderNamesDraft()">
+                    <i class="fas fa-trash"></i></button>
+            </div>`).join('') || '<div class="point-status" style="padding:2px 0 6px;">No column names yet.</div>';
+        list.querySelectorAll('select').forEach((s, i) => { s.value = namesDraft[i].key; });
+    }
+
+    function addNameDraft() {
+        namesDraft.push({ key: '', name: '' });
+        renderNamesDraft();
+    }
+
+    // The draft as the object to save. Throws on a half-filled or repeated row.
+    function namesDraftPayload() {
+        const names = {};
+        namesDraft.forEach(n => {
+            const name = String(n.name || '').trim();
+            if (!n.key && !name) return;   // an empty row added and left
+            if (!n.key) throw new Error(`Choose a column for "${name}", or remove it.`);
+            const column = n.key.slice(n.key.indexOf('|') + 1);
+            if (!name) throw new Error(`Enter a name for ${column}, or remove it.`);
+            if (names[n.key]) throw new Error(`${column} is named twice.`);
+            names[n.key] = name;
+        });
+        return names;
     }
 
     // Settings tabs. The popup reopens on the tab last used this visit.
-    let settingsTab = 'setGroupPeriods';
+    let settingsTab = 'setGroupCharts';
 
     function showSettingsTab(id) {
         settingsTab = id;
+        // Picks up section names typed on the Sections tab.
+        if (id === 'setGroupCharts') renderChartDraft();
+        if (id === 'setGroupTargets') loadTargetsTab();
         document.querySelectorAll('#settingsModal .settings-pane').forEach(p => p.classList.toggle('active', p.id === id));
         document.querySelectorAll('#settingsModal .settings-tabs button').forEach(b => b.classList.toggle('active', b.dataset.tab === id));
     }
 
     function restoreSettingsGroups() {
         showSettingsTab(settingsTab);
+        showChartSubtab(chartSubtab);
+    }
+
+    // Sub-sections of the Charts tab. Reopens on the one last used this visit.
+    let chartSubtab = 'chartSubList';
+
+    function showChartSubtab(id) {
+        chartSubtab = id;
+        document.querySelectorAll('#setGroupCharts .chart-subpane').forEach(p => p.classList.toggle('active', p.id === id));
+        document.querySelectorAll('#setGroupCharts .chart-subtabs button').forEach(b => b.classList.toggle('active', b.dataset.sub === id));
     }
 
     // ── View Vehicles columns (edited in the Settings popup) ─────────────────
@@ -3659,7 +4557,7 @@
     function renderSectionDraft() {
         const last = sectionDraft.length - 1;
         document.getElementById('sectionList').innerHTML = sectionDraft.map((s, i) => {
-            const charts = s.from ? layout.rows.filter(r => r.section === s.from).length : 0;
+            const charts = chartDraft.filter(c => c.sec === s).length;
             const removeTitle = charts ? 'Move or remove its charts first' : 'Remove section';
             return `
                 <div class="section-item">
@@ -3682,6 +4580,7 @@
     function addSectionDraft() {
         sectionDraft.push({ name: '', from: null });
         renderSectionDraft();
+        renderChartDraft();
         const inputs = document.querySelectorAll('#sectionList input');
         inputs[inputs.length - 1].focus();
     }
@@ -3691,11 +4590,117 @@
         if (j < 0 || j >= sectionDraft.length) return;
         [sectionDraft[i], sectionDraft[j]] = [sectionDraft[j], sectionDraft[i]];
         renderSectionDraft();
+        renderChartDraft();
     }
 
     function removeSectionDraft(i) {
         sectionDraft.splice(i, 1);
         renderSectionDraft();
+        renderChartDraft();
+    }
+
+    // ── Charts (Settings > Charts) ───────────────────────────────────────────
+    // One item per saved chart: { id, title, hidden, sec }. `sec` points at the
+    // chart's item in sectionDraft, so a section renamed or added in the same
+    // popup is followed. Shown grouped by section, in sectionDraft order.
+    let chartDraft = [];
+
+    function loadChartDraft() {
+        chartDraft = layout.rows.map(r => ({
+            id: r.id,
+            title: rowTitle(r),
+            hidden: !!r.hidden,
+            sec: sectionDraft.find(s => s.from === r.section),
+        }));
+        renderChartDraft();
+    }
+
+    function sectionLabel(s) {
+        return s.name.trim() || '(new section)';
+    }
+
+    function renderChartDraft() {
+        const options = sel => sectionDraft.map((s, k) =>
+            `<option value="${k}" ${s === sel ? 'selected' : ''}>${escHtml(sectionLabel(s))}</option>`).join('');
+        const html = sectionDraft.map(s => {
+            const items = chartDraft.filter(c => c.sec === s);
+            if (!items.length) return '';
+            return `<div class="chart-list-section">${escHtml(sectionLabel(s))}</div>` + items.map((c, n) => {
+                const i = chartDraft.indexOf(c);
+                return `
+                <div class="chart-item ${c.hidden ? 'is-hidden' : ''}">
+                    <label><input type="checkbox" ${c.hidden ? '' : 'checked'} onchange="setChartHidden(${i}, !this.checked)"> Show</label>
+                    <span class="chart-item-title" title="${escHtml(c.title)}">${escHtml(c.title)}</span>
+                    <select onchange="setChartSection(${i}, this.value)">${options(s)}</select>
+                    <button type="button" class="btn btn-edit" title="Move up"
+                            onclick="moveChartDraft(${i}, -1)" ${n === 0 ? 'disabled' : ''}>
+                        <i class="fas fa-arrow-up"></i></button>
+                    <button type="button" class="btn btn-edit" title="Move down"
+                            onclick="moveChartDraft(${i}, 1)" ${n === items.length - 1 ? 'disabled' : ''}>
+                        <i class="fas fa-arrow-down"></i></button>
+                </div>`;
+            }).join('');
+        }).join('');
+        document.getElementById('chartList').innerHTML = html || '<div class="modal-hint">No charts yet.</div>';
+    }
+
+    function setChartHidden(i, hidden) {
+        chartDraft[i].hidden = hidden;
+        renderChartDraft();
+    }
+
+    // Moved to another section: goes to the bottom of it.
+    function setChartSection(i, k) {
+        const [c] = chartDraft.splice(i, 1);
+        c.sec = sectionDraft[parseInt(k, 10)];
+        chartDraft.push(c);
+        renderChartDraft();
+        renderSectionDraft();
+    }
+
+    // Swap with the next chart up or down in the same section.
+    function moveChartDraft(i, step) {
+        const c = chartDraft[i];
+        let j = i + step;
+        while (j >= 0 && j < chartDraft.length && chartDraft[j].sec !== c.sec) j += step;
+        if (j < 0 || j >= chartDraft.length) return;
+        [chartDraft[i], chartDraft[j]] = [chartDraft[j], chartDraft[i]];
+        renderChartDraft();
+    }
+
+    // The charts as they will be saved: { id, section, hidden }, grouped by
+    // section in the new section order. Worked out before the sections are
+    // saved, since that resets sectionDraft.
+    function chartDraftPlan() {
+        const plan = sectionDraft.flatMap(s => chartDraft
+            .filter(c => c.sec === s)
+            .map(c => ({ id: c.id, section: s.name.trim(), hidden: c.hidden })));
+        // A chart left out here would be deleted by the save.
+        if (plan.length !== layout.rows.length) throw new Error('Some charts have no section - reload the page');
+        return plan;
+    }
+
+    function chartsChanged(plan) {
+        const now = layout.rows.map(r => ({ id: r.id, section: r.section, hidden: !!r.hidden }));
+        return JSON.stringify(plan) !== JSON.stringify(now);
+    }
+
+    async function saveChartPlan(plan) {
+        const byId = Object.fromEntries(layout.rows.map(r => [r.id, r]));
+        const rows = plan.map(p => {
+            const row = { ...byId[p.id], section: p.section };
+            if (p.hidden) row.hidden = true; else delete row.hidden;
+            return row;
+        });
+        await saveLayout(rows);
+        layout.rows = rows;
+        renderLayout();
+        // Charts shown again have no chart drawn yet.
+        shownRows().forEach(row => {
+            if (rowCharts[row.id]) return;
+            if (customRowData[row.id]) renderCustomRow(row, customRowData[row.id]);
+            else loadCustomRow(row);
+        });
     }
 
     function sectionsChanged() {
@@ -3703,11 +4708,15 @@
             || sectionDraft.some((s, i) => s.from !== SECTIONS[i] || s.name.trim() !== SECTIONS[i]);
     }
 
-    async function saveSections() {
+    // `holdOn`: saved section names to keep for now, because charts are still
+    // saved in them until the chart moves are saved (see saveSectionsAndCharts).
+    async function saveSections(holdOn = []) {
+        const items = sectionDraft.map(s => ({ name: s.name.trim(), from: s.from }))
+            .concat(holdOn.map(name => ({ name, from: name })));
         const resp = await fetch(BASE_URL + '/kpi/sections', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ sections: sectionDraft.map(s => ({ name: s.name.trim(), from: s.from })) }),
+            body: JSON.stringify({ sections: items }),
         }).then(r => r.json());
         if (resp.status !== 'ok') throw new Error(resp.message || 'section save failed');
         SECTIONS = resp.sections;
@@ -3721,7 +4730,25 @@
         });
         // Saved: the popup's list now starts from the saved names.
         sectionDraft = SECTIONS.map(name => ({ name, from: name }));
+        loadChartDraft();
         renderSectionDraft();
+    }
+
+    // Sections first, so new and renamed ones exist before charts move into
+    // them. A removed section whose charts are being moved out is kept until
+    // the charts are saved, then removed with a second section save.
+    async function saveSectionsAndCharts() {
+        const plan = chartDraftPlan();
+        let keep = [];
+        if (sectionsChanged()) {
+            const kept = new Set(sectionDraft.map(s => s.from));
+            keep = SECTIONS.filter(name => !kept.has(name) && layout.rows.some(r => r.section === name));
+            const finalNames = sectionDraft.map(s => s.name.trim());
+            await saveSections(keep);
+            if (keep.length) sectionDraft = finalNames.map(name => ({ name, from: name }));
+        }
+        if (chartsChanged(plan)) await saveChartPlan(plan);
+        if (keep.length) await saveSections();
     }
 
     function closeSettingsModal() {
@@ -3731,7 +4758,7 @@
     async function saveSettings() {
         const next = {};
         for (const [name, id] of Object.entries(SETTING_INPUTS)) {
-            next[name] = parseInt(document.getElementById(id).value, 10);
+            next[name] = readSettingInput(document.getElementById(id));
         }
         const errorBox = document.getElementById('settingsError');
         if (next.days_window > next.days_total) {
@@ -3739,20 +4766,33 @@
             errorBox.classList.add('show');
             return;
         }
+        if (next.days_after >= next.days_total) {
+            errorBox.textContent = 'Days available must be more than the days after today.';
+            errorBox.classList.add('show');
+            return;
+        }
+        let names;
+        try { names = namesDraftPayload(); } catch (err) {
+            errorBox.textContent = err.message;
+            errorBox.classList.add('show');
+            return;
+        }
         const button = document.getElementById('settingsSaveBtn');
         button.disabled = true;
         try {
             blockSaveIfLoadFailed();
-            if (sectionsChanged()) await saveSections();
+            await saveSectionsAndCharts();
             await saveVehColumnDraft();
             await saveThemeDraft();
+            await saveMetricNames(names);
             const resp = await fetch(BASE_URL + '/kpi/settings', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ settings: next }),
             }).then(r => r.json());
             if (resp.status !== 'ok') throw new Error(resp.message || 'save failed');
-            const needsData = ['months', 'weeks', 'days_total'].some(k => resp.settings[k] !== settings[k]);
+            const needsData = ['months', 'weeks', 'days_total', 'months_after', 'weeks_after', 'days_after']
+                .some(k => resp.settings[k] !== settings[k]);
             settings = resp.settings;
             applyAppearance();
             DayWindow.reset();
