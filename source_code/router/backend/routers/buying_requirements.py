@@ -413,9 +413,10 @@ def _fetch_dbs_raw_values() -> list:
         fresh = _cached_if_fresh()
         if fresh is not None:
             return fresh
-        values = SharePointClient().get_worksheet_values(
+        # Only re-read when the sheet has been saved since the last read.
+        values = SharePointClient().get_worksheet_values_if_changed(
             _DBS_SUBFOLDER, _DBS_FILENAME, _DBS_SHEET,
-            max_col=_DBS_MAX_COL, max_row=_DBS_MAX_ROW,
+            max_col=_DBS_MAX_COL, max_row=_DBS_MAX_ROW, s3_key=_DBS_SHEET_S3_KEY,
         )
         with _cache_lock:
             _dbs_raw_values_cache["values"] = values
@@ -483,7 +484,12 @@ _SF_S3_KEY         = f"applications/pricing/uk-vehicle-list-evaluator/{_S3_ENV}/
 _DBS_S3_KEY        = f"applications/pricing/uk-vehicle-list-evaluator/{_S3_ENV}/cache/dbs_purchases_v17.json"
 _CB_S3_KEY         = f"applications/pricing/uk-vehicle-list-evaluator/{_S3_ENV}/cache/cb_purchases_v13.json"
 _CB_EXTRA_S3_KEY   = f"applications/pricing/uk-vehicle-list-evaluator/{_S3_ENV}/cache/cb_extra_v2.json"
-_VRM_CAP_S3_KEY    = f"applications/pricing/uk-vehicle-list-evaluator/shared/vrm_cap_id_cache.json"
+# The raw sheet values with the file's last-saved time (see
+# SharePointClient.get_worksheet_values_if_changed). Shared: the sheets are the
+# same for every environment.
+_DBS_SHEET_S3_KEY  = "applications/pricing/uk-vehicle-list-evaluator/shared/cache/sheet_daily_buyers_v1.json"
+_CB_SHEET_S3_KEY   = "applications/pricing/uk-vehicle-list-evaluator/shared/cache/sheet_cars_bought_v1.json"
+_VRM_CAP_S3_KEY    =f"applications/pricing/uk-vehicle-list-evaluator/shared/vrm_cap_id_cache.json"
 
 
 def _sf_last_valid_window_utc() -> float:
@@ -1193,9 +1199,10 @@ def _build_cb_purchases() -> dict:
     def _fetch_cb_values():
         for _attempt in range(1, 4):
             try:
-                return _CarsBoughtSharePointClient().get_worksheet_values(
+                # Only re-read when the sheet has been saved since the last read.
+                return _CarsBoughtSharePointClient().get_worksheet_values_if_changed(
                     _CB_SUBFOLDER, _CB_FILENAME, _CB_SHEET,
-                    max_col=_CB_MAX_COL, max_row=_CB_MAX_ROW,
+                    max_col=_CB_MAX_COL, max_row=_CB_MAX_ROW, s3_key=_CB_SHEET_S3_KEY,
                 )
             except Exception as _exc:
                 logger.warning(f"Cars Bought fetch attempt {_attempt}/3 failed: {_exc}")

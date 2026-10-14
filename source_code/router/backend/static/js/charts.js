@@ -162,37 +162,99 @@ function makeBgPlugin(invert = false, initialTarget = null) {
 // getAngle returns the tilt in degrees (read at draw time, so a settings
 // change only needs a redraw). Tilted labels are anchored at the point so
 // they rise away from it: negative runs up to the right, positive up to the left.
-function makeDataLabelPlugin(id, dsLabel, fontSize, fmt, getAngle = () => 0) {
+// getBelow returns true to put the labels under the points instead, running
+// down away from them (a tilted one mirrors the above case).
+// Where the line is steep a label at the usual spot would sit on the line, so
+// each label is moved clear of it: further above (or below), then to the side,
+// to the nearest spot where its box touches none of the nearby line segments.
+function makeDataLabelPlugin(id, dsLabel, fontSize, fmt, getAngle = () => 0, getBelow = () => false) {
     return {
         id,
         afterDatasetsDraw(chart) {
             const dsIdx = chart.data.datasets.findIndex(d => d.label === dsLabel);
             if (dsIdx < 0) return;
             const meta = chart.getDatasetMeta(dsIdx);
+            const values = chart.data.datasets[dsIdx].data;
+            const has = i => i >= 0 && i < values.length && values[i] !== null && values[i] !== undefined;
             const angle = Number(getAngle()) || 0;
+            const rad = angle * Math.PI / 180;
+            const cos = Math.cos(rad), sin = Math.sin(rad);
+            const below = !!getBelow();
+            const leftAligned = (angle < 0) !== below;
             const c2 = chart.ctx;
             c2.save();
             c2.font = `bold ${fontSize}px DM Sans, system-ui, sans-serif`;
             c2.fillStyle = '#0f172a';
             meta.data.forEach((point, i) => {
-                const v = chart.data.datasets[dsIdx].data[i];
-                if (v === null || v === undefined) return;
+                if (!has(i)) return;
+                const text = fmt(values[i]);
+                const w = c2.measureText(text).width;
+                const h = fontSize;
+                // The label's box around its anchor, before it is rotated, with
+                // a little room so it does not graze the line.
+                const pad = 3;
+                const box = angle
+                    ? { l: (leftAligned ? 0 : -w) - pad, r: (leftAligned ? w : 0) + pad, t: -h / 2 - pad, b: h / 2 + pad }
+                    : { l: -w / 2 - pad, r: w / 2 + pad, t: (below ? 0 : -h) - pad, b: (below ? h : 0) + pad };
+                // The line drawn near this point (two segments either side; the
+                // line breaks at a missing value).
+                const segments = [];
+                for (let j = i - 2; j < i + 2; j++) {
+                    if (has(j) && has(j + 1)) segments.push([meta.data[j], meta.data[j + 1]]);
+                }
+                // Does the label, anchored at (ax, ay), touch the line? Each
+                // segment is turned into the label's own (unrotated) frame.
+                const hits = (ax, ay) => segments.some(([p, q]) => {
+                    const local = pt => {
+                        const x = pt.x - ax, y = pt.y - ay;
+                        return [x * cos + y * sin, -x * sin + y * cos];
+                    };
+                    const [x1, y1] = local(p);
+                    const [x2, y2] = local(q);
+                    return segmentHitsBox(x1, y1, x2, y2, box);
+                });
+                const side = angle ? 10 : w / 2 + 4;
+                let anchor = null;
+                for (let d = 6; d <= 60 && !anchor; d += 3) {
+                    for (const dx of [0, -side, side]) {
+                        const ax = point.x + dx, ay = point.y + (below ? d : -d);
+                        if (!hits(ax, ay)) { anchor = [ax, ay]; break; }
+                    }
+                }
+                if (!anchor) anchor = [point.x, point.y + (below ? 6 : -6)];
                 c2.save();
-                c2.translate(point.x, point.y - 6);
+                c2.translate(anchor[0], anchor[1]);
                 if (angle) {
-                    c2.rotate(angle * Math.PI / 180);
-                    c2.textAlign = angle < 0 ? 'left' : 'right';
+                    c2.rotate(rad);
+                    c2.textAlign = leftAligned ? 'left' : 'right';
                     c2.textBaseline = 'middle';
                 } else {
                     c2.textAlign = 'center';
-                    c2.textBaseline = 'bottom';
+                    c2.textBaseline = below ? 'top' : 'bottom';
                 }
-                c2.fillText(fmt(v), 0, 0);
+                c2.fillText(text, 0, 0);
                 c2.restore();
             });
             c2.restore();
         }
     };
+}
+
+// Does the segment (x1, y1)-(x2, y2) pass through the box {l, r, t, b}?
+// Clips the segment to the box (Liang-Barsky); anything left over is inside.
+function segmentHitsBox(x1, y1, x2, y2, box) {
+    const dx = x2 - x1, dy = y2 - y1;
+    let t0 = 0, t1 = 1;
+    for (const [p, q] of [[-dx, x1 - box.l], [dx, box.r - x1], [-dy, y1 - box.t], [dy, box.b - y1]]) {
+        if (p === 0) {
+            if (q < 0) return false;
+        } else {
+            const t = q / p;
+            if (p < 0) { if (t > t1) return false; if (t > t0) t0 = t; }
+            else { if (t < t0) return false; if (t < t1) t1 = t; }
+        }
+    }
+    return true;
 }
 
 // ── Chart HTML ──────────────────────────────────────────────────────────────
@@ -203,12 +265,14 @@ function makeDataLabelPlugin(id, dsLabel, fontSize, fmt, getAngle = () => 0) {
 // legend: false drops the legend line and puts the day scroller on the
 // title line instead, so the plot gets the freed height (KPI page).
 // subtitle, if given, sits under the title in smaller grey text (no-legend cards only).
-function chartCardHtml({ canvasId, titleId = '', title = '', subtitle = '', legendId = '', dayScroller = false, legend = true }) {
+// headExtra is the page's own HTML for the title line, before the scroller (no-legend cards only).
+function chartCardHtml({ canvasId, titleId = '', title = '', subtitle = '', legendId = '', dayScroller = false, legend = true, headExtra = '' }) {
     if (!legend) {
         return `
         <div class="chart-card">
             <div class="chart-card-head">
                 <h2${titleId ? ` id="${titleId}"` : ''}>${escHtml(title)}</h2>
+                ${headExtra}
                 ${dayScroller ? DayWindow.scrollerHtml() : ''}
             </div>
             ${subtitle ? `<div class="chart-card-subtitle">${escHtml(subtitle)}</div>` : ''}

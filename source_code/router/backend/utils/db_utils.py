@@ -1014,32 +1014,52 @@ def delete_chart_target(conn, chart_key: str, from_date) -> int:
         raise
 
 
-def upsert_chart_target_dates(conn, chart_key: str, rows: list, user: str = None) -> None:
-    """Write per-date targets for one key: [(date, value), ...].
+def replace_chart_target_dates(conn, chart_key: str, rows: list, user: str = None) -> None:
+    """Replace every per-date target for one key with rows: [(date, value), ...].
 
-    Used by the KPI CSV import. Only the dates given are touched — a date already
-    stored is overwritten, a new one is added, and every other date is left as
-    it was, so a later file can carry amendments and new dates together.
+    Used by the KPI page's pasted targets: the box shows the whole list, so
+    what is saved is the whole list — a date taken out of the box is removed.
+    The delete and the insert are one transaction, so a failed save leaves the
+    old list as it was. Empty rows removes them all.
     """
-    if not rows:
-        return
     _ensure_chart_targets_table(conn)
     try:
         with conn.cursor() as cur:
-            psycopg2.extras.execute_values(
-                cur,
-                "INSERT INTO chart_targets (chart_key, target_date, target_value, created_by) VALUES %s "
-                "ON CONFLICT (chart_key, target_date) DO UPDATE "
-                "SET target_value = EXCLUDED.target_value, "
-                "    created_by   = EXCLUDED.created_by, "
-                "    updated_at   = NOW()",
-                [(chart_key, d, value, user) for d, value in rows],
-                page_size=1000,
-            )
+            cur.execute("DELETE FROM chart_targets WHERE chart_key = %s", (chart_key,))
+            if rows:
+                psycopg2.extras.execute_values(
+                    cur,
+                    "INSERT INTO chart_targets (chart_key, target_date, target_value, created_by) VALUES %s",
+                    [(chart_key, d, value, user) for d, value in rows],
+                    page_size=1000,
+                )
         conn.commit()
     except Exception:
         conn.rollback()
         raise
+
+
+def get_chart_target_overview(conn, key_prefix: str) -> list:
+    """Every stored key starting with key_prefix, with what it holds:
+    [(chart_key, count, first_date, last_date, min_value, max_value)].
+    Tolerates the table not existing yet, like get_chart_targets."""
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT chart_key, COUNT(*), MIN(target_date), MAX(target_date),
+                       MIN(target_value), MAX(target_value)
+                FROM chart_targets
+                WHERE chart_key LIKE %s
+                GROUP BY chart_key
+                ORDER BY chart_key
+                """,
+                (key_prefix.replace('%', r'\%').replace('_', r'\_') + '%',),
+            )
+            return cur.fetchall()
+    except psycopg2.errors.UndefinedTable:
+        conn.rollback()
+        return []
 
 
 # ── Google Ads Campaigns: chosen campaigns ────────────────────────────────────

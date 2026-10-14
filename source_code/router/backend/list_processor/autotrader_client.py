@@ -172,6 +172,7 @@ class AutoTraderClient(metaclass=Singleton):
         self.auth_url = f"{host}/authenticate"
         self.vehicles_api_url = f"{host}/vehicles"
         self.valuations_api_url = f"{host}/valuations"
+        self.advertisers_api_url = f"{host}/advertisers"
 
         # Auth data
         env = 'prod' if os.getenv('AWS_REGION') == 'eu-west-1' else 'dev'
@@ -227,6 +228,22 @@ class AutoTraderClient(metaclass=Singleton):
                         raise Exception(f'Authentication failed with status code: {response.status_code}')
 
             return self.access_token
+
+    def get_car_van_advert_allowance(self, session):
+        """Number of Car/Van Standard adverts our contract allows at once.
+        Cars over this number show as CAPPED and are not on autotrader.co.uk.
+        Returns None when the allowance is unlimited."""
+        headers = {'Authorization': f'Bearer {self.get_access_token(session)}'}
+        params = {'advertiserId': self.advertiser_id, 'autotraderAdvertAllowances': 'true'}
+        with self.limiter:
+            response = session.get(self.advertisers_api_url, params=params, headers=headers, timeout=20)
+        if response.status_code != 200:
+            raise Exception(f'Advertisers request failed with status code: {response.status_code}')
+        for advertiser in response.json().get('results', []):
+            for allowance in advertiser.get('autotraderAdvertAllowances') or []:
+                if allowance.get('type') == 'Standard' and 'Car' in (allowance.get('vehicleTypes') or []):
+                    return None if allowance.get('unlimited') else allowance.get('capacity')
+        raise Exception('No Car/Van Standard allowance in the advertisers response')
 
     @cache(ignore_args=['session', 'headers'], ex=60*60*24)
     def competitor_request(self, session, headers, competitor_link):

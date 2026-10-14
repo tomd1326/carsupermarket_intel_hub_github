@@ -8,11 +8,14 @@ import re
 import time
 import logging
 import datetime
+import threading
+from concurrent.futures import ThreadPoolExecutor
 
 
 from utils.db_utils import (get_database_connection, get_prod_pricer_connection,
                             get_chart_targets, get_chart_target_ranges, save_chart_targets,
-                            delete_chart_target, upsert_chart_target_dates,
+                            delete_chart_target, replace_chart_target_dates,
+                            get_chart_target_overview,
                             get_chart_target_summary, get_ga4_campaign_ids,
                             add_ga4_campaign, remove_ga4_campaign)
 from utils.snowflake_client import SnowflakeClient
@@ -1040,55 +1043,115 @@ def kpi_metrics(request: Request, user: str = Depends(require_page_api('kpi'))):
 # /kpi/settings). The page sends the counts with each data request; they are
 # clamped here so a bad value cannot ask Snowflake for years of data.
 #
-# The day series always runs KPI_FUTURE_DAYS past today, so the target line
-# shows what is coming. days_total includes those future days.
-
-KPI_FUTURE_DAYS = 10
+# Each chart also runs a set number of periods past the current one
+# (months_after / weeks_after / days_after), with no actuals yet, so the N-1
+# and target lines show what is coming. days_total includes the days after.
 
 KPI_DEFAULT_SETTINGS = {
     "months": 14,          # including the current month
     "weeks": 10,           # including the current week
+    "months_after": 1,     # months shown after the current one
+    "weeks_after": 1,      # weeks shown after the current one
+    "days_after": 10,      # days shown after today
     "days_window": 35,     # days on screen at once in a day chart
     "days_total": 90,      # days available to scroll across
     "label_angle": 0,      # tilt of the value labels on the data points
+    "label_below": 0,      # 1 = value labels under the line's points, 0 = above
     "section_font_px": 13,  # section heading, e.g. "Upper Funnel" (was 0.82rem)
     "title_font_px": 14,    # chart titles (was 0.88rem)
+    "subtitle_font_px": 12,  # optional line under a chart title (was 0.78rem)
+    "period_font_px": 12,    # monthly / weekly / daily at the right of the title line
+    "toolbar_font_px": 14,   # every button and label in the top bar
+    "at_font_px": 13,        # Autotrader figures boxes (Published, Capped etc.)
+    "legend_font_px": 10,   # series names in the legend above stacked charts
+    # Line thickness in px on line charts. Halves allowed, so these are the
+    # only settings that are not whole numbers (see _clamp_setting).
+    "main_line_px": 2.5,     # the chart's own line
+    "n1_line_px": 1.5,       # last year
+    "target_line_px": 1.5,   # target, line and stacked charts
 }
+
+# Line colours, #rrggbb. Kept apart from the number settings above.
+KPI_COLOUR_SETTINGS = {
+    "main_line_colour": "#0d3d6e",
+    "n1_line_colour": "#6b7280",
+    "target_line_colour": "#e53e3e",
+}
+_KPI_HALF_SETTINGS = {"main_line_px", "n1_line_px", "target_line_px"}
 
 KPI_SETTING_LIMITS = {
     "months": (1, 24),
     "weeks": (1, 104),
+    "months_after": (0, 12),
+    "weeks_after": (0, 26),
+    "days_after": (0, 90),
     "days_window": (7, 400),
-    "days_total": (KPI_FUTURE_DAYS + 1, 400),
+    # At least days_after + 1 as well (today must be in it): see _period_args.
+    "days_total": (7, 400),
     "label_angle": (-90, 90),
+    "label_below": (0, 1),
     "section_font_px": (10, 28),
     "title_font_px": (10, 28),
+    "subtitle_font_px": (8, 24),
+    "period_font_px": (8, 24),
+    "toolbar_font_px": (10, 22),
+    "at_font_px": (9, 22),
+    "legend_font_px": (8, 24),
+    "main_line_px": (0.5, 8),
+    "n1_line_px": (0.5, 8),
+    "target_line_px": (0.5, 8),
 }
 
 
-def _clamp_setting(name: str, value) -> int:
+def _setting_number(name: str, value):
+    """The setting as its type: a whole number, or for line thickness the
+    nearest half. Raises TypeError / ValueError when it is not a number."""
+    if name in _KPI_HALF_SETTINGS:
+        return round(float(value) * 2) / 2
+    return int(value)
+
+
+def _clamp_setting(name: str, value):
     low, high = KPI_SETTING_LIMITS[name]
     try:
-        value = int(value)
+        value = _setting_number(name, value)
     except (TypeError, ValueError):
         value = KPI_DEFAULT_SETTINGS[name]
     return min(max(value, low), high)
 
 
-def _kpi_periods(today: datetime.date, months: int, weeks: int, days_total: int):
+def _colour_setting(name: str, value) -> str:
+    return value.lower() if isinstance(value, str) and re.fullmatch(r"#[0-9a-fA-F]{6}", value) \
+        else KPI_COLOUR_SETTINGS[name]
+
+
+def _period_args(source: dict) -> tuple:
+    """(months, weeks, days_total, after) from a request or settings dict,
+    clamped. after = (months_after, weeks_after, days_after). days_total is
+    raised if needed so the day chart still reaches back to today."""
+    get = lambda name, key=None: _clamp_setting(name, source.get(key or name, KPI_DEFAULT_SETTINGS[name]))
+    after = (get("months_after"), get("weeks_after"), get("days_after"))
+    days = max(get("days_total", "days"), after[2] + 1)
+    return get("months"), get("weeks"), days, after
+
+
+def _kpi_periods(today: datetime.date, months: int, weeks: int, days_total: int, after: tuple = None):
     """Month starts, week Mondays and day dates for the KPI charts, oldest first.
-    The months and weeks end with the current, part-elapsed one, then the
-    following one (no actuals yet, but its N-1 and target are shown)."""
+    The months and weeks end with the current, part-elapsed one, then `after`
+    more (no actuals yet, but their N-1 and target are shown)."""
+    months_after, weeks_after, days_after = after or (
+        KPI_DEFAULT_SETTINGS["months_after"], KPI_DEFAULT_SETTINGS["weeks_after"], KPI_DEFAULT_SETTINGS["days_after"])
     first_of_this_month = today.replace(day=1)
     month_firsts = [first_of_this_month]
     for _ in range(months - 1):
         month_firsts.insert(0, (month_firsts[0] - datetime.timedelta(days=1)).replace(day=1))
-    month_firsts.append((first_of_this_month + datetime.timedelta(days=32)).replace(day=1))
+    for _ in range(months_after):
+        month_firsts.append((month_firsts[-1] + datetime.timedelta(days=32)).replace(day=1))
 
     current_week_monday = _week_monday_of(today)
-    week_mondays = [current_week_monday - datetime.timedelta(weeks=i) for i in range(weeks - 1, -2, -1)]
+    week_mondays = [current_week_monday - datetime.timedelta(weeks=i) for i in range(weeks - 1, -weeks_after - 1, -1)]
 
-    daily_end = today + datetime.timedelta(days=KPI_FUTURE_DAYS)
+    daily_end = today + datetime.timedelta(days=days_after)
     daily_start = daily_end - datetime.timedelta(days=days_total - 1)
     dates = [daily_start + datetime.timedelta(days=i) for i in range(days_total)]
     return month_firsts, week_mondays, dates
@@ -1109,11 +1172,11 @@ def _week_dates(monday: datetime.date) -> list:
 #   none       - no target
 #   fixed      - one figure per day, stored across the whole range the same way
 #                as the Google Ads targets
-#   import     - per-date figures from an uploaded CSV
+#   import     - per-date figures pasted into the page (see /kpi/target-dates)
 #   snowflake  - the column's own <METRIC>_TARGET in daily_summary
 #
-# Fixed and imported figures are stored under separate keys in chart_targets,
-# so switching a chart to fixed keeps the imported dates for switching back.
+# Fixed and per-date figures are stored under separate keys in chart_targets,
+# so switching a chart to fixed keeps the per-date figures for switching back.
 # Both live in the PROD cluster, like the layout, so every environment shows
 # the same targets.
 
@@ -1168,18 +1231,72 @@ def kpi_custom_data(request: Request, metric: str, agg: str = "sum", source: str
                     current_week: bool = False,
                     current_day: bool = False,
                     refresh: str = "",
+                    sp_refresh: str = "",
                     weight_by: str = "",
                     user: str = Depends(require_page_api('kpi'))):
+    """One chart's data. The page now uses /kpi/custom-data-batch; kept for
+    single requests. See _custom_data."""
+    _refresh_daily_summary_columns(refresh)
+    return _custom_data(metric, agg, source, target_mode, months, weeks, days,
+                        current_month, current_week, current_day, sp_refresh, weight_by)
+
+
+def _ds_fetch_range(today, months, weeks, days, after=None):
+    """daily_summary dates a chart needs: a year further back than anything
+    shown, for N-1, and forward to the end of the last month, week or day
+    shown, so every period's target total is complete. Depends only on the
+    period settings, so every chart in one load needs the same range."""
+    month_firsts, week_mondays, dates = _kpi_periods(today, months, weeks, days, after)
+    prev_week_mondays = [_prev_iso_week_monday(m) for m in week_mondays]
+    fetch_start = min(_shift_years(dates[0], -1), _shift_years(month_firsts[0], -1),
+                      prev_week_mondays[0])
+    last_month = month_firsts[-1]
+    fetch_end = max(dates[-1], week_mondays[-1] + datetime.timedelta(days=6),
+                    last_month.replace(day=calendar.monthrange(last_month.year, last_month.month)[1]))
+    return fetch_start, fetch_end
+
+
+def _fetch_daily_summary(columns: list, fetch_start, fetch_end) -> dict:
+    """{date: {COLUMN: value}} for the given daily_summary columns, in one query.
+    Column names must come from the live column list (they are interpolated)."""
+    cols = ["DATE"] + [c for c in dict.fromkeys(columns) if c != "DATE"]
+    with SnowflakeClient() as sf:
+        rows, names = sf.execute(f"""
+            SELECT {', '.join(cols)}
+            FROM PROD_CARSUPERMARKET_DB.product_slt_kpis.daily_summary
+            WHERE DATE >= %s AND DATE <= %s
+            ORDER BY DATE
+        """, [str(fetch_start), str(fetch_end)])
+    names = [n.upper() for n in names]
+    out = {}
+    for r in rows:
+        row = dict(zip(names, r))
+        d = row.pop("DATE")
+        d = d if isinstance(d, datetime.date) else datetime.date.fromisoformat(str(d)[:10])
+        out[d] = row
+    return out
+
+
+def _custom_data(metric: str, agg: str, source: str, target_mode: str, months: int, weeks: int,
+                 days: int, current_month: bool, current_week: bool, current_day: bool,
+                 sp_refresh: str = "", weight_by: str = "",
+                 prefetched: dict | None = None, stored_targets: dict | None = None,
+                 after: tuple | None = None) -> dict:
     """Daily/weekly/monthly series for one metric, plus its N-1 and target.
     current_month / current_week / current_day: also fill the current
     (part-elapsed) month, week or day. Today only has stock figures in
     daily_summary; other columns are NULL until tomorrow's build.
     refresh: Load Data's click token — re-reads the column list once per click.
+    sp_refresh: the same token, sent only when the Load Data button is clicked
+    — re-reads any SharePoint file saved since the cached copy (see
+    _refresh_sharepoint).
     weight_by: on an Average chart, a daily_summary count column to weight
     each day by, so a week or month is the average over every vehicle rather
     than the plain average of the daily averages (a 3-order day would
-    otherwise count as much as a 20-order day)."""
-    _refresh_daily_summary_columns(refresh)
+    otherwise count as much as a 20-order day).
+    prefetched: {date: {COLUMN: value}} already read from daily_summary for the
+    whole load (see kpi_custom_data_batch); without it this reads its own.
+    stored_targets: {target key: {date: value}} already read, likewise."""
     if source == "snowflake":
         metric = metric.upper()
         weight_by = weight_by.upper()
@@ -1195,12 +1312,11 @@ def kpi_custom_data(request: Request, metric: str, agg: str = "sum", source: str
             return {"status": "error", "message": f"Unknown weight column: {weight_by}"}
     if target_mode not in KPI_TARGET_MODES:
         return {"status": "error", "message": f"Unknown target mode: {target_mode}"}
-    months = _clamp_setting("months", months)
-    weeks = _clamp_setting("weeks", weeks)
-    days = _clamp_setting("days_total", days)
+    months, weeks, days, after = _period_args({"months": months, "weeks": weeks, "days": days,
+                                               **dict(zip(("months_after", "weeks_after", "days_after"), after or ()))})
     try:
         today = datetime.date.today()
-        month_firsts, week_mondays, dates = _kpi_periods(today, months, weeks, days)
+        month_firsts, week_mondays, dates = _kpi_periods(today, months, weeks, days, after)
         prev_week_mondays = [_prev_iso_week_monday(m) for m in week_mondays]
 
         def _num(val):
@@ -1230,36 +1346,23 @@ def kpi_custom_data(request: Request, metric: str, agg: str = "sum", source: str
             # way for both sources, so the <METRIC>_N_MINUS_1 column is not read.
             # It also only runs to yesterday, which left future days blank.
             target_col = _target_column(metric)
-            # Fetch a year further back than anything shown, for N-1, and
-            # forward to the end of next month, so the current month's target
-            # total is complete.
-            fetch_start = min(_shift_years(dates[0], -1), _shift_years(month_firsts[0], -1),
-                              prev_week_mondays[0])
-            _nm = (today.replace(day=1) + datetime.timedelta(days=32)).replace(day=1)
-            fetch_end = max(dates[-1], (_nm + datetime.timedelta(days=32)).replace(day=1) - datetime.timedelta(days=1))
-            # All column names come from the live column list — safe to interpolate
-            select_cols = (["DATE", metric] + ([target_col] if target_col else [])
-                           + ([weight_by] if weight_by and weight_by != metric else []))
-            with SnowflakeClient() as sf:
-                rows, cols = sf.execute(f"""
-                    SELECT {', '.join(select_cols)}
-                    FROM PROD_CARSUPERMARKET_DB.product_slt_kpis.daily_summary
-                    WHERE DATE >= %s AND DATE <= %s
-                    ORDER BY DATE
-                """, [str(fetch_start), str(fetch_end)])
-            col_map = {c.upper(): i for i, c in enumerate(cols)}
-            by_date: dict = {}
-            for r in rows:
-                d = r[col_map['DATE']]
-                d = d if isinstance(d, datetime.date) else datetime.date.fromisoformat(str(d)[:10])
-                by_date[d] = {
-                    'v':  _num(r[col_map[metric]]),
-                    't':  _num(r[col_map[target_col]]) if target_col else None,
-                    'w':  _num(r[col_map[weight_by]]) if weight_by else None,
+            if prefetched is None:
+                # All column names come from the live column list — safe to interpolate
+                fetch_start, fetch_end = _ds_fetch_range(today, months, weeks, days, after)
+                prefetched = _fetch_daily_summary(
+                    [metric] + ([target_col] if target_col else []) + ([weight_by] if weight_by else []),
+                    fetch_start, fetch_end)
+            by_date: dict = {
+                d: {
+                    'v': _num(row.get(metric)),
+                    't': _num(row.get(target_col)) if target_col else None,
+                    'w': _num(row.get(weight_by)) if weight_by else None,
                 }
+                for d, row in prefetched.items()
+            }
             value_at = lambda d: by_date.get(d, {}).get('v')
         else:
-            sp = _get_sharepoint_data()
+            sp = _get_sharepoint_data(sp_refresh)
             if sp.get("status") != "ok":
                 return {"status": "error", "message": sp.get("message", "SharePoint data unavailable")}
             stale_date = sp.get("stale_date") if sp.get("stale") else None
@@ -1321,8 +1424,13 @@ def kpi_custom_data(request: Request, metric: str, agg: str = "sum", source: str
             weekly_values_target = [_agg([by_date.get(d, {}).get('t') for d in _week_dates(m)]) for m in week_mondays]
             monthly_values_target = [_agg([by_date.get(d, {}).get('t') for d in _month_dates(f)]) for f in month_firsts]
         elif target_mode in ("fixed", "import"):
-            values_target, weekly_values_target, monthly_values_target = _stored_kpi_targets(
-                target_mode, source, metric, dates, week_mondays, month_firsts, agg)
+            key = _kpi_target_key(target_mode, source, metric)
+            if stored_targets is not None:
+                values_target, weekly_values_target, monthly_values_target = _roll_up_kpi_targets(
+                    stored_targets.get(key, {}), dates, week_mondays, month_firsts, agg)
+            else:
+                values_target, weekly_values_target, monthly_values_target = _stored_kpi_targets(
+                    target_mode, source, metric, dates, week_mondays, month_firsts, agg)
 
         return {
             "status": "ok",
@@ -1355,6 +1463,93 @@ def kpi_custom_data(request: Request, metric: str, agg: str = "sum", source: str
     except Exception as e:
         logger.error(f"KPI custom data failed for {source}:{metric}: {e}")
         return {"status": "error", "message": str(e)}
+
+
+@router.post("/kpi/custom-data-batch")
+def kpi_custom_data_batch(request: Request, payload: dict, user: str = Depends(require_page_api('kpi'))):
+    """Every chart's data for one page load in a single request. payload:
+    {items: [{source, metric, agg, target_mode, current_month, current_week,
+    current_day, weight_by}], months, weeks, days, refresh, sp_refresh}.
+    Reads every daily_summary column needed in one Snowflake query, the
+    stored targets in one database call and SharePoint once, then builds each
+    item from those. Returns {status, results} with results in item order."""
+    payload = payload or {}
+    items = payload.get("items")
+    if not isinstance(items, list) or len(items) > 500:
+        return {"status": "error", "message": "items must be a list of at most 500"}
+    _refresh_daily_summary_columns(str(payload.get("refresh") or ""))
+    months, weeks, days, after = _period_args(payload)
+    sp_refresh = str(payload.get("sp_refresh") or "")
+
+    def norm(item):
+        item = item if isinstance(item, dict) else {}
+        source = item.get("source", "snowflake")
+        metric = str(item.get("metric") or "")
+        weight_by = str(item.get("weight_by") or "")
+        if source == "snowflake":
+            metric, weight_by = metric.upper(), weight_by.upper()
+        return {"source": source, "metric": metric, "agg": item.get("agg", "sum"),
+                "target_mode": item.get("target_mode", "snowflake"),
+                "current_month": bool(item.get("current_month")),
+                "current_week": bool(item.get("current_week")),
+                "current_day": bool(item.get("current_day")),
+                "weight_by": weight_by}
+
+    items = [norm(i) for i in items]
+
+    try:
+        today = datetime.date.today()
+        # Every daily_summary column any item needs, read once. Only names in
+        # the live column list are used, so they are safe to interpolate; an
+        # unknown one gets its error from _custom_data below.
+        live = set(_snowflake_metric_columns())
+        columns = []
+        for i in items:
+            if i["source"] != "snowflake" or i["metric"] not in live:
+                continue
+            columns.append(i["metric"])
+            target_col = _target_column(i["metric"])
+            if target_col:
+                columns.append(target_col)
+            if i["weight_by"] in live:
+                columns.append(i["weight_by"])
+        prefetched = None
+        if columns:
+            fetch_start, fetch_end = _ds_fetch_range(today, months, weeks, days, after)
+            prefetched = _fetch_daily_summary(columns, fetch_start, fetch_end)
+
+        # Stored (fixed / imported) targets for every item that uses them, in one call.
+        stored = None
+        keys = list(dict.fromkeys(_kpi_target_key(i["target_mode"], i["source"], i["metric"])
+                                  for i in items if i["target_mode"] in ("fixed", "import")))
+        if keys:
+            month_firsts, week_mondays, dates = _kpi_periods(today, months, weeks, days, after)
+            last_month = month_firsts[-1]
+            start = min(dates[0], week_mondays[0], month_firsts[0])
+            end = max(dates[-1], week_mondays[-1] + datetime.timedelta(days=6),
+                      last_month.replace(day=calendar.monthrange(last_month.year, last_month.month)[1]))
+            with get_prod_pricer_connection() as conn:
+                stored = get_chart_targets(conn, keys, start, end)
+
+        # SharePoint once (and its Load Data check once), before the items use it.
+        if any(i["source"] == "sharepoint" for i in items):
+            _get_sharepoint_data(sp_refresh)
+    except Exception as e:
+        logger.error(f"KPI batch data failed: {e}")
+        return {"status": "error", "message": str(e)}
+
+    # Build each different item once; repeats share the result.
+    built = {}
+    results = []
+    for i in items:
+        key = json.dumps(i, sort_keys=True)
+        if key not in built:
+            built[key] = _custom_data(
+                i["metric"], i["agg"], i["source"], i["target_mode"], months, weeks, days,
+                i["current_month"], i["current_week"], i["current_day"], "", i["weight_by"],
+                prefetched=prefetched if prefetched is not None else {}, stored_targets=stored, after=after)
+        results.append(built[key])
+    return {"status": "ok", "results": results}
 
 
 # ── KPI target editing ───────────────────────────────────────────────────────
@@ -1423,60 +1618,119 @@ async def kpi_save_fixed_target(request: Request, user: str = Depends(require_pa
     return {"status": "ok", "fixed": value}
 
 
-KPI_IMPORT_MAX_ROWS = 5000
+KPI_PASTE_MAX_ROWS = 5000
+
+# A chart that keeps its own target (a ratio chart, or one with added metrics)
+# stores its per-date targets under its own id, not a metric: its figures are
+# the chart's result (e.g. a conversion %), which no single metric holds.
+# Keyed by id rather than title, so renaming the chart keeps them.
+_ROW_ID = r"[A-Za-z0-9_-]{1,40}"
 
 
-@router.post("/kpi/metric-target/import")
-async def kpi_import_targets(request: Request, user: str = Depends(require_page_api('kpi'))):
-    """Body: {"source", "metric", "rows": [{"date": "YYYY-MM-DD", "value": number}, ...]}.
+def _kpi_row_target_key(row_id: str) -> str:
+    return f"kpi:row:{row_id}"
 
-    Only the dates in the file are written: a stored date is overwritten, a new
-    one is added, and every other stored date is left alone.
-    """
-    if not is_admin(user):
-        return {"status": "error", "message": "Only the admin can change KPI targets"}
-    body = await request.json()
-    source, metric = body.get('source'), body.get('metric')
+
+def _target_dates_key(source, metric, row_id) -> tuple[str | None, str | None]:
+    """(key, error) for a per-date target list: a metric's, or a chart's own."""
+    if row_id is not None:
+        if not isinstance(row_id, str) or not re.fullmatch(_ROW_ID, row_id):
+            return None, "bad chart id"
+        return _kpi_row_target_key(row_id), None
     if source == "snowflake" and isinstance(metric, str):
         metric = metric.upper()
     error = _validate_metric(source, metric)
     if error:
+        return None, error
+    return _kpi_target_key("import", source, metric), None
+
+
+@router.get("/kpi/target-dates")
+def kpi_get_target_dates(request: Request, source: str = None, metric: str = None, row_id: str = None,
+                         user: str = Depends(require_page_api('kpi'))):
+    """Every stored per-date target for a metric (source + metric) or for a
+    chart's own target (row_id), oldest first: {rows: [[date, value], ...]}."""
+    key, error = _target_dates_key(source, metric, row_id)
+    if error:
         return {"status": "error", "message": error}
-    raw_rows = body.get('rows') or []
-    if not raw_rows:
-        return {"status": "error", "message": "The file has no rows"}
-    if len(raw_rows) > KPI_IMPORT_MAX_ROWS:
-        return {"status": "error", "message": f"Too many rows (limit {KPI_IMPORT_MAX_ROWS})"}
+    try:
+        with get_prod_pricer_connection() as conn:
+            by_date = get_chart_targets(conn, [key], datetime.date(1900, 1, 1),
+                                        datetime.date(2999, 12, 31)).get(key, {})
+    except Exception as e:
+        logger.error("Reading KPI target dates failed for %s: %s", key, e)
+        return {"status": "error", "message": str(e)}
+    return {"status": "ok", "rows": [[d.isoformat(), v] for d, v in sorted(by_date.items())]}
+
+
+@router.post("/kpi/target-dates")
+async def kpi_save_target_dates(request: Request, user: str = Depends(require_page_api('kpi'))):
+    """Body: {"source", "metric", "rows": [{"date", "value"}]} or {"row_id", "rows"}.
+
+    Replaces the whole list: the box on the page shows every stored date, so a
+    date taken out of it is removed. Empty rows removes them all.
+    """
+    if not is_admin(user):
+        return {"status": "error", "message": "Only the admin can change KPI targets"}
+    body = await request.json()
+    key, error = _target_dates_key(body.get('source'), body.get('metric'), body.get('row_id'))
+    if error:
+        return {"status": "error", "message": error}
+    raw_rows = body.get('rows')
+    if not isinstance(raw_rows, list):
+        return {"status": "error", "message": "bad rows"}
+    if len(raw_rows) > KPI_PASTE_MAX_ROWS:
+        return {"status": "error", "message": f"Too many rows (limit {KPI_PASTE_MAX_ROWS})"}
 
     by_date = {}
     for index, row in enumerate(raw_rows, start=1):
+        if not isinstance(row, dict):
+            return {"status": "error", "message": f"Row {index}: bad row"}
         try:
             d = datetime.date.fromisoformat(str(row.get('date')))
-        except (TypeError, ValueError, AttributeError):
+        except (TypeError, ValueError):
             return {"status": "error", "message": f"Row {index}: bad date {row.get('date')!r}"}
         value, error = _target_value_or_error(row.get('value'))
         if error:
             return {"status": "error", "message": f"Row {index} ({d}): {error}"}
-        # A date repeated in the file: the later row wins, as it would in the sheet.
+        if d in by_date:
+            return {"status": "error", "message": f"{d} is in the list twice"}
         by_date[d] = value
 
-    key = _kpi_target_key("import", source, metric)
     try:
         with get_prod_pricer_connection() as conn:
-            upsert_chart_target_dates(conn, key, sorted(by_date.items()), user)
-            summary = get_chart_target_summary(conn, key)
+            replace_chart_target_dates(conn, key, sorted(by_date.items()), user)
     except Exception as e:
-        logger.error("Importing KPI targets failed for %s:%s: %s", source, metric, e)
-        return {"status": "error", "message": f"Import failed: {e}"}
-    return {
-        "status": "ok",
-        "written": len(by_date),
-        "imported": None if not summary else {
-            "count": summary['count'],
-            "first": summary['first'].isoformat(),
-            "last": summary['last'].isoformat(),
-        },
-    }
+        logger.error("Saving KPI target dates failed for %s: %s", key, e)
+        return {"status": "error", "message": f"Save failed: {e}"}
+    return {"status": "ok", "count": len(by_date)}
+
+
+@router.get("/kpi/targets/overview")
+def kpi_targets_overview(request: Request, user: str = Depends(require_page_api('kpi'))):
+    """Every stored KPI target, for the Targets tab in Settings:
+    [{kind: fixed|dates|row, source, metric, row_id, count, first, last, value}].
+    A fixed figure is one value stored across many dates, so it comes back as
+    that value; per-date lists come back as a count and date range."""
+    try:
+        with get_prod_pricer_connection() as conn:
+            rows = get_chart_target_overview(conn, "kpi:")
+    except Exception as e:
+        logger.error("Reading KPI target overview failed: %s", e)
+        return {"status": "error", "message": str(e)}
+    out = []
+    for key, count, first, last, low, high in rows:
+        parts = key.split(":", 3)
+        item = {"count": count, "first": first.isoformat(), "last": last.isoformat(),
+                "value": float(low) if low == high else None}
+        if parts[1] == "row" and len(parts) == 3:
+            item.update(kind="row", row_id=parts[2])
+        elif parts[1] in ("fixed", "import") and len(parts) == 4:
+            item.update(kind="fixed" if parts[1] == "fixed" else "dates", source=parts[2], metric=parts[3])
+        else:
+            continue
+        out.append(item)
+    return {"status": "ok", "targets": out}
 
 
 # ── Layout and settings ──────────────────────────────────────────────────────
@@ -1537,6 +1791,8 @@ def _validate_stacked_row(row: dict) -> str | None:
             return f"bad {flag}"
     if row.get("divide_by") is not None or row.get("weight_by") is not None:
         return "A stacked chart cannot be divided or weighted"
+    if row.get("metric_plus") or row.get("divide_plus"):
+        return "A stacked chart cannot have added metrics"
     if row.get("target_mode", "none") not in ("none", "fixed"):
         return "A stacked chart's target must be none or fixed"
     target = row.get("stack_target")
@@ -1569,8 +1825,12 @@ def _validate_themes(themes) -> str | None:
         return "At most 30 colour themes"
     ids = set()
     for t in themes:
-        if not isinstance(t, dict) or set(t) - {"id", "name", "colours"}:
+        if not isinstance(t, dict) or set(t) - {"id", "name", "colours", "transparency"}:
             return "bad theme"
+        # How see-through the theme's colours are, 0 (solid) to 90 %.
+        transparency = t.get("transparency", 0)
+        if isinstance(transparency, bool) or not isinstance(transparency, int) or not 0 <= transparency <= 90:
+            return f"{t.get('name')}: transparency must be 0 to 90 %"
         theme_id, name, colours = t.get("id"), t.get("name"), t.get("colours")
         if not isinstance(theme_id, str) or not re.fullmatch(r"[a-z0-9_-]{1,40}", theme_id) or theme_id in ids:
             return "bad theme id"
@@ -1602,6 +1862,101 @@ def kpi_themes_save(request: Request, payload: dict, user: str = Depends(require
     return {"status": "ok", "themes": themes}
 
 
+# Display names for raw columns, shared by every chart: {"source|column": name},
+# e.g. {"snowflake|AT_PORTAL_ENQUIRIES": "AT enquiries"}. Typed in a chart's
+# series list or in Settings > Column Names. Until first saved, it is built
+# from the names already typed on stacked chart series.
+# SharePoint columns are spreadsheet headers, so any printable text.
+_METRIC_NAME_KEY = r"(snowflake|sharepoint)\|[^\x00-\x1f]{1,150}"
+
+
+def _seed_metric_names(layout: dict) -> dict:
+    names = {}
+    for row in layout.get("rows", []):
+        for s in row.get("series") or []:
+            label = (s.get("label") or "").strip()
+            if label and s.get("metric"):
+                names.setdefault(f"{s.get('source', 'snowflake')}|{s['metric']}", label)
+    return names
+
+
+def _validate_metric_names(names) -> str | None:
+    if not isinstance(names, dict) or len(names) > 500:
+        return "bad column names"
+    for key, name in names.items():
+        if not isinstance(key, str) or not re.fullmatch(_METRIC_NAME_KEY, key):
+            return f"bad column: {key}"
+        if not isinstance(name, str) or not name.strip() or len(name) > 60:
+            return f"{key.split('|', 1)[-1]}: names must be 1 to 60 characters"
+    return None
+
+
+@router.post("/kpi/metric-names")
+def kpi_metric_names_save(request: Request, payload: dict, user: str = Depends(require_page_api('kpi'))):
+    """The shared column display names. Admin only. Replaces the whole list."""
+    if not is_admin(user):
+        return {"status": "error", "message": "Only the admin can change column names"}
+    names = (payload or {}).get("names")
+    err = _validate_metric_names(names)
+    if err:
+        return {"status": "error", "message": err}
+    names = {k: v.strip() for k, v in names.items()}
+    try:
+        _write_kpi_layout_value('metric_names', names)
+    except Exception as e:
+        logger.error(f"KPI column names save failed: {e}")
+        return {"status": "error", "message": str(e)}
+    return {"status": "ok", "names": names}
+
+
+# A calculated target (target_mode "calc", plain line charts only): two other
+# targets combined, target_calc = {"a": ref, "op": "times" | "divide", "b": ref},
+# e.g. orders = enquiries target x conversion % target, or average price =
+# revenue target / orders target. The page works it out (kpi_targets.js). A ref:
+#   {"kind": "metric", "source", "metric", "mode": "import" | "fixed" | "snowflake"}
+#   {"kind": "chart", "row_id"}   that chart's own target, as it draws it
+#   {"kind": "value", "value"}    a typed figure (12% is 0.12)
+_CALC_REF_MODES = ("import", "fixed", "snowflake")
+
+
+def _validate_calc_ref(ref, row_id) -> str | None:
+    if not isinstance(ref, dict):
+        return "bad calculated target"
+    kind = ref.get("kind")
+    if kind == "metric":
+        if ref.get("mode") not in _CALC_REF_MODES:
+            return "bad calculated target source"
+        return _validate_layout_metric(ref.get("source", "snowflake"), ref.get("metric"))
+    if kind == "chart":
+        ref_id = ref.get("row_id")
+        if not isinstance(ref_id, str) or not re.fullmatch(_ROW_ID, ref_id):
+            return "bad calculated target chart"
+        if ref_id == row_id:
+            return "A calculated target cannot use its own chart"
+        return None
+    if kind == "value":
+        value = ref.get("value")
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            return "The calculated target's figure must be a number"
+        return None
+    return "bad calculated target"
+
+
+def _validate_target_calc(row: dict) -> str | None:
+    calc = row.get("target_calc")
+    if row.get("target_mode") != "calc":
+        return "target_calc is only for a calculated target" if calc is not None else None
+    if row.get("chart_type", "line") != "line" or row.get("divide_by") or row.get("metric_plus"):
+        return "Only a plain line chart can have a calculated target"
+    if not isinstance(calc, dict) or calc.get("op") not in ("times", "divide"):
+        return "bad calculated target"
+    for side in ("a", "b"):
+        error = _validate_calc_ref(calc.get(side), row.get("id"))
+        if error:
+            return error
+    return None
+
+
 def _validate_layout(layout: dict, sections: list) -> str | None:
     """Return an error message if the layout payload is invalid, else None."""
     rows = layout.get("rows") if isinstance(layout, dict) else None
@@ -1627,6 +1982,9 @@ def _validate_layout(layout: dict, sections: list) -> str | None:
             return "bad subtitle"
         if not isinstance(row.get("invert", False), bool):
             return "bad invert"
+        # Hidden in Settings > Charts: kept, but not shown or loaded.
+        if not isinstance(row.get("hidden", False), bool):
+            return "bad hidden"
         # Which current (part-elapsed) periods to show: {"m": bool, "w": bool,
         # "d": bool}. Rows saved before the day option hold a single bool,
         # meaning month and week.
@@ -1643,7 +2001,7 @@ def _validate_layout(layout: dict, sections: list) -> str | None:
         decimals = row.get("decimals", 0)
         if not isinstance(decimals, int) or not (0 <= decimals <= 3):
             return f"bad decimals: {decimals}"
-        if row.get("target_mode", "snowflake") not in KPI_TARGET_MODES:
+        if row.get("target_mode", "snowflake") not in KPI_TARGET_MODES + ("inputs", "calc"):
             return f"bad target mode: {row.get('target_mode')}"
         # Vertical axis minimum and maximum per period (m/w/d). Missing or null
         # minimum = start at 0; missing or null maximum = worked out from the data.
@@ -1661,8 +2019,11 @@ def _validate_layout(layout: dict, sections: list) -> str | None:
             if value is not None and value <= (y_min.get(key) or 0):
                 return "axis maximum must be above its minimum"
         # Ratio chart: the metric divided by a second metric. The page fetches
-        # both and divides; its target is a figure stored on the row itself,
-        # because the stored per-metric targets are for the numerator alone.
+        # both and divides. Its target is one of: a fixed figure stored on the
+        # row itself (ratio_target); "import", per-date figures pasted for the
+        # chart (kpi:row:<id>); or "inputs", each metric's own target (the
+        # source chosen per metric in input_targets) added and divided the same
+        # way as the actuals.
         divide_by = row.get("divide_by")
         if divide_by is not None:
             if not isinstance(divide_by, dict):
@@ -1672,11 +2033,47 @@ def _validate_layout(layout: dict, sections: list) -> str | None:
                 return error
             if row.get("ratio_as", "dec") not in ("dec", "pct"):
                 return f"bad ratio_as: {row.get('ratio_as')}"
-            if row.get("target_mode", "none") not in ("none", "fixed"):
-                return "a ratio chart's target must be none or fixed"
+        # Metrics added to the metric (metric_plus) or to the divide-by metric
+        # (divide_plus), e.g. orders / (calls + emails). Sum charts only: added
+        # averages mean nothing. Like a ratio chart, the target is on the row.
+        for field in ("metric_plus", "divide_plus"):
+            plus = row.get(field)
+            if plus is None:
+                continue
+            if not isinstance(plus, list) or len(plus) > 10:
+                return f"bad {field}"
+            for p in plus:
+                if not isinstance(p, dict):
+                    return f"bad {field}"
+                error = _validate_layout_metric(p.get("source", "snowflake"), p.get("metric"))
+                if error:
+                    return error
+        if row.get("divide_plus") and divide_by is None:
+            return "divide_plus needs divide_by"
+        if row.get("metric_plus") or row.get("divide_plus"):
+            if row.get("agg") != "sum":
+                return "Metrics can only be added together on a Sum chart"
+            if row.get("weight_by") is not None:
+                return "A chart with added metrics cannot be weighted"
+        if divide_by is not None or row.get("metric_plus"):
+            if row.get("target_mode", "none") not in ("none", "fixed", "import", "inputs"):
+                return "a ratio or added-metrics chart's target must be none, fixed, import or inputs"
             ratio_target = row.get("ratio_target")
             if ratio_target is not None and (isinstance(ratio_target, bool) or not isinstance(ratio_target, (int, float))):
                 return "bad ratio_target"
+            input_targets = row.get("input_targets")
+            if input_targets is not None:
+                if not isinstance(input_targets, dict) or len(input_targets) > 22:
+                    return "bad input_targets"
+                for key, mode in input_targets.items():
+                    if not isinstance(key, str) or not re.fullmatch(_METRIC_NAME_KEY, key) \
+                            or mode not in ("fixed", "import", "snowflake"):
+                        return f"bad input target: {key}"
+        elif row.get("target_mode") == "inputs" or row.get("input_targets") is not None:
+            return "Only a ratio or added-metrics chart can take its target from its inputs"
+        error = _validate_target_calc(row)
+        if error:
+            return error
         error = _validate_row_vehicles(row.get("vehicles"))
         if error:
             return error
@@ -1731,6 +2128,8 @@ def _kpi_settings(stored: dict | None) -> dict:
     """Stored settings filled out with defaults and clamped to the limits."""
     merged = {**KPI_DEFAULT_SETTINGS, **(stored or {})}
     settings = {name: _clamp_setting(name, merged[name]) for name in KPI_DEFAULT_SETTINGS}
+    settings.update({name: _colour_setting(name, (stored or {}).get(name)) for name in KPI_COLOUR_SETTINGS})
+    settings["days_total"] = max(settings["days_total"], settings["days_after"] + 1)
     settings["days_window"] = min(settings["days_window"], settings["days_total"])
     return settings
 
@@ -1743,6 +2142,9 @@ def kpi_layout_get(request: Request, user: str = Depends(require_page_api('kpi')
         notes = _read_kpi_layout_value('notes') or []
         sections = _kpi_sections(layout)
         themes = _read_kpi_layout_value('themes') or KPI_DEFAULT_THEMES
+        metric_names = _read_kpi_layout_value('metric_names')
+        if metric_names is None:
+            metric_names = _seed_metric_names(layout)
     except Exception as e:
         # Report it rather than serving an empty layout: the page saves the
         # whole layout in one go, so a save made on an empty one would wipe
@@ -1754,7 +2156,8 @@ def kpi_layout_get(request: Request, user: str = Depends(require_page_api('kpi')
     # now created on the page. Drop them from a layout saved before that.
     layout = {**layout, "rows": [r for r in layout.get("rows", []) if r.get("type") == "custom"]}
     return {"status": "ok", "layout": layout, "sections": sections, "settings": settings,
-            "setting_limits": KPI_SETTING_LIMITS, "notes": notes, "themes": themes}
+            "setting_limits": KPI_SETTING_LIMITS, "notes": notes, "themes": themes,
+            "metric_names": metric_names}
 
 
 # ── Chart notes ──────────────────────────────────────────────────────────────
@@ -1839,6 +2242,40 @@ def kpi_client_error(request: Request, payload: dict, user: str = Depends(requir
     return {"status": "ok"}
 
 
+@router.get("/kpi/at-allowance")
+def kpi_at_allowance(request: Request, user: str = Depends(require_page_api('kpi'))):
+    """Car/Van advert allowance, asked for live from the Autotrader advertisers
+    API on every page load and Load Data so a contract change shows straight
+    away, plus the published / capped / unpublished counts from the latest day
+    in daily_summary (the first Autotrader pull of that morning)."""
+    import requests
+    from list_processor.autotrader_client import AutoTraderClient
+    result = {"status": "ok"}
+    try:
+        result["capacity"] = AutoTraderClient().get_car_van_advert_allowance(requests.Session())
+    except Exception as e:
+        logger.error(f"Autotrader allowance request failed: {e}")
+        result["capacity_error"] = str(e)
+    try:
+        with SnowflakeClient() as sf:
+            rows, _ = sf.execute("""
+                SELECT date, stock_advertised_on_at, stock_capped_on_at,
+                    stock_selectively_not_published_on_at
+                FROM PROD_CARSUPERMARKET_DB.PRODUCT_SLT_KPIS.DAILY_SUMMARY
+                WHERE date <= CURRENT_DATE AND stock_advertised_on_at IS NOT NULL
+                ORDER BY date DESC
+                LIMIT 1
+            """)
+        if rows:
+            day, published, capped, unpublished = rows[0]
+            result["counts"] = {"date": str(day), "published": published,
+                                "capped": capped, "unpublished": unpublished}
+    except Exception as e:
+        logger.error(f"Autotrader advert counts query failed: {e}")
+        result["counts_error"] = str(e)
+    return result
+
+
 def _kpi_sections(layout: dict) -> list:
     """The saved section list, plus any section a chart is in that the list
     is missing (e.g. no list saved yet, so the defaults are used). Without
@@ -1912,20 +2349,25 @@ def kpi_sections_save(request: Request, payload: dict, user: str = Depends(requi
 
 @router.post("/kpi/settings")
 def kpi_settings_save(request: Request, payload: dict, user: str = Depends(require_page_api('kpi'))):
-    """Chart periods and label angle, shared by everyone. Admin only."""
+    """Chart periods, data labels, lines and sizes, shared by everyone. Admin only."""
     if not is_admin(user):
         return {"status": "error", "message": "Only the admin can change the KPI settings"}
     raw = (payload or {}).get("settings") or {}
     for name, (low, high) in KPI_SETTING_LIMITS.items():
         try:
-            value = int(raw.get(name))
+            value = _setting_number(name, raw.get(name))
         except (TypeError, ValueError):
-            return {"status": "error", "message": f"{name} must be a whole number"}
+            return {"status": "error", "message": f"{name} must be a number"}
         if not low <= value <= high:
             return {"status": "error", "message": f"{name} must be between {low} and {high}"}
+    for name in KPI_COLOUR_SETTINGS:
+        if not isinstance(raw.get(name), str) or not re.fullmatch(r"#[0-9a-fA-F]{6}", raw[name]):
+            return {"status": "error", "message": f"{name} must be a colour like #0d3d6e"}
     settings = _kpi_settings(raw)
     if int(raw["days_window"]) > int(raw["days_total"]):
         return {"status": "error", "message": "Days shown cannot be more than the days available"}
+    if int(raw["days_after"]) >= int(raw["days_total"]):
+        return {"status": "error", "message": "Days available must be more than the days after today"}
     try:
         _write_kpi_layout_value('settings', settings)
     except Exception as e:
@@ -2365,10 +2807,14 @@ _kpi_sp_cache_at: float = 0.0
 # spreadsheet itself). Shared key (not env-scoped) so one fetch warms local,
 # dev and prod. The SharePoint API is slow and unreliable — the S3 copy also
 # serves as a stale fallback.
-# The source spreadsheet is refreshed once per day between 08:00 and 09:00 UK,
-# so a cached payload is fresh if fetched after the most recent 09:00 UK.
+# Read once a day: a cached payload is fresh if fetched after the most recent
+# 09:00 UK. The Load Data button also checks each file's last-saved time and
+# re-reads only a file saved since the cached copy (_refresh_sharepoint).
 _SP_S3_BUCKET = "aa-raw-sources-uk"
-_SP_S3_KEY = "applications/pricing/uk-vehicle-list-evaluator/shared/cache/kpi_sharepoint_v5.json"
+_SP_S3_KEY = "applications/pricing/uk-vehicle-list-evaluator/shared/cache/kpi_sharepoint_v6.json"
+
+# Daily spend and enquiries: Table1, every number column.
+_SPEND_URL = "https://carsmkt.sharepoint.com/teams/marketing/Reports/Daily%20Spend%20and%20Enquiries.xlsx"
 
 # The at_data sheet of the Autotrader CTR workbook. Sheet header → metric name.
 # The natural columns are headed "Market Extension natural ..." in the sheet.
@@ -2384,6 +2830,11 @@ _AT_DATA_COLUMNS = {
     "PPC advert views": "at_advert_views_ppc",
     "Market Extension natural advert views": "at_advert_views_natural",
 }
+
+# Load Data click token this server last refreshed for, and a lock so the
+# many chart requests from one click run the check once.
+_sp_refresh_token = ""
+_sp_refresh_lock = threading.Lock()
 
 
 def _sp_cache_is_fresh(cached_at: float) -> bool:
@@ -2420,9 +2871,22 @@ def _sp_s3_save(cached_at: float, date_str: str, data: dict) -> None:
         logger.warning("SharePoint S3 cache write failed: %s", e)
 
 
-def _get_sharepoint_data() -> dict:
-    """Memory cache → S3 cache → SharePoint fetch → stale S3 fallback."""
+def _sp_keep(result: dict) -> dict:
+    """Make result the cached copy, in memory and in S3."""
     global _kpi_sp_cache, _kpi_sp_cache_at
+    now = time.time()
+    _kpi_sp_cache = result
+    _kpi_sp_cache_at = now
+    _sp_s3_save(now, datetime.date.today().isoformat(), result)
+    return result
+
+
+def _get_sharepoint_data(sp_refresh: str = "") -> dict:
+    """Memory cache → S3 cache → SharePoint fetch → stale S3 fallback.
+    sp_refresh: a Load Data click token; see _refresh_sharepoint."""
+    global _kpi_sp_cache, _kpi_sp_cache_at
+    if sp_refresh:
+        _refresh_sharepoint(sp_refresh)
     if _kpi_sp_cache.get("status") == "ok" and _sp_cache_is_fresh(_kpi_sp_cache_at):
         logger.info("KPI SharePoint: serving from memory cache")
         return _kpi_sp_cache
@@ -2442,11 +2906,7 @@ def _get_sharepoint_data() -> dict:
         result = {"status": "error", "message": str(e)}
 
     if result.get("status") == "ok":
-        now = time.time()
-        _kpi_sp_cache = result
-        _kpi_sp_cache_at = now
-        _sp_s3_save(now, datetime.date.today().isoformat(), result)
-        return result
+        return _sp_keep(result)
 
     # SharePoint failed — fall back to the most recent S3 payload if we have one
     if cached and cached.get("status") == "ok":
@@ -2458,65 +2918,103 @@ def _get_sharepoint_data() -> dict:
     return result
 
 
+def _refresh_sharepoint(token: str) -> None:
+    """Load Data button: pick up a spreadsheet saved since the cached copy.
+    Asks SharePoint when each file was last saved (one small call each, run
+    together, no workbook opened) and re-reads only a file that changed. Runs
+    once per click on each server; the click's other chart requests wait for
+    it, then use the result."""
+    global _sp_refresh_token, _kpi_sp_cache, _kpi_sp_cache_at
+    with _sp_refresh_lock:
+        if token == _sp_refresh_token:
+            return
+        _sp_refresh_token = token
+        current = _get_sharepoint_data()
+        if current.get("status") != "ok" or current.get("stale"):
+            return
+        # Another server may have saved a newer copy since this one loaded its own.
+        cached_at, _, cached = _sp_s3_load()
+        if cached and cached.get("status") == "ok" and cached_at > _kpi_sp_cache_at:
+            _kpi_sp_cache, _kpi_sp_cache_at = cached, cached_at
+            current = cached
+        try:
+            modified = _sp_last_modified()
+        except Exception as e:
+            logger.warning("KPI SharePoint: last-saved check failed: %s", e)
+            return
+        old = current.get("modified", {})
+        changed = [k for k in _SP_SOURCES if modified.get(k) != old.get(k)]
+        if not changed:
+            logger.info("KPI SharePoint: no file saved since the cached copy")
+            return
+        logger.info("KPI SharePoint: re-reading %s", ", ".join(changed))
+        parts = dict(current.get("parts", {}))
+        try:
+            with ThreadPoolExecutor(max_workers=len(changed)) as pool:
+                for key, part in zip(changed, pool.map(lambda k: _SP_SOURCES[k][1](), changed)):
+                    parts[key] = part
+        except Exception as e:
+            logger.error("KPI SharePoint re-read failed: %s", e)
+            return
+        result = _combine_sp_parts(parts, modified)
+        if result.get("status") == "ok":
+            _sp_keep(result)
+
+
 def warm_sharepoint_cache() -> None:
     """Refresh the SharePoint KPI cache if stale. Called by the /home cache warmer."""
     _get_sharepoint_data()
     logger.info("Home cache warm (SharePoint KPI) complete")
 
 
-def _build_kpi_sharepoint_data() -> dict:
-    """Fetch Table1 and keep every number column by date. Result is cached in
-    _kpi_sp_cache; /kpi/custom-data turns it into chart series per request, so
-    the chart periods can change without refetching the spreadsheet."""
-    client = SharePointClient()
-    rows = client.get_table_rows(
-        table_name="Table1",
-        sharepoint_url="https://carsmkt.sharepoint.com/teams/marketing/Reports/Daily%20Spend%20and%20Enquiries.xlsx",
-    )
+def _sp_parse_date(val) -> str | None:
+    if val is None or val == "":
+        return None
+    if isinstance(val, (int, float)):
+        try:
+            return (datetime.date(1899, 12, 30) + datetime.timedelta(days=int(val))).isoformat()
+        except Exception:
+            return None
+    s = str(val).strip()[:10]
+    try:
+        datetime.date.fromisoformat(s)
+        return s
+    except ValueError:
+        return None
 
+
+def _sp_number(val):
+    if isinstance(val, bool):
+        return None
+    if isinstance(val, (int, float)):
+        return float(val)
+    try:
+        return float(str(val).strip())
+    except (TypeError, ValueError):
+        return None
+
+
+def _sp_cutoff() -> str:
+    """Far enough back for the longest periods the settings allow plus their
+    N-1 a year earlier: 24 months + 12, or 104 weeks + a year of weeks."""
+    cutoff = datetime.date.today().replace(day=1)
+    for _ in range(38):
+        cutoff = (cutoff - datetime.timedelta(days=1)).replace(day=1)
+    return cutoff.isoformat()
+
+
+def _read_spend_part() -> dict:
+    """Table1 of the daily spend workbook: every number column, by date."""
+    rows = SharePointClient().get_table_rows(table_name="Table1", sharepoint_url=_SPEND_URL)
     if not rows:
-        return {"status": "error", "message": "No rows returned from SharePoint"}
-
+        raise ValueError("No rows returned from SharePoint")
     columns = list(rows[0].keys())
     date_col = next((c for c in columns if c.lower() == "date"), None)
     if not date_col:
-        return {"status": "error", "message": f"Could not find a Date column. Found: {columns}"}
-
-    def _parse_date(val) -> str | None:
-        if val is None or val == "":
-            return None
-        if isinstance(val, (int, float)):
-            try:
-                return (datetime.date(1899, 12, 30) + datetime.timedelta(days=int(val))).isoformat()
-            except Exception:
-                return None
-        s = str(val).strip()[:10]
-        try:
-            datetime.date.fromisoformat(s)
-            return s
-        except ValueError:
-            return None
-
-    def _number(val):
-        if isinstance(val, bool):
-            return None
-        if isinstance(val, (int, float)):
-            return float(val)
-        try:
-            return float(str(val).strip())
-        except (TypeError, ValueError):
-            return None
-
-    # Far enough back for the longest periods the settings allow plus their
-    # N-1 a year earlier: 24 months + 12, or 104 weeks + a year of weeks.
-    today = datetime.date.today()
-    cutoff = today.replace(day=1)
-    for _ in range(38):
-        cutoff = (cutoff - datetime.timedelta(days=1)).replace(day=1)
-    cutoff_str = cutoff.isoformat()
-
-    dated = [(d, row) for d, row in ((_parse_date(row.get(date_col)), row) for row in rows)
-             if d and d >= cutoff_str]
+        raise ValueError(f"Could not find a Date column. Found: {columns}")
+    cutoff = _sp_cutoff()
+    dated = [(d, row) for d, row in ((_sp_parse_date(row.get(date_col)), row) for row in rows)
+             if d and d >= cutoff]
 
     # A number column is one where every filled cell is a number and at least
     # one cell is filled. Text columns (notes, labels) are left out.
@@ -2525,44 +3023,106 @@ def _build_kpi_sharepoint_data() -> dict:
         if col == date_col:
             continue
         filled = [row.get(col) for _, row in dated if row.get(col) not in (None, "")]
-        if filled and all(_number(v) is not None for v in filled):
+        if filled and all(_sp_number(v) is not None for v in filled):
             number_columns.append(col)
 
     by_date: dict[str, dict] = {}
     for d, row in dated:
-        values = {col: _number(row.get(col)) for col in number_columns if row.get(col) not in (None, "")}
+        values = {col: _sp_number(row.get(col)) for col in number_columns if row.get(col) not in (None, "")}
         if values:
             by_date[d] = values
+    return {"columns": number_columns, "by_date": by_date}
 
-    # Autotrader search appearances and advert views, from a second workbook.
-    # A failure here leaves these columns out rather than failing the whole read.
-    try:
-        at_rows = SharePointClient(team_site="/teams/marketing").get_worksheet_values_by_url(
-            _AT_DATA_URL, _AT_DATA_SHEET, max_col="G", max_row=5000,
-        )
-        headers = [str(h).strip() for h in at_rows[0]] if at_rows else []
-        missing = [h for h in [_AT_DATA_DATE_HEADER, *_AT_DATA_COLUMNS] if h not in headers]
-        if missing:
-            raise ValueError(f"at_data headers not found: {missing}. Found: {headers}")
-        date_idx = headers.index(_AT_DATA_DATE_HEADER)
-        col_idx = {metric: headers.index(header) for header, metric in _AT_DATA_COLUMNS.items()}
-        for row in at_rows[1:]:
-            d = _parse_date(row[date_idx])
-            if not d or d < cutoff_str:
-                continue
-            values = {metric: _number(row[i]) for metric, i in col_idx.items() if row[i] not in (None, "")}
-            if values:
-                by_date.setdefault(d, {}).update(values)
-        number_columns.extend(_AT_DATA_COLUMNS.values())
-    except Exception as e:
-        logger.warning("KPI SharePoint: Autotrader CTR at_data read failed: %s", e)
 
+def _read_at_ctr_part() -> dict:
+    """Autotrader search appearances and advert views: the at_data sheet of the
+    CTR workbook, columns A to G only."""
+    at_rows = SharePointClient(team_site="/teams/marketing").get_worksheet_values_by_url(
+        _AT_DATA_URL, _AT_DATA_SHEET, max_col="G", max_row=5000,
+    )
+    headers = [str(h).strip() for h in at_rows[0]] if at_rows else []
+    missing = [h for h in [_AT_DATA_DATE_HEADER, *_AT_DATA_COLUMNS] if h not in headers]
+    if missing:
+        raise ValueError(f"at_data headers not found: {missing}. Found: {headers}")
+    date_idx = headers.index(_AT_DATA_DATE_HEADER)
+    col_idx = {metric: headers.index(header) for header, metric in _AT_DATA_COLUMNS.items()}
+    cutoff = _sp_cutoff()
+    by_date: dict[str, dict] = {}
+    for row in at_rows[1:]:
+        d = _sp_parse_date(row[date_idx])
+        if not d or d < cutoff:
+            continue
+        values = {metric: _sp_number(row[i]) for metric, i in col_idx.items() if row[i] not in (None, "")}
+        if values:
+            by_date[d] = values
+    return {"columns": list(_AT_DATA_COLUMNS.values()), "by_date": by_date}
+
+
+# Each workbook: (its URL, the function that reads it). Read and cached
+# separately, so a change to one does not mean re-reading the other.
+_SP_SOURCES = {
+    "spend": (_SPEND_URL, _read_spend_part),
+    "at_ctr": (_AT_DATA_URL, _read_at_ctr_part),
+}
+
+
+def _sp_last_modified() -> dict:
+    """Each workbook's last-saved time, asked for together."""
+    client = SharePointClient()
+    keys = list(_SP_SOURCES)
+    with ThreadPoolExecutor(max_workers=len(keys)) as pool:
+        times = list(pool.map(lambda k: client.get_last_modified_by_url(_SP_SOURCES[k][0]), keys))
+    return dict(zip(keys, times))
+
+
+def _combine_sp_parts(parts: dict, modified: dict) -> dict:
+    """The cached payload: each workbook's part kept as read, plus every
+    column merged by date for /kpi/custom-data. The spend workbook is
+    required; the Autotrader CTR one is left out if it could not be read."""
+    if "spend" not in parts:
+        return {"status": "error", "message": "Daily spend workbook could not be read"}
+    columns, by_date = [], {}
+    for key in _SP_SOURCES:
+        part = parts.get(key)
+        if not part:
+            continue
+        columns.extend(part["columns"])
+        for d, values in part["by_date"].items():
+            by_date.setdefault(d, {}).update(values)
     return {
         "status": "ok",
-        "fetched": today.isoformat(),
-        "columns": number_columns,
+        "fetched": datetime.date.today().isoformat(),
+        "columns": columns,
         "by_date": by_date,
+        "parts": parts,
+        # Only for parts actually read, so a failed one is tried again next time.
+        "modified": {k: v for k, v in modified.items() if k in parts},
     }
+
+
+def _build_kpi_sharepoint_data() -> dict:
+    """Read both workbooks (together) and combine. Result is cached in
+    _kpi_sp_cache; /kpi/custom-data turns it into chart series per request, so
+    the chart periods can change without refetching the spreadsheets."""
+    try:
+        modified = _sp_last_modified()
+    except Exception as e:
+        logger.warning("KPI SharePoint: last-saved check failed: %s", e)
+        modified = {}
+    keys = list(_SP_SOURCES)
+
+    def read(key):
+        try:
+            return _SP_SOURCES[key][1]()
+        except Exception as e:
+            # The spend workbook failing fails the whole read (in _combine_sp_parts);
+            # the Autotrader one failing leaves its columns out.
+            logger.warning("KPI SharePoint: %s read failed: %s", key, e)
+            return None
+
+    with ThreadPoolExecutor(max_workers=len(keys)) as pool:
+        parts = {k: p for k, p in zip(keys, pool.map(read, keys)) if p is not None}
+    return _combine_sp_parts(parts, modified)
 
 
 @router.get("/weekly-business-review", response_class=HTMLResponse)
