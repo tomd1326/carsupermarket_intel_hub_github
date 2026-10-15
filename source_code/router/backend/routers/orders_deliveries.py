@@ -32,10 +32,6 @@ from utils.snowflake_client import SnowflakeClient
 from .core import (BASE_URL, templates, _track, get_current_user, s3_bucketname,
                    s3_bucket_region, _S3_ENV, is_admin, require_page, require_page_api)
 from .kpi import _cortex_complete, _CORTEX_MODEL
-from utils.email_client import send_email
-
-# Test email button (tdrayson only) sends from and to this address.
-TEST_EMAIL_ADDRESS = "tom.drayson@carsupermarket.com"
 
 logger = logging.getLogger(__name__)
 
@@ -370,35 +366,7 @@ def orders_deliveries_page(request: Request, user: str = Depends(require_page('o
     return templates.TemplateResponse("orders_deliveries.html", {
         "request": request, "user": user, "BASE_URL": BASE_URL,
         "font_summary": font_summary, "font_vehicle": font_vehicle,
-        "show_test_email": is_admin(user),
     })
-
-
-@router.post("/reports/orders-deliveries/test-email")
-def orders_deliveries_test_email(request: Request,
-                                 user: str = Depends(require_page_api('orders_deliveries'))):
-    """Send a test email to Tom, to confirm Graph mail sending works. Admin only.
-
-    Keeps its own admin check ON TOP of the page permission — a diagnostic
-    button, not something granting the page should hand over."""
-    if not is_admin(user):
-        raise HTTPException(status_code=403)
-    _track(request, 'test_email', '/reports/orders-deliveries')
-
-    sent_at = datetime.datetime.now(zoneinfo.ZoneInfo("Europe/London")).strftime('%Y-%m-%d %H:%M:%S')
-    try:
-        send_email(
-            to=TEST_EMAIL_ADDRESS,
-            subject=f"VLE test email - {sent_at}",
-            body_html=(
-                "<p>Test email from the Orders &amp; Deliveries page.</p>"
-                f"<p>Sent at {sent_at} (UK).</p>"
-            ),
-        )
-    except Exception as e:
-        logger.exception("Test email failed")
-        return {"status": "error", "message": str(e)[:300]}
-    return {"status": "ok", "message": f"Sent to {TEST_EMAIL_ADDRESS} at {sent_at}"}
 
 
 @router.get("/reports/orders-deliveries/data")

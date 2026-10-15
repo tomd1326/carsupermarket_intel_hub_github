@@ -1,3 +1,4 @@
+{% from '_navigation.html' import live_users with context %}
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -92,6 +93,7 @@
 </head>
 <body>
     <div class="logout-link d-flex align-items-center gap-2">
+        {{ live_users(user) }}
         <span>{{ user }}</span>
         <span class="text-secondary">·</span>
         <a href="{{ BASE_URL }}/logout" class="text-secondary text-decoration-none"><i class="fas fa-sign-out-alt"></i> Logout</a>

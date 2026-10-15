@@ -167,15 +167,36 @@ SETTINGS_DEFAULTS = {
     'cap_override_enabled':             '0',
     'cap_override_subscriber_id':       '',
     'cap_override_password':            '',
+    # Live users circles beside the Home button (Settings > Live Users).
+    'presence_enabled':                 1,
+    'presence_interval_seconds':        20,
+    'presence_drop_off_seconds':        60,
+    'presence_circle_size':             26,
+    'presence_max_circles':             5,
+    'presence_border_width':            2,
+    'presence_gap':                     4,
+    'presence_border_colour':           '#ffffff',
+    'presence_text_colour':             '#ffffff',
+    'presence_more_colour':             '#64748b',
 }
 
 BOOL_SETTINGS = {'calc_buying_reqs', 'get_stock', 'enable_cars_bought', 'kpi_ai_summary', 'cap_override_enabled'}
+
+# Live users colours, stored as '#rrggbb' text.
+PRESENCE_COLOUR_SETTINGS = {'presence_border_colour', 'presence_text_colour', 'presence_more_colour'}
 
 # Per-user bool settings stored as e.g. calc_buying_reqs__buyer, get_stock__buyer.
 PER_USER_BOOL_SETTINGS = {'calc_buying_reqs', 'get_stock'}
 
 ADMIN_USER = 'admin'
 ALWAYS_ENABLED_USERS = {'admin', 'tdrayson'}
+
+# The admin login comes from core._ADMIN_FALLBACK and may have no row in the
+# users table, so its name and email cannot be saved there. Fixed here instead,
+# and laid over whatever is stored wherever user details are read.
+ADMIN_DETAILS = {
+    'tdrayson': {'first_name': 'Tom', 'last_name': 'Drayson', 'email': 'tom.drayson@carsupermarket.com'},
+}
 
 
 def get_settings(conn, user: str = None) -> dict:
@@ -185,7 +206,8 @@ def get_settings(conn, user: str = None) -> dict:
             rows = cur.fetchall()
         row_map = dict(rows)
         result = dict(SETTINGS_DEFAULTS)
-        STRING_SETTINGS = {'cap_override_subscriber_id', 'cap_override_password'}
+        STRING_SETTINGS = {'cap_override_subscriber_id', 'cap_override_password',
+                           'email_sender', 'email_test_recipient', 'login_mode'} | PRESENCE_COLOUR_SETTINGS
         for key, value in rows:
             if key in BOOL_SETTINGS or key in STRING_SETTINGS or '__' in key:
                 continue
@@ -204,6 +226,12 @@ def get_settings(conn, user: str = None) -> dict:
         result['cap_override_enabled'] = row_map.get('cap_override_enabled', '0') == '1'
         result['cap_override_subscriber_id'] = row_map.get('cap_override_subscriber_id', '')
         result['cap_override_password'] = row_map.get('cap_override_password', '')
+        result['email_sender'] = row_map.get('email_sender', '')
+        result['email_test_recipient'] = row_map.get('email_test_recipient', '')
+        # 'both' = username or email address at login, 'email' = email address only.
+        result['login_mode'] = row_map.get('login_mode', 'both')
+        for key in PRESENCE_COLOUR_SETTINGS:
+            result[key] = row_map.get(key, SETTINGS_DEFAULTS[key])
         # valuation_cache_hours: integer, global.
         try:
             result['valuation_cache_hours'] = int(row_map.get('valuation_cache_hours', SETTINGS_DEFAULTS['valuation_cache_hours']))
@@ -219,6 +247,9 @@ def get_settings(conn, user: str = None) -> dict:
         d['cap_override_enabled'] = False
         d['cap_override_subscriber_id'] = ''
         d['cap_override_password'] = ''
+        d['email_sender'] = ''
+        d['email_test_recipient'] = ''
+        d['login_mode'] = 'both'
         return d
 
 
@@ -466,6 +497,138 @@ def get_active_sessions_all_envs(conn, inactivity_minutes: int = 30) -> list:
         ]
 
 
+# ── Live users on a page ─────────────────────────────────────────────────────
+# One row per open browser tab (a new id on every page load), so two windows
+# on one login on different pages do not overwrite each other. db/16_page_presence.sql
+# is the same table for running by hand.
+
+_page_presence_ready = False
+
+
+def _ensure_page_presence_table(conn) -> None:
+    """Runs once per process: the heartbeat is called every few seconds per
+    tab, so the CREATE/ALTER statements must not run on every call."""
+    global _page_presence_ready
+    if _page_presence_ready:
+        return
+    _ensure_user_detail_columns(conn)   # the list below reads first/last name
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS page_presence (
+                tab_id        VARCHAR(64)  PRIMARY KEY,
+                session_id    VARCHAR(64)  NOT NULL,
+                username      VARCHAR(100) NOT NULL,
+                environment   VARCHAR(10)  NOT NULL,
+                page          VARCHAR(200) NOT NULL,
+                last_seen_at  TIMESTAMP    NOT NULL DEFAULT NOW()
+            )
+            """
+        )
+        # seq and left_tab came after the first version of the table.
+        cur.execute(
+            "ALTER TABLE page_presence "
+            "ADD COLUMN IF NOT EXISTS seq      INTEGER NOT NULL DEFAULT 0, "
+            "ADD COLUMN IF NOT EXISTS left_tab BOOLEAN NOT NULL DEFAULT FALSE"
+        )
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_page_presence_page ON page_presence (environment, page)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_page_presence_last_seen ON page_presence (last_seen_at)")
+    conn.commit()
+    _page_presence_ready = True
+
+
+def touch_page_presence(conn, tab_id: str, seq: int, session_id: str, username: str, environment: str,
+                        page: str, drop_off_seconds: int, only_user: str | None = None) -> list:
+    """Record that this tab is on `page`, then return who else is on it.
+
+    Returns [(username, first_name, last_name)], one entry per person however
+    many tabs they have open, seen within drop_off_seconds. only_user limits
+    the list to that one person.
+
+    seq goes up by one with every message a tab sends. A message only counts
+    if its seq is higher than the last one stored, so a heartbeat that arrives
+    after the tab's leave message cannot bring the tab back."""
+    _ensure_page_presence_table(conn)
+    with conn.cursor() as cur:
+        # The username check stops a tab id sent by one user taking over another's row.
+        # NOT EXISTS: a heartbeat sent with the old cookie after logout is ignored
+        # (the session cookie itself cannot be withdrawn once sent).
+        cur.execute(
+            """
+            INSERT INTO page_presence (tab_id, session_id, username, environment, page, last_seen_at, seq, left_tab)
+            SELECT %s, %s, %s, %s, %s, NOW(), %s, FALSE
+            WHERE NOT EXISTS (
+                SELECT 1 FROM user_sessions WHERE session_id = %s AND logout_at IS NOT NULL
+            )
+            ON CONFLICT (tab_id) DO UPDATE
+                SET page = EXCLUDED.page, last_seen_at = NOW(), seq = EXCLUDED.seq, left_tab = FALSE
+                WHERE page_presence.username = EXCLUDED.username
+                  AND EXCLUDED.seq > page_presence.seq
+            """,
+            (tab_id, session_id, username, environment, page, seq, session_id),
+        )
+        # Rows from tabs that closed without saying so.
+        cur.execute("DELETE FROM page_presence WHERE last_seen_at < NOW() - INTERVAL '1 hour'")
+        cur.execute(
+            """
+            SELECT p.username, MAX(u.first_name), MAX(u.last_name)
+            FROM page_presence p
+            LEFT JOIN users u ON u.username = p.username
+            WHERE p.environment = %s
+              AND p.page = %s
+              AND NOT p.left_tab
+              AND p.last_seen_at >= NOW() - (INTERVAL '1 second' * %s)
+              AND (%s IS NULL OR p.username = %s)
+            GROUP BY p.username
+            ORDER BY p.username
+            """,
+            (environment, page, drop_off_seconds, only_user, only_user),
+        )
+        rows = [
+            (u, ADMIN_DETAILS[u]['first_name'], ADMIN_DETAILS[u]['last_name']) if u in ADMIN_DETAILS else (u, f, l)
+            for u, f, l in cur.fetchall()
+        ]
+    conn.commit()
+    return rows
+
+
+def mark_page_presence_left(conn, tab_id: str, seq: int, session_id: str, username: str,
+                            environment: str) -> None:
+    """The tab was closed, hidden or left: take it off straight away.
+
+    Marks the row rather than deleting it, so its seq is kept and a late
+    heartbeat with a lower seq is still ignored. Inserts a marked row if the
+    leave arrives before the tab's first heartbeat. Same seq rule as
+    touch_page_presence, so a late leave cannot remove a tab that came back."""
+    _ensure_page_presence_table(conn)
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO page_presence (tab_id, session_id, username, environment, page, last_seen_at, seq, left_tab)
+            VALUES (%s, %s, %s, %s, '', NOW(), %s, TRUE)
+            ON CONFLICT (tab_id) DO UPDATE
+                SET seq = EXCLUDED.seq, left_tab = TRUE
+                WHERE page_presence.username = EXCLUDED.username
+                  AND EXCLUDED.seq > page_presence.seq
+            """,
+            (tab_id, session_id, username, environment, seq),
+        )
+    conn.commit()
+
+
+def remove_session_presence(conn, session_id: str) -> None:
+    """Logout: every tab on that login. Marked with the highest possible seq
+    rather than deleted, so no heartbeat still on its way can bring one back.
+    The 1-hour cleanup in touch_page_presence deletes them later."""
+    _ensure_page_presence_table(conn)
+    with conn.cursor() as cur:
+        cur.execute(
+            "UPDATE page_presence SET left_tab = TRUE, seq = 2147483647 WHERE session_id = %s",
+            (session_id,),
+        )
+    conn.commit()
+
+
 # ── User management (always prod) ────────────────────────────────────────────
 
 def load_all_users(conn) -> dict:
@@ -504,10 +667,26 @@ def load_user_details(conn) -> dict:
     _ensure_user_detail_columns(conn)
     with conn.cursor() as cur:
         cur.execute("SELECT username, first_name, last_name, email FROM users")
-        return {
+        details = {
             row[0]: {'first_name': row[1] or '', 'last_name': row[2] or '', 'email': row[3] or ''}
             for row in cur.fetchall()
         }
+    for username, fixed in ADMIN_DETAILS.items():
+        details[username] = dict(fixed)
+    return details
+
+
+def find_usernames_by_email(conn, email: str) -> list:
+    """Usernames with this email (case-insensitive). More than one when
+    accounts share an address."""
+    _ensure_user_detail_columns(conn)
+    with conn.cursor() as cur:
+        cur.execute("SELECT username FROM users WHERE LOWER(email) = LOWER(%s)", (email.strip(),))
+        usernames = [row[0] for row in cur.fetchall()]
+    for username, fixed in ADMIN_DETAILS.items():
+        if fixed['email'].lower() == email.strip().lower() and username not in usernames:
+            usernames.append(username)
+    return usernames
 
 
 def update_user_details(conn, details: dict) -> None:

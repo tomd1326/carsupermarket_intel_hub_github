@@ -892,7 +892,9 @@ def kpi_ga4_campaign_conversion(
 # No daily_summary column is named in this file except the exclusions below;
 # the weekly/monthly rollup default is guessed from the column name.
 
-KPI_SOURCES = ("snowflake", "sharepoint")
+#   autotrader - allowance and cost figures worked out from Settings > Autotrader
+#                (see _AT_METRICS)
+KPI_SOURCES = ("snowflake", "sharepoint", "autotrader")
 
 # daily_summary columns that are not metrics: the date itself, its text
 # labels, and the N-1 / target companions of each metric.
@@ -990,6 +992,9 @@ def _validate_metric(source: str, metric: str) -> str | None:
     if source == "snowflake":
         if metric not in _snowflake_metric_columns():
             return f"Unknown metric: {metric}"
+    elif source == "autotrader":
+        if metric not in _AT_METRICS:
+            return f"Unknown Autotrader setting: {metric}"
     else:
         # Only checked against the list when the SharePoint data is already in
         # memory — reading it can mean a slow SharePoint fetch, which a layout
@@ -1035,6 +1040,15 @@ def kpi_metrics(request: Request, user: str = Depends(require_page_api('kpi'))):
             "has_n1": True,
             "has_target": False,
         })
+    for col, description in _AT_METRICS.items():
+        metrics.append({
+            "source": "autotrader",
+            "column": col,
+            "description": description,
+            "suggested_agg": "avg",
+            "has_n1": True,
+            "has_target": False,
+        })
     return {"status": "ok", "metrics": metrics}
 
 
@@ -1069,6 +1083,9 @@ KPI_DEFAULT_SETTINGS = {
     "main_line_px": 2.5,     # the chart's own line
     "n1_line_px": 1.5,       # last year
     "target_line_px": 1.5,   # target, line and stacked charts
+    # 1 = every user sees the Targets button and can set a chart's fixed or
+    # per-date target; 0 = the admin only (Settings > Targets).
+    "targets_for_all": 1,
 }
 
 # Line colours, #rrggbb. Kept apart from the number settings above.
@@ -1100,6 +1117,7 @@ KPI_SETTING_LIMITS = {
     "main_line_px": (0.5, 8),
     "n1_line_px": (0.5, 8),
     "target_line_px": (0.5, 8),
+    "targets_for_all": (0, 1),
 }
 
 
@@ -1281,7 +1299,8 @@ def _custom_data(metric: str, agg: str, source: str, target_mode: str, months: i
                  days: int, current_month: bool, current_week: bool, current_day: bool,
                  sp_refresh: str = "", weight_by: str = "",
                  prefetched: dict | None = None, stored_targets: dict | None = None,
-                 after: tuple | None = None) -> dict:
+                 after: tuple | None = None, multiply_source: str = "", multiply_metric: str = "",
+                 at_values=None) -> dict:
     """Daily/weekly/monthly series for one metric, plus its N-1 and target.
     current_month / current_week / current_day: also fill the current
     (part-elapsed) month, week or day. Today only has stock figures in
@@ -1296,13 +1315,25 @@ def _custom_data(metric: str, agg: str, source: str, target_mode: str, months: i
     otherwise count as much as a 20-order day).
     prefetched: {date: {COLUMN: value}} already read from daily_summary for the
     whole load (see kpi_custom_data_batch); without it this reads its own.
-    stored_targets: {target key: {date: value}} already read, likewise."""
+    stored_targets: {target key: {date: value}} already read, likewise.
+    multiply_source / multiply_metric: Multiply By. Each day's figure (and its
+    target) is multiplied by the second metric's figure for the same day,
+    before the days are added or averaged into weeks and months, so e.g.
+    slots x cost per slot per day, as a Sum, gives the right cost for any
+    week or month.
+    at_values: _at_setting_values() already built for the whole load."""
     if source == "snowflake":
         metric = metric.upper()
         weight_by = weight_by.upper()
+    if multiply_source == "snowflake":
+        multiply_metric = multiply_metric.upper()
     error = _validate_metric(source, metric)
     if error:
         return {"status": "error", "message": error}
+    if multiply_metric:
+        error = _validate_metric(multiply_source, multiply_metric)
+        if error:
+            return {"status": "error", "message": f"Multiply by: {error}"}
     if agg not in ("sum", "avg"):
         return {"status": "error", "message": f"Unknown agg: {agg}"}
     if weight_by:
@@ -1339,35 +1370,54 @@ def _custom_data(metric: str, agg: str, source: str, target_mode: str, months: i
             total = sum(known)
             return _round(total if agg == 'sum' else total / len(known))
 
-        target_col = None
+        target_col = _target_column(metric) if source == "snowflake" else None
         stale_date = None
-        if source == "snowflake":
-            # N-1 is looked up from the metric's own history (below), the same
-            # way for both sources, so the <METRIC>_N_MINUS_1 column is not read.
-            # It also only runs to yesterday, which left future days blank.
-            target_col = _target_column(metric)
-            if prefetched is None:
-                # All column names come from the live column list — safe to interpolate
-                fetch_start, fetch_end = _ds_fetch_range(today, months, weeks, days, after)
-                prefetched = _fetch_daily_summary(
-                    [metric] + ([target_col] if target_col else []) + ([weight_by] if weight_by else []),
-                    fetch_start, fetch_end)
-            by_date: dict = {
-                d: {
-                    'v': _num(row.get(metric)),
-                    't': _num(row.get(target_col)) if target_col else None,
-                    'w': _num(row.get(weight_by)) if weight_by else None,
-                }
-                for d, row in prefetched.items()
-            }
-            value_at = lambda d: by_date.get(d, {}).get('v')
-        else:
+        sources = {source, multiply_source} if multiply_metric else {source}
+        if "snowflake" in sources and prefetched is None:
+            # All column names come from the live column list — safe to interpolate
+            fetch_start, fetch_end = _ds_fetch_range(today, months, weeks, days, after)
+            columns = ([metric] if source == "snowflake" else []) + ([target_col] if target_col else []) \
+                + ([weight_by] if weight_by else []) \
+                + ([multiply_metric] if multiply_metric and multiply_source == "snowflake" else [])
+            prefetched = _fetch_daily_summary(columns, fetch_start, fetch_end)
+        sp_by_date = {}
+        if "sharepoint" in sources:
             sp = _get_sharepoint_data(sp_refresh)
             if sp.get("status") != "ok":
                 return {"status": "error", "message": sp.get("message", "SharePoint data unavailable")}
             stale_date = sp.get("stale_date") if sp.get("stale") else None
             sp_by_date = sp.get("by_date", {})
-            value_at = lambda d: _num(sp_by_date.get(d.isoformat(), {}).get(metric))
+        if "autotrader" in sources and at_values is None:
+            at_values = _at_setting_values()
+
+        # One metric's figure for one day, from whichever source it is in.
+        # N-1 is looked up from the metric's own history (below), the same way
+        # for every source, so the <METRIC>_N_MINUS_1 column is not read.
+        def lookup(src, met):
+            if src == "snowflake":
+                return lambda d: _num((prefetched.get(d) or {}).get(met))
+            if src == "autotrader":
+                return lambda d: _num(at_values(d, met))
+            return lambda d: _num(sp_by_date.get(d.isoformat(), {}).get(met))
+
+        base_at = lookup(source, metric)
+        if multiply_metric:
+            factor_at = lookup(multiply_source, multiply_metric)
+
+            def times(v, d):
+                f = factor_at(d) if v is not None else None
+                return v * f if f is not None else None
+            value_at = lambda d: times(base_at(d), d)
+        else:
+            times = lambda v, d: v
+            value_at = base_at
+        by_date: dict = {
+            d: {
+                't': times(_num(row.get(target_col)), d) if target_col else None,
+                'w': _num(row.get(weight_by)) if weight_by else None,
+            }
+            for d, row in (prefetched or {}).items()
+        }
 
         # One week's or month's figure from its days. With weight_by, each
         # day's average counts in proportion to that day's count: sum(average
@@ -1488,12 +1538,18 @@ def kpi_custom_data_batch(request: Request, payload: dict, user: str = Depends(r
         weight_by = str(item.get("weight_by") or "")
         if source == "snowflake":
             metric, weight_by = metric.upper(), weight_by.upper()
+        multiply_source = str(item.get("multiply_source") or "snowflake")
+        multiply_metric = str(item.get("multiply_metric") or "")
+        if multiply_source == "snowflake":
+            multiply_metric = multiply_metric.upper()
         return {"source": source, "metric": metric, "agg": item.get("agg", "sum"),
                 "target_mode": item.get("target_mode", "snowflake"),
                 "current_month": bool(item.get("current_month")),
                 "current_week": bool(item.get("current_week")),
                 "current_day": bool(item.get("current_day")),
-                "weight_by": weight_by}
+                "weight_by": weight_by,
+                "multiply_source": multiply_source if multiply_metric else "",
+                "multiply_metric": multiply_metric}
 
     items = [norm(i) for i in items]
 
@@ -1505,6 +1561,8 @@ def kpi_custom_data_batch(request: Request, payload: dict, user: str = Depends(r
         live = set(_snowflake_metric_columns())
         columns = []
         for i in items:
+            if i["multiply_source"] == "snowflake" and i["multiply_metric"] in live:
+                columns.append(i["multiply_metric"])
             if i["source"] != "snowflake" or i["metric"] not in live:
                 continue
             columns.append(i["metric"])
@@ -1532,8 +1590,11 @@ def kpi_custom_data_batch(request: Request, payload: dict, user: str = Depends(r
                 stored = get_chart_targets(conn, keys, start, end)
 
         # SharePoint once (and its Load Data check once), before the items use it.
-        if any(i["source"] == "sharepoint" for i in items):
+        used = {i["source"] for i in items} | {i["multiply_source"] for i in items}
+        if "sharepoint" in used:
             _get_sharepoint_data(sp_refresh)
+        # Autotrader settings and allowance history read once for every item.
+        at_values = _at_setting_values() if "autotrader" in used else None
     except Exception as e:
         logger.error(f"KPI batch data failed: {e}")
         return {"status": "error", "message": str(e)}
@@ -1547,7 +1608,9 @@ def kpi_custom_data_batch(request: Request, payload: dict, user: str = Depends(r
             built[key] = _custom_data(
                 i["metric"], i["agg"], i["source"], i["target_mode"], months, weeks, days,
                 i["current_month"], i["current_week"], i["current_day"], "", i["weight_by"],
-                prefetched=prefetched if prefetched is not None else {}, stored_targets=stored, after=after)
+                prefetched=prefetched if prefetched is not None else {}, stored_targets=stored, after=after,
+                multiply_source=i["multiply_source"], multiply_metric=i["multiply_metric"],
+                at_values=at_values)
         results.append(built[key])
     return {"status": "ok", "results": results}
 
@@ -1589,9 +1652,12 @@ def kpi_get_metric_target(request: Request, source: str, metric: str,
 
 @router.post("/kpi/metric-target/fixed")
 async def kpi_save_fixed_target(request: Request, user: str = Depends(require_page_api('kpi'))):
-    """Body: {"source", "metric", "value": number|null}. null removes the fixed figure."""
-    if not is_admin(user):
-        return {"status": "error", "message": "Only the admin can change KPI targets"}
+    """Body: {"source", "metric", "value": number|null}. null removes the fixed
+    figure. Open to every KPI user while targets_for_all is on, from the
+    Targets popup."""
+    refused = _targets_refused(user)
+    if refused:
+        return {"status": "error", "message": refused}
     body = await request.json()
     source, metric = body.get('source'), body.get('metric')
     if source == "snowflake" and isinstance(metric, str):
@@ -1668,10 +1734,12 @@ async def kpi_save_target_dates(request: Request, user: str = Depends(require_pa
     """Body: {"source", "metric", "rows": [{"date", "value"}]} or {"row_id", "rows"}.
 
     Replaces the whole list: the box on the page shows every stored date, so a
-    date taken out of it is removed. Empty rows removes them all.
+    date taken out of it is removed. Empty rows removes them all. Open to
+    every KPI user while targets_for_all is on, from the Targets popup.
     """
-    if not is_admin(user):
-        return {"status": "error", "message": "Only the admin can change KPI targets"}
+    refused = _targets_refused(user)
+    if refused:
+        return {"status": "error", "message": refused}
     body = await request.json()
     key, error = _target_dates_key(body.get('source'), body.get('metric'), body.get('row_id'))
     if error:
@@ -1793,8 +1861,8 @@ def _validate_stacked_row(row: dict) -> str | None:
         return "A stacked chart cannot be divided or weighted"
     if row.get("metric_plus") or row.get("divide_plus"):
         return "A stacked chart cannot have added metrics"
-    if row.get("target_mode", "none") not in ("none", "fixed"):
-        return "A stacked chart's target must be none or fixed"
+    if row.get("target_mode", "none") not in ("none", "fixed", "import"):
+        return "A stacked chart's target must be none, fixed or per date"
     target = row.get("stack_target")
     if target is not None and (isinstance(target, bool) or not isinstance(target, (int, float))):
         return "bad stack_target"
@@ -1867,7 +1935,7 @@ def kpi_themes_save(request: Request, payload: dict, user: str = Depends(require
 # series list or in Settings > Column Names. Until first saved, it is built
 # from the names already typed on stacked chart series.
 # SharePoint columns are spreadsheet headers, so any printable text.
-_METRIC_NAME_KEY = r"(snowflake|sharepoint)\|[^\x00-\x1f]{1,150}"
+_METRIC_NAME_KEY = r"(snowflake|sharepoint|autotrader)\|[^\x00-\x1f]{1,150}"
 
 
 def _seed_metric_names(layout: dict) -> dict:
@@ -1996,7 +2064,7 @@ def _validate_layout(layout: dict, sections: list) -> str | None:
             return "bad include_current"
         if not isinstance(row.get("data_labels", True), bool):
             return "bad data_labels"
-        if row.get("fmt", "num") not in ("num", "pct", "pct100", "k", "km"):
+        if row.get("fmt", "num") not in ("num", "pct", "pct100", "k", "km", "gbp", "gbpkm"):
             return f"bad fmt: {row.get('fmt')}"
         decimals = row.get("decimals", 0)
         if not isinstance(decimals, int) or not (0 <= decimals <= 3):
@@ -2018,6 +2086,17 @@ def _validate_layout(layout: dict, sections: list) -> str | None:
         for key, value in (row.get("y_max") or {}).items():
             if value is not None and value <= (y_min.get(key) or 0):
                 return "axis maximum must be above its minimum"
+        # Multiply By: each day of the metric times the same day of a second
+        # metric, worked out on the server (_custom_data). Plain charts only.
+        multiply_by = row.get("multiply_by")
+        if multiply_by is not None:
+            if not isinstance(multiply_by, dict) or set(multiply_by) - {"source", "metric"}:
+                return "bad multiply_by"
+            error = _validate_layout_metric(multiply_by.get("source", "snowflake"), multiply_by.get("metric"))
+            if error:
+                return error
+            if row.get("divide_by") or row.get("metric_plus") or row.get("chart_type") == "stacked":
+                return "Multiply By can only be used on a plain chart, without Divided By or added metrics"
         # Ratio chart: the metric divided by a second metric. The page fetches
         # both and divides. Its target is one of: a fixed figure stored on the
         # row itself (ratio_target); "import", per-date figures pasted for the
@@ -2124,6 +2203,15 @@ def _write_kpi_layout_values(values: dict) -> None:
         conn.commit()
 
 
+def _targets_refused(user) -> str | None:
+    """Why this user may not change targets, or None. Other users may only
+    while Settings > Targets lets every user set them."""
+    if is_admin(user):
+        return None
+    settings = _kpi_settings(_read_kpi_layout_value('settings'))
+    return None if settings["targets_for_all"] == 1 else "Only the admin can change KPI targets"
+
+
 def _kpi_settings(stored: dict | None) -> dict:
     """Stored settings filled out with defaults and clamped to the limits."""
     merged = {**KPI_DEFAULT_SETTINGS, **(stored or {})}
@@ -2155,9 +2243,17 @@ def kpi_layout_get(request: Request, user: str = Depends(require_page_api('kpi')
     # The hard-coded Sessions and Apex Orders rows were removed: every chart is
     # now created on the page. Drop them from a layout saved before that.
     layout = {**layout, "rows": [r for r in layout.get("rows", []) if r.get("type") == "custom"]}
+    try:
+        raw = _read_kpi_layout_value(_AT_PERIODS_KEY) or []
+        at_periods = _at_allowance_periods()
+        at_ppc_periods = _at_ppc_periods(raw)
+    except Exception as e:
+        logger.warning("Autotrader settings read failed: %s", e)
+        at_periods, at_ppc_periods = [], []
     return {"status": "ok", "layout": layout, "sections": sections, "settings": settings,
             "setting_limits": KPI_SETTING_LIMITS, "notes": notes, "themes": themes,
-            "metric_names": metric_names}
+            "metric_names": metric_names, "at_periods": at_periods, "at_ppc_periods": at_ppc_periods,
+            "hidden_sections": [s for s in (_read_kpi_layout_value('hidden_sections') or []) if s in sections]}
 
 
 # ── Chart notes ──────────────────────────────────────────────────────────────
@@ -2232,6 +2328,48 @@ def kpi_layout_save(request: Request, payload: dict, user: str = Depends(require
         return {"status": "error", "message": str(e)}
 
 
+@router.post("/kpi/row-target")
+def kpi_row_target_save(request: Request, payload: dict, user: str = Depends(require_page_api('kpi'))):
+    """One chart's target, from the Targets popup, for users who cannot save
+    the whole layout. Body: {"row_id", "target_mode": "fixed"|"import",
+    "value": number|null}. Only the target fields of that one chart change.
+    value is the chart's own fixed figure on a ratio, added-metrics or stacked
+    chart; a plain chart's fixed figure belongs to the metric and is saved
+    through /kpi/metric-target/fixed instead."""
+    refused = _targets_refused(user)
+    if refused:
+        return {"status": "error", "message": refused}
+    payload = payload or {}
+    row_id, mode, value = payload.get("row_id"), payload.get("target_mode"), payload.get("value")
+    if mode not in ("fixed", "import"):
+        return {"status": "error", "message": "The target must be a fixed figure or per date"}
+    if value is not None and (isinstance(value, bool) or not isinstance(value, (int, float)) or value < 0):
+        return {"status": "error", "message": "The fixed target must be a number of 0 or more"}
+    try:
+        stored = _read_kpi_layout_value('layout') or KPI_DEFAULT_LAYOUT
+        layout = json.loads(json.dumps(stored))
+        row = next((r for r in layout.get("rows", []) if r.get("id") == row_id), None)
+        if row is None:
+            return {"status": "error", "message": "That chart no longer exists - reload the page"}
+        # The chart's own fixed figure is saved whichever target it draws, so
+        # the Fixed Figure box keeps what was typed while Per Date is chosen.
+        if row.get("chart_type") == "stacked" or row.get("divide_by") is not None or row.get("metric_plus"):
+            if mode == "fixed" and value is None:
+                return {"status": "error", "message": "Enter a fixed figure"}
+            row["stack_target" if row.get("chart_type") == "stacked" else "ratio_target"] = value
+        row["target_mode"] = mode
+        row.pop("input_targets", None)
+        row.pop("target_calc", None)
+        err = _validate_layout(layout, _kpi_sections(stored))
+        if err:
+            return {"status": "error", "message": err}
+        _write_kpi_layout_value('layout', layout)
+        return {"status": "ok", "row": row}
+    except Exception as e:
+        logger.error(f"KPI row target save failed: {e}")
+        return {"status": "error", "message": str(e)}
+
+
 @router.post("/kpi/client-error")
 def kpi_client_error(request: Request, payload: dict, user: str = Depends(require_page_api('kpi'))):
     """Logs an error the KPI page hit in the browser, which would otherwise
@@ -2256,6 +2394,8 @@ def kpi_at_allowance(request: Request, user: str = Depends(require_page_api('kpi
     except Exception as e:
         logger.error(f"Autotrader allowance request failed: {e}")
         result["capacity_error"] = str(e)
+    if isinstance(result.get("capacity"), int):
+        _record_at_allowance(result["capacity"])
     try:
         with SnowflakeClient() as sf:
             rows, _ = sf.execute("""
@@ -2274,6 +2414,167 @@ def kpi_at_allowance(request: Request, user: str = Depends(require_page_api('kpi
         logger.error(f"Autotrader advert counts query failed: {e}")
         result["counts_error"] = str(e)
     return result
+
+
+# ── Autotrader allowance and costs (Settings > Autotrader) ───────────────────
+# Dated rows typed in Settings, each applying from its date until the next:
+#   from           YYYY-MM-DD
+#   base           base advert slots (charged)
+#   flex_pct       flex % of base (free); flex slots = base x flex %, rounded
+#   total          optional: total allowance including tactical, typed for past
+#                  periods; when blank the Autotrader API figure is used
+#   slot_cost      cost per advert slot per month
+# The cost per PPC advert view changes separately, so it has its own dated
+# list under 'at_ppc_cost_periods': {from, ppc_view_cost}.
+# The API total is saved once a day under 'at_allowance_history' whenever the
+# page asks for it (/kpi/at-allowance), so tactical slots build a history.
+# Tactical = total - (base + flex). Charged = base + tactical (flex is free).
+_AT_PERIODS_KEY = "at_allowance_periods"
+_AT_PPC_KEY = "at_ppc_cost_periods"
+_AT_HISTORY_KEY = "at_allowance_history"
+_AT_PERIOD_FIELDS = ("from", "base", "flex_pct", "total", "slot_cost")
+_AT_PPC_FIELDS = ("from", "ppc_view_cost")
+
+# The chart metrics worked out from those settings: name -> description.
+# Fixed in code because each is a calculation, not a column.
+_AT_METRICS = {
+    "at_base_slots": "Base allowance (advert slots), from Settings > Autotrader",
+    "at_flex_slots": "Flex slots: base allowance x flex %, rounded. Free",
+    "at_allowance_incl_flex": "Allowance including flex: base + flex",
+    "at_total_allowance": "Total allowance including tactical: from the Autotrader API, or typed in Settings for past periods",
+    "at_tactical_slots": "Tactical slots: total allowance including tactical - allowance including flex",
+    "at_charged_slots": "Charged slots: base + tactical (flex is free)",
+    "at_cost_per_slot_month": "Cost per advert slot per month",
+    "at_cost_per_slot_day": ("Cost per advert slot per day: the monthly cost / the days in that month. "
+                             "Charged slots multiplied by this, as a Sum chart, gives the slot cost"),
+    "at_cost_per_ppc_view": ("Cost per PPC advert view. PPC advert views multiplied by this, "
+                             "as a Sum chart, gives the PPC cost"),
+}
+
+
+def _record_at_allowance(capacity: int) -> None:
+    """Save today's API total allowance, if it is not already saved."""
+    try:
+        today = datetime.date.today().isoformat()
+        history = _read_kpi_layout_value(_AT_HISTORY_KEY) or {}
+        if history.get(today) != capacity:
+            history[today] = capacity
+            _write_kpi_layout_value(_AT_HISTORY_KEY, history)
+    except Exception as e:
+        logger.warning("Saving the Autotrader allowance history failed: %s", e)
+
+
+def _validate_at_rows(rows, fields: tuple, optional: tuple, what: str) -> str | None:
+    if not isinstance(rows, list) or len(rows) > 200:
+        return f"{what}: at most 200 rows"
+    seen = set()
+    for p in rows:
+        if not isinstance(p, dict) or set(p) - set(fields):
+            return f"{what}: bad row"
+        try:
+            datetime.date.fromisoformat(p.get("from"))
+        except (TypeError, ValueError):
+            return f"{what}: every row needs a From date"
+        if p["from"] in seen:
+            return f"{what}: two rows start on {p['from']}"
+        seen.add(p["from"])
+        for field in fields[1:]:
+            v = p.get(field)
+            if v is None and field in optional:
+                continue
+            if isinstance(v, bool) or not isinstance(v, (int, float)) or v < 0:
+                return f"{what} {p['from']}: every figure must be a number of 0 or more"
+    return None
+
+
+def _at_ppc_periods(allowance_rows: list) -> list:
+    """The PPC cost rows. Before they had their own list the cost was on the
+    allowance rows, so those are used until the list is first saved."""
+    rows = _read_kpi_layout_value(_AT_PPC_KEY)
+    if rows is not None:
+        return rows
+    return [{"from": p["from"], "ppc_view_cost": p["ppc_view_cost"]}
+            for p in allowance_rows if p.get("ppc_view_cost") is not None]
+
+
+def _at_allowance_periods() -> list:
+    """The allowance rows, without the PPC cost they used to carry."""
+    return [{k: v for k, v in p.items() if k in _AT_PERIOD_FIELDS}
+            for p in (_read_kpi_layout_value(_AT_PERIODS_KEY) or [])]
+
+
+@router.post("/kpi/at-periods")
+def kpi_at_periods_save(request: Request, payload: dict, user: str = Depends(require_page_api('kpi'))):
+    """Save the dated Autotrader allowance rows and PPC cost rows, together.
+    Admin only."""
+    if not is_admin(user):
+        return {"status": "error", "message": "Only the admin can change the Autotrader settings"}
+    periods = (payload or {}).get("periods")
+    ppc = (payload or {}).get("ppc_periods")
+    err = (_validate_at_rows(periods, _AT_PERIOD_FIELDS, ("total",), "Allowance")
+           or _validate_at_rows(ppc, _AT_PPC_FIELDS, (), "PPC Cost"))
+    if err:
+        return {"status": "error", "message": err}
+    periods = sorted(periods, key=lambda p: p["from"])
+    ppc = sorted(ppc, key=lambda p: p["from"])
+    try:
+        _write_kpi_layout_values({_AT_PERIODS_KEY: periods, _AT_PPC_KEY: ppc})
+    except Exception as e:
+        logger.error(f"Autotrader settings save failed: {e}")
+        return {"status": "error", "message": str(e)}
+    return {"status": "ok", "periods": periods, "ppc_periods": ppc}
+
+
+def _at_setting_values():
+    """A function (date, metric) -> value for the _AT_METRICS, from the saved
+    rows and the API history. Reads both once, so build it once per load."""
+    import bisect
+    raw = _read_kpi_layout_value(_AT_PERIODS_KEY) or []
+    periods = sorted(raw, key=lambda p: p["from"])
+    starts = [p["from"] for p in periods]
+    ppc = sorted(_at_ppc_periods(raw), key=lambda p: p["from"])
+    ppc_starts = [p["from"] for p in ppc]
+    history = _read_kpi_layout_value(_AT_HISTORY_KEY) or {}
+    hist_dates = sorted(history)
+
+    def value(d: datetime.date, metric: str):
+        iso = d.isoformat()
+        if metric == "at_cost_per_ppc_view":
+            k = bisect.bisect_right(ppc_starts, iso) - 1
+            return ppc[k]["ppc_view_cost"] if k >= 0 else None
+        i = bisect.bisect_right(starts, iso) - 1
+        if i < 0:
+            return None      # before the first row: nothing set
+        p = periods[i]
+        base = p["base"]
+        flex = int(base * p["flex_pct"] / 100 + 0.5)   # nearest whole slot
+        incl_flex = base + flex
+        total = p.get("total")
+        if total is None:
+            # The latest API figure saved on or before this day. None before
+            # the first one, which counts as no tactical slots.
+            j = bisect.bisect_right(hist_dates, iso) - 1
+            total = history[hist_dates[j]] if j >= 0 else incl_flex
+        tactical = max(0, total - incl_flex)
+        if metric == "at_base_slots":
+            return base
+        if metric == "at_flex_slots":
+            return flex
+        if metric == "at_allowance_incl_flex":
+            return incl_flex
+        if metric == "at_total_allowance":
+            return total
+        if metric == "at_tactical_slots":
+            return tactical
+        if metric == "at_charged_slots":
+            return base + tactical
+        if metric == "at_cost_per_slot_month":
+            return p["slot_cost"]
+        if metric == "at_cost_per_slot_day":
+            return p["slot_cost"] / calendar.monthrange(d.year, d.month)[1]
+        return None
+
+    return value
 
 
 def _kpi_sections(layout: dict) -> list:
@@ -2306,7 +2607,9 @@ def kpi_sections_save(request: Request, payload: dict, user: str = Depends(requi
         return {"status": "error", "message": "At least one section is needed"}
     if len(items) > 50:
         return {"status": "error", "message": "At most 50 sections"}
-    names, renames, slugs = [], {}, set()
+    # hidden: sections hidden in Settings > Sections (kept, with their charts,
+    # but not shown as tabs and their charts not loaded).
+    names, renames, slugs, hidden = [], {}, set(), []
     for item in items:
         if not isinstance(item, dict):
             return {"status": "error", "message": "bad section"}
@@ -2321,6 +2624,8 @@ def kpi_sections_save(request: Request, payload: dict, user: str = Depends(requi
             return {"status": "error", "message": f"Two sections are named too alike: '{name}'"}
         slugs.add(slug)
         names.append(name)
+        if item.get("hidden") is True:
+            hidden.append(name)
         old = item.get("from")
         if old is not None:
             if not isinstance(old, str):
@@ -2340,11 +2645,11 @@ def kpi_sections_save(request: Request, payload: dict, user: str = Depends(requi
                     "message": f"Move or remove the charts in {', '.join(in_use)} before removing it"}
         new_rows = [{**r, "section": renames.get(r.get("section"), r.get("section"))} for r in rows]
         new_layout = {**layout, "rows": new_rows}
-        _write_kpi_layout_values({'layout': new_layout, 'sections': names})
+        _write_kpi_layout_values({'layout': new_layout, 'sections': names, 'hidden_sections': hidden})
     except Exception as e:
         logger.error(f"KPI sections save failed: {e}")
         return {"status": "error", "message": str(e)}
-    return {"status": "ok", "sections": names, "layout": new_layout}
+    return {"status": "ok", "sections": names, "layout": new_layout, "hidden_sections": hidden}
 
 
 @router.post("/kpi/settings")
