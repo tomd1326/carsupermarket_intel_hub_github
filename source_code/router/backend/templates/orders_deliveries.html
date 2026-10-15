@@ -29,13 +29,6 @@
             <button class="btn btn-refresh ms-2" id="refresh-btn" onclick="refreshData()" title="Reload the latest data from Snowflake">
                 <i class="fas fa-rotate-right"></i> Refresh Data
             </button>
-            {% if show_test_email %}
-            <button class="btn btn-outline-secondary ms-2" id="test-email-btn" onclick="sendTestEmail()"
-                    title="Send a test email to tom.drayson@carsupermarket.com">
-                <i class="fas fa-envelope"></i> Test Email
-            </button>
-            <span class="cache-note ms-2" id="test-email-note"></span>
-            {% endif %}
             <!-- Page font resizer — scales everything except the vehicle grid,
                  which has its own resizer next to its CSV button. -->
             <div class="d-flex align-items-center gap-1 ms-auto">

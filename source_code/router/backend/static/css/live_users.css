@@ -1,0 +1,27 @@
+/* Live users circles beside the Home button. Every size and colour comes
+   from Settings > Live Users via the --live-user-* variables on the container
+   (set in _navigation.html, and updated by live_users.js on each check). */
+.live-users {
+    display: flex;
+    align-items: center;
+    gap: var(--live-user-gap, 4px);
+    margin-right: 0.25rem;
+}
+.live-users:empty { display: none; }
+.live-user {
+    width: var(--live-user-size, 26px);
+    height: var(--live-user-size, 26px);
+    border-radius: 50%;
+    border: var(--live-user-border-width, 2px) solid var(--live-user-border-colour, #ffffff);
+    box-sizing: border-box;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--live-user-text-colour, #ffffff);
+    font-size: calc(var(--live-user-size, 26px) * 0.4);
+    font-weight: 600;
+    line-height: 1;
+    cursor: default;
+    user-select: none;
+}
+.live-user-more { background: var(--live-user-more-colour, #64748b); }

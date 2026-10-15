@@ -17,8 +17,21 @@ SECRET_NAME = "prod/carsupermarket/sharepoint/credentials"
 
 # The mailbox mail is sent as. Graph sends on behalf of a real mailbox rather
 # than an anonymous relay, so this address must exist in the tenant and the app
-# must be allowed to send as it.
+# must be allowed to send as it. Set in Settings > Email; this is only the
+# fallback when that box is blank.
 DEFAULT_SENDER = "tom.drayson@carsupermarket.com"
+
+
+def configured_sender() -> str:
+    """Sender address from Settings > Email, else DEFAULT_SENDER."""
+    from utils.db_utils import get_database_connection, get_settings
+    try:
+        with get_database_connection() as conn:
+            sender = get_settings(conn).get('email_sender', '')
+    except Exception as e:
+        logger.warning("Could not read email sender setting: %s", e)
+        sender = ''
+    return sender.strip() or DEFAULT_SENDER
 
 
 def _get_token() -> str:
@@ -49,7 +62,7 @@ def _get_token() -> str:
 
 
 def send_email(to: str | list[str], subject: str, body_html: str,
-               sender: str = DEFAULT_SENDER) -> None:
+               sender: str | None = None) -> None:
     """
     Send one email through Microsoft Graph.
 
@@ -60,6 +73,7 @@ def send_email(to: str | list[str], subject: str, body_html: str,
     if not recipients:
         raise ValueError("send_email needs at least one recipient")
 
+    sender = sender or configured_sender()
     token = _get_token()
     resp = requests.post(
         f"https://graph.microsoft.com/v1.0/users/{sender}/sendMail",

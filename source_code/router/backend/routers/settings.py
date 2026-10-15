@@ -2,9 +2,12 @@
 
 from fastapi import APIRouter, Request, Form, Depends, HTTPException
 from fastapi.responses import HTMLResponse, RedirectResponse
+import datetime
 import time
 import hashlib
 import logging
+import re
+import zoneinfo
 
 
 from utils.db_utils import (get_database_connection, get_settings, save_settings,
@@ -12,7 +15,7 @@ from utils.db_utils import (get_database_connection, get_settings, save_settings
                             get_active_sessions_all_envs, upsert_user,
                             load_user_details, update_user_details,
                             load_all_page_access, set_page_access_many,
-                            delete_user_and_access, ALWAYS_ENABLED_USERS,
+                            delete_user_and_access, ALWAYS_ENABLED_USERS, ADMIN_DETAILS,
                             get_prod_pricer_connection, load_page_names, save_page_names)
 
 from . import core
@@ -35,6 +38,8 @@ SETTINGS_SECTIONS = [
     ("mot-check",           "MOT Check",           "MOT Check"),
     ("kpi",                 "KPI Dashboard",       "KPI Dashboard"),
     ("cap-credentials",     "CAP Credentials",     "CAP Credential Override"),
+    ("email",               "Email",               "Email"),
+    ("live-users",          "Live Users",          "Live Users"),
 ]
 
 # The settings 'user' scope used by this admin page. The buying requirements
@@ -197,6 +202,98 @@ def save_cap_credentials(
     return _section_redirect("cap-credentials")
 
 
+@router.post("/settings/section/email")
+def save_email(
+    request: Request,
+    email_sender: str = Form(default=""),
+    email_test_recipient: str = Form(default=""),
+    user: str = Depends(get_current_user),
+):
+    if user != 'tdrayson':
+        raise HTTPException(status_code=403, detail="Forbidden")
+    with get_database_connection() as conn:
+        save_settings_partial(conn, {
+            'email_sender':         email_sender.strip(),
+            'email_test_recipient': email_test_recipient.strip(),
+        })
+    logger.info("Settings [Email] updated by %s", user)
+    return _section_redirect("email")
+
+
+@router.post("/settings/section/live-users")
+def save_live_users(
+    request: Request,
+    presence_enabled: str = Form(default=""),
+    presence_interval_seconds: int = Form(...),
+    presence_drop_off_seconds: int = Form(...),
+    presence_circle_size: int = Form(...),
+    presence_max_circles: int = Form(...),
+    presence_border_width: int = Form(...),
+    presence_gap: int = Form(...),
+    presence_border_colour: str = Form(...),
+    presence_text_colour: str = Form(...),
+    presence_more_colour: str = Form(...),
+    user: str = Depends(get_current_user),
+):
+    if user != 'tdrayson':
+        raise HTTPException(status_code=403, detail="Forbidden")
+    # Colours go into a style attribute, so only '#rrggbb' is accepted.
+    colours = {
+        'presence_border_colour': presence_border_colour,
+        'presence_text_colour':   presence_text_colour,
+        'presence_more_colour':   presence_more_colour,
+    }
+    for key, value in colours.items():
+        if not re.fullmatch(r'#[0-9a-fA-F]{6}', value.strip()):
+            raise HTTPException(status_code=400, detail=f"{key} must be a colour like #ffffff")
+        colours[key] = value.strip().lower()
+    interval = max(5, presence_interval_seconds)
+    with get_database_connection() as conn:
+        save_settings_partial(conn, {
+            'presence_enabled':          '1' if presence_enabled == "on" else '0',
+            'presence_interval_seconds': interval,
+            # Must outlast at least two missed heartbeats, or circles flicker.
+            'presence_drop_off_seconds': max(interval * 2 + 5, presence_drop_off_seconds),
+            'presence_circle_size':      min(60, max(14, presence_circle_size)),
+            'presence_max_circles':      max(1, presence_max_circles),
+            'presence_border_width':     min(6, max(0, presence_border_width)),
+            'presence_gap':              min(20, max(0, presence_gap)),
+            **colours,
+        })
+    # This container uses the new values straight away; others within a minute.
+    core.reload_presence_config()
+    logger.info("Settings [Live Users] updated by %s", user)
+    return _section_redirect("live-users")
+
+
+@router.post("/settings/email/test")
+def send_test_email(request: Request, user: str = Depends(get_current_user)):
+    """Send a test email from the saved sender to the saved test address, to
+    confirm Graph mail sending works. Uses the SAVED values, not the boxes."""
+    if user != 'tdrayson':
+        raise HTTPException(status_code=403, detail="Forbidden")
+    from utils.email_client import send_email, configured_sender
+    with get_database_connection() as conn:
+        settings = get_settings(conn, user=_SETTINGS_SCOPE)
+    sender = configured_sender()
+    to = settings.get('email_test_recipient', '').strip() or sender
+    sent_at = datetime.datetime.now(zoneinfo.ZoneInfo("Europe/London")).strftime('%Y-%m-%d %H:%M:%S')
+    try:
+        send_email(
+            to=to,
+            subject=f"VLE test email - {sent_at}",
+            body_html=(
+                "<p>Test email from Settings &gt; Email.</p>"
+                f"<p>Sent from {sender} at {sent_at} (UK).</p>"
+            ),
+            sender=sender,
+        )
+    except Exception as e:
+        logger.exception("Test email failed")
+        return {"status": "error", "message": str(e)[:300]}
+    return {"status": "ok", "message": f"Sent from {sender} to {to} at {sent_at}"}
+
+
 @router.get("/settings/users", response_class=HTMLResponse)
 def users_page(request: Request, user: str = Depends(get_current_user)):
     if user != 'tdrayson':
@@ -206,20 +303,37 @@ def users_page(request: Request, user: str = Depends(get_current_user)):
     last_logins = {}
     db_active_sessions = []
     user_details = {}
+    login_mode = 'both'
     try:
         with get_database_connection() as conn:
             last_logins = get_last_login_per_user(conn)
             db_active_sessions = get_active_sessions_all_envs(conn)
             user_details = load_user_details(conn)
+            login_mode = get_settings(conn).get('login_mode', 'both')
     except Exception as e:
         logger.warning("Failed to load user activity data: %s", e)
     return templates.TemplateResponse("users.html", {
         "request": request, "user": user, "BASE_URL": BASE_URL,
+        "login_mode": login_mode,
         "active_sessions": sessions, "non_admin_users": non_admin_users,
         "all_users": sorted(VALID_USERS), "user_details": user_details,
         "last_logins": last_logins, "db_active_sessions": db_active_sessions,
         "sections": SETTINGS_SECTIONS, "active_section": "users",
     })
+
+
+@router.post("/settings/login-mode")
+def save_login_mode(
+    request: Request,
+    login_mode: str = Form(default="both"),
+    user: str = Depends(get_current_user),
+):
+    if user != 'tdrayson':
+        raise HTTPException(status_code=403, detail="Forbidden")
+    with get_database_connection() as conn:
+        save_settings_partial(conn, {'login_mode': 'email' if login_mode == 'email' else 'both'})
+    logger.info("Settings [Sign In] login_mode=%s set by %s", login_mode, user)
+    return _user_redirect("users", loginok=1)
 
 
 @router.post("/settings/force-relogin")
@@ -394,7 +508,7 @@ async def save_user_details(request: Request, user: str = Depends(get_current_us
     form = await request.form()
     details = {}
     for u in VALID_USERS:
-        if f"email__{u}" not in form:
+        if f"email__{u}" not in form or u in ADMIN_DETAILS:   # admin's are fixed in code
             continue
         details[u] = {
             'first_name': str(form.get(f"first_name__{u}", "")).strip(),

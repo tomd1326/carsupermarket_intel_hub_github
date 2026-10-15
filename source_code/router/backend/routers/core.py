@@ -16,7 +16,7 @@ from fastapi.templating import Jinja2Templates
 
 from utils.db_utils import (get_database_connection, get_prod_pricer_connection,
                             load_all_users, load_all_page_access, load_page_names,
-                            record_event)
+                            record_event, get_settings, SETTINGS_DEFAULTS)
 from .page_registry import ALL_PAGE_KEYS, CONFIGURED_MARKER, DEFAULT_PAGE_KEYS, PAGES_BY_KEY
 
 logger = logging.getLogger(__name__)
@@ -99,6 +99,39 @@ def page_name(page_key: str) -> str:
 
 
 templates.env.globals['page_name'] = page_name
+
+
+# Live users settings (Settings > Live Users), cached per process the same way
+# as page names. Every page reads them to draw the circles, so they must not
+# cost a database read per page.
+PRESENCE_SETTING_KEYS = ('presence_enabled', 'presence_interval_seconds', 'presence_drop_off_seconds',
+                         'presence_circle_size', 'presence_max_circles', 'presence_border_width',
+                         'presence_gap', 'presence_border_colour', 'presence_text_colour',
+                         'presence_more_colour')
+_PRESENCE_CONFIG: dict = {k: SETTINGS_DEFAULTS[k] for k in PRESENCE_SETTING_KEYS}
+_PRESENCE_LOADED_AT: float = 0.0
+PRESENCE_TTL_SECONDS = 60
+
+
+def reload_presence_config() -> None:
+    global _PRESENCE_LOADED_AT
+    _PRESENCE_LOADED_AT = time.time()
+    try:
+        with get_database_connection() as conn:
+            settings = get_settings(conn)
+        _PRESENCE_CONFIG.update({k: settings[k] for k in PRESENCE_SETTING_KEYS})
+    except Exception as e:
+        logger.warning("Could not load live users settings - using the last known values: %s", e)
+
+
+def presence_config() -> dict:
+    """Usage in a template:  {% set pc = presence_config() %}"""
+    if time.time() - _PRESENCE_LOADED_AT >= PRESENCE_TTL_SECONDS:
+        reload_presence_config()
+    return dict(_PRESENCE_CONFIG)
+
+
+templates.env.globals['presence_config'] = presence_config
 
 # Generic initialization
 s3_bucketname = 'aa-raw-sources-uk'
