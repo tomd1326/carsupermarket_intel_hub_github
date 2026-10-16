@@ -187,7 +187,7 @@
 @keyframes css-spin { to { transform: rotate(360deg); } }
 
 /* Whole-page loading message, centred on screen:
-     <div class="page-loading"><i class="fas fa-sync-alt spin"></i> Loading...</div>
+     <div class="page-loading"><i class="fas fa-sync-alt spin"></i> Loading<span class="loading-dots"></span></div>
    Hidden until an ancestor (or <body>) has .page-is-loading. */
 .page-loading {
     display: none; position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
@@ -195,6 +195,18 @@
     z-index: 1030;
 }
 .page-is-loading .page-loading { display: flex; }
+/* Dots after "Loading" counting 0, 1, 2, 3 and round again. Fixed width so
+   the word does not shift as the dots change. */
+.loading-dots::after {
+    content: ''; display: inline-block; width: 1.2em; text-align: left;
+    animation: loading-dots 1.6s steps(1, end) infinite;
+}
+@keyframes loading-dots {
+    0%   { content: ''; }
+    25%  { content: '.'; }
+    50%  { content: '..'; }
+    75%  { content: '...'; }
+}
 /* Loading message inside a panel or settings popup. */
 .section-loading { display: flex; align-items: center; justify-content: center; gap: 12px; min-height: 180px; font-size: 1.25rem; font-weight: 600; color: #64748b; }
 /* Own spin rather than Font Awesome's fa-spin, which stops moving when

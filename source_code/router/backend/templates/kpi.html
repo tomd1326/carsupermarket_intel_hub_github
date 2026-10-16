@@ -44,6 +44,23 @@
         }
         .kpi-tab:hover { background: #d1d9e2; }
         .kpi-tab.active { background: #fff; color: #0f172a; border-bottom-color: #fff; }
+        /* My Charts: each user's own page, picked out in light blue. */
+        .kpi-tab.my-charts-tab { background: #dbeafe; border-color: #93c5fd; color: #1e40af; }
+        .kpi-tab.my-charts-tab:hover { background: #bfdbfe; }
+        .kpi-tab.my-charts-tab.active { background: #eff6ff; border-bottom-color: #eff6ff; }
+        /* The same chart row is moved into My Charts while that tab shows, so
+           its buttons change with where it sits. */
+        .my-charts-only { display: none; }
+        #sec-my-charts-own .my-charts-only { display: inline-flex; }
+        #sec-my-charts-own .not-my-charts { display: none !important; }
+        .chart-row .in-my-chart-btn { display: none; }
+        .chart-row.in-my-charts .add-my-chart-btn { display: none; }
+        .chart-row.in-my-charts .in-my-chart-btn { display: inline-block; color: #1e40af; border-color: #93c5fd; background: #eff6ff; }
+        /* A collapsed row is one clean line: no Targets or My Charts add. */
+        .chart-row.collapsed .targets-btn,
+        .chart-row.collapsed .add-my-chart-btn,
+        .chart-row.collapsed .in-my-chart-btn { display: none !important; }
+        .my-charts-empty { color: #64748b; font-size: 0.85rem; padding: 8px 0; }
         .at-strip { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 12px; }
         /* Size from Settings > Appearance ("Autotrader Figures Size"); padding
            and the figure are in em so the box keeps its shape at any size. */
@@ -340,6 +357,7 @@
         .plus-row { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
         .plus-row span { font-weight: 600; color: #64748b; }
         .plus-row select { flex: 1; min-width: 0; }
+        .plus-row select.plus-op { flex: none; width: auto; }
         .plus-add { margin-top: 6px; align-self: flex-start; }
         /* Rows matched by the Settings grey-out rule (cancelled deals). */
         /* Light grey fill only; the text stays the same colour as every other
@@ -397,6 +415,11 @@
         .settings-subtabs button.active { background: #e2e8f0; color: #0f172a; }
         .chart-subpane { display: none; }
         .chart-subpane.active { display: block; }
+        /* Chart List keeps the box at the same 62vh as every other tab
+           (.settings-body min-height): the list scrolls inside, with the hint
+           below it, instead of making the box taller. */
+        #chartSubList.active { display: flex; flex-direction: column; height: 62vh; }
+        #chartSubList #chartList { flex: 1; min-height: 0; overflow-y: auto; }
         .setting-colour { width: 100%; height: 32px; padding: 2px; border: 1px solid #cbd5e1; border-radius: 6px; cursor: pointer; }
         .veh-col-search { width: 100%; padding: 5px 9px; border: 1px solid #cbd5e1; border-radius: 6px; margin-bottom: 6px; font-size: 0.82rem; }
         .veh-col-head { font-size: 0.8rem; font-weight: 700; color: #334155; margin-bottom: 4px; }
@@ -432,7 +455,7 @@
     </div>
 
     <div class="page-content page-is-loading" id="pageContent">
-        <div class="page-loading"><i class="fas fa-sync-alt spin"></i> Loading...</div>
+        <div class="page-loading"><i class="fas fa-sync-alt spin"></i> Loading<span class="loading-dots"></span></div>
         <div id="sectionTabs" class="kpi-tabs" role="tablist"></div>
         <div id="sectionsContainer"></div>
     </div>
@@ -585,6 +608,8 @@
                     <div id="metricPlusList"></div>
                     <button type="button" class="btn btn-sm plus-add" id="metricPlusBtn" onclick="addPlus('metric')">
                         <i class="fas fa-plus"></i> Add Metric</button>
+                    <!-- The whole sum as it will be worked out, e.g. (a + b) / c. -->
+                    <div class="metric-desc" id="formulaPreview"></div>
                 </div>
                 <div class="modal-field line-only">
                     <label for="divideSelect">Divided By</label>
@@ -1223,18 +1248,24 @@
     function rowTargetMode(row) { return row.target_mode || 'snowflake'; }
     function rowMetricInfo(row) { return metricsByKey[metricKey(rowSource(row), row.metric)] || {}; }
     // Metrics added to the chart's metric and to its divide-by metric, e.g.
-    // orders / (calls + emails): [{ source, metric }]. Sum charts only.
+    // orders / (calls + emails): [{ source, metric, op? }].
     function rowPlus(row) { return row.metric_plus || []; }
     function rowDividePlus(row) { return row.divide_by ? (row.divide_plus || []) : []; }
     // A ratio chart or one with added metrics keeps its own target on the row
     // (ratio_target): the stored targets each belong to a single metric.
     function rowOwnTarget(row) { return !!row.divide_by || rowPlus(row).length > 0; }
     // "orders / (calls + emails)": brackets only round a side of more than
-    // one metric, and only when there is a divide.
-    function formulaText(top, bottom) {
-        const side = names => names.length > 1 && bottom.length ? `(${names.join(' + ')})` : names.join(' + ');
-        return bottom.length ? `${side(top)} / ${side(bottom)}` : side(top);
+    // one metric, and only when there is a divide. topOps / bottomOps hold the
+    // operator before each name after the first ('+', '-', '*', '/'); missing
+    // ones are '+', as on charts saved before operators could be picked.
+    function formulaText(top, bottom, topOps = [], bottomOps = []) {
+        const join = (names, ops) => names.map((n, i) => (i ? ` ${ops[i - 1] || '+'} ${n}` : n)).join('');
+        const side = (names, ops) => names.length > 1 && bottom.length ? `(${join(names, ops)})` : join(names, ops);
+        return bottom.length ? `${side(top, topOps)} / ${side(bottom, bottomOps)}` : side(top, topOps);
     }
+    // The operators of a row's added metrics, in order.
+    function plusOps(list) { return list.map(p => p.op || '+'); }
+    const PLUS_OPS = [['+', '+ Plus'], ['-', '- Minus'], ['*', '* Times'], ['/', '/ Divided By']];
 
     function sectionDomId(name) {
         return 'sec-' + name.toLowerCase().replace(/[^a-z0-9]+/g, '-');
@@ -1278,6 +1309,7 @@
             if (layoutResp.sections) SECTIONS = layoutResp.sections;
             hiddenSections = new Set(layoutResp.hidden_sections || []);
             loadCollapsedRows(layoutResp.collapsed_rows || []);
+            myCharts = layoutResp.my_charts || [];
             layout = layoutResp.layout || { rows: [] };
             if (layoutResp.settings) settings = layoutResp.settings;
             applyAppearance();
@@ -1326,10 +1358,24 @@
     function renderLayout() {
         const container = document.getElementById('sectionsContainer');
 
-        // Ensure section blocks exist, in order (existing blocks keep their open state)
-        SECTIONS.forEach(name => {
-            let sec = document.getElementById(sectionDomId(name));
-            if (!sec) {
+        // Ensure section blocks exist, in order (existing blocks keep their open
+        // state). My Charts comes first, then the admin's sections.
+        [MY_CHARTS, ...SECTIONS].forEach(name => {
+            const mine = name === MY_CHARTS;
+            let sec = document.getElementById(mine ? MY_CHARTS_DOM_ID : sectionDomId(name));
+            if (!sec && mine) {
+                sec = document.createElement('div');
+                sec.className = 'category-section';
+                sec.id = MY_CHARTS_DOM_ID;
+                const body = document.createElement('div');
+                body.className = 'category-body open';
+                body.appendChild(collapseToolsElement(name));
+                const empty = document.createElement('div');
+                empty.className = 'my-charts-empty';
+                empty.textContent = 'No charts here yet. Use Add To My Charts on any chart to add it.';
+                body.appendChild(empty);
+                sec.appendChild(body);
+            } else if (!sec) {
                 sec = document.createElement('div');
                 sec.className = 'category-section';
                 sec.id = sectionDomId(name);
@@ -1356,21 +1402,8 @@
                     strip.className = 'at-strip';
                     body.appendChild(strip);
                 }
-                // Collapse All / Expand All for every user, below the
-                // Autotrader figures and above the first chart. Same small
-                // button style as each row's own collapse button.
-                const rowTools = document.createElement('div');
-                rowTools.className = 'section-tools';
-                [['Collapse All Charts', 'fa-compress-alt', true], ['Expand All Charts', 'fa-expand-alt', false]]
-                    .forEach(([label, icon, collapse]) => {
-                        const btn = document.createElement('button');
-                        btn.type = 'button';
-                        btn.className = 'chart-title-btn';
-                        btn.innerHTML = `<i class="fas ${icon}"></i> ${label}`;
-                        btn.onclick = () => setSectionRowsCollapsed(name, collapse);
-                        rowTools.appendChild(btn);
-                    });
-                body.appendChild(rowTools);
+                // Collapse All / Expand All, below the Autotrader figures.
+                body.appendChild(collapseToolsElement(name));
                 sec.appendChild(header);
                 sec.appendChild(body);
             }
@@ -1394,15 +1427,27 @@
         // One tab per section with shown charts (all sections until the layout
         // has loaded, and always in Admin View, so an empty section can still
         // be opened to add its first chart); only the chosen tab's section is shown.
-        const tabNames = SECTIONS.filter(name => !hiddenSections.has(name)
-            && (!layoutLoaded || !isUserView() || shownRows().some(r => r.section === name)));
+        // My Charts is always there, for everyone, once the layout has loaded.
+        const tabNames = (layoutLoaded ? [MY_CHARTS] : []).concat(SECTIONS.filter(name => !hiddenSections.has(name)
+            && (!layoutLoaded || !isUserView() || shownRows().some(r => r.section === name))));
         if (!tabNames.includes(activeSection)) {
             let saved = null;
             try { saved = localStorage.getItem(ACTIVE_SECTION_KEY); } catch (e) {}
-            activeSection = tabNames.includes(saved) ? saved : tabNames[0];
+            activeSection = tabNames.includes(saved) ? saved : tabNames[layoutLoaded ? 1 : 0] || tabNames[0];
         }
+
+        // A chart row is one set of charts on the page, so while My Charts
+        // shows, this user's chosen rows are moved into it in their order;
+        // on any other tab they stay in their own section.
+        const mineBody = document.getElementById(MY_CHARTS_DOM_ID).querySelector('.category-body');
+        const mineRows = myChartRows();
+        if (activeSection === MY_CHARTS) mineRows.forEach(row => mineBody.appendChild(getRowElement(row)));
+        mineBody.querySelector('.my-charts-empty').style.display = mineRows.length ? 'none' : '';
+        const mineIds = new Set(mineRows.map(r => r.id));
+        Object.entries(customRowEls).forEach(([id, el]) => el.classList.toggle('in-my-charts', mineIds.has(id)));
+
         document.getElementById('sectionTabs').innerHTML = tabNames.map((name, i) => `
-            <div class="kpi-tab ${name === activeSection ? 'active' : ''}" role="tab"
+            <div class="kpi-tab ${name === activeSection ? 'active' : ''} ${name === MY_CHARTS ? 'my-charts-tab' : ''}" role="tab"
                  aria-selected="${name === activeSection}" onclick="showSection(${i})">
                 ${escHtml(name)}
             </div>`).join('');
@@ -1410,9 +1455,88 @@
         SECTIONS.forEach(name => {
             document.getElementById(sectionDomId(name)).style.display = name === activeSection ? '' : 'none';
         });
+        document.getElementById(MY_CHARTS_DOM_ID).style.display = activeSection === MY_CHARTS ? '' : 'none';
         showAtAllowance();
 
         setTimeout(resizeAllCharts, 10);
+    }
+
+    // Collapse All Charts / Expand All Charts row for a section's tab. Same
+    // small button style as each row's own collapse button.
+    function collapseToolsElement(name) {
+        const tools = document.createElement('div');
+        tools.className = 'section-tools';
+        [['Collapse All Charts', 'fa-compress-alt', true], ['Expand All Charts', 'fa-expand-alt', false]]
+            .forEach(([label, icon, collapse]) => {
+                const btn = document.createElement('button');
+                btn.type = 'button';
+                btn.className = 'chart-title-btn';
+                btn.innerHTML = `<i class="fas ${icon}"></i> ${label}`;
+                btn.onclick = () => setSectionRowsCollapsed(name, collapse);
+                tools.appendChild(btn);
+            });
+        return tools;
+    }
+
+    // ── My Charts ──
+    // Each user's own tab of charts picked from any section. Saved against
+    // their login on the server, in the order they set.
+    const MY_CHARTS = 'My Charts';
+    const MY_CHARTS_DOM_ID = 'sec-my-charts-own';
+    let myCharts = [];
+
+    // Shown rows on a tab, in the order that tab draws them.
+    function rowsInTab(name) {
+        return name === MY_CHARTS ? myChartRows() : shownRows().filter(r => r.section === name);
+    }
+    function myChartRows() {
+        const shown = new Map(shownRows().map(r => [r.id, r]));
+        return myCharts.map(id => shown.get(id)).filter(Boolean);
+    }
+
+    let myChartsSaving = Promise.resolve();
+    function saveMyCharts(before) {
+        const rows = [...myCharts];
+        myChartsSaving = myChartsSaving.then(() => fetch(BASE_URL + '/kpi/my-charts', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ rows }),
+        }).then(r => r.json()).then(j => {
+            if (j.status !== 'ok') throw new Error(j.message || 'Save failed');
+        }).catch(err => {
+            if (myCharts.join() === rows.join()) { myCharts = before; renderLayout(); redrawActiveSection(); }
+            document.getElementById('statusText').textContent = 'My Charts save failed: ' + err.message;
+        }));
+    }
+
+    function addToMyCharts(id) {
+        if (myCharts.includes(id)) return;
+        const before = [...myCharts];
+        myCharts = [...myCharts, id];
+        renderLayout();
+        saveMyCharts(before);
+    }
+
+    function removeFromMyCharts(id) {
+        const before = [...myCharts];
+        myCharts = myCharts.filter(x => x !== id);
+        renderLayout();
+        redrawActiveSection();
+        saveMyCharts(before);
+    }
+
+    // Swap with the next shown My Charts row above (-1) or below (1).
+    function moveMyChart(id, step) {
+        const visible = myChartRows().map(r => r.id);
+        const other = visible[visible.indexOf(id) + step];
+        if (!other) return;
+        const before = [...myCharts];
+        const rows = [...myCharts];
+        const a = rows.indexOf(id), b = rows.indexOf(other);
+        [rows[a], rows[b]] = [rows[b], rows[a]];
+        myCharts = rows;
+        renderLayout();
+        saveMyCharts(before);
     }
 
     // The section tab showing. Remembered in this browser only, so each person
@@ -1433,8 +1557,8 @@
     // already loaded, once the tab is visible and has its real width.
     function redrawActiveSection() {
         requestAnimationFrame(() => {
-            shownRows()
-                .filter(r => r.section === activeSection && customRowData[r.id])
+            rowsInTab(activeSection)
+                .filter(r => customRowData[r.id])
                 .forEach(r => {
                     (rowCharts[r.id] || []).forEach(c => c && c.destroy());
                     delete rowCharts[r.id];
@@ -1478,7 +1602,7 @@
 
     // Collapse or expand every shown chart row in one section.
     function setSectionRowsCollapsed(section, collapse) {
-        shownRows().filter(r => r.section === section).forEach(r => {
+        rowsInTab(section).forEach(r => {
             if (collapse) collapsedSet.add(r.id); else collapsedSet.delete(r.id);
             const el = customRowEls[r.id];
             if (el) el.classList.toggle('collapsed', collapse);
@@ -1592,9 +1716,30 @@
             <button type="button" class="chart-title-btn targets-btn" onclick="openTargetModal('${row.id}')">
                 <i class="fas fa-bullseye"></i> Targets
             </button>`;
+        // My Charts, for everyone. Elsewhere: add (or a note it is already
+        // there). On the My Charts tab: remove and reorder instead, and the
+        // admin's section buttons are hidden as they act on the section.
+        const myChartsButtons = `
+            <button type="button" class="chart-title-btn not-my-charts add-my-chart-btn" onclick="addToMyCharts('${row.id}')">
+                <i class="fas fa-plus"></i> Add To My Charts
+            </button>
+            <button type="button" class="chart-title-btn not-my-charts in-my-chart-btn" onclick="showSection(0)" title="Open My Charts">
+                <i class="fas fa-check"></i> In My Charts
+            </button>
+            <span class="my-charts-only" style="gap: 8px;">
+                <button type="button" class="chart-title-btn" onclick="removeFromMyCharts('${row.id}')">
+                    <i class="fas fa-times"></i> Remove From My Charts
+                </button>
+                <button type="button" class="chart-title-btn" title="Move up My Charts" onclick="moveMyChart('${row.id}', -1)">
+                    <i class="fas fa-arrow-up"></i> Up
+                </button>
+                <button type="button" class="chart-title-btn" title="Move down My Charts" onclick="moveMyChart('${row.id}', 1)">
+                    <i class="fas fa-arrow-down"></i> Down
+                </button>
+            </span>`;
         if (isRowCollapsed(row.id)) el.classList.add('collapsed');
         el.innerHTML = `
-            <div class="chart-row-actions">${toggleButton}${labelsToggle}${targetsButton}${editButton ? `<span class="chart-row-admin">${editButton}</span>` : ''}</div>
+            <div class="chart-row-actions">${toggleButton}${labelsToggle}${targetsButton}${myChartsButtons}${editButton ? `<span class="chart-row-admin not-my-charts">${editButton}</span>` : ''}</div>
             <div class="charts-row">
                 ${card('Monthly', 'm')}
                 ${card('Weekly', 'w')}
@@ -1766,7 +1911,7 @@
             fetchMetricData(p.source || 'snowflake', p.metric, row.agg,
                 inputs ? inputs[metricKey(p.source || 'snowflake', p.metric)] : 'none', cur).then(d =>
                 d.status === 'ok' || (parts === top && i === 0) ? d : { ...d, message: `${p.metric}: ${d.message}` })))
-            .then(sumData);
+            .then(d => combineData(d, plusOps(parts.slice(1))));
         const top = [{ source: rowSource(row), metric: row.metric }, ...rowPlus(row)];
         // Per Date: the chart's own pasted figures (kpi_targets.js).
         const ownDates = d => (row.target_mode === 'import' ? withRowDateTargets(row, d) : d);
@@ -1795,31 +1940,62 @@
         });
     }
 
-    // Several metrics' series added point by point. A point is blank only
-    // when every metric is blank there; one missing counts as 0. Last year
-    // is only kept when every metric has it.
-    function sumData(parts) {
+    // One side's figures for a single point: vals[0] ops[0] vals[1] ...,
+    // times and divide before plus and minus, as in ordinary maths. Blank
+    // (null) values: when blankIsZero, a blank in a plus or minus counts as 0
+    // (a day with no calls still has emails); a blank next to a times or
+    // divide makes the point blank, as does dividing by 0. The point is blank
+    // when every value is.
+    function evalTerms(vals, ops, blankIsZero) {
+        const blank = v => v === null || v === undefined;
+        if (vals.every(blank)) return null;
+        if (!blankIsZero && vals.some(blank)) return null;
+        // Group into products: each '+' / '-' starts a new term.
+        const terms = [];
+        let cur = { sign: 1, vals: [vals[0]], ops: [] };
+        for (let i = 1; i < vals.length; i++) {
+            const op = ops[i - 1] || '+';
+            if (op === '+' || op === '-') {
+                terms.push(cur);
+                cur = { sign: op === '-' ? -1 : 1, vals: [vals[i]], ops: [] };
+            } else {
+                cur.vals.push(vals[i]);
+                cur.ops.push(op);
+            }
+        }
+        terms.push(cur);
+        let total = 0;
+        for (const t of terms) {
+            if (t.vals.length === 1) { total += t.sign * (blank(t.vals[0]) ? 0 : t.vals[0]); continue; }
+            if (t.vals.some(blank)) return null;
+            let v = t.vals[0];
+            for (let j = 0; j < t.ops.length; j++) {
+                if (t.ops[j] === '*') v *= t.vals[j + 1];
+                else if (t.vals[j + 1] === 0) return null;
+                else v /= t.vals[j + 1];
+            }
+            total += t.sign * v;
+        }
+        return total;
+    }
+
+    // Several metrics' series combined point by point with the operators
+    // chosen between them (all '+' on charts saved before operators). Each
+    // period's figure is worked out from that period's totals, the same way
+    // a divided chart is. Last year is only kept when every metric has it.
+    function combineData(parts, ops = []) {
         const bad = parts.find(p => p.status !== 'ok');
         if (bad) return bad;
         if (parts.length === 1) return parts[0];
-        const add = key => {
+        const apply = (key, blankIsZero) => {
             const lists = parts.map(p => p[key]);
             if (lists.some(l => !l)) return null;
-            return lists[0].map((_, i) => {
-                const vals = lists.map(l => l[i]).filter(v => v !== null && v !== undefined);
-                return vals.length ? vals.reduce((a, b) => a + b, 0) : null;
-            });
+            return lists[0].map((_, i) => evalTerms(lists.map(l => l[i]), ops, blankIsZero));
         };
-        // Targets only add up where every metric has one: a target missing
+        const add = key => apply(key, true);
+        // Targets only combine where every metric has one: a target missing
         // for one metric is unknown, not 0.
-        const addAll = key => {
-            const lists = parts.map(p => p[key]);
-            if (lists.some(l => !l)) return null;
-            return lists[0].map((_, i) => {
-                const vals = lists.map(l => l[i]);
-                return vals.some(v => v === null || v === undefined) ? null : vals.reduce((a, b) => a + b, 0);
-            });
-        };
+        const addAll = key => apply(key, false);
         const out = { ...parts[0], stale_date: parts.map(p => p.stale_date).find(Boolean) || parts[0].stale_date };
         ['values', 'values_n1', 'monthly_values', 'monthly_values_n1', 'weekly_values', 'weekly_values_n1']
             .forEach(key => { out[key] = add(key); });
@@ -2094,7 +2270,15 @@
         return text.startsWith('-') ? '-£' + text.slice(1) : '£' + text;
     }
 
+    // A divided chart shown as a Percentage (x 100) is already a %, so the
+    // "from a decimal" Label Format would times it by 100 a second time
+    // (0.5 showing as 5,000%). Read it as "already a %" instead.
+    function fmtRow(row) {
+        return row.divide_by && row.ratio_as !== 'dec' && row.fmt === 'pct100' ? { ...row, fmt: 'pct' } : row;
+    }
+
     function rowFormatter(row) {
+        row = fmtRow(row);
         const decimals = row.decimals || 0;
         if (row.fmt === 'pct') return v => withCommas(v, decimals) + '%';
         if (row.fmt === 'pct100') return v => withCommas(v * 100, decimals) + '%';
@@ -2109,6 +2293,7 @@
     // (no k / M, up to 4 decimals). The % or £ stays, as it says what the
     // figure is; a decimal shown as a % is still shown as a %.
     function rowFullFormatter(row, pct = false) {
+        row = fmtRow(row);
         const full = v => v.toLocaleString('en-GB', { maximumFractionDigits: 4 });
         if (pct || row.fmt === 'pct') return v => full(v) + '%';
         if (row.fmt === 'pct100') return v => full(Math.round(v * 100 * 1e6) / 1e6) + '%';
@@ -2120,6 +2305,7 @@
 
     // Axis ticks keep only the decimals they need (up to 3).
     function rowTickFormatter(row) {
+        row = fmtRow(row);
         const fmt = v => v.toLocaleString('en-GB', { maximumFractionDigits: 3 });
         if (row.fmt === 'pct') return v => fmt(v) + '%';
         // Rounded so 1.1 x 100 shows as 110%, not 110.00000000000001%.
@@ -2203,7 +2389,20 @@
     // is not above the bottom, which the chart box does not allow anyway.
     function withFixedMax(range, max) {
         if (max === null || max === undefined || max <= range.yMin) return range;
-        return { yMin: range.yMin, yMax: max, unit: _niceUnit(max - range.yMin) };
+        // Chart.js steps up from the minimum and then adds the maximum as a
+        // last tick, so a step that does not divide the gap leaves one uneven
+        // gap at the top (600 to 1,400 in 200s, then 1,500). Use a round step
+        // that divides it exactly, 4 to 10 gaps, nearest 6. If none does, keep
+        // the usual step and lift the top to the next step.
+        const span = max - range.yMin;
+        const pow = Math.pow(10, Math.floor(Math.log10(span)));
+        const exact = [pow / 100, pow / 10, pow, pow * 10].flatMap(p => [1, 2, 2.5, 5].map(m => m * p))
+            .map(u => ({ u, n: span / u }))
+            .filter(c => c.n >= 4 && c.n <= 10 && Math.abs(c.n - Math.round(c.n)) < 1e-9)
+            .sort((a, b) => Math.abs(a.n - 6) - Math.abs(b.n - 6))[0];
+        if (exact) return { yMin: range.yMin, yMax: max, unit: exact.u };
+        const unit = _niceUnit(span);
+        return { yMin: range.yMin, yMax: range.yMin + Math.ceil(span / unit - 1e-9) * unit, unit };
     }
 
     // Ranges for a row's month/week/day charts, scaled from the real data only
@@ -3204,7 +3403,8 @@
 
     function rowFormula(row) {
         return formulaText([row.metric, ...rowPlus(row).map(p => p.metric)],
-            row.divide_by ? [row.divide_by.metric, ...rowDividePlus(row).map(p => p.metric)] : []);
+            row.divide_by ? [row.divide_by.metric, ...rowDividePlus(row).map(p => p.metric)] : [],
+            plusOps(rowPlus(row)), plusOps(rowDividePlus(row)));
     }
 
     const keyToMetric = key => {
@@ -3216,7 +3416,12 @@
     // ones only count while a divide-by metric is chosen.
     function selectedPlus(side) {
         if (!chartModalState || (side === 'divide' && !selectedDivide())) return [];
-        return chartModalState.plus[side].filter(Boolean).map(keyToMetric);
+        const ops = chartModalState.ops[side];
+        // op is only stored when it is not '+', so charts using only plus
+        // save exactly as they did before operators could be picked.
+        return chartModalState.plus[side]
+            .map((key, i) => (key ? { ...keyToMetric(key), ...(ops[i] && ops[i] !== '+' ? { op: ops[i] } : {}) } : null))
+            .filter(Boolean);
     }
 
     // A ratio chart, or one with added metrics: its target is on the chart.
@@ -3224,33 +3429,47 @@
         return !!selectedDivide() || selectedPlus('metric').length > 0;
     }
 
-    // "+ [metric] [x]" rows under Metric and Divided by. Adding is for Sum
-    // charts only, so the Add buttons hide on Average; rows already there
-    // stay so they can be removed, and saving says why it cannot.
+    // "[operator] [metric] [x]" rows under Metric and Divided by. The
+    // operator is plus, minus, times or divided by; times and divide are
+    // worked out before plus and minus. Sum and Average charts alike: on an
+    // Average chart it works on each period's averages.
     function renderPlusLists() {
         if (!chartModalState) return;
-        const avg = radioValue('aggRadio', 'sum') === 'avg';
         ['metric', 'divide'].forEach(side => {
             const on = side === 'metric' || !!selectedDivide();
             const listEl = document.getElementById(side + 'PlusList');
             const keys = chartModalState.plus[side];
+            const ops = chartModalState.ops[side];
             listEl.innerHTML = on ? keys.map((key, i) => {
                 const missing = key && !metricsByKey[key]
                     ? `<option value="${escHtml(key)}">${escHtml(keyToMetric(key).metric)}</option>` : '';
-                return `<div class="plus-row"><span>+</span>
+                const opOptions = PLUS_OPS.map(([v, label]) =>
+                    `<option value="${v}" ${(ops[i] || '+') === v ? 'selected' : ''}>${escHtml(label)}</option>`).join('');
+                return `<div class="plus-row">
+                    <select class="plus-op" title="How this metric joins the ones before it" onchange="setPlusOp('${side}', ${i}, this.value)">${opOptions}</select>
                     <select onchange="setPlus('${side}', ${i}, this.value)">
                         <option value="">(choose a metric)</option>${missing}${metricGroupHtml('snowflake')}${metricGroupHtml('sharepoint')}${metricGroupHtml('autotrader')}
                     </select>
                     <button type="button" class="btn btn-sm" title="Remove" onclick="removePlus('${side}', ${i})"><i class="fas fa-times"></i></button>
                 </div>`;
             }).join('') : '';
-            listEl.querySelectorAll('select').forEach((s, i) => { s.value = keys[i]; });
-            document.getElementById(side + 'PlusBtn').style.display = on && !avg ? '' : 'none';
+            listEl.querySelectorAll('select:not(.plus-op)').forEach((s, i) => { s.value = keys[i]; });
+            document.getElementById(side + 'PlusBtn').style.display = on ? '' : 'none';
         });
+        // The whole sum, shown once there is more than the one metric. Times
+        // and divide come before plus and minus within each side.
+        const m = selectedMetric() || {};
+        const divide = selectedDivide();
+        const top = selectedPlus('metric'), bottom = selectedPlus('divide');
+        document.getElementById('formulaPreview').textContent = top.length || divide
+            ? 'Formula: ' + formulaText([m.column || '', ...top.map(p => p.metric)],
+                divide ? [divide.metric, ...bottom.map(p => p.metric)] : [], plusOps(top), plusOps(bottom))
+            : '';
     }
 
     function addPlus(side) {
         chartModalState.plus[side].push('');
+        chartModalState.ops[side].push('+');
         renderPlusLists();
     }
 
@@ -3259,8 +3478,14 @@
         onDivideChange();
     }
 
+    function setPlusOp(side, i, op) {
+        chartModalState.ops[side][i] = op;
+        onDivideChange();
+    }
+
     function removePlus(side, i) {
         chartModalState.plus[side].splice(i, 1);
+        chartModalState.ops[side].splice(i, 1);
         onDivideChange();
     }
 
@@ -3314,6 +3539,10 @@
         chartModalState.plus = {
             metric: row ? rowPlus(row).map(p => metricKey(p.source || 'snowflake', p.metric)) : [],
             divide: row ? rowDividePlus(row).map(p => metricKey(p.source || 'snowflake', p.metric)) : [],
+        };
+        chartModalState.ops = {
+            metric: row ? plusOps(rowPlus(row)) : [],
+            divide: row ? plusOps(rowDividePlus(row)) : [],
         };
         chartModalState.wasDivide = !!divideKey;
         // The title the popup would fill in; a title still matching it follows
@@ -3622,7 +3851,8 @@
         const m = selectedMetric() || {};
         const divide = selectedDivide();
         const autoTitle = formulaText([m.column || '', ...selectedPlus('metric').map(p => p.metric)],
-            divide ? [divide.metric, ...selectedPlus('divide').map(p => p.metric)] : []);
+            divide ? [divide.metric, ...selectedPlus('divide').map(p => p.metric)] : [],
+            plusOps(selectedPlus('metric')), plusOps(selectedPlus('divide')));
         const titleInput = document.getElementById('titleInput');
         // Only replace a title the popup filled in, never one typed by hand.
         if (chartModalState.autoTitle === null || titleInput.value === chartModalState.autoTitle) {
@@ -3772,7 +4002,7 @@
     }
 
     const divideId = div => div ? metricKey(div.source || 'snowflake', div.metric) : '';
-    const plusId = list => list.map(divideId).join(',');
+    const plusId = list => list.map(p => (p.op || '+') + divideId(p)).join(',');
 
     // Grey placeholder in each blank maximum box: the top the chart would get
     // from the minimum as typed. Only shown when the loaded data still matches
@@ -4034,10 +4264,6 @@
         const multiply = selectedMultiply();
         if (multiply && (divide || metricPlus.length)) {
             showChartError('Multiplied By can only be used on a plain chart. Remove Divided By and the added metrics, or set Multiplied By to nothing.');
-            return;
-        }
-        if ((metricPlus.length || dividePlus.length) && radioValue('aggRadio', 'sum') !== 'sum') {
-            showChartError('Metrics can only be added together on a Sum chart. Choose Sum, or remove the added metrics.');
             return;
         }
         // The target is set in the Targets popup, so the chart keeps its own.
@@ -5094,7 +5320,7 @@
         });
         // Drop the blocks of sections that were renamed or removed. renderLayout
         // has already moved their charts into the new blocks.
-        const keep = new Set(SECTIONS.map(sectionDomId));
+        const keep = new Set([...SECTIONS.map(sectionDomId), MY_CHARTS_DOM_ID]);
         document.querySelectorAll('#sectionsContainer > .category-section').forEach(el => {
             if (!keep.has(el.id)) el.remove();
         });

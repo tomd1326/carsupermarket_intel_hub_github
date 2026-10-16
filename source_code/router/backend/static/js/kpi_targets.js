@@ -759,7 +759,8 @@ function chartFormula(row) {
     const name = p => metricName(p.source, p.metric);
     if (isStacked(row)) return (row.series || []).map(seriesLabel).join(', ');
     return formulaText([name({ source: rowSource(row), metric: row.metric }), ...rowPlus(row).map(name)],
-        row.divide_by ? [name(row.divide_by), ...rowDividePlus(row).map(name)] : []);
+        row.divide_by ? [name(row.divide_by), ...rowDividePlus(row).map(name)] : [],
+        plusOps(rowPlus(row)), plusOps(rowDividePlus(row)));
 }
 
 function renderTargetsTab() {

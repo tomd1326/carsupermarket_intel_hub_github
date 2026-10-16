@@ -54,6 +54,17 @@
                     environment.
                 </p>
                 <form method="post" action="{{ BASE_URL }}/settings/page-names">
+                    <div class="mb-3">
+                        <label for="site_name" class="form-label mb-1 fw-semibold">Site Name</label>
+                        <input type="text" class="form-control form-control-sm" id="site_name" name="site_name"
+                               maxlength="{{ max_length }}" style="max-width: 400px;"
+                               placeholder="{{ site_name_default }}"
+                               value="{{ stored.get(site_name_key, '') }}">
+                        <div class="pn-note mt-1">
+                            Shown on the home page on the line below CarSupermarket.com, and in its
+                            browser tab. Clear the box to go back to "{{ site_name_default }}".
+                        </div>
+                    </div>
                     <table class="table table-sm table-bordered pn-table mb-0">
                         <thead class="table-light">
                             <tr><th>Default name</th><th>Name shown</th></tr>
