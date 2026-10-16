@@ -301,7 +301,7 @@
             minGPUM:      {{ settings.min_gpu_m }},
         };
         window.ENABLE_CARS_BOUGHT = {{ 'true' if enable_cars_bought else 'false' }};
-        window.SP_CACHE_MINUTES = {{ settings.sharepoint_cache_minutes }};
+        window.SP_CACHE_MINUTES = {{ sp_cache_minutes }};
     </script>
     <!-- Must load before buying_requirements.js — that file's colour-scale
          helpers wrap shadeColour()/shadeAroundZero() from here. -->

@@ -216,15 +216,87 @@ class SharePointClient:
         item_id = item["id"]
         return drive_id, item_id
 
-    def get_last_modified_by_url(self, sharepoint_url: str) -> str:
+    def get_last_modified_by_url(self, sharepoint_url: str, timeout: float = 30) -> str:
         """When the file at sharepoint_url was last saved (ISO string). One small
         call that does not open the workbook, so a file can be checked for
         changes before paying for a slow read."""
+        return self.get_file_info_by_url(sharepoint_url, timeout=timeout)["lastModifiedDateTime"]
+
+    def get_file_info_by_url(self, sharepoint_url: str, timeout: float = 30) -> dict:
+        """{name, size, lastModifiedDateTime} for the file at sharepoint_url, in
+        one small call that does not open the workbook."""
         encoded = base64.urlsafe_b64encode(sharepoint_url.encode()).rstrip(b"=").decode()
-        url = f"https://graph.microsoft.com/v1.0/shares/u!{encoded}/driveItem?$select=lastModifiedDateTime"
-        resp = requests.get(url, headers=self._headers, timeout=30)
+        url = (f"https://graph.microsoft.com/v1.0/shares/u!{encoded}/driveItem"
+               "?$select=name,size,lastModifiedDateTime")
+        resp = requests.get(url, headers=self._headers, timeout=timeout)
         resp.raise_for_status()
-        return resp.json()["lastModifiedDateTime"]
+        return resp.json()
+
+    def _item_ids_by_url(self, sharepoint_url: str) -> tuple[str, str]:
+        """(drive_id, item_id) for a link, remembered like the other IDs so a
+        read does not pay for the shares lookup every time."""
+        key = ("url", sharepoint_url)
+        cached = _id_cache_get(key)
+        if cached is not None:
+            return cached
+        ids = self._get_item_id_by_url(sharepoint_url)
+        _id_cache_put(key, ids)
+        return ids
+
+    def _get_by_url(self, sharepoint_url: str, path: str, timeout: float) -> requests.Response:
+        """GET drives/{drive}/items/{item}/<path> for the file at sharepoint_url.
+        A 404/410 can mean the remembered IDs are out of date (file deleted and
+        recreated), so they are dropped and looked up again once."""
+        for attempt in (1, 2):
+            drive_id, item_id = self._item_ids_by_url(sharepoint_url)
+            resp = requests.get(f"https://graph.microsoft.com/v1.0/drives/{drive_id}/items/{item_id}/{path}",
+                                headers=self._headers, timeout=timeout)
+            if resp.status_code in (404, 410) and attempt == 1:
+                _id_cache_drop(("url", sharepoint_url))
+                continue
+            resp.raise_for_status()
+            return resp
+
+    def get_range_values_by_url(self, sharepoint_url: str, sheet_name: str, max_col: str, max_row: int,
+                                timeout: float = 120) -> list[list]:
+        """Cell values A1:{max_col}{max_row} of a sheet, fully blank rows at the
+        end removed. Row 0 is the first row of the sheet."""
+        encoded_sheet = requests.utils.quote(sheet_name)
+        address = requests.utils.quote(f"A1:{max_col}{max_row}")
+        resp = self._get_by_url(sharepoint_url,
+                                f"workbook/worksheets/{encoded_sheet}/range(address='{address}')?$select=values",
+                                timeout)
+        values = resp.json().get("values", [])
+        while values and all(c in (None, "") for c in values[-1]):
+            values.pop()
+        return values
+
+    def get_table_values_by_url(self, sharepoint_url: str, table_name: str, timeout: float = 120) -> list[list]:
+        """A named Excel table as rows: row 0 the column headers, in table order."""
+        encoded_table = requests.utils.quote(table_name)
+        columns = [c["name"] for c in self._get_by_url(
+            sharepoint_url, f"workbook/tables/{encoded_table}/columns?$select=name", timeout).json().get("value", [])]
+        rows = [columns]
+        drive_id, item_id = self._item_ids_by_url(sharepoint_url)
+        rows_url = (f"https://graph.microsoft.com/v1.0/drives/{drive_id}/items/{item_id}"
+                    f"/workbook/tables/{encoded_table}/rows")
+        while rows_url:
+            resp = requests.get(rows_url, headers=self._headers, timeout=timeout)
+            resp.raise_for_status()
+            body = resp.json()
+            for row_obj in body.get("value", []):
+                rows.append(row_obj.get("values", [[]])[0])
+            rows_url = body.get("@odata.nextLink")
+        return rows
+
+    def list_sheets_and_tables_by_url(self, sharepoint_url: str, timeout: float = 25) -> tuple[list, list]:
+        """(sheet names, table names) in the workbook. Opens the workbook, so
+        it can take several seconds on a big file, but reads no cells."""
+        sheets = [w["name"] for w in self._get_by_url(
+            sharepoint_url, "workbook/worksheets?$select=name", timeout).json().get("value", [])]
+        tables = [t["name"] for t in self._get_by_url(
+            sharepoint_url, "workbook/tables?$select=name", timeout).json().get("value", [])]
+        return sheets, tables
 
     def get_last_modified(self, subfolder: str, filename: str) -> str:
         """Same as get_last_modified_by_url, for a file found by folder and name
