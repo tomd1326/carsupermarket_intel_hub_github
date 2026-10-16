@@ -139,6 +139,22 @@ def page_name(page_key: str) -> str:
 
 templates.env.globals['page_name'] = page_name
 
+# The whole site's name, shown on the home page under "CarSupermarket.com".
+# Set on Settings > Page Names and stored in the same page_names table under
+# this key, so it is cached and refreshed with the page names.
+SITE_NAME_KEY = '__site'
+SITE_NAME_DEFAULT = 'Buying Tools'
+
+
+def site_name() -> str:
+    """Usage in a template:  {{ site_name() }}"""
+    if time.time() - _PAGE_NAMES_LOADED_AT >= PAGE_NAMES_TTL_SECONDS:
+        reload_page_names()
+    return PAGE_NAMES.get(SITE_NAME_KEY) or SITE_NAME_DEFAULT
+
+
+templates.env.globals['site_name'] = site_name
+
 
 # Live users settings (Settings > Live Users), cached per process the same way
 # as page names. Every page reads them to draw the circles, so they must not

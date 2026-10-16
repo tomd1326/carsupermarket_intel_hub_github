@@ -370,6 +370,7 @@ def page_names_page(request: Request, user: str = Depends(get_current_user)):
         "request": request, "user": user, "BASE_URL": BASE_URL,
         "pages": PAGES, "stored": stored, "load_error": load_error,
         "max_length": _PAGE_NAME_MAX,
+        "site_name_key": core.SITE_NAME_KEY, "site_name_default": core.SITE_NAME_DEFAULT,
         "sections": SETTINGS_SECTIONS, "active_section": "page_names",
     })
 
@@ -388,6 +389,11 @@ async def save_page_names_route(request: Request, user: str = Depends(get_curren
             return _user_redirect("page_names", nameerr=f"Names+must+be+{_PAGE_NAME_MAX}+characters+or+fewer")
         if label and label != page.label:
             names[page.key] = label
+    site = str(form.get("site_name", "")).strip()
+    if len(site) > _PAGE_NAME_MAX:
+        return _user_redirect("page_names", nameerr=f"Names+must+be+{_PAGE_NAME_MAX}+characters+or+fewer")
+    if site and site != core.SITE_NAME_DEFAULT:
+        names[core.SITE_NAME_KEY] = site
     try:
         with get_prod_pricer_connection() as conn:
             save_page_names(conn, names, updated_by=user)
