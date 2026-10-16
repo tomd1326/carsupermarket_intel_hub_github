@@ -66,10 +66,11 @@
         const own = users.filter(u => u.username === me);
         const others = users.filter(u => u.username !== me);
         const shown = others.length > maxCircles ? others.slice(0, maxCircles - 1) : others;
-        own.concat(shown).forEach(u => box.appendChild(circle(u.initials, u.name, colourFor(u.username))));
+        const here = u => u.name + ' is here';
+        own.concat(shown).forEach(u => box.appendChild(circle(u.initials, here(u), colourFor(u.username))));
         const rest = others.slice(shown.length);
         if (rest.length) {
-            box.appendChild(circle('+' + rest.length, rest.map(u => u.name).join('\n'), null, 'live-user-more'));
+            box.appendChild(circle('+' + rest.length, rest.map(here).join('\n'), null, 'live-user-more'));
         }
     }
 

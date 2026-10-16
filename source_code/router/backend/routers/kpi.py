@@ -19,7 +19,7 @@ from utils.db_utils import (get_database_connection, get_prod_pricer_connection,
                             get_chart_target_summary, get_ga4_campaign_ids,
                             add_ga4_campaign, remove_ga4_campaign)
 from utils.snowflake_client import SnowflakeClient
-from utils.sharepoint_client import SharePointClient
+from utils import sharepoint_sources
 
 from .core import (BASE_URL, templates, _track, get_current_user, is_admin,
                    require_page, require_page_api, _uk_now)
@@ -886,7 +886,8 @@ def kpi_ga4_campaign_conversion(
 # metric from one of two sources:
 #
 #   snowflake  - a number column of product_slt_kpis.daily_summary
-#   sharepoint - a number column of the "Daily Spend and Enquiries" table
+#   sharepoint - a number column of any KPI Daily Metrics file in
+#                Settings > SharePoint (see _get_sharepoint_data)
 #
 # The column lists are read live, so new columns appear without code changes.
 # No daily_summary column is named in this file except the exclusions below;
@@ -999,7 +1000,7 @@ def _validate_metric(source: str, metric: str) -> str | None:
         # Only checked against the list when the SharePoint data is already in
         # memory — reading it can mean a slow SharePoint fetch, which a layout
         # save should not wait on.
-        cached_columns = _kpi_sp_cache.get("columns") if _kpi_sp_cache.get("status") == "ok" else None
+        cached_columns = _kpi_sp_last.get("columns") if _kpi_sp_last.get("status") == "ok" else None
         if cached_columns is not None and metric not in cached_columns:
             return f"Unknown SharePoint column: {metric}"
         if len(metric) > 200:
@@ -1028,13 +1029,12 @@ def kpi_metrics(request: Request, user: str = Depends(require_page_api('kpi'))):
             "has_n1": True,   # N-1 is looked up from the metric's own history
             "has_target": f"{col}_TARGET" in live_cols,
         })
+    sp_descriptions = _kpi_sp_last.get("descriptions") or {}
     for col in _sharepoint_metric_columns():
         metrics.append({
             "source": "sharepoint",
             "column": col,
-            "description": ("From the at_data sheet of the Autotrader CTR spreadsheet"
-                            if col in _AT_DATA_COLUMNS.values()
-                            else "From the Daily Spend and Enquiries spreadsheet"),
+            "description": sp_descriptions.get(col, "From a SharePoint spreadsheet"),
             "suggested_agg": _guess_agg(col),
             # N-1 is worked out from the spreadsheet's own history.
             "has_n1": True,
@@ -1300,15 +1300,15 @@ def _custom_data(metric: str, agg: str, source: str, target_mode: str, months: i
                  sp_refresh: str = "", weight_by: str = "",
                  prefetched: dict | None = None, stored_targets: dict | None = None,
                  after: tuple | None = None, multiply_source: str = "", multiply_metric: str = "",
-                 at_values=None) -> dict:
+                 at_values=None, sp_data: dict | None = None) -> dict:
     """Daily/weekly/monthly series for one metric, plus its N-1 and target.
     current_month / current_week / current_day: also fill the current
     (part-elapsed) month, week or day. Today only has stock figures in
     daily_summary; other columns are NULL until tomorrow's build.
     refresh: Load Data's click token — re-reads the column list once per click.
     sp_refresh: the same token, sent only when the Load Data button is clicked
-    — re-reads any SharePoint file saved since the cached copy (see
-    _refresh_sharepoint).
+    — asks SharePoint now whether each file has been saved since its copy (see
+    _get_sharepoint_data).
     weight_by: on an Average chart, a daily_summary count column to weight
     each day by, so a week or month is the average over every vehicle rather
     than the plain average of the daily averages (a 3-order day would
@@ -1321,7 +1321,8 @@ def _custom_data(metric: str, agg: str, source: str, target_mode: str, months: i
     before the days are added or averaged into weeks and months, so e.g.
     slots x cost per slot per day, as a Sum, gives the right cost for any
     week or month.
-    at_values: _at_setting_values() already built for the whole load."""
+    at_values: _at_setting_values() already built for the whole load.
+    sp_data: _get_sharepoint_data() already built for the whole load."""
     if source == "snowflake":
         metric = metric.upper()
         weight_by = weight_by.upper()
@@ -1382,7 +1383,7 @@ def _custom_data(metric: str, agg: str, source: str, target_mode: str, months: i
             prefetched = _fetch_daily_summary(columns, fetch_start, fetch_end)
         sp_by_date = {}
         if "sharepoint" in sources:
-            sp = _get_sharepoint_data(sp_refresh)
+            sp = sp_data if sp_data is not None else _get_sharepoint_data(sp_refresh)
             if sp.get("status") != "ok":
                 return {"status": "error", "message": sp.get("message", "SharePoint data unavailable")}
             stale_date = sp.get("stale_date") if sp.get("stale") else None
@@ -1591,8 +1592,7 @@ def kpi_custom_data_batch(request: Request, payload: dict, user: str = Depends(r
 
         # SharePoint once (and its Load Data check once), before the items use it.
         used = {i["source"] for i in items} | {i["multiply_source"] for i in items}
-        if "sharepoint" in used:
-            _get_sharepoint_data(sp_refresh)
+        sp = _get_sharepoint_data(sp_refresh) if "sharepoint" in used else None
         # Autotrader settings and allowance history read once for every item.
         at_values = _at_setting_values() if "autotrader" in used else None
     except Exception as e:
@@ -1610,9 +1610,16 @@ def kpi_custom_data_batch(request: Request, payload: dict, user: str = Depends(r
                 i["current_month"], i["current_week"], i["current_day"], "", i["weight_by"],
                 prefetched=prefetched if prefetched is not None else {}, stored_targets=stored, after=after,
                 multiply_source=i["multiply_source"], multiply_metric=i["multiply_metric"],
-                at_values=at_values)
+                at_values=at_values, sp_data=sp)
         results.append(built[key])
-    return {"status": "ok", "results": results}
+    out = {"status": "ok", "results": results}
+    if sp and sp.get("status") == "ok":
+        # Files being downloaded now: the page asks /api/sharepoint/status
+        # until they have arrived, then reloads the charts.
+        out["sp_pending"] = sp.get("pending") or []
+        out["sp_keys"] = sp.get("keys") or []
+        out["sp_check_seconds"] = sp.get("check_seconds")
+    return out
 
 
 # ── KPI target editing ───────────────────────────────────────────────────────
@@ -2253,7 +2260,37 @@ def kpi_layout_get(request: Request, user: str = Depends(require_page_api('kpi')
     return {"status": "ok", "layout": layout, "sections": sections, "settings": settings,
             "setting_limits": KPI_SETTING_LIMITS, "notes": notes, "themes": themes,
             "metric_names": metric_names, "at_periods": at_periods, "at_ppc_periods": at_ppc_periods,
-            "hidden_sections": [s for s in (_read_kpi_layout_value('hidden_sections') or []) if s in sections]}
+            "hidden_sections": [s for s in (_read_kpi_layout_value('hidden_sections') or []) if s in sections],
+            "collapsed_rows": _user_collapsed_rows(user)}
+
+
+# ── Collapsed chart rows ─────────────────────────────────────────────────────
+# Each user's own collapsed rows, stored as {user: [row ids]} so they follow
+# the person to any browser. The row order stays the admin's.
+_COLLAPSED_KEY = 'collapsed_rows'
+
+
+def _user_collapsed_rows(user: str) -> list:
+    try:
+        return (_read_kpi_layout_value(_COLLAPSED_KEY) or {}).get(user, [])
+    except Exception as e:
+        logger.warning("Collapsed rows read failed: %s", e)
+        return []
+
+
+@router.post("/kpi/collapsed-rows")
+def kpi_collapsed_rows_save(request: Request, payload: dict, user: str = Depends(require_page_api('kpi'))):
+    rows = (payload or {}).get("rows")
+    if not isinstance(rows, list) or len(rows) > 1000 or not all(isinstance(r, str) and 0 < len(r) <= 40 for r in rows):
+        return {"status": "error", "message": "bad rows"}
+    try:
+        stored = _read_kpi_layout_value(_COLLAPSED_KEY) or {}
+        stored[user] = sorted(set(rows))
+        _write_kpi_layout_value(_COLLAPSED_KEY, stored)
+        return {"status": "ok"}
+    except Exception as e:
+        logger.error(f"KPI collapsed rows save failed: {e}")
+        return {"status": "error", "message": str(e)}
 
 
 # ── Chart notes ──────────────────────────────────────────────────────────────
@@ -3105,171 +3142,23 @@ def kpi_ai_summary(request: Request, payload: dict, user: str = Depends(require_
         return {"status": "error", "message": str(e)}
 
 
-_kpi_sp_cache: dict = {}
-_kpi_sp_cache_at: float = 0.0
+# ── SharePoint metrics ───────────────────────────────────────────────────────
+# Every KPI Daily Metrics file in Settings > SharePoint: a date column plus
+# number columns, one row per day. Every column that holds only numbers is a
+# metric; Column Renames there change a header's metric name, and a renamed
+# column is kept even if a cell holds text (that cell is skipped). The files
+# themselves are read, checked for changes and cached by
+# utils/sharepoint_sources; this only turns each copy into metrics by date.
 
-# S3 cache for the aggregated SharePoint payload (small JSON, not the
-# spreadsheet itself). Shared key (not env-scoped) so one fetch warms local,
-# dev and prod. The SharePoint API is slow and unreliable — the S3 copy also
-# serves as a stale fallback.
-# Read once a day: a cached payload is fresh if fetched after the most recent
-# 09:00 UK. The Load Data button also checks each file's last-saved time and
-# re-reads only a file saved since the cached copy (_refresh_sharepoint).
-_SP_S3_BUCKET = "aa-raw-sources-uk"
-_SP_S3_KEY = "applications/pricing/uk-vehicle-list-evaluator/shared/cache/kpi_sharepoint_v6.json"
-
-# Daily spend and enquiries: Table1, every number column.
-_SPEND_URL = "https://carsmkt.sharepoint.com/teams/marketing/Reports/Daily%20Spend%20and%20Enquiries.xlsx"
-
-# The at_data sheet of the Autotrader CTR workbook. Sheet header → metric name.
-# The natural columns are headed "Market Extension natural ..." in the sheet.
-_AT_DATA_URL = ("https://carsmkt.sharepoint.com/teams/marketing/Shared%20Documents/"
-                "Classifieds/AutoTrader/Autotrader%20CTR%20v3.xlsx")
-_AT_DATA_SHEET = "at_data"
-_AT_DATA_DATE_HEADER = "Dynamic Date"
-_AT_DATA_COLUMNS = {
-    "Total search appearances": "at_search_appearances_total",
-    "PPC search appearances": "at_search_appearances_ppc",
-    "Market Extension natural search appearances": "at_search_appearances_natural",
-    "Total advert views": "at_advert_views_total",
-    "PPC advert views": "at_advert_views_ppc",
-    "Market Extension natural advert views": "at_advert_views_natural",
-}
-
-# Load Data click token this server last refreshed for, and a lock so the
-# many chart requests from one click run the check once.
+# Load Data click token last acted on, so the many chart requests from one
+# click ask SharePoint once.
 _sp_refresh_token = ""
 _sp_refresh_lock = threading.Lock()
 
-
-def _sp_cache_is_fresh(cached_at: float) -> bool:
-    import zoneinfo
-    uk = zoneinfo.ZoneInfo("Europe/London")
-    now_uk = datetime.datetime.now(uk)
-    boundary = now_uk.replace(hour=9, minute=0, second=0, microsecond=0)
-    if boundary > now_uk:
-        boundary -= datetime.timedelta(days=1)
-    return cached_at >= boundary.timestamp()
-
-
-def _sp_s3_load() -> tuple[float, str | None, dict | None]:
-    """Return (cached_at, date_iso, data) from the S3 cache, or (0.0, None, None)."""
-    try:
-        import boto3
-        obj = boto3.client("s3", region_name="eu-west-1").get_object(Bucket=_SP_S3_BUCKET, Key=_SP_S3_KEY)
-        payload = json.loads(obj["Body"].read())
-        return payload.get("cached_at", 0.0), payload.get("date"), payload.get("data")
-    except Exception as e:
-        logger.warning("SharePoint S3 cache read failed: %s", e)
-        return 0.0, None, None
-
-
-def _sp_s3_save(cached_at: float, date_str: str, data: dict) -> None:
-    try:
-        import boto3
-        boto3.client("s3", region_name="eu-west-1").put_object(
-            Bucket=_SP_S3_BUCKET, Key=_SP_S3_KEY,
-            Body=json.dumps({"cached_at": cached_at, "date": date_str, "data": data}).encode(),
-            ContentType="application/json",
-        )
-    except Exception as e:
-        logger.warning("SharePoint S3 cache write failed: %s", e)
-
-
-def _sp_keep(result: dict) -> dict:
-    """Make result the cached copy, in memory and in S3."""
-    global _kpi_sp_cache, _kpi_sp_cache_at
-    now = time.time()
-    _kpi_sp_cache = result
-    _kpi_sp_cache_at = now
-    _sp_s3_save(now, datetime.date.today().isoformat(), result)
-    return result
-
-
-def _get_sharepoint_data(sp_refresh: str = "") -> dict:
-    """Memory cache → S3 cache → SharePoint fetch → stale S3 fallback.
-    sp_refresh: a Load Data click token; see _refresh_sharepoint."""
-    global _kpi_sp_cache, _kpi_sp_cache_at
-    if sp_refresh:
-        _refresh_sharepoint(sp_refresh)
-    if _kpi_sp_cache.get("status") == "ok" and _sp_cache_is_fresh(_kpi_sp_cache_at):
-        logger.info("KPI SharePoint: serving from memory cache")
-        return _kpi_sp_cache
-
-    cached_at, cache_date, cached = _sp_s3_load()
-    if cached and cached.get("status") == "ok" and _sp_cache_is_fresh(cached_at):
-        logger.info("KPI SharePoint: serving from S3 cache (fetched %s)", cache_date)
-        _kpi_sp_cache = cached
-        _kpi_sp_cache_at = cached_at
-        return cached
-
-    logger.info("KPI SharePoint: cache stale or missing, fetching from SharePoint")
-    try:
-        result = _build_kpi_sharepoint_data()
-    except Exception as e:
-        logger.error("KPI SharePoint fetch failed: %s", e)
-        result = {"status": "error", "message": str(e)}
-
-    if result.get("status") == "ok":
-        return _sp_keep(result)
-
-    # SharePoint failed — fall back to the most recent S3 payload if we have one
-    if cached and cached.get("status") == "ok":
-        logger.warning("KPI SharePoint: fetch failed, serving stale S3 cache from %s", cache_date)
-        stale = dict(cached)
-        stale["stale"] = True
-        stale["stale_date"] = cache_date
-        return stale
-    return result
-
-
-def _refresh_sharepoint(token: str) -> None:
-    """Load Data button: pick up a spreadsheet saved since the cached copy.
-    Asks SharePoint when each file was last saved (one small call each, run
-    together, no workbook opened) and re-reads only a file that changed. Runs
-    once per click on each server; the click's other chart requests wait for
-    it, then use the result."""
-    global _sp_refresh_token, _kpi_sp_cache, _kpi_sp_cache_at
-    with _sp_refresh_lock:
-        if token == _sp_refresh_token:
-            return
-        _sp_refresh_token = token
-        current = _get_sharepoint_data()
-        if current.get("status") != "ok" or current.get("stale"):
-            return
-        # Another server may have saved a newer copy since this one loaded its own.
-        cached_at, _, cached = _sp_s3_load()
-        if cached and cached.get("status") == "ok" and cached_at > _kpi_sp_cache_at:
-            _kpi_sp_cache, _kpi_sp_cache_at = cached, cached_at
-            current = cached
-        try:
-            modified = _sp_last_modified()
-        except Exception as e:
-            logger.warning("KPI SharePoint: last-saved check failed: %s", e)
-            return
-        old = current.get("modified", {})
-        changed = [k for k in _SP_SOURCES if modified.get(k) != old.get(k)]
-        if not changed:
-            logger.info("KPI SharePoint: no file saved since the cached copy")
-            return
-        logger.info("KPI SharePoint: re-reading %s", ", ".join(changed))
-        parts = dict(current.get("parts", {}))
-        try:
-            with ThreadPoolExecutor(max_workers=len(changed)) as pool:
-                for key, part in zip(changed, pool.map(lambda k: _SP_SOURCES[k][1](), changed)):
-                    parts[key] = part
-        except Exception as e:
-            logger.error("KPI SharePoint re-read failed: %s", e)
-            return
-        result = _combine_sp_parts(parts, modified)
-        if result.get("status") == "ok":
-            _sp_keep(result)
-
-
-def warm_sharepoint_cache() -> None:
-    """Refresh the SharePoint KPI cache if stale. Called by the /home cache warmer."""
-    _get_sharepoint_data()
-    logger.info("Home cache warm (SharePoint KPI) complete")
+# (key, copy saved time, copy download time, settings) -> parsed copy.
+_sp_parsed: dict = {}
+# The last combined result, for _validate_metric (which must not wait on a read).
+_kpi_sp_last: dict = {}
 
 
 def _sp_parse_date(val) -> str | None:
@@ -3308,126 +3197,140 @@ def _sp_cutoff() -> str:
     return cutoff.isoformat()
 
 
-def _read_spend_part() -> dict:
-    """Table1 of the daily spend workbook: every number column, by date."""
-    rows = SharePointClient().get_table_rows(table_name="Table1", sharepoint_url=_SPEND_URL)
-    if not rows:
-        raise ValueError("No rows returned from SharePoint")
-    columns = list(rows[0].keys())
-    date_col = next((c for c in columns if c.lower() == "date"), None)
-    if not date_col:
-        raise ValueError(f"Could not find a Date column. Found: {columns}")
+def _parse_kpi_copy(src: dict, values: list) -> dict:
+    """{columns, by_date} from one KPI Daily Metrics file's copy. Row 0 is the
+    header row."""
+    if not values:
+        raise ValueError("no rows")
+    headers = [str(h).strip() if h is not None else "" for h in values[0]]
+    date_header = (src.get("date_header") or "Date").strip()
+    date_idx = next((i for i, h in enumerate(headers) if h.lower() == date_header.lower()), None)
+    if date_idx is None:
+        raise ValueError(f"date column '{date_header}' not found. Found: {[h for h in headers if h]}")
+    renames = {str(k).strip(): str(v).strip() for k, v in (src.get("column_names") or {}).items()
+               if str(v).strip()}
     cutoff = _sp_cutoff()
-    dated = [(d, row) for d, row in ((_sp_parse_date(row.get(date_col)), row) for row in rows)
-             if d and d >= cutoff]
+    dated = []
+    for row in values[1:]:
+        d = _sp_parse_date(row[date_idx] if date_idx < len(row) else None)
+        if d and d >= cutoff:
+            dated.append((d, row))
 
     # A number column is one where every filled cell is a number and at least
-    # one cell is filled. Text columns (notes, labels) are left out.
+    # one cell is filled. Text columns (notes, labels) are left out, unless the
+    # column is listed under Column Renames.
     number_columns = []
-    for col in columns:
-        if col == date_col:
+    for i, header in enumerate(headers):
+        if i == date_idx or not header:
             continue
-        filled = [row.get(col) for _, row in dated if row.get(col) not in (None, "")]
-        if filled and all(_sp_number(v) is not None for v in filled):
-            number_columns.append(col)
+        filled = [row[i] for _, row in dated if i < len(row) and row[i] not in (None, "")]
+        if header in renames or (filled and all(_sp_number(v) is not None for v in filled)):
+            number_columns.append((i, renames.get(header, header)))
 
     by_date: dict[str, dict] = {}
     for d, row in dated:
-        values = {col: _sp_number(row.get(col)) for col in number_columns if row.get(col) not in (None, "")}
-        if values:
-            by_date[d] = values
-    return {"columns": number_columns, "by_date": by_date}
+        day = {}
+        for i, metric in number_columns:
+            if i < len(row) and row[i] not in (None, ""):
+                v = _sp_number(row[i])
+                if v is not None:
+                    day[metric] = v
+        if day:
+            by_date.setdefault(d, {}).update(day)
+    return {"columns": [m for _, m in number_columns], "by_date": by_date}
 
 
-def _read_at_ctr_part() -> dict:
-    """Autotrader search appearances and advert views: the at_data sheet of the
-    CTR workbook, columns A to G only."""
-    at_rows = SharePointClient(team_site="/teams/marketing").get_worksheet_values_by_url(
-        _AT_DATA_URL, _AT_DATA_SHEET, max_col="G", max_row=5000,
-    )
-    headers = [str(h).strip() for h in at_rows[0]] if at_rows else []
-    missing = [h for h in [_AT_DATA_DATE_HEADER, *_AT_DATA_COLUMNS] if h not in headers]
-    if missing:
-        raise ValueError(f"at_data headers not found: {missing}. Found: {headers}")
-    date_idx = headers.index(_AT_DATA_DATE_HEADER)
-    col_idx = {metric: headers.index(header) for header, metric in _AT_DATA_COLUMNS.items()}
-    cutoff = _sp_cutoff()
-    by_date: dict[str, dict] = {}
-    for row in at_rows[1:]:
-        d = _sp_parse_date(row[date_idx])
-        if not d or d < cutoff:
+def _uk_text(ts) -> str:
+    import zoneinfo
+    return ts.astimezone(zoneinfo.ZoneInfo("Europe/London")).strftime("%d %b %H:%M") if ts else "unknown"
+
+
+def _get_sharepoint_data(sp_refresh: str = "") -> dict:
+    """Every switched-on KPI Daily Metrics file, merged by date.
+    sp_refresh: a Load Data click token - the first request carrying it asks
+    SharePoint about every file now rather than waiting for its interval.
+
+    Never waits for a download: a file saved since its copy is downloaded by
+    the worker, and comes back listed in "pending" so the page can redraw once
+    it has arrived."""
+    global _sp_refresh_token, _kpi_sp_last
+    check = "auto"
+    if sp_refresh:
+        with _sp_refresh_lock:
+            if sp_refresh != _sp_refresh_token:
+                _sp_refresh_token = sp_refresh
+                check = "now"
+    try:
+        sources = sharepoint_sources.sources_of_type(sharepoint_sources.KPI_FILE_TYPE)
+    except Exception as e:
+        logger.error("KPI SharePoint: file list unavailable: %s", e)
+        return {"status": "error", "message": f"SharePoint file list unavailable: {e}"}
+
+    def one(src):
+        try:
+            return src, sharepoint_sources.get_copy(src["source_key"], check=check)
+        except Exception as e:
+            return src, sharepoint_sources.Copy(error=str(e))
+
+    copies = []
+    if sources:
+        with ThreadPoolExecutor(max_workers=min(4, len(sources))) as pool:
+            copies = list(pool.map(one, sources))
+
+    columns, by_date, descriptions = [], {}, {}
+    pending, stale, errors = [], [], []
+    for src, copy in copies:
+        if copy.pending:
+            pending.append({"key": src["source_key"], "name": src["name"]})
+        if copy.values is None:
+            if not copy.pending:
+                errors.append(f"{src['name']}: {copy.error or 'no data'}")
             continue
-        values = {metric: _sp_number(row[i]) for metric, i in col_idx.items() if row[i] not in (None, "")}
-        if values:
-            by_date[d] = values
-    return {"columns": list(_AT_DATA_COLUMNS.values()), "by_date": by_date}
-
-
-# Each workbook: (its URL, the function that reads it). Read and cached
-# separately, so a change to one does not mean re-reading the other.
-_SP_SOURCES = {
-    "spend": (_SPEND_URL, _read_spend_part),
-    "at_ctr": (_AT_DATA_URL, _read_at_ctr_part),
-}
-
-
-def _sp_last_modified() -> dict:
-    """Each workbook's last-saved time, asked for together."""
-    client = SharePointClient()
-    keys = list(_SP_SOURCES)
-    with ThreadPoolExecutor(max_workers=len(keys)) as pool:
-        times = list(pool.map(lambda k: client.get_last_modified_by_url(_SP_SOURCES[k][0]), keys))
-    return dict(zip(keys, times))
-
-
-def _combine_sp_parts(parts: dict, modified: dict) -> dict:
-    """The cached payload: each workbook's part kept as read, plus every
-    column merged by date for /kpi/custom-data. The spend workbook is
-    required; the Autotrader CTR one is left out if it could not be read."""
-    if "spend" not in parts:
-        return {"status": "error", "message": "Daily spend workbook could not be read"}
-    columns, by_date = [], {}
-    for key in _SP_SOURCES:
-        part = parts.get(key)
-        if not part:
-            continue
-        columns.extend(part["columns"])
+        if copy.error:
+            stale.append(f"{src['name']} from {_uk_text(copy.saved_at)}")
+        sig = (src["source_key"], copy.modified, copy.downloaded_at, src.get("date_header"),
+               json.dumps(src.get("column_names") or {}, sort_keys=True))
+        part = _sp_parsed.get(sig)
+        if part is None:
+            try:
+                part = _parse_kpi_copy(src, copy.values)
+            except Exception as e:
+                errors.append(f"{src['name']}: {e}")
+                continue
+            for old in [k for k in _sp_parsed if k[0] == src["source_key"]]:
+                _sp_parsed.pop(old, None)
+            _sp_parsed[sig] = part
+        for col in part["columns"]:
+            if col not in descriptions:
+                columns.append(col)
+                descriptions[col] = f"From the {src['name']} spreadsheet"
         for d, values in part["by_date"].items():
-            by_date.setdefault(d, {}).update(values)
-    return {
+            day = by_date.setdefault(d, {})
+            for col, v in values.items():
+                if descriptions.get(col) == f"From the {src['name']} spreadsheet":
+                    day[col] = v
+    for e in errors:
+        logger.warning("KPI SharePoint: %s", e)
+    result = {
         "status": "ok",
-        "fetched": datetime.date.today().isoformat(),
         "columns": columns,
         "by_date": by_date,
-        "parts": parts,
-        # Only for parts actually read, so a failed one is tried again next time.
-        "modified": {k: v for k, v in modified.items() if k in parts},
+        "descriptions": descriptions,
+        "pending": pending,
+        "errors": errors,
+        "stale": bool(stale),
+        "stale_date": "; ".join(stale) if stale else None,
+        "keys": [s["source_key"] for s in sources],
+        "check_seconds": min((max(1, int(s["check_minutes"])) * 60 for s in sources), default=900),
     }
+    _kpi_sp_last = result
+    return result
 
 
-def _build_kpi_sharepoint_data() -> dict:
-    """Read both workbooks (together) and combine. Result is cached in
-    _kpi_sp_cache; /kpi/custom-data turns it into chart series per request, so
-    the chart periods can change without refetching the spreadsheets."""
-    try:
-        modified = _sp_last_modified()
-    except Exception as e:
-        logger.warning("KPI SharePoint: last-saved check failed: %s", e)
-        modified = {}
-    keys = list(_SP_SOURCES)
-
-    def read(key):
-        try:
-            return _SP_SOURCES[key][1]()
-        except Exception as e:
-            # The spend workbook failing fails the whole read (in _combine_sp_parts);
-            # the Autotrader one failing leaves its columns out.
-            logger.warning("KPI SharePoint: %s read failed: %s", key, e)
-            return None
-
-    with ThreadPoolExecutor(max_workers=len(keys)) as pool:
-        parts = {k: p for k, p in zip(keys, pool.map(read, keys)) if p is not None}
-    return _combine_sp_parts(parts, modified)
+def warm_sharepoint_cache() -> None:
+    """Run the check for every SharePoint file. Called by the /home cache warmer."""
+    sharepoint_sources.check_due()
+    logger.info("Home cache warm (SharePoint files) complete")
 
 
 @router.get("/weekly-business-review", response_class=HTMLResponse)

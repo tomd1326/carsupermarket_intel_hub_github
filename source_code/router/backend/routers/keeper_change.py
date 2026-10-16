@@ -13,7 +13,6 @@ Two different existing pages are followed on purpose:
     mot_check.py, which does those parts well.
 """
 import datetime
-import hmac
 import json
 import logging
 import os
@@ -31,10 +30,9 @@ from fastapi.responses import HTMLResponse, FileResponse
 
 from utils.s3_tools import download_file
 from utils.lambda_http import LambdaRequestsManager
-from utils.secrets_manager_client import get_secret
 
 from .core import (BASE_URL, templates, s3_bucketname, s3_bucket_region, _track,
-                   require_page, require_page_api, _uk_now)
+                   require_page, require_page_api, _uk_now, worker_secret, check_worker_secret)
 
 logger = logging.getLogger(__name__)
 
@@ -171,43 +169,9 @@ def _now_iso() -> str:
 
 
 # ── worker credential ─────────────────────────────────────────────────────────
-
-def _worker_secret() -> str:
-    """The shared secret proving a worker call came from our own Lambda.
-
-    The worker route cannot use require_page_api — it is invoked by the Lambda
-    itself, with no session. Without this check anyone who can reach the API
-    could start runs (which is the state /api/reports/run in reports.py is in).
-
-    Only needed when the work is dispatched over HTTP, i.e. on Lambda. Running
-    locally the worker is called in-process and never crosses a route, so this
-    is not consulted — the secret does not have to exist to run the page on a
-    laptop.
-
-    Falls back to the Autotrader secret already in the same store if
-    WORKER_SHARED_SECRET has not been added yet. That value is not published
-    anywhere and is already required for this page to do anything at all, so it
-    is a reasonable stand-in; add the dedicated key when convenient.
-
-    Note utils/lambda_http.py no longer logs the dispatched event: it used to
-    write the whole thing, body included, to CloudWatch twice per dispatch,
-    which would have put this secret in the logs on every run.
-    """
-    secrets = get_secret(f'{_ENV}/carsupermarket/car_pricer/api_access')
-    token = secrets.get('WORKER_SHARED_SECRET') or secrets.get('AUTOTRADER_SECRET')
-    if not token:
-        raise RuntimeError(
-            'No worker credential available: add WORKER_SHARED_SECRET to '
-            f'{_ENV}/carsupermarket/car_pricer/api_access'
-        )
-    return token
-
-
-def _check_worker_secret(supplied: str) -> None:
-    expected = _worker_secret()
-    if not supplied or not hmac.compare_digest(str(supplied), expected):
-        logger.warning('Keeper change worker called with a bad or missing secret')
-        raise HTTPException(status_code=403, detail='Forbidden')
+# Shared with the SharePoint download worker; see core.worker_secret.
+_worker_secret = worker_secret
+_check_worker_secret = check_worker_secret
 
 
 # ── run state ─────────────────────────────────────────────────────────────────

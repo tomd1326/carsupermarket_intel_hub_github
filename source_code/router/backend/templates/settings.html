@@ -13,7 +13,7 @@
 </head>
 <body class="bg-light">
     {{ account_nav(user) }}
-    <div class="settings-card">
+    <div class="settings-card{% if active_section == 'sharepoint' %} settings-card-wide{% endif %}">
         <div class="d-flex align-items-center gap-3 mb-4">
             <a href="javascript:history.back()" class="btn btn-outline-secondary nav-btn">
                 <i class="fas fa-arrow-left me-1"></i>Back
@@ -74,19 +74,14 @@
                     <p class="form-text mt-0">
                         How long the page reuses previously loaded data before fetching it again.
                         Longer means faster page loads but older figures. Refresh Data always
-                        fetches live, whatever these are set to.
+                        fetches live, whatever this is set to.
+                    </p>
+                    <p class="form-text">
+                        The Daily Buyers Sheet and Cars Bought files are set up in
+                        <a href="{{ BASE_URL }}/settings/section/sharepoint">SharePoint</a>, including how
+                        often they are checked for changes.
                     </p>
                     <div class="d-flex gap-4 flex-wrap">
-                        <div>
-                            <label for="sharepoint_cache_minutes" class="form-label mb-1">Reuse spreadsheet data for (minutes)</label>
-                            <input class="form-control" type="number" id="sharepoint_cache_minutes" name="sharepoint_cache_minutes"
-                                   value="{{ settings.sharepoint_cache_minutes }}" min="0" style="width: 110px;" onclick="this.select()">
-                            <div class="form-text" style="max-width: 340px;">
-                                Applies to the Daily Buyers Sheet and Cars Bought files. Default: 30.
-                                Reading these from SharePoint is slow, so lowering this makes the
-                                first load after it expires noticeably slower for whoever hits it.
-                            </div>
-                        </div>
                         <div>
                             <label for="snowflake_cache_minutes" class="form-label mb-1">Reuse vehicle data for (minutes)</label>
                             <input class="form-control" type="number" id="snowflake_cache_minutes" name="snowflake_cache_minutes"
@@ -402,6 +397,389 @@
             </div>
             <button type="submit" class="btn btn-primary">Save Live Users</button>
         </form>
+        {% endif %}
+
+        {# ── SharePoint Files ────────────────────────────────── #}
+        {% if active_section == 'sharepoint' %}
+        <style>
+            .sp-intro { font-size: 0.85rem; }
+            #sp-table { font-size: 0.85rem; }
+            #sp-table th { white-space: nowrap; font-weight: 600; }
+            #sp-table td { white-space: nowrap; }
+            #sp-table td.sp-status { white-space: normal; min-width: 140px; max-width: 280px; }
+            #sp-table .sp-sub { font-size: 0.75rem; color: #6c757d; }
+            #sp-table .sp-actions { display: flex; gap: 4px; justify-content: flex-end; }
+            #sp-table .sp-actions .btn { font-size: 0.75rem; padding: 0.15rem 0.45rem; }
+        </style>
+        <div class="card mb-4">
+            <div class="card-header fw-semibold d-flex align-items-center">
+                <span>SharePoint Files</span>
+                <button type="button" class="btn btn-sm btn-primary ms-auto" onclick="spEdit(null)">
+                    <i class="fas fa-plus me-1"></i>Add File
+                </button>
+            </div>
+            <div class="card-body">
+                <p class="form-text sp-intro mt-0">
+                    Every SharePoint spreadsheet the app reads. Each file is checked for changes on its own
+                    interval: the app asks SharePoint when the file was last saved (a quick call that does not
+                    open the workbook) and only downloads it when it has been saved since the copy it holds.
+                    Pages are drawn from that copy straight away; a newer copy is downloaded in the background
+                    and the page redraws when it arrives. Checks only happen while someone is using the site.
+                </p>
+                <p class="form-text sp-intro">
+                    <strong>KPI Daily Metrics</strong> files can be added and deleted here: a date column plus
+                    number columns, one row per day. Every column holding only numbers becomes a KPI chart metric.
+                    The <strong>Daily Buyers Sheet</strong> and <strong>Cars Bought</strong> files can be edited
+                    and switched off but not deleted, because Buying Requirements turns their rows into purchases.
+                </p>
+                <div id="sp-error" class="alert alert-danger py-2 px-3" style="display:none"></div>
+                <table class="table table-sm align-middle mb-0" id="sp-table">
+                    <thead>
+                        <tr>
+                            <th>Name</th>
+                            <th>Reads</th>
+                            <th>Check Every</th>
+                            <th>Last Checked</th>
+                            <th>Saved In SharePoint</th>
+                            <th>Copy Held</th>
+                            <th>Last Download</th>
+                            <th>Status</th>
+                            <th></th>
+                        </tr>
+                    </thead>
+                    <tbody id="sp-rows"><tr><td colspan="9" class="text-muted">Loading...</td></tr></tbody>
+                </table>
+            </div>
+        </div>
+
+        <div class="card mb-4" id="sp-form-card" style="display:none">
+            <div class="card-header fw-semibold" id="sp-form-title">Add File</div>
+            <div class="card-body">
+                <input type="hidden" id="sp-key">
+                <div class="d-flex gap-3 flex-wrap mb-3">
+                    <div>
+                        <label for="sp-name" class="form-label mb-1">Name</label>
+                        <input class="form-control" id="sp-name" maxlength="100" style="width: 260px;">
+                    </div>
+                    <div>
+                        <label class="form-label mb-1">Type</label>
+                        <div class="form-control-plaintext" id="sp-type-label">KPI Daily Metrics</div>
+                    </div>
+                    <div>
+                        <label for="sp-check" class="form-label mb-1">Check Every (minutes)</label>
+                        <input class="form-control" type="number" id="sp-check" min="1" max="1440" style="width: 110px;" onclick="this.select()">
+                    </div>
+                    <div>
+                        <label for="sp-order" class="form-label mb-1">Order</label>
+                        <input class="form-control" type="number" id="sp-order" style="width: 90px;" onclick="this.select()">
+                    </div>
+                    <div class="form-check align-self-end mb-2">
+                        <input class="form-check-input" type="checkbox" id="sp-enabled">
+                        <label class="form-check-label" for="sp-enabled">Switched On</label>
+                    </div>
+                </div>
+                <div class="mb-3">
+                    <label for="sp-url" class="form-label mb-1">Link</label>
+                    <input class="form-control" id="sp-url" placeholder="https://carsmkt.sharepoint.com/...">
+                    <div class="form-text">Any SharePoint link to the file: the browser address or Copy Link.</div>
+                </div>
+                <div class="d-flex gap-3 flex-wrap mb-3">
+                    <div>
+                        <label for="sp-read" class="form-label mb-1">Read</label>
+                        <select class="form-select" id="sp-read" style="width: 170px;" onchange="spReadKindChanged()">
+                            <option value="sheet">A Sheet Range</option>
+                            <option value="table">A Named Table</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label for="sp-sheet" class="form-label mb-1" id="sp-sheet-label">Sheet Name</label>
+                        <input class="form-control" id="sp-sheet" maxlength="100" style="width: 200px;">
+                    </div>
+                    <div class="sp-sheet-only">
+                        <label for="sp-maxcol" class="form-label mb-1">Last Column</label>
+                        <input class="form-control" id="sp-maxcol" maxlength="3" style="width: 90px;">
+                    </div>
+                    <div class="sp-sheet-only">
+                        <label for="sp-maxrow" class="form-label mb-1">Last Row</label>
+                        <input class="form-control" type="number" id="sp-maxrow" min="2" max="100000" style="width: 110px;" onclick="this.select()">
+                    </div>
+                </div>
+                <div class="form-text mb-3 sp-sheet-only" style="max-width: 640px;">
+                    SharePoint takes longer the bigger the range asked for, however much of it is filled, so keep
+                    Last Column and Last Row only as big as the data needs.
+                </div>
+
+                <div id="sp-kpi-fields">
+                    <div class="mb-3">
+                        <label for="sp-date" class="form-label mb-1">Date Column Header</label>
+                        <input class="form-control" id="sp-date" maxlength="100" style="width: 260px;">
+                    </div>
+                    <div class="mb-3">
+                        <label for="sp-renames" class="form-label mb-1">Column Renames</label>
+                        <textarea class="form-control font-monospace" id="sp-renames" rows="5" style="max-width: 640px;"
+                                  placeholder="Header in the sheet = metric name"></textarea>
+                        <div class="form-text" style="max-width: 640px;">
+                            One per line: <code>Header in the sheet = metric name</code>. A column listed here is kept
+                            even if some cells hold text (those cells are skipped). Use this when two files share a
+                            header, as every metric name must be different. Renaming a metric that charts already
+                            use stops those charts finding it.
+                        </div>
+                    </div>
+                </div>
+
+                <div id="sp-header-fields" style="display:none">
+                    <div class="mb-3">
+                        <label for="sp-headers" class="form-label mb-1">Column Headers</label>
+                        <textarea class="form-control font-monospace" id="sp-headers" rows="10" style="max-width: 640px;"></textarea>
+                        <div class="form-text" style="max-width: 640px;">
+                            One field per line: <code>FIELD: header, other header</code>. The first header found in the
+                            sheet is used. A field left out, or with nothing after the colon, uses the standard headers
+                            shown in grey. <span id="sp-required-note"></span>
+                        </div>
+                        <pre class="form-text mt-2 mb-0" id="sp-default-headers"></pre>
+                    </div>
+                </div>
+
+                <div class="d-flex align-items-center gap-2 flex-wrap">
+                    <button type="button" class="btn btn-primary" onclick="spSave()">Save</button>
+                    <button type="button" class="btn btn-outline-secondary" id="sp-test-btn" onclick="spTest()"
+                            title="Checks the link and lists the sheets and tables. Reads no cells, but opening a big workbook can take several seconds.">
+                        <i class="fas fa-plug me-1"></i>Test Access
+                    </button>
+                    <button type="button" class="btn btn-outline-secondary" onclick="spCloseForm()">Cancel</button>
+                    <span class="text-muted small" id="sp-form-note"></span>
+                </div>
+                <div class="form-text mt-2" id="sp-test-result"></div>
+            </div>
+        </div>
+
+        <script>
+            const BASE_URL = "{{ BASE_URL }}";
+            let spFiles = [];
+            let spFileTypes = {};
+            let spRequired = [];
+            let spRefreshTimer = null;
+            const SP_KPI = 'kpi_daily_metrics';
+
+            function esc(v) {
+                return String(v ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+            }
+            function ukTime(iso) {
+                if (!iso) return '-';
+                return new Date(iso).toLocaleString('en-GB', { timeZone: 'Europe/London', day: '2-digit', month: 'short',
+                                                               hour: '2-digit', minute: '2-digit' });
+            }
+            function jobText(job) {
+                if (!job) return '';
+                const label = { queued: 'Waiting To Start', running: 'Downloading', done: 'Done',
+                                failed: 'Failed', skipped: 'Skipped' }[job.status] || job.status;
+                return `${label} ${ukTime(job.finished_at || job.started_at || job.requested_at)}` +
+                       (job.message ? ` - ${job.message}` : '');
+            }
+
+            function spLoad() {
+                fetch(`${BASE_URL}/api/sharepoint/sources`).then(r => r.json()).then(d => {
+                    const err = document.getElementById('sp-error');
+                    if (d.status !== 'ok') { err.textContent = d.message || 'Could not load the file list'; err.style.display = ''; return; }
+                    err.style.display = 'none';
+                    spFiles = d.files; spFileTypes = d.file_types; spRequired = d.required_headers;
+                    spRender();
+                    clearTimeout(spRefreshTimer);
+                    const open = spFiles.some(f => f.job && ['queued', 'running'].includes(f.job.status));
+                    spRefreshTimer = setTimeout(spLoad, open ? 4000 : 60000);
+                }).catch(e => {
+                    const err = document.getElementById('sp-error');
+                    err.textContent = 'Could not load the file list: ' + e.message; err.style.display = '';
+                });
+            }
+
+            function spRender() {
+                const body = document.getElementById('sp-rows');
+                if (!spFiles.length) { body.innerHTML = '<tr><td colspan="9" class="text-muted">No files yet.</td></tr>'; return; }
+                body.innerHTML = spFiles.map(f => {
+                    const reads = f.read_kind === 'table' ? `Table ${esc(f.sheet_or_table)}`
+                                : `${esc(f.sheet_or_table)} A1:${esc(f.max_col)}${esc(f.max_row)}`;
+                    const download = f.last_downloaded_at
+                        ? `${ukTime(f.last_downloaded_at)}<div class="sp-sub">${f.last_read_seconds ?? '-'}s, ${f.last_row_count ?? '-'} rows</div>` : '-';
+                    const job = f.job;
+                    const open = job && ['queued', 'running'].includes(job.status);
+                    let statusHtml = '';
+                    if (!f.enabled) statusHtml = '<span class="text-muted">Switched Off</span>';
+                    else if (open) statusHtml = `<span class="text-primary">${esc(jobText(job))}</span>`;
+                    else if (f.last_error) statusHtml = `<span class="text-danger">${esc(f.last_error)}</span><div class="sp-sub">${ukTime(f.last_error_at)}</div>`;
+                    else statusHtml = `<span class="text-success">OK</span>`;
+                    const history = (f.recent_jobs || []).map(j => `<div>${esc(jobText(j))}${j.requested_by ? ' (' + esc(j.requested_by) + ')' : ''}</div>`).join('');
+                    return `<tr>
+                        <td><div class="fw-semibold">${esc(f.name)}</div>
+                            <div class="sp-sub">${esc(spFileTypes[f.file_type] || f.file_type)}</div></td>
+                        <td>${reads}</td>
+                        <td>${esc(f.check_minutes)} min</td>
+                        <td>${ukTime(f.last_checked_at)}</td>
+                        <td>${ukTime(f.last_saved_at)}</td>
+                        <td>${ukTime(f.copy_saved_at)}</td>
+                        <td>${download}</td>
+                        <td class="sp-status">${statusHtml}
+                            ${history ? `<details class="sp-sub mt-1"><summary>Recent Downloads</summary>${history}</details>` : ''}</td>
+                        <td><div class="sp-actions">
+                            <button class="btn btn-sm btn-outline-secondary" onclick="spEdit('${esc(f.source_key)}')">Edit</button>
+                            <button class="btn btn-sm btn-outline-secondary" onclick="spAction('${esc(f.source_key)}', 'check')"
+                                    title="Ask SharePoint now whether the file has been saved since the copy; download only if it has" ${f.enabled ? '' : 'disabled'}>Check Now</button>
+                            <button class="btn btn-sm btn-outline-secondary" onclick="spAction('${esc(f.source_key)}', 'reread')"
+                                    title="Download the file now, whether or not it has changed" ${f.enabled ? '' : 'disabled'}>Re-read Now</button>
+                            <button class="btn btn-sm btn-outline-secondary" onclick="spToggle('${esc(f.source_key)}')">${f.enabled ? 'Switch Off' : 'Switch On'}</button>
+                            ${f.fixed ? '' : `<button class="btn btn-sm btn-outline-danger" onclick="spDelete('${esc(f.source_key)}')">Delete</button>`}
+                        </div></td>
+                    </tr>`;
+                }).join('');
+            }
+
+            function spReadKindChanged() {
+                const table = document.getElementById('sp-read').value === 'table';
+                document.querySelectorAll('.sp-sheet-only').forEach(el => { el.style.display = table ? 'none' : ''; });
+                document.getElementById('sp-sheet-label').textContent = table ? 'Table Name' : 'Sheet Name';
+            }
+
+            function spEdit(key) {
+                const f = key ? spFiles.find(x => x.source_key === key) : null;
+                const type = f ? f.file_type : SP_KPI;
+                document.getElementById('sp-form-title').textContent = f ? `Edit ${f.name}` : 'Add File';
+                document.getElementById('sp-key').value = f ? f.source_key : '';
+                document.getElementById('sp-name').value = f ? f.name : '';
+                document.getElementById('sp-type-label').textContent = spFileTypes[type] || type;
+                document.getElementById('sp-check').value = f ? f.check_minutes : 15;
+                document.getElementById('sp-order').value = f ? f.sort_order : (Math.max(0, ...spFiles.map(x => x.sort_order || 0)) + 10);
+                document.getElementById('sp-enabled').checked = f ? !!f.enabled : true;
+                document.getElementById('sp-url').value = f ? f.url : '';
+                document.getElementById('sp-read').value = f ? f.read_kind : 'sheet';
+                document.getElementById('sp-sheet').value = f ? f.sheet_or_table : '';
+                document.getElementById('sp-maxcol').value = f && f.max_col ? f.max_col : 'Z';
+                document.getElementById('sp-maxrow').value = f && f.max_row ? f.max_row : 2000;
+                const kpi = type === SP_KPI;
+                document.getElementById('sp-kpi-fields').style.display = kpi ? '' : 'none';
+                document.getElementById('sp-header-fields').style.display = kpi ? 'none' : '';
+                if (kpi) {
+                    document.getElementById('sp-date').value = f ? (f.date_header || '') : 'Date';
+                    document.getElementById('sp-renames').value = Object.entries((f && f.column_names) || {})
+                        .map(([h, m]) => `${h} = ${m}`).join('\n');
+                } else {
+                    const defaults = f.default_headers || {};
+                    const stored = f.column_names || {};
+                    document.getElementById('sp-headers').value = Object.keys(defaults)
+                        .map(field => `${field}: ${(stored[field] || []).join(', ')}`).join('\n');
+                    document.getElementById('sp-default-headers').textContent = 'Standard headers:\n' +
+                        Object.entries(defaults).map(([field, names]) => `${field}: ${names.join(', ')}`).join('\n');
+                    document.getElementById('sp-required-note').textContent =
+                        `Needed for purchases to be counted: ${spRequired.join(', ')}.`;
+                }
+                spReadKindChanged();
+                document.getElementById('sp-form-note').textContent = '';
+                document.getElementById('sp-test-result').textContent = '';
+                const card = document.getElementById('sp-form-card');
+                card.style.display = '';
+                card.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            }
+
+            function spCloseForm() { document.getElementById('sp-form-card').style.display = 'none'; }
+
+            function spFormPayload() {
+                const key = document.getElementById('sp-key').value;
+                const f = key ? spFiles.find(x => x.source_key === key) : null;
+                const kpi = !f || f.file_type === SP_KPI;
+                const columnNames = {};
+                if (kpi) {
+                    document.getElementById('sp-renames').value.split('\n').forEach(line => {
+                        const i = line.indexOf('=');
+                        if (i > 0) columnNames[line.slice(0, i).trim()] = line.slice(i + 1).trim();
+                    });
+                } else {
+                    document.getElementById('sp-headers').value.split('\n').forEach(line => {
+                        const i = line.indexOf(':');
+                        if (i > 0) {
+                            const names = line.slice(i + 1).split(',').map(s => s.trim()).filter(Boolean);
+                            if (names.length) columnNames[line.slice(0, i).trim()] = names;
+                        }
+                    });
+                }
+                return {
+                    source_key: key || null,
+                    file_type: f ? f.file_type : SP_KPI,
+                    name: document.getElementById('sp-name').value,
+                    url: document.getElementById('sp-url').value,
+                    read_kind: document.getElementById('sp-read').value,
+                    sheet_or_table: document.getElementById('sp-sheet').value,
+                    max_col: document.getElementById('sp-maxcol').value,
+                    max_row: document.getElementById('sp-maxrow').value,
+                    date_header: kpi ? document.getElementById('sp-date').value : null,
+                    column_names: columnNames,
+                    check_minutes: document.getElementById('sp-check').value,
+                    sort_order: document.getElementById('sp-order').value,
+                    enabled: document.getElementById('sp-enabled').checked,
+                };
+            }
+
+            function spPost(url, payload, method = 'POST') {
+                return fetch(url, { method, headers: { 'Content-Type': 'application/json' },
+                                    body: payload ? JSON.stringify(payload) : null }).then(r => r.json());
+            }
+
+            function spSave() {
+                const note = document.getElementById('sp-form-note');
+                note.textContent = 'Saving...';
+                spPost(`${BASE_URL}/api/sharepoint/sources`, spFormPayload()).then(d => {
+                    if (d.status !== 'ok') { note.textContent = d.message || 'Save failed'; return; }
+                    note.textContent = '';
+                    spCloseForm();
+                    spLoad();
+                }).catch(e => { note.textContent = 'Save failed: ' + e.message; });
+            }
+
+            function spTest() {
+                const btn = document.getElementById('sp-test-btn');
+                const out = document.getElementById('sp-test-result');
+                const p = spFormPayload();
+                btn.disabled = true;
+                out.textContent = 'Testing...';
+                spPost(`${BASE_URL}/api/sharepoint/test`, { url: p.url, read_kind: p.read_kind, sheet_or_table: p.sheet_or_table })
+                    .then(d => {
+                        if (d.status !== 'ok' || !d.ok) { out.textContent = 'Failed: ' + (d.message || 'unknown error'); return; }
+                        const lines = [`Found ${d.file_name} (${d.size_mb} MB), last saved ${ukTime(d.saved_at)}. Change check took ${d.check_seconds}s.`];
+                        if (d.message) lines.push(d.message);
+                        if (d.sheets) lines.push('Sheets: ' + d.sheets.join(', '));
+                        if (d.tables && d.tables.length) lines.push('Tables: ' + d.tables.join(', '));
+                        out.innerHTML = lines.map(esc).join('<br>');
+                    })
+                    .catch(e => { out.textContent = 'Failed: ' + e.message; })
+                    .finally(() => { btn.disabled = false; });
+            }
+
+            function spAction(key, action) {
+                spPost(`${BASE_URL}/api/sharepoint/sources/${encodeURIComponent(key)}/${action}`).then(d => {
+                    if (d.status !== 'ok') alert(d.message || 'Failed');
+                    else if (d.error) alert(d.error);
+                    spLoad();
+                });
+            }
+
+            function spToggle(key) {
+                const f = spFiles.find(x => x.source_key === key);
+                if (!f) return;
+                spPost(`${BASE_URL}/api/sharepoint/sources`, { ...f, enabled: !f.enabled }).then(d => {
+                    if (d.status !== 'ok') alert(d.message || 'Failed');
+                    spLoad();
+                });
+            }
+
+            function spDelete(key) {
+                const f = spFiles.find(x => x.source_key === key);
+                if (!f || !confirm(`Delete ${f.name}? Charts using its metrics will stop finding them.`)) return;
+                spPost(`${BASE_URL}/api/sharepoint/sources/${encodeURIComponent(key)}`, null, 'DELETE').then(d => {
+                    if (d.status !== 'ok') alert(d.message || 'Delete failed');
+                    spLoad();
+                });
+            }
+
+            spLoad();
+        </script>
         {% endif %}
 
         </div><!-- /.settings-content -->
