@@ -5,6 +5,18 @@
 </a>
 {%- endmacro %}
 
+{# Live users circles. Filled by live_users.js; who is listed is decided by the
+   server (routers/presence.py). Home calls this directly, as it has no account_nav. #}
+{% macro live_users(user_name=None) -%}
+{% if user_name %}{% set pc = presence_config() %}{% if pc.presence_enabled %}
+<link href="{{ static_url('css/live_users.css') }}" rel="stylesheet">
+<div id="live-users" class="live-users" data-base="{{ BASE_URL }}"
+     data-interval="{{ pc.presence_interval_seconds }}" data-max="{{ pc.presence_max_circles }}"
+     style="--live-user-size: {{ pc.presence_circle_size }}px; --live-user-border-width: {{ pc.presence_border_width }}px; --live-user-gap: {{ pc.presence_gap }}px; --live-user-border-colour: {{ pc.presence_border_colour }}; --live-user-text-colour: {{ pc.presence_text_colour }}; --live-user-more-colour: {{ pc.presence_more_colour }}"></div>
+<script src="{{ static_url('js/live_users.js') }}" defer></script>
+{% endif %}{% endif %}
+{%- endmacro %}
+
 {# Every page calls account_nav, so the popup scroll lock rides along with it. #}
 {% macro account_nav(user_name=None, show_back=False) -%}
 <script src="{{ static_url('js/popup_scroll_lock.js') }}" defer></script>
@@ -14,6 +26,7 @@
         <i class="fas fa-arrow-left me-1"></i>Back
     </a>
     {% endif %}
+    {{ live_users(user_name) }}
     {{ home_button() }}
     {% if user_name %}
     <span class="account-user">{{ user_name }}</span>

@@ -32,6 +32,26 @@
         <div class="settings-content">
 
         <div class="card mb-4">
+            <div class="card-header fw-semibold">Sign In</div>
+            {% if request.query_params.get('loginok') %}
+            <div class="alert alert-success mb-0 rounded-0 border-0 py-2 px-3">Sign in setting saved.</div>
+            {% endif %}
+            <div class="card-body">
+                <form method="post" action="{{ BASE_URL }}/settings/login-mode" class="d-flex gap-2 align-items-end flex-wrap">
+                    <div>
+                        <label for="login_mode" class="form-label mb-1">Sign In With</label>
+                        <select class="form-select" id="login_mode" name="login_mode" style="width: 320px;">
+                            <option value="both" {% if login_mode != 'email' %}selected{% endif %}>Username Or Email Address</option>
+                            <option value="email" {% if login_mode == 'email' %}selected{% endif %}>Email Address Only</option>
+                        </select>
+                    </div>
+                    <button type="submit" class="btn btn-primary">Save</button>
+                </form>
+                <div class="form-text">The admin account can always sign in by username. Users without an email below cannot sign in when set to Email Address Only.</div>
+            </div>
+        </div>
+
+        <div class="card mb-4">
             <div class="card-header fw-semibold">Accounts</div>
             {% if request.query_params.get('pwdok') %}
             <div class="alert alert-success mb-0 rounded-0 border-0 py-2 px-3">Password updated for {{ request.query_params.get('pwdok') }}.</div>
@@ -82,10 +102,18 @@
                         {% for u in all_users %}
                         {% set d = user_details.get(u, {}) %}
                         <tr>
-                            <td class="align-middle text-nowrap">{{ u }}{% if u == 'tdrayson' %} <span class="text-muted small">(admin)</span>{% endif %}</td>
+                            <td class="align-middle text-nowrap">{{ u }}{% if u == 'tdrayson' %} <span class="text-muted small">(admin, details set in code)</span>{% endif %}</td>
+                            {% if u == 'tdrayson' %}
+                            {# Fixed in code (db_utils.ADMIN_DETAILS): the admin login may have
+                               no users-table row to save into. No name attributes, so not sent. #}
+                            <td><input type="text" value="{{ d.first_name or '' }}" class="form-control form-control-sm" style="width:120px;" readonly disabled title="Set in code"></td>
+                            <td><input type="text" value="{{ d.last_name or '' }}" class="form-control form-control-sm" style="width:120px;" readonly disabled title="Set in code"></td>
+                            <td><input type="email" value="{{ d.email or '' }}" class="form-control form-control-sm" style="width:220px;" readonly disabled title="Set in code"></td>
+                            {% else %}
                             <td><input type="text" form="details-form" name="first_name__{{ u }}" value="{{ d.first_name or '' }}" class="form-control form-control-sm" style="width:120px;" autocomplete="off"></td>
                             <td><input type="text" form="details-form" name="last_name__{{ u }}" value="{{ d.last_name or '' }}" class="form-control form-control-sm" style="width:120px;" autocomplete="off"></td>
                             <td><input type="email" form="details-form" name="email__{{ u }}" value="{{ d.email or '' }}" class="form-control form-control-sm" style="width:220px;" autocomplete="off"></td>
+                            {% endif %}
                             <td class="align-middle text-muted small text-nowrap">
                                 {{ last_logins[u] if last_logins.get(u) else 'Never' }}
                             </td>

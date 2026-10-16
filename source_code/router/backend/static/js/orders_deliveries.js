@@ -2125,26 +2125,6 @@ const BASE_URL = window.BASE_URL;
 
         function refreshData() { load(true); }
 
-        // Test email button — only rendered for tdrayson (see the template).
-        async function sendTestEmail() {
-            const btn = document.getElementById('test-email-btn');
-            const note = document.getElementById('test-email-note');
-            btn.disabled = true;
-            note.textContent = 'Sending...';
-            try {
-                const resp = await fetch(BASE_URL + '/reports/orders-deliveries/test-email',
-                                         { method: 'POST' });
-                const data = await resp.json();
-                note.textContent = data.status === 'ok'
-                    ? data.message
-                    : 'Failed: ' + (data.message || 'unknown error');
-            } catch (e) {
-                note.textContent = 'Failed: ' + e.message;
-            } finally {
-                btn.disabled = false;
-            }
-        }
-
         document.querySelectorAll('#lens-toggle button').forEach(b =>
             b.addEventListener('click', () => setLens(b.dataset.lens)));
         document.querySelectorAll('#view-toggle button').forEach(b =>

@@ -325,11 +325,150 @@ function calcRefText(ref) {
     return `${metricName(ref.source || 'snowflake', ref.metric)} (${INPUT_TARGET_LABELS[ref.mode] || ref.mode})`;
 }
 
+// ── Targets popup ──
+// One chart's target line, opened with the Targets button beside Edit Chart.
+// The Fixed Figure box and the Per Date box are separate and both always
+// shown; each saves its own figures, and the choice at the top picks which
+// one the line draws. Every user can use those two (unless Settings >
+// Targets makes it the admin's only). The admin also gets No Target, the
+// Snowflake target column, From Inputs and Calculated. A plain chart's fixed
+// and per-date figures belong to the metric (every chart on it shares them);
+// a ratio, added-metrics or stacked chart's belong to the chart.
+
+let targetModalState = null;
+
+// The target options this user can pick for the chart.
+function targetModesFor(s) {
+    if (!IS_ADMIN) return ['fixed', 'import'];
+    if (s.kind === 'stacked') return ['none', 'fixed', 'import'];
+    if (s.kind === 'own') return ['none', 'fixed', 'import', 'inputs'];
+    const info = metricsByKey[metricKey(s.source, s.metric)] || {};
+    return ['none', 'fixed', 'import', ...(info.has_target || s.current === 'snowflake' ? ['snowflake'] : []), 'calc'];
+}
+
+// Is the per-date box in 0-100 % units? Follows the chart's Label Format.
+function targetPastePct() {
+    return !!targetModalState && targetModalState.pct;
+}
+
+function showTargetError(message) {
+    const box = document.getElementById('targetModalError');
+    box.textContent = message;
+    box.classList.add('show');
+}
+
+function closeTargetModal() {
+    targetModalState = null;
+    document.getElementById('targetModal').classList.remove('open');
+}
+
+async function openTargetModal(rowId) {
+    const row = findRow(rowId);
+    if (!row) return;
+    const kind = isStacked(row) ? 'stacked' : rowOwnTarget(row) ? 'own' : 'plain';
+    const source = rowSource(row);
+    const s = {
+        rowId, kind, source, metric: row.metric, pct: rowIsPct(row),
+        current: kind === 'stacked' ? (['fixed', 'import'].includes(row.target_mode) ? row.target_mode : 'none') : rowTargetMode(row),
+        storedFixed: null, fixedOrig: '', datesOrig: '', datesLoading: true,
+        // Calculated target as saved, until its lists load.
+        calc: row.target_calc ? JSON.parse(JSON.stringify(row.target_calc)) : null, calcLoaded: false,
+        inputTargets: { ...(row.input_targets || {}) }, storedTargets: null,
+    };
+    targetModalState = s;
+    const show = (id, on) => { document.getElementById(id).style.display = on ? '' : 'none'; };
+    document.getElementById('targetModalTitle').textContent = `Targets: ${rowTitle(row)}`;
+    document.getElementById('targetModalError').classList.remove('show');
+
+    const listed = IS_ADMIN ? ' Every target is also listed in Settings > Targets.' : '';
+    document.getElementById('targetSharedNote').textContent =
+        (kind === 'plain' ? `Fixed and per-date figures belong to ${metricOptionText(source, row.metric)}, so every chart on it shares them.`
+                          : 'Fixed and per-date figures here belong to this chart only.') + listed;
+
+    const modes = targetModesFor(s);
+    Object.entries({ none: 'targetModeNone', fixed: 'targetModeFixed', import: 'targetModeImport',
+                     snowflake: 'targetModeSnowflake', inputs: 'targetModeInputs', calc: 'targetModeCalc' })
+        .forEach(([mode, id]) => show(id, modes.includes(mode)));
+    setRadio('targetMode', modes.includes(s.current) ? s.current : '');
+    document.getElementById('targetCurrentNote').textContent = modes.includes(s.current) ? ''
+        : `Currently: ${TARGET_SOURCE_LABELS[s.current] || s.current}, set by the admin. Saving a fixed figure or per-date list replaces it.`;
+
+    // Fixed figure: per day on a plain, added-metrics or stacked chart, the
+    // same on every point of a divided one.
+    const divided = !!row.divide_by;
+    document.getElementById('fixedTargetLabel').textContent = kind === 'stacked' ? 'Fixed Target (Per Day, Against The Column Total)'
+        : divided ? 'Fixed Target' : 'Fixed Target (Per Day)';
+    document.getElementById('fixedTargetHint').textContent = divided
+        ? 'One figure for every point, in the chart\'s units (25 for 25%).'
+        : 'One figure for every date: added up for weeks and months on Sum charts, the same figure on Average charts.';
+    document.getElementById('fixedTargetUnit').textContent = kind === 'stacked' ? ''
+        : row.fmt === 'pct' ? '%' : row.fmt === 'pct100' ? 'as a decimal (0.12 = 12%)' : '';
+    const fixedInput = document.getElementById('fixedTargetInput');
+    const own = kind === 'stacked' ? row.stack_target : kind === 'own' ? row.ratio_target : null;
+    fixedInput.value = own === null || own === undefined ? '' : own;
+    s.fixedOrig = fixedInput.value;
+
+    document.getElementById('chartDatesHint').textContent = kind === 'own'
+        ? 'This chart\'s own figure for each date, in its units (12% or 0.12 for 12% on a % chart). '
+          + 'Paste two columns from Excel: date, target. Weeks and months show the average.'
+        : kind === 'stacked'
+        ? 'This chart\'s own figure for each date, against the column total. Paste two columns from Excel: '
+          + 'date, target. Weeks and months add up the days on Sum charts. Taking a date out of the box removes it.'
+        : 'Paste two columns from Excel: date, target. They belong to the metric, so every chart on it '
+          + 'shares them. Taking a date out of the box removes it.';
+    const datesInput = document.getElementById('chartDatesInput');
+    datesInput.value = '';
+    datesInput.placeholder = 'Loading...';
+    document.getElementById('chartDatesCheck').textContent = '';
+
+    updateTargetFields();
+    document.getElementById('targetModal').classList.add('open');
+
+    if (kind === 'plain') {
+        try {
+            const resp = await fetch(`${BASE_URL}/kpi/metric-target?${new URLSearchParams({ source, metric: row.metric })}`).then(r => r.json());
+            if (targetModalState !== s) return;
+            if (resp.status !== 'ok') throw new Error(resp.message || 'load failed');
+            s.storedFixed = resp.fixed === undefined ? null : resp.fixed;
+            if (s.storedFixed !== null && fixedInput.value === '') fixedInput.value = s.storedFixed;
+            s.fixedOrig = s.storedFixed === null ? '' : String(s.storedFixed);
+        } catch (err) {
+            if (targetModalState === s) showTargetError('Could not load the stored fixed figure: ' + err.message);
+        }
+    }
+    {
+        try {
+            const rows = await fetchTargetDates(kind === 'plain' ? { source, metric: row.metric } : { row_id: row.id });
+            if (targetModalState !== s) return;
+            s.datesOrig = formatPastedTargets(rows, s.pct);
+            if (datesInput.value === '') datesInput.value = s.datesOrig;
+        } catch (err) {
+            if (targetModalState === s) showTargetError('Could not load the per-date targets: ' + err.message);
+        }
+        if (targetModalState !== s) return;
+        s.datesLoading = false;
+        datesInput.placeholder = '';
+        showPasteCheck('chartDatesInput', 'chartDatesCheck', s.pct);
+    }
+}
+
+// Shows the fields for the chosen target source.
+function updateTargetFields() {
+    const s = targetModalState;
+    if (!s) return;
+    const mode = radioValue('targetMode', '');
+    const show = (id, on) => { document.getElementById(id).style.display = on ? '' : 'none'; };
+    show('inputTargetsField', mode === 'inputs');
+    show('calcField', mode === 'calc');
+    if (mode === 'inputs') renderInputTargets();
+    if (mode === 'calc' && !s.calcLoaded) loadCalcOptions();
+}
+
 // The Calculated From lists: every metric target that exists, every chart
 // with a target of its own kind, and a typed figure. Read from Settings >
 // Targets' list of stored targets, so only targets that hold figures are offered.
 async function loadCalcOptions() {
-    const s = chartModalState;
+    const s = targetModalState;
     s.calcLoaded = true;
     ['calcA', 'calcB'].forEach(id => { document.getElementById(id).innerHTML = '<option value="">Loading...</option>'; });
     let stored = [];
@@ -338,9 +477,9 @@ async function loadCalcOptions() {
         if (resp.status !== 'ok') throw new Error(resp.message || 'load failed');
         stored = resp.targets || [];
     } catch (err) {
-        if (chartModalState === s) showChartError('Could not load the targets to calculate from: ' + err.message);
+        if (targetModalState === s) showTargetError('Could not load the targets to calculate from: ' + err.message);
     }
-    if (chartModalState !== s) return;
+    if (targetModalState !== s) return;
     const metricOpts = [];
     metricsCatalogue.forEach(m => {
         const modes = [];
@@ -398,128 +537,139 @@ function readCalc() {
              b: side('calcB', 'calcBValue', 'second') };
 }
 
-// ── Edit Chart popup: per-date box and From Inputs list ──
-
-// Is the popup's box in 0-100 % units? Follows the Format chosen in the popup.
-function chartPastePct() {
-    return document.getElementById('fmtSelect').value === 'pct';
-}
-
-// The box holds the metric's list on a plain chart and the chart's own list
-// on a ratio or added-metrics chart. Switching between the two keeps what was
-// typed in each.
-function showChartDates(kind) {
-    const s = chartModalState;
-    if (!s) return;
-    const input = document.getElementById('chartDatesInput');
-    // Only swap the text when the list changes, so what was typed stays put
-    // while other settings in the popup change.
-    if (s.datesKind !== kind) {
-        if (s.datesKind) s.dates[s.datesKind] = input.value;
-        s.datesKind = kind;
-        input.value = s.dates[kind] || '';
-        input.placeholder = s.loading[kind] ? 'Loading...' : '';
-    }
-    document.getElementById('chartDatesHint').textContent = kind === 'row'
-        ? 'This chart\'s own figure for each date, in its units (12% or 0.12 for 12% on a % chart). '
-          + 'Paste two columns from Excel: date, target. Weeks and months show the average.'
-        : 'Paste two columns from Excel: date, target. They belong to the metric, so every chart on it '
-          + 'shares them. Taking a date out of the box removes it. Saved with the chart.';
-    showPasteCheck('chartDatesInput', 'chartDatesCheck', chartPastePct());
-}
-
-// Loads one list into the popup, unless the popup has moved on since.
-async function loadChartDates(kind, params) {
-    const s = chartModalState;
-    const input = document.getElementById('chartDatesInput');
-    s.dates[kind] = s.datesOrig[kind] = '';
-    s.loading[kind] = true;
-    if (s.datesKind === kind) { input.value = ''; input.placeholder = 'Loading...'; }
-    try {
-        const rows = await fetchTargetDates(params);
-        if (chartModalState !== s) return;
-        if (kind === 'metric' && s.metricKey !== metricKey(params.source, params.metric)) return;
-        s.dates[kind] = s.datesOrig[kind] = formatPastedTargets(rows, chartPastePct());
-    } catch (err) {
-        if (chartModalState === s) showChartError('Could not load the per-date targets: ' + err.message);
-    }
-    s.loading[kind] = false;
-    if (chartModalState === s && s.datesKind === kind) {
-        input.value = s.dates[kind];
-        input.placeholder = '';
-        showPasteCheck('chartDatesInput', 'chartDatesCheck', chartPastePct());
-    }
-}
-
-// Shows the per-date box, the From Inputs list and the right radio options
-// for the chosen target source.
-function updateTargetFields() {
-    if (!chartModalState) return;
-    const show = (id, on) => { document.getElementById(id).style.display = on ? '' : 'none'; };
-    if (chartTypeValue() === 'stacked') {
-        show('importField', false);
-        show('inputTargetsField', false);
-        return;
-    }
-    const own = selectedOwnTarget();
-    const mode = radioValue('targetMode', 'none');
-    show('targetModeInputs', own);
-    show('importField', mode === 'import');
-    show('inputTargetsField', own && mode === 'inputs');
-    show('calcField', !own && mode === 'calc');
-    showChartDates(own ? 'row' : 'metric');
-    if (own && mode === 'inputs') renderInputTargets();
-    if (!own && mode === 'calc' && !chartModalState.calcLoaded) loadCalcOptions();
-    updateFixedUnit();
-}
-
-// The fixed target box's unit: "%" on a chart showing 0-100 %, a reminder
-// on one showing a decimal as %.
-function updateFixedUnit() {
-    const unit = document.getElementById('fixedTargetUnit');
-    if (!unit) return;
-    const fmt = document.getElementById('fmtSelect').value;
-    unit.textContent = chartTypeValue() === 'stacked' ? '' : fmt === 'pct' ? '%' : fmt === 'pct100' ? 'as a decimal (0.12 = 12%)' : '';
-}
-
-// One line per metric in the chart, with where its target comes from.
+// One line per metric in the chart, with where its target comes from. A
+// source with nothing stored behind it says so, since one metric with no
+// target leaves the whole chart without a target line. A metric not yet set
+// starts on a source that holds figures.
 function renderInputTargets() {
-    const s = chartModalState;
-    const m = selectedMetric() || {};
-    const divide = selectedDivide();
-    const parts = [{ source: m.source, metric: m.column }, ...selectedPlus('metric'),
-                   ...(divide ? [divide, ...selectedPlus('divide')] : [])].filter(p => p.metric);
-    document.getElementById('inputTargetsList').innerHTML = parts.map(p => {
-        const key = metricKey(p.source || 'snowflake', p.metric);
-        const chosen = s.inputTargets[key] || 'import';
+    const s = targetModalState;
+    const row = findRow(s.rowId);
+    if (!row) return;
+    if (!s.storedTargets) {
+        s.storedTargets = 'loading';
+        fetch(`${BASE_URL}/kpi/targets/overview`).then(r => r.json())
+            .then(resp => { if (resp.status !== 'ok') throw new Error(resp.message || 'load failed'); return resp.targets || []; })
+            .catch(() => null)
+            .then(targets => {
+                if (targetModalState !== s) return;
+                s.storedTargets = targets || 'failed';
+                if (radioValue('targetMode', '') === 'inputs') renderInputTargets();
+            });
+    }
+    const stored = Array.isArray(s.storedTargets) ? s.storedTargets : null;
+    document.getElementById('inputTargetsList').innerHTML = rowInputParts(row).map(p => {
+        const source = p.source || 'snowflake';
+        const key = metricKey(source, p.metric);
         const info = metricsByKey[key] || {};
+        const has = mode => mode === 'snowflake' ? !!info.has_target
+            : !stored || stored.some(t => t.kind === (mode === 'import' ? 'dates' : 'fixed') && t.source === source && t.metric === p.metric);
+        if (!s.inputTargets[key] && stored) {
+            s.inputTargets[key] = ['import', 'fixed', 'snowflake'].find(has) || 'import';
+        }
+        const chosen = s.inputTargets[key] || 'import';
         const options = Object.entries(INPUT_TARGET_LABELS)
             .filter(([mode]) => mode !== 'snowflake' || info.has_target || chosen === 'snowflake')
-            .map(([mode, label]) => `<option value="${mode}"${mode === chosen ? ' selected' : ''}>${label}</option>`).join('');
-        return `<div class="input-target-row"><span title="${escHtml(p.metric)}">${escHtml(metricName(p.source, p.metric))}</span>
-            <select data-key="${escHtml(key)}" onchange="chartModalState.inputTargets[this.dataset.key] = this.value">${options}</select></div>`;
+            .map(([mode, label]) => `<option value="${mode}"${mode === chosen ? ' selected' : ''}>${label}${has(mode) ? '' : ' - Nothing Set'}</option>`).join('');
+        return `<div class="input-target-row"><span title="${escHtml(p.metric)}">${escHtml(metricName(source, p.metric))}</span>
+            <select data-key="${escHtml(key)}" onchange="targetModalState.inputTargets[this.dataset.key] = this.value">${options}</select></div>`;
     }).join('');
 }
 
-// The From Inputs choices for the metrics now in the chart.
+// The From Inputs choices for the chart's metrics.
 function readInputTargets(row) {
     return Object.fromEntries(rowInputParts(row).map(p => {
         const key = metricKey(p.source || 'snowflake', p.metric);
-        return [key, chartModalState.inputTargets[key] || 'import'];
+        return [key, targetModalState.inputTargets[key] || 'import'];
     }));
 }
 
-// Checks the box before anything is saved. Returns {changed, rows}; throws
-// with the problem.
-function readChartDates(mode) {
-    const s = chartModalState;
-    const kind = s.datesKind;
-    // Saving before the stored list has arrived would replace it with nothing.
-    if (s.loading[kind]) throw new Error('The per-date targets are still loading - try again in a moment.');
+async function saveTargetModal() {
+    const s = targetModalState;
+    if (!s) return;
+    const row = findRow(s.rowId);
+    document.getElementById('targetModalError').classList.remove('show');
+    if (!row) { showTargetError('This chart has been removed.'); return; }
+    let mode = radioValue('targetMode', '');
+    if (!mode) { showTargetError('Choose which target the line uses.'); return; }
+    // Saving before the stored figures have arrived would replace them with nothing.
+    if (s.datesLoading) { showTargetError('The targets are still loading - try again in a moment.'); return; }
+
+    // Fixed Figure box: saved whenever it changed, whichever target the line uses.
+    const raw = document.getElementById('fixedTargetInput').value.trim();
+    let fixed = raw === '' ? null : Number(raw);
+    if (fixed !== null && (isNaN(fixed) || fixed < 0)) { showTargetError('The fixed target must be a number of 0 or more.'); return; }
+    if (mode === 'fixed' && fixed === null) { showTargetError('Enter a fixed figure, or choose another target.'); return; }
+    let fixedChanged = raw !== s.fixedOrig.trim();
+
+    // Per Date box: saved whenever it changed, the same way.
     const text = document.getElementById('chartDatesInput').value;
-    const rows = parsePastedTargets(text, chartPastePct());
-    if (mode === 'import' && !rows.length) throw new Error('Paste the per-date targets, or choose another target option.');
-    return { kind, rows, changed: text.trim() !== (s.datesOrig[kind] || '').trim() };
+    let pasted;
+    try { pasted = parsePastedTargets(text, s.pct); } catch (err) { showTargetError(err.message); return; }
+    if (mode === 'import' && !pasted.length) { showTargetError('Paste the per-date targets, or choose another target.'); return; }
+    const datesChanged = text.trim() !== s.datesOrig.trim();
+
+    // Per Date chosen with every pasted date the same figure: saved as a fixed
+    // figure instead and the per-date list cleared. On a plain chart that
+    // moves every chart on the metric to Fixed, which only the admin can do;
+    // anyone else's list is kept as pasted.
+    const same = mode === 'import' && datesChanged && (IS_ADMIN || s.kind !== 'plain') ? sameFigure(pasted) : null;
+    if (same !== null) { mode = 'fixed'; fixed = same; fixedChanged = true; }
+    let calc = null;
+    if (mode === 'calc') {
+        try { calc = readCalc(); } catch (err) { showTargetError(err.message); return; }
+    }
+
+    const next = { ...row, target_mode: mode };
+    if (s.kind === 'stacked') next.stack_target = fixed;
+    if (s.kind === 'own') next.ratio_target = fixed;
+    delete next.input_targets;
+    if (mode === 'inputs') next.input_targets = readInputTargets(row);
+    delete next.target_calc;
+    if (calc) next.target_calc = calc;
+    const rowChanged = JSON.stringify(next) !== JSON.stringify(row);
+    const datesParams = s.kind === 'plain' ? { source: s.source, metric: s.metric } : { row_id: row.id };
+    const metricFixedChanged = s.kind === 'plain' && fixedChanged;
+
+    const button = document.getElementById('targetSaveBtn');
+    button.disabled = true;
+    try {
+        // A plain chart's fixed figure belongs to the metric.
+        if (metricFixedChanged) await saveMetricFixed(s.source, s.metric, fixed);
+        if (datesChanged && same === null) await saveTargetDates(datesParams, pasted);
+        if (IS_ADMIN) {
+            let rows = layout.rows.map(r => (r.id === row.id ? next : r));
+            if (same !== null && s.kind === 'plain') rows = switchMetricToFixed(rows, s.source, s.metric);
+            if (rowChanged || same !== null) {
+                await saveLayout(rows);
+                layout.rows = rows;
+            }
+        } else if (rowChanged) {
+            // Only this chart's target changes on the server (/kpi/row-target).
+            const resp = await fetch(`${BASE_URL}/kpi/row-target`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ row_id: row.id, target_mode: mode, value: s.kind === 'plain' ? null : fixed }),
+            }).then(r => r.json());
+            if (resp.status !== 'ok') throw new Error(resp.message || 'save failed');
+            layout.rows = layout.rows.map(r => (r.id === row.id ? resp.row : r));
+        }
+        // Cleared only once no chart draws the list any more.
+        if (same !== null) await saveTargetDates(datesParams, []);
+        closeTargetModal();
+        const saved = findRow(row.id);
+        if (saved && !saved.hidden && (rowChanged || datesChanged || fixedChanged)) loadCustomRow(saved);
+        if (s.kind === 'plain' && (metricFixedChanged || datesChanged)) {
+            refreshRowsOnMetric(s.source, s.metric, ['import', 'fixed']);
+        }
+        if (same !== null) {
+            document.getElementById('statusText').textContent =
+                'Every date had the same figure, so it was saved as a fixed figure.';
+        }
+    } catch (err) {
+        showTargetError('Save failed: ' + err.message);
+    } finally {
+        button.disabled = false;
+    }
 }
 
 // ── Settings > Targets tab ──
@@ -563,12 +713,18 @@ function viewButton(onclick) {
 }
 
 // What one chart's target is, for the Charts table: [details html, view button html].
+// A chart's target source; a stacked chart's is none, fixed or per date.
+function stackedOrRowMode(row) {
+    if (!isStacked(row)) return rowTargetMode(row);
+    return ['fixed', 'import'].includes(row.target_mode) ? row.target_mode : 'none';
+}
+
 function chartTargetDetails(row) {
-    const mode = isStacked(row) ? (row.target_mode === 'fixed' ? 'fixed' : 'none') : rowTargetMode(row);
+    const mode = stackedOrRowMode(row);
     if (mode === 'none') return ['', ''];
-    if (isStacked(row)) return [fmtTargetFigure(row.stack_target) || NOTHING_SET, ''];
     const id = escHtml(JSON.stringify(row.id));
-    if (rowOwnTarget(row)) {
+    if (isStacked(row) && mode === 'fixed') return [fmtTargetFigure(row.stack_target) || NOTHING_SET, ''];
+    if (isStacked(row) || rowOwnTarget(row)) {
         if (mode === 'fixed') return [fmtTargetFigure(row.ratio_target, rowIsPct(row)) || NOTHING_SET, ''];
         if (mode === 'import') {
             const t = storedRowTarget(row.id);
@@ -608,7 +764,7 @@ function chartFormula(row) {
 
 function renderTargetsTab() {
     const chartRows = layout.rows.map(row => {
-        const mode = isStacked(row) ? (row.target_mode === 'fixed' ? 'fixed' : 'none') : rowTargetMode(row);
+        const mode = stackedOrRowMode(row);
         const [details, button] = chartTargetDetails(row);
         return `<tr><td>${escHtml(rowTitle(row))}${row.hidden ? ' (hidden)' : ''}<br><small>${escHtml(row.section)}</small></td>
             <td>${escHtml(chartFormula(row))}</td><td>${TARGET_SOURCE_LABELS[mode] || mode}</td>

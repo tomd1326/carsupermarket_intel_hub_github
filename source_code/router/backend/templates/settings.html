@@ -252,6 +252,158 @@
         </form>
         {% endif %}
 
+        {# ── Email ───────────────────────────────────────────── #}
+        {% if active_section == 'email' %}
+        <form method="post" action="{{ BASE_URL }}/settings/section/email">
+            <div class="card mb-4">
+                <div class="card-header fw-semibold">Email</div>
+                <div class="card-body">
+                    <p class="form-text mt-0">
+                        Mail is sent through Microsoft Graph using the SharePoint app registration.
+                        The sender must be a real mailbox in the tenant, and the app needs the
+                        Mail.Send application permission with admin consent.
+                    </p>
+                    <div class="d-flex gap-3 flex-wrap">
+                        <div>
+                            <label for="email_sender" class="form-label mb-1">Send From</label>
+                            <input class="form-control" type="email" id="email_sender" name="email_sender"
+                                   value="{{ settings.email_sender }}" placeholder="tom.drayson@carsupermarket.com"
+                                   style="width: 320px;" autocomplete="off">
+                            <div class="form-text">Blank = tom.drayson@carsupermarket.com</div>
+                        </div>
+                        <div>
+                            <label for="email_test_recipient" class="form-label mb-1">Send Test Email To</label>
+                            <input class="form-control" type="email" id="email_test_recipient" name="email_test_recipient"
+                                   value="{{ settings.email_test_recipient }}" placeholder="Same as Send From"
+                                   style="width: 320px;" autocomplete="off">
+                            <div class="form-text">Blank = the Send From address</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="d-flex align-items-center gap-2">
+                <button type="submit" class="btn btn-primary">Save Email</button>
+                <button type="button" class="btn btn-outline-secondary" id="test-email-btn" onclick="sendTestEmail()"
+                        title="Uses the saved values - save first if you have changed them">
+                    <i class="fas fa-envelope"></i> Send Test Email
+                </button>
+                <span class="text-muted small" id="test-email-note"></span>
+            </div>
+        </form>
+        <script>
+            const BASE_URL = "{{ BASE_URL }}";
+            async function sendTestEmail() {
+                const btn = document.getElementById('test-email-btn');
+                const note = document.getElementById('test-email-note');
+                btn.disabled = true;
+                note.textContent = 'Sending...';
+                try {
+                    const resp = await fetch(BASE_URL + '/settings/email/test', { method: 'POST' });
+                    const data = await resp.json();
+                    note.textContent = data.status === 'ok'
+                        ? data.message
+                        : 'Failed: ' + (data.message || 'unknown error');
+                } catch (e) {
+                    note.textContent = 'Failed: ' + e.message;
+                } finally {
+                    btn.disabled = false;
+                }
+            }
+        </script>
+        {% endif %}
+
+        {# ── Live Users ──────────────────────────────────────── #}
+        {% if active_section == 'live-users' %}
+        <form method="post" action="{{ BASE_URL }}/settings/section/live-users">
+            <div class="card mb-4">
+                <div class="card-header fw-semibold">Live Users</div>
+                <div class="card-body">
+                    <p class="form-text mt-0">
+                        Initial circles to the left of the Home button showing who is on the same page.
+                        You see everyone, yourself included; everyone else sees only you.
+                        Hover a circle for the full name, taken from User Accounts.
+                    </p>
+                    <p class="form-text">
+                        Turning this off applies on each open page's next check. Turning it on applies
+                        when pages are next opened or reloaded. Other changes reach open pages within
+                        about a minute plus one check.
+                    </p>
+                    <div class="form-check mb-3">
+                        <input class="form-check-input" type="checkbox" id="presence_enabled" name="presence_enabled"
+                               {% if settings.presence_enabled %}checked{% endif %}>
+                        <label class="form-check-label" for="presence_enabled">Show Live Users <span class="text-muted">(everyone)</span></label>
+                    </div>
+                    <div class="d-flex gap-4 flex-wrap">
+                        <div>
+                            <label for="presence_interval_seconds" class="form-label mb-1">Check Every (seconds)</label>
+                            <input class="form-control" type="number" id="presence_interval_seconds" name="presence_interval_seconds"
+                                   value="{{ settings.presence_interval_seconds }}" min="5" style="width: 110px;" onclick="this.select()">
+                            <div class="form-text">Default: 20. Minimum 5.</div>
+                        </div>
+                        <div>
+                            <label for="presence_drop_off_seconds" class="form-label mb-1">Drop Off After (seconds)</label>
+                            <input class="form-control" type="number" id="presence_drop_off_seconds" name="presence_drop_off_seconds"
+                                   value="{{ settings.presence_drop_off_seconds }}" min="15" style="width: 110px;" onclick="this.select()">
+                            <div class="form-text" style="max-width: 300px;">
+                                Default: 60. Only used when a tab stops without saying so (crash, lost
+                                network); the circle then goes on the next check after this, so up to
+                                this plus one check. At least two checks plus 5 seconds.
+                            </div>
+                        </div>
+                        <div>
+                            <label for="presence_circle_size" class="form-label mb-1">Circle Size (px)</label>
+                            <input class="form-control" type="number" id="presence_circle_size" name="presence_circle_size"
+                                   value="{{ settings.presence_circle_size }}" min="14" max="60" style="width: 110px;" onclick="this.select()">
+                            <div class="form-text">Default: 26</div>
+                        </div>
+                        <div>
+                            <label for="presence_max_circles" class="form-label mb-1">Max Circles</label>
+                            <input class="form-control" type="number" id="presence_max_circles" name="presence_max_circles"
+                                   value="{{ settings.presence_max_circles }}" min="1" style="width: 110px;" onclick="this.select()">
+                            <div class="form-text" style="max-width: 220px;">Default: 5. Other people past this show as "+N". Your own circle is always shown.</div>
+                        </div>
+                    </div>
+                    <div class="d-flex gap-4 flex-wrap mt-3">
+                        <div>
+                            <label for="presence_border_width" class="form-label mb-1">Border Width (px)</label>
+                            <input class="form-control" type="number" id="presence_border_width" name="presence_border_width"
+                                   value="{{ settings.presence_border_width }}" min="0" max="6" style="width: 110px;" onclick="this.select()">
+                            <div class="form-text">Default: 2</div>
+                        </div>
+                        <div>
+                            <label for="presence_gap" class="form-label mb-1">Gap Between Circles (px)</label>
+                            <input class="form-control" type="number" id="presence_gap" name="presence_gap"
+                                   value="{{ settings.presence_gap }}" min="0" max="20" style="width: 110px;" onclick="this.select()">
+                            <div class="form-text">Default: 4</div>
+                        </div>
+                        <div>
+                            <label for="presence_border_colour" class="form-label mb-1">Border Colour</label>
+                            <input class="form-control form-control-color" type="color" id="presence_border_colour" name="presence_border_colour"
+                                   value="{{ settings.presence_border_colour }}">
+                            <div class="form-text">Default: white</div>
+                        </div>
+                        <div>
+                            <label for="presence_text_colour" class="form-label mb-1">Initials Colour</label>
+                            <input class="form-control form-control-color" type="color" id="presence_text_colour" name="presence_text_colour"
+                                   value="{{ settings.presence_text_colour }}">
+                            <div class="form-text">Default: white</div>
+                        </div>
+                        <div>
+                            <label for="presence_more_colour" class="form-label mb-1">"+N" Circle Colour</label>
+                            <input class="form-control form-control-color" type="color" id="presence_more_colour" name="presence_more_colour"
+                                   value="{{ settings.presence_more_colour }}">
+                            <div class="form-text">Default: grey</div>
+                        </div>
+                    </div>
+                    <div class="form-text mt-3">
+                        Each person's circle colour is picked from their username, so it stays the same on every page.
+                    </div>
+                </div>
+            </div>
+            <button type="submit" class="btn btn-primary">Save Live Users</button>
+        </form>
+        {% endif %}
+
         </div><!-- /.settings-content -->
         </div><!-- /.settings-layout -->
     </div>
