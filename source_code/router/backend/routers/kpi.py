@@ -2120,8 +2120,10 @@ def _validate_layout(layout: dict, sections: list) -> str | None:
             if row.get("ratio_as", "dec") not in ("dec", "pct"):
                 return f"bad ratio_as: {row.get('ratio_as')}"
         # Metrics added to the metric (metric_plus) or to the divide-by metric
-        # (divide_plus), e.g. orders / (calls + emails). Sum charts only: added
-        # averages mean nothing. Like a ratio chart, the target is on the row.
+        # (divide_plus), e.g. orders / (calls + emails). Each may carry an
+        # operator (op: + - * /) joining it to the ones before it; the page
+        # works it out on each period's totals (Sum) or averages (Average).
+        # Like a ratio chart, the target is on the row.
         for field in ("metric_plus", "divide_plus"):
             plus = row.get(field)
             if plus is None:
@@ -2131,14 +2133,15 @@ def _validate_layout(layout: dict, sections: list) -> str | None:
             for p in plus:
                 if not isinstance(p, dict):
                     return f"bad {field}"
+                # How the metric joins the ones before it; missing = plus.
+                if p.get("op", "+") not in ("+", "-", "*", "/"):
+                    return f"bad {field} operator: {p.get('op')}"
                 error = _validate_layout_metric(p.get("source", "snowflake"), p.get("metric"))
                 if error:
                     return error
         if row.get("divide_plus") and divide_by is None:
             return "divide_plus needs divide_by"
         if row.get("metric_plus") or row.get("divide_plus"):
-            if row.get("agg") != "sum":
-                return "Metrics can only be added together on a Sum chart"
             if row.get("weight_by") is not None:
                 return "A chart with added metrics cannot be weighted"
         if divide_by is not None or row.get("metric_plus"):
@@ -2261,36 +2264,48 @@ def kpi_layout_get(request: Request, user: str = Depends(require_page_api('kpi')
             "setting_limits": KPI_SETTING_LIMITS, "notes": notes, "themes": themes,
             "metric_names": metric_names, "at_periods": at_periods, "at_ppc_periods": at_ppc_periods,
             "hidden_sections": [s for s in (_read_kpi_layout_value('hidden_sections') or []) if s in sections],
-            "collapsed_rows": _user_collapsed_rows(user)}
+            "collapsed_rows": _user_row_list(_COLLAPSED_KEY, user),
+            "my_charts": _user_row_list(_MY_CHARTS_KEY, user)}
 
 
-# ── Collapsed chart rows ─────────────────────────────────────────────────────
-# Each user's own collapsed rows, stored as {user: [row ids]} so they follow
-# the person to any browser. The row order stays the admin's.
+# ── Per-user chart row lists ─────────────────────────────────────────────────
+# Each user's own collapsed rows and My Charts, stored as {user: [row ids]}
+# so they follow the person to any browser. The section row order stays the
+# admin's; My Charts keeps the order the user set.
 _COLLAPSED_KEY = 'collapsed_rows'
+_MY_CHARTS_KEY = 'my_charts'
 
 
-def _user_collapsed_rows(user: str) -> list:
+def _user_row_list(key: str, user: str) -> list:
     try:
-        return (_read_kpi_layout_value(_COLLAPSED_KEY) or {}).get(user, [])
+        return (_read_kpi_layout_value(key) or {}).get(user, [])
     except Exception as e:
-        logger.warning("Collapsed rows read failed: %s", e)
+        logger.warning("%s read failed: %s", key, e)
         return []
 
 
-@router.post("/kpi/collapsed-rows")
-def kpi_collapsed_rows_save(request: Request, payload: dict, user: str = Depends(require_page_api('kpi'))):
+def _save_user_row_list(key: str, user: str, payload: dict, keep_order: bool) -> dict:
     rows = (payload or {}).get("rows")
     if not isinstance(rows, list) or len(rows) > 1000 or not all(isinstance(r, str) and 0 < len(r) <= 40 for r in rows):
         return {"status": "error", "message": "bad rows"}
     try:
-        stored = _read_kpi_layout_value(_COLLAPSED_KEY) or {}
-        stored[user] = sorted(set(rows))
-        _write_kpi_layout_value(_COLLAPSED_KEY, stored)
+        stored = _read_kpi_layout_value(key) or {}
+        stored[user] = list(dict.fromkeys(rows)) if keep_order else sorted(set(rows))
+        _write_kpi_layout_value(key, stored)
         return {"status": "ok"}
     except Exception as e:
-        logger.error(f"KPI collapsed rows save failed: {e}")
+        logger.error(f"KPI {key} save failed: {e}")
         return {"status": "error", "message": str(e)}
+
+
+@router.post("/kpi/collapsed-rows")
+def kpi_collapsed_rows_save(request: Request, payload: dict, user: str = Depends(require_page_api('kpi'))):
+    return _save_user_row_list(_COLLAPSED_KEY, user, payload, keep_order=False)
+
+
+@router.post("/kpi/my-charts")
+def kpi_my_charts_save(request: Request, payload: dict, user: str = Depends(require_page_api('kpi'))):
+    return _save_user_row_list(_MY_CHARTS_KEY, user, payload, keep_order=True)
 
 
 # ── Chart notes ──────────────────────────────────────────────────────────────
