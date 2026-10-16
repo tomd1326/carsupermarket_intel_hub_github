@@ -30,6 +30,45 @@ BASE_URL = os.getenv("BASE_URL", "/dev")
 _ENV = 'local' if os.getenv('LOCAL_ENV') == '1' else ('prod' if os.getenv('AWS_REGION') == 'eu-west-1' else 'dev')
 _S3_ENV = 'prod' if os.getenv('AWS_REGION') == 'eu-west-1' else 'dev'
 
+
+def worker_secret() -> str:
+    """The shared secret proving a worker call came from our own Lambda.
+
+    Worker routes (keeper change chunks, SharePoint downloads) cannot use
+    require_page_api: the Lambda invokes them itself, with no session. Without
+    this check anyone who can reach the API could start runs (which is the
+    state /api/reports/run in reports.py is in).
+
+    Only needed when the work is dispatched over HTTP, i.e. on Lambda. Running
+    locally the worker is called in-process and never crosses a route, so this
+    is not consulted — the secret does not have to exist to run on a laptop.
+
+    Falls back to the Autotrader secret already in the same store if
+    WORKER_SHARED_SECRET has not been added yet. That value is not published
+    anywhere and is already required for the app to do anything at all, so it
+    is a reasonable stand-in; add the dedicated key when convenient.
+
+    utils/lambda_http.py does not log the dispatched event, so the secret in
+    the payload never reaches CloudWatch.
+    """
+    from utils.secrets_manager_client import get_secret
+    secrets = get_secret(f'{_S3_ENV}/carsupermarket/car_pricer/api_access')
+    token = secrets.get('WORKER_SHARED_SECRET') or secrets.get('AUTOTRADER_SECRET')
+    if not token:
+        raise RuntimeError(
+            'No worker credential available: add WORKER_SHARED_SECRET to '
+            f'{_S3_ENV}/carsupermarket/car_pricer/api_access'
+        )
+    return token
+
+
+def check_worker_secret(supplied: str) -> None:
+    import hmac
+    expected = worker_secret()
+    if not supplied or not hmac.compare_digest(str(supplied), expected):
+        logger.warning('Worker route called with a bad or missing secret')
+        raise HTTPException(status_code=403, detail='Forbidden')
+
 # templates/ lives in the backend root, one level above this package
 templates_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "templates")
 templates = Jinja2Templates(directory=templates_dir)

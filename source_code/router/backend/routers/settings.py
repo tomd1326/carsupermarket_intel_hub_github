@@ -40,6 +40,7 @@ SETTINGS_SECTIONS = [
     ("cap-credentials",     "CAP Credentials",     "CAP Credential Override"),
     ("email",               "Email",               "Email"),
     ("live-users",          "Live Users",          "Live Users"),
+    ("sharepoint",          "SharePoint",          "SharePoint Files"),
 ]
 
 # The settings 'user' scope used by this admin page. The buying requirements
@@ -97,7 +98,6 @@ def save_buying_requirements(
     max_dts: int = Form(...),
     min_gpu_m: int = Form(...),
     enable_cars_bought: str = Form(default=""),
-    sharepoint_cache_minutes: int = Form(...),
     snowflake_cache_minutes: int = Form(...),
     user: str = Depends(get_current_user),
 ):
@@ -110,7 +110,6 @@ def save_buying_requirements(
             'max_dts':                  max_dts,
             'min_gpu_m':                min_gpu_m,
             'enable_cars_bought':       '1' if enable_cars_bought == "on" else '0',
-            'sharepoint_cache_minutes': max(0, sharepoint_cache_minutes),
             'snowflake_cache_minutes':  max(0, snowflake_cache_minutes),
         })
     logger.info("Settings [Buying Requirements] updated by %s", user)

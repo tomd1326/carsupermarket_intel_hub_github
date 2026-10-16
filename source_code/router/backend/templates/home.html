@@ -71,24 +71,6 @@
         .logout-link:hover {
             color: #ffffff !important;
         }
-        .menu-btn-settings {
-            width: 280px;
-            height: 80px;
-            font-size: 1.1rem;
-            font-weight: 600;
-            border-radius: 8px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            gap: 12px;
-            background-color: #4a5568;
-            border: none;
-            color: #ffffff;
-        }
-        .menu-btn-settings:hover {
-            background-color: #2d3748;
-            color: #ffffff;
-        }
     </style>
 </head>
 <body>
@@ -97,6 +79,10 @@
         <span>{{ user }}</span>
         <span class="text-secondary">·</span>
         <a href="{{ BASE_URL }}/logout" class="text-secondary text-decoration-none"><i class="fas fa-sign-out-alt"></i> Logout</a>
+        {% if is_admin %}
+        <span class="text-secondary">·</span>
+        <a href="{{ BASE_URL }}/settings-page" class="text-secondary text-decoration-none" title="Settings" aria-label="Settings"><i class="fas fa-cog"></i></a>
+        {% endif %}
     </div>
     <div class="home-container">
         <img src="{{ BASE_URL }}/static/icon.png" alt="CarSupermarket" class="brand-logo">
@@ -111,11 +97,6 @@
                 {{ page_name(page.key) }}
             </a>
             {% endfor %}
-            {% if is_admin %}
-            <a href="{{ BASE_URL }}/settings-page" class="btn menu-btn-settings">
-                <i class="fas fa-cog"></i> Settings
-            </a>
-            {% endif %}
         </div>
     </div>
 </body>

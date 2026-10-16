@@ -1467,7 +1467,7 @@ function applyCbPurchases(p, vehicles) {
 }
 
 // How old cached SharePoint data may be before the page fetches live instead.
-// Set on the Buying Requirements settings page; falls back to 30 minutes.
+// The sheets' check interval in Settings > SharePoint; falls back to 30 minutes.
 const _SP_MAX_AGE_SECS = (window.SP_CACHE_MINUTES ?? 30) * 60;
 
 function _setDbsUpdatedAt(fetchedAt) {

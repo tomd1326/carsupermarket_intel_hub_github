@@ -56,6 +56,9 @@
         /* Capped: Excel's "Bad" style (light red fill, dark red text). */
         .at-stat.at-stat-bad { background: #ffc7ce; border-color: #f4a3ad; color: #9c0006; }
         .at-stat.at-stat-bad strong { color: #9c0006; }
+        /* Capped at zero: Excel's "Good" style (light green fill, dark green text). */
+        .at-stat.at-stat-good { background: #c6efce; border-color: #a3d9ad; color: #006100; }
+        .at-stat.at-stat-good strong { color: #006100; }
         .at-strip-note { align-self: center; font-size: 0.78rem; color: #94a3b8; }
         /* New or copied chart: a blue glow that pulses twice then fades. Colour
            only, so nothing is left behind when the animation ends. */
@@ -1274,6 +1277,7 @@
             if (layoutResp.status !== 'ok') throw new Error(layoutResp.message || 'no layout returned');
             if (layoutResp.sections) SECTIONS = layoutResp.sections;
             hiddenSections = new Set(layoutResp.hidden_sections || []);
+            loadCollapsedRows(layoutResp.collapsed_rows || []);
             layout = layoutResp.layout || { rows: [] };
             if (layoutResp.settings) settings = layoutResp.settings;
             applyAppearance();
@@ -1352,6 +1356,21 @@
                     strip.className = 'at-strip';
                     body.appendChild(strip);
                 }
+                // Collapse All / Expand All for every user, below the
+                // Autotrader figures and above the first chart. Same small
+                // button style as each row's own collapse button.
+                const rowTools = document.createElement('div');
+                rowTools.className = 'section-tools';
+                [['Collapse All Charts', 'fa-compress-alt', true], ['Expand All Charts', 'fa-expand-alt', false]]
+                    .forEach(([label, icon, collapse]) => {
+                        const btn = document.createElement('button');
+                        btn.type = 'button';
+                        btn.className = 'chart-title-btn';
+                        btn.innerHTML = `<i class="fas ${icon}"></i> ${label}`;
+                        btn.onclick = () => setSectionRowsCollapsed(name, collapse);
+                        rowTools.appendChild(btn);
+                    });
+                body.appendChild(rowTools);
                 sec.appendChild(header);
                 sec.appendChild(body);
             }
@@ -1429,22 +1448,51 @@
         return customRowEls[row.id];
     }
 
-    // Which chart rows this viewer has collapsed. Kept in the browser only,
-    // so one person hiding a row does not hide it for anyone else.
+    // Which chart rows this user has collapsed. Saved against their login on
+    // the server, so it follows them to any browser and one person hiding a
+    // row does not hide it for anyone else.
     const COLLAPSED_KEY = 'kpiCollapsedRows';
-    function collapsedRows() {
-        try { return new Set(JSON.parse(localStorage.getItem(COLLAPSED_KEY) || '[]')); }
-        catch (e) { return new Set(); }
+    let collapsedSet = new Set();
+    function loadCollapsedRows(rows) {
+        collapsedSet = new Set(rows);
+        // Rows collapsed before this was saved on the server were kept in the
+        // browser; carry them over once.
+        let local = [];
+        try { local = JSON.parse(localStorage.getItem(COLLAPSED_KEY) || '[]'); } catch (e) {}
+        if (local.length) {
+            local.forEach(id => collapsedSet.add(id));
+            try { localStorage.removeItem(COLLAPSED_KEY); } catch (e) {}
+            saveCollapsedRows();
+        }
     }
-    function isRowCollapsed(id) { return collapsedRows().has(id); }
+    function isRowCollapsed(id) { return collapsedSet.has(id); }
+    function saveCollapsedRows() {
+        fetch(BASE_URL + '/kpi/collapsed-rows', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ rows: [...collapsedSet] }),
+        }).then(r => r.json()).then(j => {
+            if (j.status !== 'ok') console.error('Collapsed rows save failed: ' + j.message);
+        }).catch(err => console.error('Collapsed rows save failed', err));
+    }
+
+    // Collapse or expand every shown chart row in one section.
+    function setSectionRowsCollapsed(section, collapse) {
+        shownRows().filter(r => r.section === section).forEach(r => {
+            if (collapse) collapsedSet.add(r.id); else collapsedSet.delete(r.id);
+            const el = customRowEls[r.id];
+            if (el) el.classList.toggle('collapsed', collapse);
+            if (!collapse) (rowCharts[r.id] || []).forEach(c => c && c.resize());
+        });
+        saveCollapsedRows();
+    }
 
     function toggleRowCollapsed(id) {
         const el = customRowEls[id];
         if (!el) return;
         const collapsed = el.classList.toggle('collapsed');
-        const set = collapsedRows();
-        if (collapsed) set.add(id); else set.delete(id);
-        try { localStorage.setItem(COLLAPSED_KEY, JSON.stringify([...set])); } catch (e) {}
+        if (collapsed) collapsedSet.add(id); else collapsedSet.delete(id);
+        saveCollapsedRows();
         // A chart drawn or resized while hidden has no size; fit it on showing.
         if (!collapsed) (rowCharts[id] || []).forEach(c => c && c.resize());
     }
@@ -1689,6 +1737,11 @@
             .then(r => r.json())
             .then(d => {
                 if (d.status !== 'ok') throw new Error(d.message || 'load failed');
+                if (d.sp_keys) {
+                    spPending = d.sp_pending || [];
+                    spKeys = d.sp_keys;
+                    spCheckSeconds = d.sp_check_seconds || spCheckSeconds;
+                }
                 settle(i => d.results[i]);
             })
             .catch(err => settle(() => ({ status: 'error', message: String(err.message || err) })));
@@ -1870,7 +1923,8 @@
                 const day = c.date ? new Date(c.date + 'T00:00:00').toLocaleDateString('en-GB') : null;
                 atStripHtml = stat('Advert Allowance', allowance)
                     + stat('Published', num(c.published))
-                    + stat('Capped', num(c.capped), 'at-stat-bad')
+                    + stat('Capped', num(c.capped),
+                        c.capped == null ? '' : Number(c.capped) > 0 ? 'at-stat-bad' : 'at-stat-good')
                     + stat('Unpublished', num(c.unpublished))
                     + `<span class="at-strip-note">${day ? 'Published, Capped and Unpublished as at the morning of ' + day : 'Counts unavailable'}</span>`;
             })
@@ -1878,10 +1932,87 @@
             .finally(showAtAllowance);
     }
 
-    // Set only when the Load Data button is clicked: the server then re-reads
-    // any SharePoint spreadsheet saved since its cached copy. A page load uses
-    // the cached copy, so it stays fast.
+    // Set only when the Load Data button is clicked: the server then asks
+    // SharePoint straight away whether each spreadsheet has been saved since
+    // its copy, instead of waiting for the file's check interval.
     let spRefreshToken = '';
+
+    // SharePoint files (Settings > SharePoint). A file saved since its copy is
+    // downloaded in the background; the charts are drawn from the copy and
+    // drawn again when the download has finished.
+    let spPending = [];          // [{key, name}] being downloaded
+    let spKeys = [];             // every KPI file's key
+    let spCheckSeconds = 900;    // shortest check interval of those files
+    let spPollTimer = null;
+    let spIdleTimer = null;
+    let spPollStarted = 0;
+    let spSavedAt = {};          // key -> copy_saved_at last seen
+    const SP_POLL_MS = 4000;
+    const SP_POLL_GIVE_UP_MS = 10 * 60 * 1000;
+
+    function spNote() {
+        return spPending.length ? 'newer copy of ' + spPending.map(p => p.name).join(', ') + ' loading' : '';
+    }
+
+    function spStatus(keys, check) {
+        const qs = new URLSearchParams({ keys: keys.join(','), check: check ? 'true' : 'false' });
+        return fetch(`${BASE_URL}/api/sharepoint/status?${qs}`).then(r => r.json());
+    }
+
+    // Ask every few seconds until the files being downloaded have arrived (or
+    // failed), then reload the charts once.
+    function startSpPolling() {
+        if (spPollTimer || !spPending.length) return;
+        spPollStarted = Date.now();
+        const tick = () => {
+            spStatus(spPending.map(p => p.key), false)
+                .then(d => {
+                    if (d.status !== 'ok') throw new Error(d.message || 'status failed');
+                    const open = d.files.filter(f => f.job && ['queued', 'running'].includes(f.job.status));
+                    const failed = d.files.filter(f => f.job && f.job.status === 'failed');
+                    d.files.forEach(f => { spSavedAt[f.source_key] = f.copy_saved_at; });
+                    if (open.length && Date.now() - spPollStarted < SP_POLL_GIVE_UP_MS) {
+                        spPollTimer = setTimeout(tick, SP_POLL_MS);
+                        return;
+                    }
+                    spPollTimer = null;
+                    spPending = [];
+                    if (failed.length) {
+                        document.getElementById('statusText').textContent =
+                            'Refresh failed: ' + failed.map(f => `${f.name} - ${f.job.message}`).join(' | ');
+                    }
+                    if (failed.length < d.files.length) loadAll(false);
+                })
+                .catch(() => { spPollTimer = setTimeout(tick, SP_POLL_MS * 2); });
+        };
+        spPollTimer = setTimeout(tick, SP_POLL_MS);
+    }
+
+    // While the page is open, run the normal check on the files' own interval,
+    // so a spreadsheet saved during the day shows without a reload.
+    function scheduleSpIdleCheck() {
+        clearTimeout(spIdleTimer);
+        if (!spKeys.length) return;
+        spIdleTimer = setTimeout(() => {
+            if (document.hidden || spPollTimer) { scheduleSpIdleCheck(); return; }
+            spStatus(spKeys, true)
+                .then(d => {
+                    if (d.status !== 'ok') return;
+                    const open = d.files.filter(f => f.job && ['queued', 'running'].includes(f.job.status));
+                    const changed = d.files.filter(f => spSavedAt[f.source_key] !== undefined
+                                                     && f.copy_saved_at !== spSavedAt[f.source_key]);
+                    d.files.forEach(f => { if (!open.includes(f)) spSavedAt[f.source_key] = f.copy_saved_at; });
+                    if (open.length) {
+                        spPending = open.map(f => ({ key: f.source_key, name: f.name }));
+                        startSpPolling();
+                    } else if (changed.length) {
+                        loadAll(false);
+                    }
+                })
+                .catch(() => {})
+                .finally(scheduleSpIdleCheck);
+        }, Math.max(60, spCheckSeconds) * 1000);
+    }
 
     function loadAll(fromButton = false) {
         loadToken = String(Date.now());
@@ -1917,9 +2048,12 @@
                     }
                 });
                 const notes = [];
-                if (staleDates.size) notes.push('SharePoint unavailable - using data from ' + [...staleDates].join(', '));
+                if (staleDates.size) notes.push('SharePoint could not be checked - using ' + [...staleDates].join(', '));
+                if (spPending.length) notes.push(spNote());
                 if (errors.length) notes.push('errors: ' + errors.join(' | '));
                 status.textContent = notes.length ? 'Loaded (' + notes.join('; ') + ')' : 'Loaded';
+                startSpPolling();
+                scheduleSpIdleCheck();
             })
             .catch(err => { status.textContent = 'Failed: ' + err; })
             .finally(() => {

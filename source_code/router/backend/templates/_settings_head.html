@@ -6,6 +6,8 @@
     @font-face { font-family: 'DM Sans'; src: url('{{ BASE_URL }}/static/fonts/DMSans-Bold.ttf');     font-weight: 700; }
     body, button, input, select, textarea { font-family: 'DM Sans', system-ui, sans-serif; }
     .settings-card { max-width: 1180px; margin: 40px auto; padding: 0 16px; }
+    /* Sections holding a wide table (e.g. SharePoint Files) get more room instead of scrolling */
+    .settings-card.settings-card-wide { max-width: 1640px; }
     .card-header { background-color: #ced4da; }
     .card { border-color: #adb5bd; }
     /* Nav column on the left, section content to its right */
