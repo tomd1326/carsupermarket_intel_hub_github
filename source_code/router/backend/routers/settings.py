@@ -232,6 +232,8 @@ def save_live_users(
     presence_max_circles: int = Form(...),
     presence_border_width: int = Form(...),
     presence_gap: int = Form(...),
+    presence_ring_width: int = Form(...),
+    presence_ring_gap: int = Form(...),
     presence_border_colour: str = Form(...),
     presence_text_colour: str = Form(...),
     presence_more_colour: str = Form(...),
@@ -260,6 +262,8 @@ def save_live_users(
             'presence_max_circles':      max(1, presence_max_circles),
             'presence_border_width':     min(6, max(0, presence_border_width)),
             'presence_gap':              min(20, max(0, presence_gap)),
+            'presence_ring_width':       min(4, max(0, presence_ring_width)),
+            'presence_ring_gap':         min(4, max(0, presence_ring_gap)),
             **colours,
         })
     # This container uses the new values straight away; others within a minute.

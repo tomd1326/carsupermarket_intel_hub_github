@@ -1203,6 +1203,18 @@
                             <div class="form-text">Default: 4</div>
                         </div>
                         <div>
+                            <label for="presence_ring_width" class="form-label mb-1">Outer Ring Width (px)</label>
+                            <input class="form-control" type="number" id="presence_ring_width" name="presence_ring_width"
+                                   value="{{ settings.presence_ring_width }}" min="0" max="4" style="width: 110px;" onclick="this.select()">
+                            <div class="form-text" style="max-width: 220px;">Default: 1. A ring in the person's own colour, as on Microsoft 365. 0 = no ring.</div>
+                        </div>
+                        <div>
+                            <label for="presence_ring_gap" class="form-label mb-1">Outer Ring Gap (px)</label>
+                            <input class="form-control" type="number" id="presence_ring_gap" name="presence_ring_gap"
+                                   value="{{ settings.presence_ring_gap }}" min="0" max="4" style="width: 110px;" onclick="this.select()">
+                            <div class="form-text">Default: 1. Space between the circle and its ring.</div>
+                        </div>
+                        <div>
                             <label for="presence_border_colour" class="form-label mb-1">Border Colour</label>
                             <input class="form-control form-control-color" type="color" id="presence_border_colour" name="presence_border_colour"
                                    value="{{ settings.presence_border_colour }}">

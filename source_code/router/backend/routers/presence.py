@@ -1,7 +1,8 @@
 """Live users: initial circles beside the Home button.
 
 Every signed-in tab sends a heartbeat with the page it is on. Who is shown:
-  - tdrayson sees everyone on the same page, himself included;
+  - tdrayson sees everyone on the same page, himself included. On Home he
+    sees everyone signed in on any page, with the pages they have open;
   - everyone else sees only tdrayson, when he is on the same page.
 The rule is applied here, so a direct call to the endpoint cannot get more.
 """
@@ -13,7 +14,8 @@ from fastapi import APIRouter, Request, HTTPException
 
 from utils.db_utils import (get_database_connection, touch_page_presence, mark_page_presence_left)
 
-from .core import _ENV, get_current_user, is_admin, presence_config, ADMIN_USERNAME
+from .core import _ENV, get_current_user, is_admin, presence_config, page_name, ADMIN_USERNAME
+from .page_registry import PAGES
 
 logger = logging.getLogger(__name__)
 
@@ -63,11 +65,28 @@ def _seq(body: dict) -> int:
     return seq
 
 
+_HOME_PAGE = '/home'
+
+
+def _page_label(path: str) -> str:
+    """Name of the page a tab is on, as set on Settings > Page Names. The
+    longest matching path wins, so /assess-vehicle/vehicle/AB12CDE is Assess
+    Vehicle."""
+    if path == _HOME_PAGE:
+        return 'Home'
+    if path.startswith('/settings'):
+        return 'Settings'
+    matches = [p for p in PAGES if path == p.path or path.startswith(p.path + '/')]
+    if matches:
+        return page_name(max(matches, key=lambda p: len(p.path)).key)
+    return path
+
+
 # Sent with every heartbeat so open pages pick up Settings > Live Users
 # changes on their next check, without a reload.
 _DISPLAY_KEYS = ('presence_interval_seconds', 'presence_max_circles', 'presence_circle_size',
                  'presence_border_width', 'presence_border_colour', 'presence_gap',
-                 'presence_text_colour', 'presence_more_colour')
+                 'presence_text_colour', 'presence_more_colour', 'presence_ring_width', 'presence_ring_gap')
 
 
 @router.post("/api/presence")
@@ -88,16 +107,19 @@ async def presence_heartbeat(request: Request):
         return {"users": [], "config": display}
 
     only_user = None if is_admin(user) else ADMIN_USERNAME
+    all_pages = is_admin(user) and page == _HOME_PAGE
     with get_database_connection() as conn:
         rows = touch_page_presence(conn, tab_id, seq, request.session.get('session_id', ''), user, _ENV,
-                                   page, config['presence_drop_off_seconds'], only_user)
+                                   page, config['presence_drop_off_seconds'], only_user, all_pages)
     users = []
-    for username, first, last in rows:
+    for username, first, last, pages in rows:
         full_name = ' '.join(p for p in ((first or '').strip(), (last or '').strip()) if p)
         users.append({
             "username": username,
             "initials": _initials(username, first, last),
             "name": full_name or username,
+            # Only on Home: everywhere else everyone listed is on this page.
+            "pages": sorted({_page_label(p) for p in pages or []}) if all_pages else None,
         })
     # The viewer's own circle first, the way Google shows it.
     users.sort(key=lambda u: u["username"] != user)

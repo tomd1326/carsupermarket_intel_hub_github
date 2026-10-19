@@ -6,35 +6,39 @@
 {%- endmacro %}
 
 {# Live users circles. Filled by live_users.js; who is listed is decided by the
-   server (routers/presence.py). Home calls this directly, as it has no account_nav. #}
+   server (routers/presence.py). #}
 {% macro live_users(user_name=None) -%}
 {% if user_name %}{% set pc = presence_config() %}{% if pc.presence_enabled %}
 <link href="{{ static_url('css/live_users.css') }}" rel="stylesheet">
 <div id="live-users" class="live-users" data-base="{{ BASE_URL }}"
      data-interval="{{ pc.presence_interval_seconds }}" data-max="{{ pc.presence_max_circles }}"
-     style="--live-user-size: {{ pc.presence_circle_size }}px; --live-user-border-width: {{ pc.presence_border_width }}px; --live-user-gap: {{ pc.presence_gap }}px; --live-user-border-colour: {{ pc.presence_border_colour }}; --live-user-text-colour: {{ pc.presence_text_colour }}; --live-user-more-colour: {{ pc.presence_more_colour }}"></div>
+     style="--live-user-size: {{ pc.presence_circle_size }}px; --live-user-border-width: {{ pc.presence_border_width }}px; --live-user-gap: {{ pc.presence_gap }}px; --live-user-border-colour: {{ pc.presence_border_colour }}; --live-user-text-colour: {{ pc.presence_text_colour }}; --live-user-more-colour: {{ pc.presence_more_colour }}; --live-user-ring-width: {{ pc.presence_ring_width }}px; --live-user-ring-gap: {{ pc.presence_ring_gap }}px"></div>
 <script src="{{ static_url('js/live_users.js') }}" defer></script>
 {% endif %}{% endif %}
 {%- endmacro %}
 
-{# Every page calls account_nav, so the popup scroll lock rides along with it. #}
-{% macro account_nav(user_name=None, show_back=False) -%}
+{# The top-right strip on every page, Home included: live users, Home, user
+   name, Logout and (admin only) the Settings cog. Every page calls this, so
+   the popup scroll lock rides along with it. Home passes show_home=False and
+   dark=True. account_nav.js keeps .account-nav-clear rows clear of it. #}
+{% macro account_nav(user_name=None, show_back=False, show_home=True, dark=False) -%}
 <script src="{{ static_url('js/popup_scroll_lock.js') }}" defer></script>
-<div class="account-nav">
+<script src="{{ static_url('js/account_nav.js') }}" defer></script>
+<div class="account-nav{% if dark %} account-nav-dark{% endif %}">
     {% if show_back %}
     <a href="javascript:history.back()" class="btn btn-outline-secondary nav-btn">
         <i class="fas fa-arrow-left me-1"></i>Back
     </a>
     {% endif %}
     {{ live_users(user_name) }}
-    {{ home_button() }}
+    {% if show_home %}{{ home_button() }}{% endif %}
     {% if user_name %}
     <span class="account-user">{{ user_name }}</span>
     <span aria-hidden="true">&middot;</span>
     <a href="{{ BASE_URL }}/logout" class="account-logout">
         <i class="fas fa-sign-out-alt"></i> Logout
     </a>
-    {% if user_name == 'tdrayson' %}
+    {% if user_is_admin(user_name) %}
     <span aria-hidden="true">&middot;</span>
     <a href="{{ BASE_URL }}/settings-page" class="account-logout" title="Settings" aria-label="Settings"><i class="fas fa-cog"></i></a>
     {% endif %}
