@@ -41,6 +41,9 @@ SETTINGS_SECTIONS = [
     ("email",               "Email",               "Email"),
     ("live-users",          "Live Users",          "Live Users"),
     ("sharepoint",          "SharePoint",          "SharePoint Files"),
+    ("prod-to-dev",         "Prod To Dev",         "Copy Prod To Dev"),
+    ("api-requests",        "API Requests",        "API Requests"),
+    ("dbt",                 "Run dbt",             "Run dbt"),
 ]
 
 # The settings 'user' scope used by this admin page. The buying requirements
@@ -265,6 +268,48 @@ def save_live_users(
     return _section_redirect("live-users")
 
 
+@router.post("/settings/live-users/test-photo")
+def test_microsoft_photo(email: str = Form(...), user: str = Depends(get_current_user)):
+    """Fetch one person's Microsoft 365 photo through Graph, to check the app
+    registration has a photo permission before building on it. Also reports
+    which application permissions the token carries."""
+    if user != 'tdrayson':
+        raise HTTPException(status_code=403, detail="Forbidden")
+    import base64
+    import json as _json
+    import requests
+    from utils.email_client import _get_token
+    try:
+        token = _get_token()
+    except Exception as e:
+        return {"status": "error", "message": f"Could not get a Graph token: {str(e)[:300]}"}
+    # The token's 'roles' claim lists the application permissions granted.
+    try:
+        payload = token.split('.')[1]
+        payload += '=' * (-len(payload) % 4)
+        roles = _json.loads(base64.urlsafe_b64decode(payload)).get('roles', [])
+    except Exception:
+        roles = []
+    granted = ', '.join(sorted(roles)) or 'none listed'
+    resp = requests.get(
+        f"https://graph.microsoft.com/v1.0/users/{email.strip()}/photo/$value",
+        headers={"Authorization": f"Bearer {token}"}, timeout=20,
+    )
+    if resp.status_code == 200:
+        mime = resp.headers.get('Content-Type', 'image/jpeg')
+        image = f"data:{mime};base64," + base64.b64encode(resp.content).decode()
+        return {"status": "ok", "image": image,
+                "message": f"Photo found ({len(resp.content) // 1024} KB). Permissions: {granted}"}
+    try:
+        detail = resp.json().get('error', {}).get('message', '')
+    except Exception:
+        detail = resp.text[:200]
+    hint = {403: "no photo permission", 404: "no photo set, or no such user"}.get(resp.status_code, "")
+    return {"status": "error",
+            "message": f"HTTP {resp.status_code}{' - ' + hint if hint else ''}: {detail[:200]}. "
+                       f"Permissions: {granted}"}
+
+
 @router.post("/settings/email/test")
 def send_test_email(request: Request, user: str = Depends(get_current_user)):
     """Send a test email from the saved sender to the saved test address, to
@@ -291,6 +336,454 @@ def send_test_email(request: Request, user: str = Depends(get_current_user)):
         logger.exception("Test email failed")
         return {"status": "error", "message": str(e)[:300]}
     return {"status": "ok", "message": f"Sent from {sender} to {to} at {sent_at}"}
+
+
+@router.post("/settings/prod-to-dev/test")
+def test_other_env_connection(request: Request, user: str = Depends(get_current_user)):
+    """Try to connect from this Lambda to the OTHER environment's Aurora
+    cluster (dev from prod, prod from dev). Reads only — nothing is written."""
+    if user != 'tdrayson':
+        raise HTTPException(status_code=403, detail="Forbidden")
+    import os
+    import psycopg2
+    from utils.secrets_manager_client import get_secret
+    this_env = 'prod' if os.getenv('AWS_REGION') == 'eu-west-1' else 'dev'
+    other_env = 'dev' if this_env == 'prod' else 'prod'
+    secret = f'{other_env}/aramis_group/data_platform/rds/aurora_pg_core_cluster_admin_credentials'
+    started = time.time()
+    try:
+        data = get_secret(secret)
+    except Exception as e:
+        logger.exception("Reading %s secret failed", other_env)
+        return {"status": "error", "message": f"Could not read the {other_env} secret: {str(e)[:300]}"}
+    try:
+        conn = psycopg2.connect(
+            host=data['endpoint'], user=data['username'], password=data['password'],
+            database='carsupermarket_pricer', port=int(data.get('port', 5432)),
+            connect_timeout=5,
+        )
+        try:
+            with conn.cursor() as cur:
+                cur.execute("SELECT to_regclass('public.kpi_layout') IS NOT NULL")
+                has_layout = cur.fetchone()[0]
+                layout_rows = None
+                if has_layout:
+                    cur.execute("SELECT COUNT(*) FROM kpi_layout")
+                    layout_rows = cur.fetchone()[0]
+        finally:
+            conn.close()
+    except Exception as e:
+        logger.exception("Connecting to %s Aurora failed", other_env)
+        return {"status": "error",
+                "message": f"{this_env} could not connect to {other_env} Aurora ({data['endpoint']}) "
+                           f"after {time.time() - started:.1f}s: {str(e)[:300]}"}
+    rows_text = f"{layout_rows} kpi_layout rows" if has_layout else "no kpi_layout table"
+    return {"status": "ok",
+            "message": f"{this_env} connected to {other_env} Aurora ({data['endpoint']}) "
+                       f"in {time.time() - started:.1f}s - {rows_text}"}
+
+
+# Tables copied by Copy Prod To Dev, parents before children (subsidy
+# benchmarks point at schedules). User tables (user_preferences,
+# user_page_access, page_presence) are deliberately left out.
+PROD_TO_DEV_TABLES = [
+    'settings',
+    'kpi_layout',
+    'chart_targets',
+    'page_names',
+    'subsidy_rate_schedules',
+    'subsidy_rate_benchmarks',
+    'sharepoint_sources',
+    'ga4_campaigns',
+]
+
+
+def _table_columns(cur, table: str) -> list:
+    cur.execute(
+        "SELECT column_name FROM information_schema.columns "
+        "WHERE table_schema = 'public' AND table_name = %s ORDER BY ordinal_position",
+        (table,),
+    )
+    return [r[0] for r in cur.fetchall()]
+
+
+def _table_key_columns(cur, table: str) -> list:
+    """Primary key columns, used to name each copied row in the log."""
+    cur.execute(
+        "SELECT a.attname FROM pg_index i "
+        "JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = ANY(i.indkey) "
+        "WHERE i.indrelid = to_regclass(%s) AND i.indisprimary "
+        "ORDER BY array_position(i.indkey, a.attnum)",
+        (f'public.{table}',),
+    )
+    return [r[0] for r in cur.fetchall()]
+
+
+# Copy Prod To Dev runs as a job, so the page never waits on one long request
+# (API Gateway cuts those off at 29s). Each log line is committed to
+# prod_to_dev_jobs as it happens, so whichever Lambda answers the page's poll
+# can show it. Same pattern as the SharePoint refresh jobs.
+def _ensure_prod_to_dev_jobs(conn) -> None:
+    with conn.cursor() as cur:
+        cur.execute(
+            "CREATE TABLE IF NOT EXISTS prod_to_dev_jobs ("
+            " job_id VARCHAR(36) PRIMARY KEY,"
+            " status VARCHAR(10) NOT NULL,"
+            " message TEXT,"
+            " log TEXT[] NOT NULL DEFAULT '{}',"
+            " created_by VARCHAR(100),"
+            " created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),"
+            " finished_at TIMESTAMPTZ)"
+        )
+        # backend_pid: the dev session doing the copy, so Stop can cancel it.
+        cur.execute("ALTER TABLE prod_to_dev_jobs ADD COLUMN IF NOT EXISTS backend_pid INTEGER")
+        cur.execute("ALTER TABLE prod_to_dev_jobs ADD COLUMN IF NOT EXISTS "
+                    "stop_requested BOOLEAN NOT NULL DEFAULT FALSE")
+    conn.commit()
+
+
+class _CopyStopped(Exception):
+    pass
+
+
+def _job_log(job_id: str, lines) -> None:
+    """Add one log line, or a list of them in one save. Raises _CopyStopped
+    if Stop has been pressed."""
+    if isinstance(lines, str):
+        lines = [lines]
+    with get_database_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute("UPDATE prod_to_dev_jobs SET log = log || %s::text[] WHERE job_id = %s "
+                        "RETURNING stop_requested", (list(lines), job_id))
+            row = cur.fetchone()
+        conn.commit()
+    if row and row[0]:
+        raise _CopyStopped()
+
+
+def _job_stop_requested(job_id: str) -> bool:
+    with get_database_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT stop_requested FROM prod_to_dev_jobs WHERE job_id = %s", (job_id,))
+            row = cur.fetchone()
+        conn.rollback()
+    return bool(row and row[0])
+
+
+def _lock_holders(table: str, own_pid: int) -> list:
+    """Other dev sessions holding a lock on the table, to say what blocked the copy."""
+    with get_database_connection() as conn:
+        conn.rollback()
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT DISTINCT a.pid, a.state, a.application_name, a.client_addr::text, "
+                "       EXTRACT(EPOCH FROM NOW() - a.xact_start)::int, LEFT(a.query, 150) "
+                "FROM pg_locks l JOIN pg_stat_activity a ON a.pid = l.pid "
+                "WHERE l.relation = to_regclass(%s) AND l.granted AND a.pid <> %s",
+                (f'public.{table}', own_pid),
+            )
+            rows = cur.fetchall()
+        conn.rollback()
+    return [f"pid {r[0]}, {r[1]}, app '{r[2] or ''}', from {r[3] or 'local'}, "
+            f"transaction open {r[4]}s, last query: {r[5]}" for r in rows]
+
+
+def _job_finish(job_id: str, status: str, message: str) -> None:
+    with get_database_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute("UPDATE prod_to_dev_jobs SET status = %s, message = %s, finished_at = NOW() "
+                        "WHERE job_id = %s AND status IN ('queued', 'running')",
+                        (status, message[:1000], job_id))
+        conn.commit()
+
+
+def _job_claim(job_id: str) -> bool:
+    """queued -> running in one statement, so a repeated delivery does nothing."""
+    with get_database_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute("UPDATE prod_to_dev_jobs SET status = 'running' "
+                        "WHERE job_id = %s AND status = 'queued'", (job_id,))
+            won = cur.rowcount == 1
+        conn.commit()
+    return won
+
+
+@router.post("/settings/prod-to-dev/copy")
+def copy_prod_to_dev(request: Request, user: str = Depends(get_current_user)):
+    """Start a Copy Prod To Dev job and return its id for the page to poll."""
+    if user != 'tdrayson':
+        raise HTTPException(status_code=403, detail="Forbidden")
+    import os
+    import uuid
+    import threading
+    if os.getenv('AWS_REGION') == 'eu-west-1':
+        return {"status": "error", "message": "This only runs on dev - it would overwrite prod with itself."}
+    job_id = str(uuid.uuid4())
+    try:
+        with get_database_connection() as conn:
+            conn.rollback()
+            try:
+                # Fail fast rather than hang if something holds a lock.
+                with conn.cursor() as cur:
+                    cur.execute("SET lock_timeout = '5s'")
+                _ensure_prod_to_dev_jobs(conn)
+                with conn.cursor() as cur:
+                    cur.execute("SELECT COUNT(*) FROM prod_to_dev_jobs WHERE status IN ('queued', 'running')")
+                    open_jobs = cur.fetchone()[0]
+                    if not open_jobs:
+                        cur.execute("INSERT INTO prod_to_dev_jobs (job_id, status, created_by) "
+                                    "VALUES (%s, 'queued', %s)", (job_id, user))
+                conn.commit()
+            finally:
+                # The connection goes back to the shared pool - put the setting back.
+                conn.rollback()
+                with conn.cursor() as cur:
+                    cur.execute("SET lock_timeout = 0")
+                conn.commit()
+        if open_jobs:
+            return {"status": "error", "message": "A copy is already running - press Stop first."}
+    except Exception as e:
+        logger.exception("Copy prod to dev could not create its job")
+        return {"status": "error", "message": f"Could not start: {str(e)[:300]}"}
+
+    # Own Lambda invocation on Lambda (a thread is frozen once the response is
+    # sent); a thread when running locally.
+    function_name = os.getenv("AWS_LAMBDA_FUNCTION_NAME")
+    if os.getenv("LOCAL_ENV") == "1" or not function_name:
+        threading.Thread(target=_run_prod_to_dev_safely, args=(job_id,), daemon=True,
+                         name=f"prod-to-dev-{job_id[:8]}").start()
+    else:
+        try:
+            from types import SimpleNamespace
+            from routers.core import worker_secret
+            from utils.lambda_http import LambdaRequestsManager
+            LambdaRequestsManager().simulate_http(
+                aws_context=SimpleNamespace(function_name=function_name),
+                path=BASE_URL + "/api/prod-to-dev/run",
+                method="POST",
+                data={"job_id": job_id, "secret": worker_secret()},
+            )
+        except Exception as e:
+            logger.exception("Copy prod to dev job %s could not be started", job_id)
+            _job_finish(job_id, "failed", f"Could not start the copy: {str(e)[:300]}")
+    return {"status": "started", "job_id": job_id}
+
+
+@router.get("/settings/prod-to-dev/job/{job_id}")
+def prod_to_dev_job(job_id: str, user: str = Depends(get_current_user)):
+    if user != 'tdrayson':
+        raise HTTPException(status_code=403, detail="Forbidden")
+    with get_database_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT status, message, log FROM prod_to_dev_jobs WHERE job_id = %s", (job_id,))
+            row = cur.fetchone()
+        conn.rollback()
+    if not row:
+        raise HTTPException(status_code=404, detail="Job not found")
+    return {"status": row[0], "message": row[1] or "", "log": list(row[2] or [])}
+
+
+@router.post("/settings/prod-to-dev/stop")
+def prod_to_dev_stop(user: str = Depends(get_current_user)):
+    """Stop every open copy job. Cancels the dev query it is running (so a
+    lock wait ends now), and the copy undoes itself. A job whose worker has
+    died is marked stopped after a few seconds."""
+    if user != 'tdrayson':
+        raise HTTPException(status_code=403, detail="Forbidden")
+    with get_database_connection() as conn:
+        conn.rollback()
+        _ensure_prod_to_dev_jobs(conn)
+        with conn.cursor() as cur:
+            cur.execute("UPDATE prod_to_dev_jobs SET stop_requested = TRUE "
+                        "WHERE status IN ('queued', 'running') RETURNING job_id, backend_pid")
+            jobs = cur.fetchall()
+            for _, pid in jobs:
+                if pid:
+                    cur.execute("SELECT pg_cancel_backend(%s)", (pid,))
+        conn.commit()
+    if not jobs:
+        return {"status": "ok", "message": "Nothing was running"}
+    time.sleep(3)
+    for job_id, _ in jobs:
+        _job_finish(job_id, "stopped", "Stopped by you - nothing changed in dev")
+    return {"status": "ok", "message": f"Stopped {len(jobs)} copy job(s)"}
+
+
+@router.post("/api/prod-to-dev/run")
+def prod_to_dev_run(data: dict):
+    """Internal worker route, invoked by our own Lambda."""
+    from routers.core import check_worker_secret
+    check_worker_secret(data.get("secret"))
+    job_id = str(data.get("job_id") or "")
+    if not job_id:
+        raise HTTPException(status_code=400, detail="job_id missing")
+    _run_prod_to_dev_safely(job_id)
+    return {"ok": True}
+
+
+def _run_prod_to_dev_safely(job_id: str) -> None:
+    try:
+        _run_prod_to_dev(job_id)
+    except Exception as e:
+        logger.exception("Copy prod to dev job %s crashed", job_id)
+        try:
+            _job_finish(job_id, "failed", f"Crashed: {str(e)[:300]}")
+        except Exception:
+            pass
+
+
+def _run_prod_to_dev(job_id: str) -> None:
+    """Replace the settings tables in DEV with the rows from PROD. Prod is
+    only read. All-or-nothing: if any table fails, dev is left as it was."""
+    import psycopg2
+    import psycopg2.errors
+    import psycopg2.extras
+    from utils.secrets_manager_client import get_secret
+    if not _job_claim(job_id):
+        return
+
+    started = time.time()
+
+    def note(text, check_stop=True):
+        stamp = f"{time.time() - started:5.1f}s  "
+        lines = [stamp + t for t in text] if isinstance(text, list) else stamp + text
+        try:
+            _job_log(job_id, lines)
+        except _CopyStopped:
+            if check_stop:
+                raise
+
+    copied, skipped = [], []
+    prod = None
+    try:
+        note("Reading prod database secret")
+        data = get_secret('prod/aramis_group/data_platform/rds/aurora_pg_core_cluster_admin_credentials')
+        note(f"Connecting to prod ({data['endpoint']})")
+        prod = psycopg2.connect(
+            host=data['endpoint'], user=data['username'], password=data['password'],
+            database='carsupermarket_pricer', port=int(data.get('port', 5432)),
+            connect_timeout=5,
+        )
+        prod.set_session(readonly=True)
+        note("Connected to prod (read only)")
+        with get_database_connection() as dev, prod.cursor() as pcur, dev.cursor() as dcur:
+            dev.rollback()
+            dcur.execute("SELECT pg_backend_pid()")
+            own_pid = dcur.fetchone()[0]
+            dev.commit()
+            with get_database_connection() as conn:
+                with conn.cursor() as cur:
+                    cur.execute("UPDATE prod_to_dev_jobs SET backend_pid = %s WHERE job_id = %s",
+                                (own_pid, job_id))
+                conn.commit()
+            note(f"Connected to dev (session {own_pid})")
+            try:
+                # Never wait forever on a lock held by another open dev transaction.
+                dcur.execute("SET LOCAL lock_timeout = '10s'")
+                dcur.execute("SET LOCAL statement_timeout = '60s'")
+                plan = []
+                for table in PROD_TO_DEV_TABLES:
+                    prod_cols = _table_columns(pcur, table)
+                    dev_cols = _table_columns(dcur, table)
+                    if not prod_cols or not dev_cols:
+                        where = 'prod' if not prod_cols else 'dev'
+                        skipped.append(f"{table} (missing in {where})")
+                        note(f"Skipping {table} - table missing in {where}")
+                        continue
+                    cols = [c for c in prod_cols if c in dev_cols]
+                    only_prod = [c for c in prod_cols if c not in dev_cols]
+                    only_dev = [c for c in dev_cols if c not in prod_cols]
+                    if only_prod:
+                        note(f"{table}: prod-only columns not copied: {', '.join(only_prod)}")
+                    if only_dev:
+                        note(f"{table}: dev-only columns left empty: {', '.join(only_dev)}")
+                    plan.append((table, cols))
+                note(f"Checked columns - {len(plan)} tables to copy")
+
+                # Clear children first, then load parents first.
+                for table, _ in reversed(plan):
+                    note(f"Clearing dev {table}")
+                    try:
+                        dcur.execute(f'DELETE FROM "{table}"')
+                    except psycopg2.errors.LockNotAvailable:
+                        dev.rollback()
+                        note(f"{table} is locked by another open dev session - waited 10s and gave up")
+                        holders = _lock_holders(table, own_pid)
+                        for h in holders:
+                            note(f"  Holding the lock: {h}")
+                        if not holders:
+                            note("  The other session finished before it could be looked up")
+                        raise RuntimeError(f"{table} is locked by another open dev session (see log)")
+                    note(f"Cleared dev {table} ({dcur.rowcount} rows removed)")
+                for table, cols in plan:
+                    col_sql = ', '.join(f'"{c}"' for c in cols)
+                    pcur.execute(f'SELECT {col_sql} FROM "{table}"')
+                    fetched = pcur.fetchall()
+                    # Name each row by its primary key - values are never logged
+                    # (settings holds the CAP override password).
+                    keys = [c for c in _table_key_columns(pcur, table) if c in cols] or cols[:1]
+                    key_idx = [cols.index(c) for c in keys]
+                    # Tables keyed on more than one column (chart_targets is one
+                    # row per metric per day) get one line per first-key value
+                    # with a count and range, not one line per row. All lines
+                    # for a table are saved in one go.
+                    if len(key_idx) > 1:
+                        groups = {}
+                        for row in fetched:
+                            rest = ' / '.join(str(row[i]) for i in key_idx[1:])
+                            g = groups.setdefault(str(row[key_idx[0]]), [0, rest, rest])
+                            g[0] += 1
+                            g[1] = min(g[1], rest)
+                            g[2] = max(g[2], rest)
+                        lines = [f"  {table}: {k} - {n} rows ({lo} to {hi})" if n > 1
+                                 else f"  {table}: {k} / {lo}"
+                                 for k, (n, lo, hi) in groups.items()]
+                    else:
+                        lines = [f"  {table}: {row[key_idx[0]]}" for row in fetched]
+                    if lines:
+                        note(lines)
+                    rows = [
+                        tuple(psycopg2.extras.Json(v) if isinstance(v, (dict, list)) else v for v in row)
+                        for row in fetched
+                    ]
+                    if rows:
+                        psycopg2.extras.execute_values(
+                            dcur, f'INSERT INTO "{table}" ({col_sql}) VALUES %s', rows)
+                    # Move any id sequence past the copied ids so new rows do not clash.
+                    if 'id' in cols:
+                        dcur.execute("SELECT pg_get_serial_sequence(%s, 'id')", (table,))
+                        seq = dcur.fetchone()[0]
+                        if seq:
+                            dcur.execute(
+                                f'SELECT setval(%s, COALESCE((SELECT MAX(id) FROM "{table}"), 0) + 1, false)',
+                                (seq,))
+                    copied.append(f"{table} ({len(rows)})")
+                    note(f"Copied {table} - {len(rows)} rows")
+                dev.commit()
+                note("Saved to dev", check_stop=False)
+            except BaseException:
+                dev.rollback()
+                note("Undone - dev left as it was", check_stop=False)
+                raise
+    except (_CopyStopped, psycopg2.errors.QueryCanceled) as e:
+        stopped = isinstance(e, _CopyStopped) or _job_stop_requested(job_id)
+        reason = "Stopped by you" if stopped else "A query ran over 60s and was cancelled"
+        note(f"{reason} - nothing changed in dev", check_stop=False)
+        _job_finish(job_id, "stopped" if stopped else "failed", f"{reason} - nothing changed in dev")
+        return
+    except Exception as e:
+        logger.exception("Copy prod to dev failed")
+        note(f"Failed: {str(e)[:300]}", check_stop=False)
+        _job_finish(job_id, "failed", f"Nothing changed in dev: {str(e)[:300]}")
+        return
+    finally:
+        if prod is not None:
+            prod.close()
+    logger.info("Copy prod to dev job %s: %s", job_id, ', '.join(copied))
+    message = f"Copied {len(copied)} tables in {time.time() - started:.1f}s"
+    if skipped:
+        message += f", skipped {len(skipped)}"
+    _job_finish(job_id, "done", message)
 
 
 @router.get("/settings/users", response_class=HTMLResponse)

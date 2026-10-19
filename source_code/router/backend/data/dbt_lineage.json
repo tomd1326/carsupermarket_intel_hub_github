@@ -1,0 +1,3115 @@
+{
+ "generated_at": {
+  "uk_dbt_product_data": "2026-10-15T11:43:44.785413Z",
+  "uk_dbt_transform_data": "2026-10-15T11:43:03.779999Z",
+  "uk_dbt_raw_data": "2026-10-15T11:39:50.423499Z"
+ },
+ "models": {
+  "accounting_transaction_splits__s": {
+   "project": "raw",
+   "materialized": "table",
+   "schema": "source_finance",
+   "table": "accounting_transaction_splits",
+   "tags": [
+    "daily"
+   ],
+   "stage_url": null,
+   "parents": [
+    "stg_accounting_transaction_splits_dedup"
+   ]
+  },
+  "autotrader_competitors__s": {
+   "project": "raw",
+   "materialized": "table",
+   "schema": "source_market_data",
+   "table": "autotrader_competitors",
+   "tags": [
+    "daily"
+   ],
+   "stage_url": null,
+   "parents": [
+    "stg_autotrader_competitors_dedup"
+   ]
+  },
+  "bcb_valuations__s": {
+   "project": "raw",
+   "materialized": "table",
+   "schema": "source_trade_ins",
+   "table": "bcb_valuations",
+   "tags": [
+    "daily"
+   ],
+   "stage_url": null,
+   "parents": [
+    "stg_bcb_valuations_dedup"
+   ]
+  },
+  "bcb_valuations_status_history__c": {
+   "project": "transform",
+   "materialized": "table",
+   "schema": "compute_trade_ins",
+   "table": "bcb_valuations_status_history",
+   "tags": [
+    "daily"
+   ],
+   "stage_url": null,
+   "parents": [
+    "bcb_valuations__s"
+   ]
+  },
+  "budget__s": {
+   "project": "raw",
+   "materialized": "table",
+   "schema": "source_finance",
+   "table": "budget",
+   "tags": [
+    "daily"
+   ],
+   "stage_url": null,
+   "parents": [
+    "stg_budget_dedup"
+   ]
+  },
+  "business_objectives__c": {
+   "project": "transform",
+   "materialized": "table",
+   "schema": "compute_company",
+   "table": "business_objectives",
+   "tags": [
+    "daily"
+   ],
+   "stage_url": null,
+   "parents": [
+    "business_objectives__s"
+   ]
+  },
+  "business_objectives__s": {
+   "project": "raw",
+   "materialized": "table",
+   "schema": "source_company",
+   "table": "business_objectives",
+   "tags": [
+    "daily"
+   ],
+   "stage_url": null,
+   "parents": [
+    "stg_business_objectives_dedup"
+   ]
+  },
+  "business_performance__p": {
+   "project": "product",
+   "materialized": "table",
+   "schema": "product_slt_kpis",
+   "table": "business_performance",
+   "tags": [
+    "daily"
+   ],
+   "stage_url": null,
+   "parents": [
+    "nps__c"
+   ]
+  },
+  "business_performance_objectives__p": {
+   "project": "product",
+   "materialized": "table",
+   "schema": "product_slt_kpis",
+   "table": "business_performance_objectives",
+   "tags": [
+    "daily"
+   ],
+   "stage_url": null,
+   "parents": [
+    "business_objectives__c"
+   ]
+  },
+  "buying_requirements__p": {
+   "project": "product",
+   "materialized": "table",
+   "schema": "product_vehicle_journey",
+   "table": "buying_requirements",
+   "tags": [
+    "daily"
+   ],
+   "stage_url": null,
+   "parents": [
+    "sales_performance__p",
+    "vehicles__c",
+    "vehicles_days_advertised__c",
+    "vehicles_stock_evolution__c"
+   ]
+  },
+  "calendar__c": {
+   "project": "transform",
+   "materialized": "table",
+   "schema": "compute_utils",
+   "table": "calendar",
+   "tags": [
+    "daily"
+   ],
+   "stage_url": null,
+   "parents": []
+  },
+  "cap_codes_car__s": {
+   "project": "raw",
+   "materialized": "table",
+   "schema": "source_market_data",
+   "table": "cap_codes_car",
+   "tags": [
+    "daily"
+   ],
+   "stage_url": null,
+   "parents": [
+    "stg_cap_codes_car_dedup"
+   ]
+  },
+  "cap_models__c": {
+   "project": "transform",
+   "materialized": "table",
+   "schema": "compute_market_data",
+   "table": "cap_models",
+   "tags": [
+    "daily"
+   ],
+   "stage_url": null,
+   "parents": [
+    "cap_codes_car__s"
+   ]
+  },
+  "cap_sectors__s": {
+   "project": "raw",
+   "materialized": "table",
+   "schema": "source_market_data",
+   "table": "cap_sectors",
+   "tags": [
+    "daily"
+   ],
+   "stage_url": null,
+   "parents": [
+    "stg_cap_sectors_dedup"
+   ]
+  },
+  "cap_valuations__c": {
+   "project": "transform",
+   "materialized": "table",
+   "schema": "compute_market_data",
+   "table": "cap_valuations",
+   "tags": [
+    "daily"
+   ],
+   "stage_url": null,
+   "parents": [
+    "cap_valuations_live__s",
+    "cap_valuations_month__s",
+    "vehicles__s"
+   ]
+  },
+  "cap_valuations_live__s": {
+   "project": "raw",
+   "materialized": "table",
+   "schema": "source_market_data",
+   "table": "cap_valuations_live",
+   "tags": [
+    "daily"
+   ],
+   "stage_url": null,
+   "parents": [
+    "stg_cap_valuations_live_dedup"
+   ]
+  },
+  "cap_valuations_month__s": {
+   "project": "raw",
+   "materialized": "table",
+   "schema": "source_market_data",
+   "table": "cap_valuations_month",
+   "tags": [
+    "daily"
+   ],
+   "stage_url": null,
+   "parents": [
+    "stg_cap_valuations_month_dedup"
+   ]
+  },
+  "contacts_customers__s": {
+   "project": "raw",
+   "materialized": "table",
+   "schema": "source_customers",
+   "table": "contacts_customers",
+   "tags": [
+    "daily"
+   ],
+   "stage_url": null,
+   "parents": [
+    "stg_contacts_customers_dedup"
+   ]
+  },
+  "contacts_finance_companies__s": {
+   "project": "raw",
+   "materialized": "table",
+   "schema": "source_sales_b2c",
+   "table": "contacts_finance_companies",
+   "tags": [
+    "daily"
+   ],
+   "stage_url": null,
+   "parents": [
+    "stg_contacts_finance_companies_dedup"
+   ]
+  },
+  "contacts_suppliers__s": {
+   "project": "raw",
+   "materialized": "table",
+   "schema": "source_purchases_b2b",
+   "table": "contacts_suppliers",
+   "tags": [
+    "daily"
+   ],
+   "stage_url": null,
+   "parents": [
+    "stg_contacts_suppliers_dedup"
+   ]
+  },
+  "current_stock__p": {
+   "project": "product",
+   "materialized": "table",
+   "schema": "product_vehicle_journey",
+   "table": "current_stock",
+   "tags": [
+    "daily"
+   ],
+   "stage_url": null,
+   "parents": [
+    "vehicles__c",
+    "vehicles_days_advertised__c",
+    "vehicles_stock_evolution__c"
+   ]
+  },
+  "customers__c": {
+   "project": "transform",
+   "materialized": "table",
+   "schema": "compute_customers",
+   "table": "customers",
+   "tags": [
+    "daily"
+   ],
+   "stage_url": null,
+   "parents": [
+    "contacts_customers__s"
+   ]
+  },
+  "customers_mailchimp__p": {
+   "project": "product",
+   "materialized": "table",
+   "schema": "product_sales_performance",
+   "table": "customers_mailchimp",
+   "tags": [
+    "daily"
+   ],
+   "stage_url": null,
+   "parents": [
+    "contacts_customers__s",
+    "customers__c",
+    "enquiries__c",
+    "financing__c",
+    "reef_customers__s",
+    "sales__c",
+    "sales_products__c",
+    "vehicles__c"
+   ]
+  },
+  "daily_spend_and_enquiries__s": {
+   "project": "raw",
+   "materialized": "table",
+   "schema": "product",
+   "table": "daily_spend_and_enquiries",
+   "tags": [
+    "daily"
+   ],
+   "stage_url": null,
+   "parents": [
+    "stg_daily_spend_and_enquiries_dedup"
+   ]
+  },
+  "daily_summary__p": {
+   "project": "product",
+   "materialized": "table",
+   "schema": "product_slt_kpis",
+   "table": "daily_summary",
+   "tags": [
+    "daily"
+   ],
+   "stage_url": null,
+   "parents": [
+    "calendar__c",
+    "enquiries__c",
+    "ga4_total_sessions_daily__s",
+    "ga4_total_users_daily__s",
+    "kpi_targets__s",
+    "mediahawk__c",
+    "onepoint_call_logs__s",
+    "sales_performance__p",
+    "vehicles__c",
+    "vehicles_autotrader__s",
+    "vehicles_stock_evolution__c",
+    "visitor_chat__s"
+   ]
+  },
+  "employees__c": {
+   "project": "transform",
+   "materialized": "table",
+   "schema": "compute_company",
+   "table": "employees",
+   "tags": [
+    "daily"
+   ],
+   "stage_url": null,
+   "parents": [
+    "organisation_units__s",
+    "users__s"
+   ]
+  },
+  "enquiries__c": {
+   "project": "transform",
+   "materialized": "table",
+   "schema": "compute_sales_b2c",
+   "table": "enquiries",
+   "tags": [
+    "daily"
+   ],
+   "stage_url": null,
+   "parents": [
+    "contacts_customers__s",
+    "employees__c",
+    "enquiries__s",
+    "enquiry_vehicles__s",
+    "invoices__s",
+    "mediahawk__c",
+    "onepoint_call_logs__s",
+    "organisation_units__s",
+    "valuations__s",
+    "vehicles__c"
+   ]
+  },
+  "enquiries__p": {
+   "project": "product",
+   "materialized": "incremental",
+   "schema": "product_sales_performance",
+   "table": "enquiries",
+   "tags": [
+    "daily"
+   ],
+   "stage_url": null,
+   "parents": [
+    "enquiries__c"
+   ]
+  },
+  "enquiries__s": {
+   "project": "raw",
+   "materialized": "table",
+   "schema": "source_sales_b2c",
+   "table": "enquiries",
+   "tags": [
+    "daily"
+   ],
+   "stage_url": null,
+   "parents": [
+    "stg_enquiries_dedup"
+   ]
+  },
+  "enquiry_vehicles__s": {
+   "project": "raw",
+   "materialized": "table",
+   "schema": "source_sales_b2c",
+   "table": "enquiry_vehicles",
+   "tags": [
+    "daily"
+   ],
+   "stage_url": null,
+   "parents": [
+    "stg_enquiry_vehicles_dedup"
+   ]
+  },
+  "finance_subsidy_rate__c": {
+   "project": "transform",
+   "materialized": "table",
+   "schema": "compute_sales_b2c",
+   "table": "finance_subsidy_rate",
+   "tags": [
+    "daily"
+   ],
+   "stage_url": null,
+   "parents": [
+    "calendar__c",
+    "financing__c",
+    "sales__c"
+   ]
+  },
+  "financing__c": {
+   "project": "transform",
+   "materialized": "table",
+   "schema": "compute_sales_b2c",
+   "table": "financing",
+   "tags": [
+    "daily"
+   ],
+   "stage_url": null,
+   "parents": [
+    "contacts_finance_companies__s",
+    "invoice_finance_amounts__s",
+    "invoices__s"
+   ]
+  },
+  "ga4_campaign_metrics__c": {
+   "project": "transform",
+   "materialized": "incremental",
+   "schema": "product",
+   "table": "ga4_campaign_metrics",
+   "tags": [
+    "ga4",
+    "daily"
+   ],
+   "stage_url": null,
+   "parents": [
+    "ga4_lead_volume_by_campaign__s",
+    "ga4_sessions_by_campaign__s"
+   ]
+  },
+  "ga4_daily_metrics__c": {
+   "project": "transform",
+   "materialized": "incremental",
+   "schema": "product",
+   "table": "ga4_daily_metrics",
+   "tags": [
+    "ga4",
+    "daily"
+   ],
+   "stage_url": null,
+   "parents": [
+    "ga4_total_bounce_rate__s",
+    "ga4_total_lead_volume__s",
+    "ga4_total_pageview__s",
+    "ga4_total_sessions__s",
+    "ga4_total_sessions_by_page__s"
+   ]
+  },
+  "ga4_lead_volume_by_campaign__s": {
+   "project": "raw",
+   "materialized": "table",
+   "schema": "source_ux_tracking",
+   "table": "ga4_lead_volume_by_campaign",
+   "tags": [
+    "daily",
+    "ga4",
+    "incremental"
+   ],
+   "stage_url": null,
+   "parents": [
+    "stg_ga4_lead_volume_by_campaign_dedup__s"
+   ]
+  },
+  "ga4_sessions_by_campaign__s": {
+   "project": "raw",
+   "materialized": "table",
+   "schema": "source_ux_tracking",
+   "table": "ga4_sessions_by_campaign",
+   "tags": [
+    "daily",
+    "ga4",
+    "incremental"
+   ],
+   "stage_url": null,
+   "parents": [
+    "stg_ga4_sessions_by_campaign_dedup__s"
+   ]
+  },
+  "ga4_total_bounce_rate__s": {
+   "project": "raw",
+   "materialized": "table",
+   "schema": "source_ux_tracking",
+   "table": "ga4_total_bounce_rate",
+   "tags": [
+    "daily",
+    "ga4",
+    "incremental"
+   ],
+   "stage_url": null,
+   "parents": [
+    "stg_ga4_total_bounce_rate_dedup__s"
+   ]
+  },
+  "ga4_total_lead_volume__s": {
+   "project": "raw",
+   "materialized": "table",
+   "schema": "source_ux_tracking",
+   "table": "ga4_total_lead_volume",
+   "tags": [
+    "daily",
+    "ga4",
+    "incremental"
+   ],
+   "stage_url": null,
+   "parents": [
+    "stg_ga4_total_lead_volume_dedup__s"
+   ]
+  },
+  "ga4_total_pageview__s": {
+   "project": "raw",
+   "materialized": "table",
+   "schema": "source_ux_tracking",
+   "table": "ga4_total_pageview",
+   "tags": [
+    "daily",
+    "ga4",
+    "incremental"
+   ],
+   "stage_url": null,
+   "parents": [
+    "stg_ga4_total_pageview_dedup__s"
+   ]
+  },
+  "ga4_total_sessions__s": {
+   "project": "raw",
+   "materialized": "table",
+   "schema": "source_ux_tracking",
+   "table": "ga4_total_sessions",
+   "tags": [
+    "daily",
+    "ga4",
+    "incremental"
+   ],
+   "stage_url": null,
+   "parents": [
+    "stg_ga4_total_sessions_dedup__s"
+   ]
+  },
+  "ga4_total_sessions_by_page__s": {
+   "project": "raw",
+   "materialized": "table",
+   "schema": "source_ux_tracking",
+   "table": "ga4_total_sessions_by_page",
+   "tags": [
+    "daily",
+    "ga4",
+    "incremental"
+   ],
+   "stage_url": null,
+   "parents": [
+    "stg_ga4_total_sessions_by_page_dedup__s"
+   ]
+  },
+  "ga4_total_sessions_daily__s": {
+   "project": "raw",
+   "materialized": "table",
+   "schema": "source_ux_tracking",
+   "table": "ga4_total_sessions_daily",
+   "tags": [
+    "daily",
+    "ga4",
+    "incremental"
+   ],
+   "stage_url": null,
+   "parents": [
+    "stg_ga4_total_sessions_daily_dedup__s"
+   ]
+  },
+  "ga4_total_users__s": {
+   "project": "raw",
+   "materialized": "table",
+   "schema": "source_ux_tracking",
+   "table": "ga4_total_users",
+   "tags": [
+    "daily",
+    "ga4",
+    "incremental"
+   ],
+   "stage_url": null,
+   "parents": [
+    "stg_ga4_total_users_dedup__s"
+   ]
+  },
+  "ga4_total_users_daily__s": {
+   "project": "raw",
+   "materialized": "table",
+   "schema": "source_ux_tracking",
+   "table": "ga4_total_users_daily",
+   "tags": [
+    "daily",
+    "ga4",
+    "incremental"
+   ],
+   "stage_url": null,
+   "parents": [
+    "stg_ga4_total_users_daily_dedup__s"
+   ]
+  },
+  "ga4_vdp_bounce_rate__s": {
+   "project": "raw",
+   "materialized": "table",
+   "schema": "source_ux_tracking",
+   "table": "ga4_vdp_bounce_rate",
+   "tags": [
+    "daily",
+    "ga4",
+    "incremental"
+   ],
+   "stage_url": null,
+   "parents": [
+    "stg_ga4_vdp_bounce_rate_dedup__s"
+   ]
+  },
+  "ga4_vdp_pageview_volume__s": {
+   "project": "raw",
+   "materialized": "table",
+   "schema": "source_ux_tracking",
+   "table": "ga4_vdp_pageview_volume",
+   "tags": [
+    "daily",
+    "ga4",
+    "incremental"
+   ],
+   "stage_url": null,
+   "parents": [
+    "stg_ga4_vdp_pageview_volume_dedup__s"
+   ]
+  },
+  "google_reviews__c": {
+   "project": "transform",
+   "materialized": "table",
+   "schema": "compute_customers",
+   "table": "google_reviews",
+   "tags": [
+    "daily"
+   ],
+   "stage_url": null,
+   "parents": [
+    "google_reviews__s"
+   ]
+  },
+  "google_reviews__p": {
+   "project": "product",
+   "materialized": "table",
+   "schema": "product_customer_satisfaction",
+   "table": "google_reviews",
+   "tags": [
+    "daily"
+   ],
+   "stage_url": null,
+   "parents": [
+    "google_reviews__c"
+   ]
+  },
+  "google_reviews__s": {
+   "project": "raw",
+   "materialized": "table",
+   "schema": "source_customers",
+   "table": "google_reviews",
+   "tags": [
+    "daily"
+   ],
+   "stage_url": null,
+   "parents": [
+    "stg_google_reviews_dedup"
+   ]
+  },
+  "gpu_tracking__p": {
+   "project": "product",
+   "materialized": "table",
+   "schema": "product_vehicle_journey",
+   "table": "gpu_tracking",
+   "tags": [
+    "daily"
+   ],
+   "stage_url": null,
+   "parents": [
+    "sales__c",
+    "vehicles__c"
+   ]
+  },
+  "invoice_finance_amounts__s": {
+   "project": "raw",
+   "materialized": "table",
+   "schema": "source_sales_b2c",
+   "table": "invoice_finance_amounts",
+   "tags": [
+    "daily"
+   ],
+   "stage_url": null,
+   "parents": [
+    "stg_invoice_finance_amounts_dedup"
+   ]
+  },
+  "invoice_notes__s": {
+   "project": "raw",
+   "materialized": "table",
+   "schema": "source_sales_b2c",
+   "table": "invoice_notes",
+   "tags": [
+    "daily"
+   ],
+   "stage_url": null,
+   "parents": [
+    "stg_invoice_notes_dedup"
+   ]
+  },
+  "invoice_part_exchange_settlements__s": {
+   "project": "raw",
+   "materialized": "table",
+   "schema": "source_trade_ins",
+   "table": "invoice_part_exchange_settlements",
+   "tags": [
+    "daily"
+   ],
+   "stage_url": null,
+   "parents": [
+    "stg_invoice_part_exchange_settlements_dedup"
+   ]
+  },
+  "invoice_product_discounts__s": {
+   "project": "raw",
+   "materialized": "table",
+   "schema": "source_sales_b2c",
+   "table": "invoice_product_discounts",
+   "tags": [
+    "daily"
+   ],
+   "stage_url": null,
+   "parents": [
+    "stg_invoice_product_discounts_dedup"
+   ]
+  },
+  "invoice_products__s": {
+   "project": "raw",
+   "materialized": "table",
+   "schema": "source_sales_b2c",
+   "table": "invoice_products",
+   "tags": [
+    "daily"
+   ],
+   "stage_url": null,
+   "parents": [
+    "stg_invoice_products_dedup"
+   ]
+  },
+  "invoice_valuations__s": {
+   "project": "raw",
+   "materialized": "table",
+   "schema": "source_sales_b2c",
+   "table": "invoice_valuations",
+   "tags": [
+    "daily"
+   ],
+   "stage_url": null,
+   "parents": [
+    "stg_invoice_valuations_dedup"
+   ]
+  },
+  "invoices__s": {
+   "project": "raw",
+   "materialized": "table",
+   "schema": "source_sales_b2c",
+   "table": "invoices",
+   "tags": [
+    "daily"
+   ],
+   "stage_url": null,
+   "parents": [
+    "stg_invoices_dedup"
+   ]
+  },
+  "judge_service_react_used_cars__s": {
+   "project": "raw",
+   "materialized": "table",
+   "schema": "source_customers",
+   "table": "judge_service_react_used_cars",
+   "tags": [
+    "daily"
+   ],
+   "stage_url": null,
+   "parents": [
+    "stg_judge_service_react_used_cars_dedup"
+   ]
+  },
+  "judge_service_value_my_car__s": {
+   "project": "raw",
+   "materialized": "table",
+   "schema": "source_customers",
+   "table": "judge_service_value_my_car",
+   "tags": [],
+   "stage_url": null,
+   "parents": [
+    "stg_judge_service_value_my_car_dedup"
+   ]
+  },
+  "kpi_targets__s": {
+   "project": "raw",
+   "materialized": "table",
+   "schema": "source_company",
+   "table": "kpi_targets",
+   "tags": [
+    "daily"
+   ],
+   "stage_url": null,
+   "parents": [
+    "stg_kpi_targets_dedup"
+   ]
+  },
+  "late_costs__s": {
+   "project": "raw",
+   "materialized": "table",
+   "schema": "source_finance",
+   "table": "late_costs",
+   "tags": [
+    "daily",
+    "incremental"
+   ],
+   "stage_url": null,
+   "parents": [
+    "stg_late_costs_dedup"
+   ]
+  },
+  "management_accounts__c": {
+   "project": "transform",
+   "materialized": "table",
+   "schema": "product",
+   "table": "management_accounts",
+   "tags": [
+    "daily"
+   ],
+   "stage_url": null,
+   "parents": [
+    "budget__s",
+    "management_accounts__s"
+   ]
+  },
+  "management_accounts__s": {
+   "project": "raw",
+   "materialized": "table",
+   "schema": "source_finance",
+   "table": "management_accounts",
+   "tags": [
+    "daily"
+   ],
+   "stage_url": null,
+   "parents": [
+    "stg_standard_costs_dedup"
+   ]
+  },
+  "mediahawk__c": {
+   "project": "transform",
+   "materialized": "table",
+   "schema": "compute_commercial_activity",
+   "table": "mediahawk",
+   "tags": [
+    "daily"
+   ],
+   "stage_url": null,
+   "parents": [
+    "mediahawk__s"
+   ]
+  },
+  "mediahawk__s": {
+   "project": "raw",
+   "materialized": "table",
+   "schema": "source_commercial_activity",
+   "table": "mediahawk",
+   "tags": [
+    "daily"
+   ],
+   "stage_url": null,
+   "parents": [
+    "stg_mediahawk_dedup"
+   ]
+  },
+  "missing_finance_amounts__p": {
+   "project": "product",
+   "materialized": "table",
+   "schema": "product_sales_performance",
+   "table": "missing_finance_amounts",
+   "tags": [
+    "daily"
+   ],
+   "stage_url": null,
+   "parents": [
+    "financing__c",
+    "sales__c",
+    "vehicles__c"
+   ]
+  },
+  "nps__c": {
+   "project": "transform",
+   "materialized": "table",
+   "schema": "compute_customers",
+   "table": "nps",
+   "tags": [
+    "daily"
+   ],
+   "stage_url": null,
+   "parents": [
+    "judge_service_react_used_cars__s"
+   ]
+  },
+  "onepoint_call_logs__s": {
+   "project": "raw",
+   "materialized": "table",
+   "schema": "source_commercial_activity",
+   "table": "onepoint_call_logs",
+   "tags": [
+    "daily"
+   ],
+   "stage_url": null,
+   "parents": [
+    "stg_onepoint_call_logs_dedup"
+   ]
+  },
+  "organisation_units__s": {
+   "project": "raw",
+   "materialized": "table",
+   "schema": "source_company",
+   "table": "organisation_units",
+   "tags": [
+    "daily"
+   ],
+   "stage_url": null,
+   "parents": [
+    "stg_organisation_units_dedup"
+   ]
+  },
+  "payments__s": {
+   "project": "raw",
+   "materialized": "table",
+   "schema": "source_finance",
+   "table": "payments",
+   "tags": [
+    "daily"
+   ],
+   "stage_url": null,
+   "parents": [
+    "stg_payments_dedup"
+   ]
+  },
+  "postcode_matching__p": {
+   "project": "product",
+   "materialized": "table",
+   "schema": "product_sales_performance",
+   "table": "postcode_matching",
+   "tags": [
+    "daily"
+   ],
+   "stage_url": null,
+   "parents": [
+    "sales_performance__p"
+   ]
+  },
+  "product_groups__s": {
+   "project": "raw",
+   "materialized": "table",
+   "schema": "source_sales_b2c",
+   "table": "product_groups",
+   "tags": [
+    "daily"
+   ],
+   "stage_url": null,
+   "parents": [
+    "stg_product_groups_dedup"
+   ]
+  },
+  "products__s": {
+   "project": "raw",
+   "materialized": "table",
+   "schema": "source_sales_b2c",
+   "table": "products",
+   "tags": [
+    "daily"
+   ],
+   "stage_url": null,
+   "parents": [
+    "stg_products_dedup"
+   ]
+  },
+  "purchases__p": {
+   "project": "product",
+   "materialized": "table",
+   "schema": "product_vehicle_journey",
+   "table": "purchases",
+   "tags": [
+    "daily"
+   ],
+   "stage_url": null,
+   "parents": [
+    "sales__c",
+    "vehicles__c",
+    "vehicles_stock_evolution__c"
+   ]
+  },
+  "query_history__s": {
+   "project": "raw",
+   "materialized": "table",
+   "schema": "source_ux_tracking",
+   "table": "query_history",
+   "tags": [
+    "monitoring",
+    "weekly"
+   ],
+   "stage_url": null,
+   "parents": []
+  },
+  "reef_customers__s": {
+   "project": "raw",
+   "materialized": "table",
+   "schema": "source_customers",
+   "table": "reef_customers",
+   "tags": [
+    "daily"
+   ],
+   "stage_url": null,
+   "parents": [
+    "stg_reef_customers_dedup"
+   ]
+  },
+  "sales__c": {
+   "project": "transform",
+   "materialized": "table",
+   "schema": "compute_sales_b2c",
+   "table": "sales",
+   "tags": [
+    "daily"
+   ],
+   "stage_url": null,
+   "parents": [
+    "contacts_customers__s",
+    "employees__c",
+    "enquiries__s",
+    "invoices__s",
+    "organisation_units__s",
+    "vehicles__s",
+    "vehicles_autotrader__s"
+   ]
+  },
+  "sales_autoview__s": {
+   "project": "raw",
+   "materialized": "table",
+   "schema": "source_sales_b2c",
+   "table": "sales_autoview",
+   "tags": [
+    "daily"
+   ],
+   "stage_url": null,
+   "parents": [
+    "stg_sales_autoview_dedup"
+   ]
+  },
+  "sales_ovonone_renewal__p": {
+   "project": "product",
+   "materialized": "table",
+   "schema": "product_sales_performance",
+   "table": "sales_ovonone_renewal",
+   "tags": [
+    "ovonone"
+   ],
+   "stage_url": null,
+   "parents": [
+    "customers__c",
+    "sales__c",
+    "sales_products__c",
+    "vehicles__c"
+   ]
+  },
+  "sales_ovonone_upsell__p": {
+   "project": "product",
+   "materialized": "table",
+   "schema": "product_sales_performance",
+   "table": "sales_ovonone_upsell",
+   "tags": [
+    "ovonone"
+   ],
+   "stage_url": null,
+   "parents": [
+    "customers__c",
+    "sales__c",
+    "sales_products__c",
+    "vehicles__c"
+   ]
+  },
+  "sales_performance__p": {
+   "project": "product",
+   "materialized": "table",
+   "schema": "product_sales_performance",
+   "table": "sales_performance",
+   "tags": [
+    "daily"
+   ],
+   "stage_url": null,
+   "parents": [
+    "enquiries__c",
+    "financing__c",
+    "invoice_valuations__s",
+    "management_accounts__s",
+    "sales__c",
+    "sales_products__c",
+    "valuations__c",
+    "vehicles__c",
+    "vehicles_days_advertised__c",
+    "vehicles_record_history__c",
+    "vehicles_stock_evolution__c"
+   ]
+  },
+  "sales_products__c": {
+   "project": "transform",
+   "materialized": "table",
+   "schema": "compute_sales_b2c",
+   "table": "sales_products",
+   "tags": [
+    "daily"
+   ],
+   "stage_url": null,
+   "parents": [
+    "invoice_product_discounts__s",
+    "invoice_products__s",
+    "invoices__s",
+    "products__s",
+    "users__s"
+   ]
+  },
+  "stg_accounting_transaction_splits": {
+   "project": "raw",
+   "materialized": "table",
+   "schema": "source_finance",
+   "table": "stg_accounting_transaction_splits",
+   "tags": [
+    "daily"
+   ],
+   "stage_url": "nexus_point/accounting/transaction-splits/json/v0/",
+   "parents": []
+  },
+  "stg_accounting_transaction_splits_dedup": {
+   "project": "raw",
+   "materialized": "table",
+   "schema": "source_finance",
+   "table": "stg_accounting_transaction_splits_dedup",
+   "tags": [
+    "daily"
+   ],
+   "stage_url": null,
+   "parents": [
+    "stg_accounting_transaction_splits"
+   ]
+  },
+  "stg_autotrader_competitors": {
+   "project": "raw",
+   "materialized": "table",
+   "schema": "source_market_data",
+   "table": "stg_autotrader_competitors",
+   "tags": [
+    "daily"
+   ],
+   "stage_url": "autotrader/competitors/json/v0/",
+   "parents": []
+  },
+  "stg_autotrader_competitors_dedup": {
+   "project": "raw",
+   "materialized": "table",
+   "schema": "source_market_data",
+   "table": "stg_autotrader_competitors_dedup",
+   "tags": [
+    "daily"
+   ],
+   "stage_url": null,
+   "parents": [
+    "stg_autotrader_competitors"
+   ]
+  },
+  "stg_bcb_valuations": {
+   "project": "raw",
+   "materialized": "table",
+   "schema": "source_trade_ins",
+   "table": "stg_bcb_valuations",
+   "tags": [
+    "daily"
+   ],
+   "stage_url": "nexus_point_bcb/valuations/json/v0/",
+   "parents": []
+  },
+  "stg_bcb_valuations_dedup": {
+   "project": "raw",
+   "materialized": "table",
+   "schema": "source_trade_ins",
+   "table": "stg_bcb_valuations_dedup",
+   "tags": [
+    "daily"
+   ],
+   "stage_url": null,
+   "parents": [
+    "stg_bcb_valuations"
+   ]
+  },
+  "stg_budget": {
+   "project": "raw",
+   "materialized": "table",
+   "schema": "source_finance",
+   "table": "stg_budget",
+   "tags": [
+    "daily"
+   ],
+   "stage_url": "applications/sharepoint/budget_ambition/csv/v0/",
+   "parents": []
+  },
+  "stg_budget_dedup": {
+   "project": "raw",
+   "materialized": "table",
+   "schema": "source_finance",
+   "table": "stg_budget_dedup",
+   "tags": [
+    "daily"
+   ],
+   "stage_url": null,
+   "parents": [
+    "stg_budget"
+   ]
+  },
+  "stg_business_objectives": {
+   "project": "raw",
+   "materialized": "table",
+   "schema": "source_company",
+   "table": "stg_business_objectives",
+   "tags": [
+    "daily"
+   ],
+   "stage_url": "applications/gsheet/business_objectives/json/v1",
+   "parents": []
+  },
+  "stg_business_objectives_dedup": {
+   "project": "raw",
+   "materialized": "table",
+   "schema": "source_company",
+   "table": "stg_business_objectives_dedup",
+   "tags": [
+    "daily"
+   ],
+   "stage_url": null,
+   "parents": [
+    "stg_business_objectives"
+   ]
+  },
+  "stg_cap_codes_car": {
+   "project": "raw",
+   "materialized": "table",
+   "schema": "source_market_data",
+   "table": "stg_cap_codes_car",
+   "tags": [
+    "daily"
+   ],
+   "stage_url": "cap/codes/car/csv/v0/",
+   "parents": []
+  },
+  "stg_cap_codes_car_dedup": {
+   "project": "raw",
+   "materialized": "table",
+   "schema": "source_market_data",
+   "table": "stg_cap_codes_car_dedup",
+   "tags": [
+    "daily"
+   ],
+   "stage_url": null,
+   "parents": [
+    "stg_cap_codes_car"
+   ]
+  },
+  "stg_cap_codes_lcv": {
+   "project": "raw",
+   "materialized": "table",
+   "schema": "source_market_data",
+   "table": "stg_cap_codes_lcv",
+   "tags": [
+    "daily"
+   ],
+   "stage_url": "cap/codes/lcv/csv/v0/",
+   "parents": []
+  },
+  "stg_cap_codes_lcv_dedup": {
+   "project": "raw",
+   "materialized": "table",
+   "schema": "source_market_data",
+   "table": "stg_cap_codes_lcv_dedup",
+   "tags": [
+    "daily"
+   ],
+   "stage_url": null,
+   "parents": [
+    "stg_cap_codes_lcv"
+   ]
+  },
+  "stg_cap_sectors": {
+   "project": "raw",
+   "materialized": "table",
+   "schema": "source_market_data",
+   "table": "stg_cap_sectors",
+   "tags": [
+    "daily"
+   ],
+   "stage_url": "cap/sectors/json/v0/",
+   "parents": []
+  },
+  "stg_cap_sectors_dedup": {
+   "project": "raw",
+   "materialized": "table",
+   "schema": "source_market_data",
+   "table": "stg_cap_sectors_dedup",
+   "tags": [
+    "daily"
+   ],
+   "stage_url": null,
+   "parents": [
+    "stg_cap_sectors"
+   ]
+  },
+  "stg_cap_valuations_live": {
+   "project": "raw",
+   "materialized": "table",
+   "schema": "source_market_data",
+   "table": "stg_cap_valuations_live",
+   "tags": [
+    "daily"
+   ],
+   "stage_url": "cap/valuations/live/json/v0/",
+   "parents": []
+  },
+  "stg_cap_valuations_live_dedup": {
+   "project": "raw",
+   "materialized": "table",
+   "schema": "source_market_data",
+   "table": "stg_cap_valuations_live_dedup",
+   "tags": [
+    "daily"
+   ],
+   "stage_url": null,
+   "parents": [
+    "stg_cap_valuations_live"
+   ]
+  },
+  "stg_cap_valuations_month": {
+   "project": "raw",
+   "materialized": "table",
+   "schema": "source_market_data",
+   "table": "stg_cap_valuations_month",
+   "tags": [
+    "daily"
+   ],
+   "stage_url": "cap/valuations/month/json/v0/",
+   "parents": []
+  },
+  "stg_cap_valuations_month_dedup": {
+   "project": "raw",
+   "materialized": "table",
+   "schema": "source_market_data",
+   "table": "stg_cap_valuations_month_dedup",
+   "tags": [
+    "daily"
+   ],
+   "stage_url": null,
+   "parents": [
+    "stg_cap_valuations_month"
+   ]
+  },
+  "stg_contacts_customers": {
+   "project": "raw",
+   "materialized": "table",
+   "schema": "source_customers",
+   "table": "stg_contacts_customers",
+   "tags": [
+    "daily"
+   ],
+   "stage_url": "nexus_point/contacts/json/v0/",
+   "parents": []
+  },
+  "stg_contacts_customers_dedup": {
+   "project": "raw",
+   "materialized": "table",
+   "schema": "source_customers",
+   "table": "stg_contacts_customers_dedup",
+   "tags": [
+    "daily"
+   ],
+   "stage_url": null,
+   "parents": [
+    "stg_contacts_customers"
+   ]
+  },
+  "stg_contacts_finance_companies": {
+   "project": "raw",
+   "materialized": "table",
+   "schema": "source_sales_b2c",
+   "table": "stg_contacts_finance_companies",
+   "tags": [
+    "daily"
+   ],
+   "stage_url": "nexus_point/contacts/json/v0/",
+   "parents": []
+  },
+  "stg_contacts_finance_companies_dedup": {
+   "project": "raw",
+   "materialized": "table",
+   "schema": "source_sales_b2c",
+   "table": "stg_contacts_finance_companies_dedup",
+   "tags": [
+    "daily"
+   ],
+   "stage_url": null,
+   "parents": [
+    "stg_contacts_finance_companies"
+   ]
+  },
+  "stg_contacts_suppliers": {
+   "project": "raw",
+   "materialized": "table",
+   "schema": "source_purchases_b2b",
+   "table": "stg_contacts_suppliers",
+   "tags": [
+    "daily"
+   ],
+   "stage_url": "nexus_point/contacts/json/v0/",
+   "parents": []
+  },
+  "stg_contacts_suppliers_dedup": {
+   "project": "raw",
+   "materialized": "table",
+   "schema": "source_purchases_b2b",
+   "table": "stg_contacts_suppliers_dedup",
+   "tags": [
+    "daily"
+   ],
+   "stage_url": null,
+   "parents": [
+    "stg_contacts_suppliers"
+   ]
+  },
+  "stg_daily_spend_and_enquiries": {
+   "project": "raw",
+   "materialized": "from_external_stage",
+   "schema": "product",
+   "table": "stg_daily_spend_and_enquiries",
+   "tags": [
+    "daily"
+   ],
+   "stage_url": "applications/sharepoint/daily_spend_and_enquiries/csv/v0/year=2026/month=10/day=14",
+   "parents": []
+  },
+  "stg_daily_spend_and_enquiries_dedup": {
+   "project": "raw",
+   "materialized": "view",
+   "schema": "product",
+   "table": "stg_daily_spend_and_enquiries_dedup",
+   "tags": [
+    "daily"
+   ],
+   "stage_url": null,
+   "parents": [
+    "stg_daily_spend_and_enquiries"
+   ]
+  },
+  "stg_enquiries": {
+   "project": "raw",
+   "materialized": "table",
+   "schema": "source_sales_b2c",
+   "table": "stg_enquiries",
+   "tags": [
+    "daily"
+   ],
+   "stage_url": "nexus_point/enquiries/json/v0/",
+   "parents": []
+  },
+  "stg_enquiries_dedup": {
+   "project": "raw",
+   "materialized": "table",
+   "schema": "source_sales_b2c",
+   "table": "stg_enquiries_dedup",
+   "tags": [
+    "daily"
+   ],
+   "stage_url": null,
+   "parents": [
+    "stg_enquiries"
+   ]
+  },
+  "stg_enquiry_vehicles": {
+   "project": "raw",
+   "materialized": "table",
+   "schema": "source_sales_b2c",
+   "table": "stg_enquiry_vehicles",
+   "tags": [
+    "daily"
+   ],
+   "stage_url": "nexus_point/enquiries/enquiry-vehicles/json/v0/",
+   "parents": []
+  },
+  "stg_enquiry_vehicles_dedup": {
+   "project": "raw",
+   "materialized": "table",
+   "schema": "source_sales_b2c",
+   "table": "stg_enquiry_vehicles_dedup",
+   "tags": [
+    "daily"
+   ],
+   "stage_url": null,
+   "parents": [
+    "stg_enquiry_vehicles"
+   ]
+  },
+  "stg_ga4_lead_volume_by_campaign__s": {
+   "project": "raw",
+   "materialized": "table",
+   "schema": "source_ux_tracking",
+   "table": "stg_ga4_lead_volume_by_campaign",
+   "tags": [
+    "daily",
+    "ga4",
+    "incremental"
+   ],
+   "stage_url": "ga4/ga4_lead_volume_by_campaign/json/v1/last_upload/",
+   "parents": []
+  },
+  "stg_ga4_lead_volume_by_campaign_dedup__s": {
+   "project": "raw",
+   "materialized": "table",
+   "schema": "source_ux_tracking",
+   "table": "stg_ga4_lead_volume_by_campaign_dedup",
+   "tags": [
+    "daily",
+    "ga4",
+    "incremental"
+   ],
+   "stage_url": null,
+   "parents": [
+    "stg_ga4_lead_volume_by_campaign__s"
+   ]
+  },
+  "stg_ga4_sessions_by_campaign__s": {
+   "project": "raw",
+   "materialized": "table",
+   "schema": "source_ux_tracking",
+   "table": "stg_ga4_sessions_by_campaign",
+   "tags": [
+    "daily",
+    "ga4",
+    "incremental"
+   ],
+   "stage_url": "ga4/ga4_sessions_by_campaign/json/v1/last_upload/",
+   "parents": []
+  },
+  "stg_ga4_sessions_by_campaign_dedup__s": {
+   "project": "raw",
+   "materialized": "table",
+   "schema": "source_ux_tracking",
+   "table": "stg_ga4_sessions_by_campaign_dedup",
+   "tags": [
+    "daily",
+    "ga4",
+    "incremental"
+   ],
+   "stage_url": null,
+   "parents": [
+    "stg_ga4_sessions_by_campaign__s"
+   ]
+  },
+  "stg_ga4_total_bounce_rate__s": {
+   "project": "raw",
+   "materialized": "table",
+   "schema": "source_ux_tracking",
+   "table": "stg_ga4_total_bounce_rate",
+   "tags": [
+    "daily",
+    "ga4",
+    "incremental"
+   ],
+   "stage_url": "ga4/ga4_total_bounce_rate/json/v1/last_upload/",
+   "parents": []
+  },
+  "stg_ga4_total_bounce_rate_dedup__s": {
+   "project": "raw",
+   "materialized": "table",
+   "schema": "source_ux_tracking",
+   "table": "stg_ga4_total_bounce_rate_dedup",
+   "tags": [
+    "daily",
+    "ga4",
+    "incremental"
+   ],
+   "stage_url": null,
+   "parents": [
+    "stg_ga4_total_bounce_rate__s"
+   ]
+  },
+  "stg_ga4_total_lead_volume__s": {
+   "project": "raw",
+   "materialized": "table",
+   "schema": "source_ux_tracking",
+   "table": "stg_ga4_total_lead_volume",
+   "tags": [
+    "daily",
+    "ga4",
+    "incremental"
+   ],
+   "stage_url": "ga4/ga4_total_lead_volume/json/v1/last_upload/",
+   "parents": []
+  },
+  "stg_ga4_total_lead_volume_dedup__s": {
+   "project": "raw",
+   "materialized": "table",
+   "schema": "source_ux_tracking",
+   "table": "stg_ga4_total_lead_volume_dedup",
+   "tags": [
+    "daily",
+    "ga4",
+    "incremental"
+   ],
+   "stage_url": null,
+   "parents": [
+    "stg_ga4_total_lead_volume__s"
+   ]
+  },
+  "stg_ga4_total_pageview__s": {
+   "project": "raw",
+   "materialized": "table",
+   "schema": "source_ux_tracking",
+   "table": "stg_ga4_total_pageview",
+   "tags": [
+    "daily",
+    "ga4",
+    "incremental"
+   ],
+   "stage_url": "ga4/ga4_total_pageview/json/v1/last_upload/",
+   "parents": []
+  },
+  "stg_ga4_total_pageview_dedup__s": {
+   "project": "raw",
+   "materialized": "table",
+   "schema": "source_ux_tracking",
+   "table": "stg_ga4_total_pageview_dedup",
+   "tags": [
+    "daily",
+    "ga4",
+    "incremental"
+   ],
+   "stage_url": null,
+   "parents": [
+    "stg_ga4_total_pageview__s"
+   ]
+  },
+  "stg_ga4_total_sessions__s": {
+   "project": "raw",
+   "materialized": "table",
+   "schema": "source_ux_tracking",
+   "table": "stg_ga4_total_sessions",
+   "tags": [
+    "daily",
+    "ga4",
+    "incremental"
+   ],
+   "stage_url": "ga4/ga4_total_sessions/json/v1/last_upload/",
+   "parents": []
+  },
+  "stg_ga4_total_sessions_by_page__s": {
+   "project": "raw",
+   "materialized": "table",
+   "schema": "source_ux_tracking",
+   "table": "stg_ga4_total_sessions_by_page",
+   "tags": [
+    "daily",
+    "ga4",
+    "incremental"
+   ],
+   "stage_url": "ga4/ga4_total_sessions_by_page/json/v1/last_upload/",
+   "parents": []
+  },
+  "stg_ga4_total_sessions_by_page_dedup__s": {
+   "project": "raw",
+   "materialized": "table",
+   "schema": "source_ux_tracking",
+   "table": "stg_ga4_total_sessions_by_page_dedup",
+   "tags": [
+    "daily",
+    "ga4",
+    "incremental"
+   ],
+   "stage_url": null,
+   "parents": [
+    "stg_ga4_total_sessions_by_page__s"
+   ]
+  },
+  "stg_ga4_total_sessions_daily__s": {
+   "project": "raw",
+   "materialized": "table",
+   "schema": "source_ux_tracking",
+   "table": "stg_ga4_total_sessions_daily",
+   "tags": [
+    "daily",
+    "ga4",
+    "incremental"
+   ],
+   "stage_url": "ga4/ga4_total_sessions_daily/json/v1/last_upload/",
+   "parents": []
+  },
+  "stg_ga4_total_sessions_daily_dedup__s": {
+   "project": "raw",
+   "materialized": "table",
+   "schema": "source_ux_tracking",
+   "table": "stg_ga4_total_sessions_daily_dedup",
+   "tags": [
+    "daily",
+    "ga4",
+    "incremental"
+   ],
+   "stage_url": null,
+   "parents": [
+    "stg_ga4_total_sessions_daily__s"
+   ]
+  },
+  "stg_ga4_total_sessions_dedup__s": {
+   "project": "raw",
+   "materialized": "table",
+   "schema": "source_ux_tracking",
+   "table": "stg_ga4_total_sessions_dedup",
+   "tags": [
+    "daily",
+    "ga4",
+    "incremental"
+   ],
+   "stage_url": null,
+   "parents": [
+    "stg_ga4_total_sessions__s"
+   ]
+  },
+  "stg_ga4_total_users__s": {
+   "project": "raw",
+   "materialized": "table",
+   "schema": "source_ux_tracking",
+   "table": "stg_ga4_total_users",
+   "tags": [
+    "daily",
+    "ga4",
+    "incremental"
+   ],
+   "stage_url": "ga4/ga4_total_users/json/v1/last_upload/",
+   "parents": []
+  },
+  "stg_ga4_total_users_daily__s": {
+   "project": "raw",
+   "materialized": "table",
+   "schema": "source_ux_tracking",
+   "table": "stg_ga4_total_users_daily",
+   "tags": [
+    "daily",
+    "ga4",
+    "incremental"
+   ],
+   "stage_url": "ga4/ga4_total_users_daily/json/v1/last_upload/",
+   "parents": []
+  },
+  "stg_ga4_total_users_daily_dedup__s": {
+   "project": "raw",
+   "materialized": "table",
+   "schema": "source_ux_tracking",
+   "table": "stg_ga4_total_users_daily_dedup",
+   "tags": [
+    "daily",
+    "ga4",
+    "incremental"
+   ],
+   "stage_url": null,
+   "parents": [
+    "stg_ga4_total_users_daily__s"
+   ]
+  },
+  "stg_ga4_total_users_dedup__s": {
+   "project": "raw",
+   "materialized": "table",
+   "schema": "source_ux_tracking",
+   "table": "stg_ga4_total_users_dedup",
+   "tags": [
+    "daily",
+    "ga4",
+    "incremental"
+   ],
+   "stage_url": null,
+   "parents": [
+    "stg_ga4_total_users__s"
+   ]
+  },
+  "stg_ga4_vdp_bounce_rate__s": {
+   "project": "raw",
+   "materialized": "table",
+   "schema": "source_ux_tracking",
+   "table": "stg_ga4_vdp_bounce_rate",
+   "tags": [
+    "daily",
+    "ga4",
+    "incremental"
+   ],
+   "stage_url": "ga4/ga4_vdp_bounce_rate/json/v1/last_upload/",
+   "parents": []
+  },
+  "stg_ga4_vdp_bounce_rate_dedup__s": {
+   "project": "raw",
+   "materialized": "table",
+   "schema": "source_ux_tracking",
+   "table": "stg_ga4_vdp_bounce_rate_dedup",
+   "tags": [
+    "daily",
+    "ga4",
+    "incremental"
+   ],
+   "stage_url": null,
+   "parents": [
+    "stg_ga4_vdp_bounce_rate__s"
+   ]
+  },
+  "stg_ga4_vdp_pageview_volume__s": {
+   "project": "raw",
+   "materialized": "table",
+   "schema": "source_ux_tracking",
+   "table": "stg_ga4_vdp_pageview_volume",
+   "tags": [
+    "daily",
+    "ga4",
+    "incremental"
+   ],
+   "stage_url": "ga4/ga4_vdp_pageview_volume/json/v1/last_upload/",
+   "parents": []
+  },
+  "stg_ga4_vdp_pageview_volume_dedup__s": {
+   "project": "raw",
+   "materialized": "table",
+   "schema": "source_ux_tracking",
+   "table": "stg_ga4_vdp_pageview_volume_dedup",
+   "tags": [
+    "daily",
+    "ga4",
+    "incremental"
+   ],
+   "stage_url": null,
+   "parents": [
+    "stg_ga4_vdp_pageview_volume__s"
+   ]
+  },
+  "stg_google_reviews": {
+   "project": "raw",
+   "materialized": "table",
+   "schema": "source_customers",
+   "table": "stg_google_reviews",
+   "tags": [
+    "daily"
+   ],
+   "stage_url": "applications/gmb_api/all_review_json_data/v0/",
+   "parents": []
+  },
+  "stg_google_reviews_dedup": {
+   "project": "raw",
+   "materialized": "table",
+   "schema": "source_customers",
+   "table": "stg_google_reviews_dedup",
+   "tags": [
+    "daily"
+   ],
+   "stage_url": null,
+   "parents": [
+    "stg_google_reviews"
+   ]
+  },
+  "stg_invoice_finance_amounts": {
+   "project": "raw",
+   "materialized": "table",
+   "schema": "source_sales_b2c",
+   "table": "stg_invoice_finance_amounts",
+   "tags": [
+    "daily"
+   ],
+   "stage_url": "nexus_point/invoices/invoice-finance-amounts/json/v0/",
+   "parents": []
+  },
+  "stg_invoice_finance_amounts_dedup": {
+   "project": "raw",
+   "materialized": "table",
+   "schema": "source_sales_b2c",
+   "table": "stg_invoice_finance_amounts_dedup",
+   "tags": [
+    "daily"
+   ],
+   "stage_url": null,
+   "parents": [
+    "stg_invoice_finance_amounts"
+   ]
+  },
+  "stg_invoice_notes": {
+   "project": "raw",
+   "materialized": "table",
+   "schema": "source_sales_b2c",
+   "table": "stg_invoice_notes",
+   "tags": [
+    "daily"
+   ],
+   "stage_url": "nexus_point/invoices/invoice-notes/json/v0/",
+   "parents": []
+  },
+  "stg_invoice_notes_dedup": {
+   "project": "raw",
+   "materialized": "table",
+   "schema": "source_sales_b2c",
+   "table": "stg_invoice_notes_dedup",
+   "tags": [
+    "daily"
+   ],
+   "stage_url": null,
+   "parents": [
+    "stg_invoice_notes"
+   ]
+  },
+  "stg_invoice_part_exchange_settlements": {
+   "project": "raw",
+   "materialized": "table",
+   "schema": "source_trade_ins",
+   "table": "stg_invoice_part_exchange_settlements",
+   "tags": [
+    "daily"
+   ],
+   "stage_url": "nexus_point/invoices/invoice-part-exchange-settlements/json/v0/",
+   "parents": []
+  },
+  "stg_invoice_part_exchange_settlements_dedup": {
+   "project": "raw",
+   "materialized": "table",
+   "schema": "source_trade_ins",
+   "table": "stg_invoice_part_exchange_settlements_dedup",
+   "tags": [
+    "daily"
+   ],
+   "stage_url": null,
+   "parents": [
+    "stg_invoice_part_exchange_settlements"
+   ]
+  },
+  "stg_invoice_product_discounts": {
+   "project": "raw",
+   "materialized": "table",
+   "schema": "source_sales_b2c",
+   "table": "stg_invoice_product_discounts",
+   "tags": [
+    "daily"
+   ],
+   "stage_url": "nexus_point/invoices/invoice-product-discounts/json/v0/",
+   "parents": []
+  },
+  "stg_invoice_product_discounts_dedup": {
+   "project": "raw",
+   "materialized": "table",
+   "schema": "source_sales_b2c",
+   "table": "stg_invoice_product_discounts_dedup",
+   "tags": [
+    "daily"
+   ],
+   "stage_url": null,
+   "parents": [
+    "stg_invoice_product_discounts"
+   ]
+  },
+  "stg_invoice_products": {
+   "project": "raw",
+   "materialized": "table",
+   "schema": "source_sales_b2c",
+   "table": "stg_invoice_products",
+   "tags": [
+    "daily"
+   ],
+   "stage_url": "nexus_point/invoices/invoice-products/json/v0/",
+   "parents": []
+  },
+  "stg_invoice_products_dedup": {
+   "project": "raw",
+   "materialized": "table",
+   "schema": "source_sales_b2c",
+   "table": "stg_invoice_products_dedup",
+   "tags": [
+    "daily"
+   ],
+   "stage_url": null,
+   "parents": [
+    "stg_invoice_products"
+   ]
+  },
+  "stg_invoice_valuations": {
+   "project": "raw",
+   "materialized": "table",
+   "schema": "source_sales_b2c",
+   "table": "stg_invoice_valuations",
+   "tags": [
+    "daily"
+   ],
+   "stage_url": "nexus_point/invoices/invoice-valuations/json/v0/",
+   "parents": []
+  },
+  "stg_invoice_valuations_dedup": {
+   "project": "raw",
+   "materialized": "table",
+   "schema": "source_sales_b2c",
+   "table": "stg_invoice_valuations_dedup",
+   "tags": [
+    "daily"
+   ],
+   "stage_url": null,
+   "parents": [
+    "stg_invoice_valuations"
+   ]
+  },
+  "stg_invoices": {
+   "project": "raw",
+   "materialized": "table",
+   "schema": "source_sales_b2c",
+   "table": "stg_invoices",
+   "tags": [
+    "daily"
+   ],
+   "stage_url": "nexus_point/invoices/json/v0/",
+   "parents": []
+  },
+  "stg_invoices_dedup": {
+   "project": "raw",
+   "materialized": "table",
+   "schema": "source_sales_b2c",
+   "table": "stg_invoices_dedup",
+   "tags": [
+    "daily"
+   ],
+   "stage_url": null,
+   "parents": [
+    "stg_invoices"
+   ]
+  },
+  "stg_judge_service_react_used_cars": {
+   "project": "raw",
+   "materialized": "table",
+   "schema": "source_customers",
+   "table": "stg_judge_service_react_used_cars",
+   "tags": [
+    "daily"
+   ],
+   "stage_url": "applications/judgeservice/react_used_cars",
+   "parents": []
+  },
+  "stg_judge_service_react_used_cars_dedup": {
+   "project": "raw",
+   "materialized": "table",
+   "schema": "source_customers",
+   "table": "stg_judge_service_react_used_cars_dedup",
+   "tags": [
+    "daily"
+   ],
+   "stage_url": null,
+   "parents": [
+    "stg_judge_service_react_used_cars"
+   ]
+  },
+  "stg_judge_service_value_my_car": {
+   "project": "raw",
+   "materialized": "table",
+   "schema": "source_customers",
+   "table": "stg_judge_service_value_my_car",
+   "tags": [],
+   "stage_url": "applications/judgeservice/value_my_car",
+   "parents": []
+  },
+  "stg_judge_service_value_my_car_dedup": {
+   "project": "raw",
+   "materialized": "table",
+   "schema": "source_customers",
+   "table": "stg_judge_service_value_my_car_dedup",
+   "tags": [],
+   "stage_url": null,
+   "parents": [
+    "stg_judge_service_value_my_car"
+   ]
+  },
+  "stg_kpi_targets": {
+   "project": "raw",
+   "materialized": "table",
+   "schema": "source_company",
+   "table": "stg_kpi_targets",
+   "tags": [
+    "daily"
+   ],
+   "stage_url": "applications/sharepoint/kpi_targets/csv/v0/",
+   "parents": []
+  },
+  "stg_kpi_targets_dedup": {
+   "project": "raw",
+   "materialized": "table",
+   "schema": "source_company",
+   "table": "stg_kpi_targets_dedup",
+   "tags": [
+    "daily"
+   ],
+   "stage_url": null,
+   "parents": [
+    "stg_kpi_targets"
+   ]
+  },
+  "stg_late_costs": {
+   "project": "raw",
+   "materialized": "table",
+   "schema": "source_finance",
+   "table": "stg_late_costs",
+   "tags": [
+    "daily",
+    "incremental"
+   ],
+   "stage_url": "applications/gsheet/late_costs/json/v1/last_upload/",
+   "parents": []
+  },
+  "stg_late_costs_dedup": {
+   "project": "raw",
+   "materialized": "table",
+   "schema": "source_finance",
+   "table": "stg_late_costs_dedup",
+   "tags": [
+    "daily",
+    "incremental"
+   ],
+   "stage_url": null,
+   "parents": [
+    "stg_late_costs"
+   ]
+  },
+  "stg_mediahawk": {
+   "project": "raw",
+   "materialized": "table",
+   "schema": "source_commercial_activity",
+   "table": "stg_mediahawk",
+   "tags": [
+    "daily"
+   ],
+   "stage_url": "mediahawk/json/v0/",
+   "parents": []
+  },
+  "stg_mediahawk_dedup": {
+   "project": "raw",
+   "materialized": "table",
+   "schema": "source_commercial_activity",
+   "table": "stg_mediahawk_dedup",
+   "tags": [
+    "daily"
+   ],
+   "stage_url": null,
+   "parents": [
+    "stg_mediahawk"
+   ]
+  },
+  "stg_onepoint_call_logs": {
+   "project": "raw",
+   "materialized": "table",
+   "schema": "source_commercial_activity",
+   "table": "stg_onepoint_call_logs",
+   "tags": [
+    "daily"
+   ],
+   "stage_url": "onepoint/call_logs/csv/v0/",
+   "parents": []
+  },
+  "stg_onepoint_call_logs_dedup": {
+   "project": "raw",
+   "materialized": "table",
+   "schema": "source_commercial_activity",
+   "table": "stg_onepoint_call_logs_dedup",
+   "tags": [
+    "daily"
+   ],
+   "stage_url": null,
+   "parents": [
+    "stg_onepoint_call_logs"
+   ]
+  },
+  "stg_organisation_units": {
+   "project": "raw",
+   "materialized": "table",
+   "schema": "source_company",
+   "table": "stg_organisation_units",
+   "tags": [
+    "daily"
+   ],
+   "stage_url": "nexus_point/organisation-units/json/v0/",
+   "parents": []
+  },
+  "stg_organisation_units_dedup": {
+   "project": "raw",
+   "materialized": "table",
+   "schema": "source_company",
+   "table": "stg_organisation_units_dedup",
+   "tags": [
+    "daily"
+   ],
+   "stage_url": null,
+   "parents": [
+    "stg_organisation_units"
+   ]
+  },
+  "stg_payments": {
+   "project": "raw",
+   "materialized": "table",
+   "schema": "source_finance",
+   "table": "stg_payments",
+   "tags": [
+    "daily"
+   ],
+   "stage_url": "nexus_point/payments/json/v0/",
+   "parents": []
+  },
+  "stg_payments_dedup": {
+   "project": "raw",
+   "materialized": "table",
+   "schema": "source_finance",
+   "table": "stg_payments_dedup",
+   "tags": [
+    "daily"
+   ],
+   "stage_url": null,
+   "parents": [
+    "stg_payments"
+   ]
+  },
+  "stg_product_groups": {
+   "project": "raw",
+   "materialized": "table",
+   "schema": "source_sales_b2c",
+   "table": "stg_product_groups",
+   "tags": [
+    "daily"
+   ],
+   "stage_url": "nexus_point/products/groups/json/v0/",
+   "parents": []
+  },
+  "stg_product_groups_dedup": {
+   "project": "raw",
+   "materialized": "table",
+   "schema": "source_sales_b2c",
+   "table": "stg_product_groups_dedup",
+   "tags": [
+    "daily"
+   ],
+   "stage_url": null,
+   "parents": [
+    "stg_product_groups"
+   ]
+  },
+  "stg_products": {
+   "project": "raw",
+   "materialized": "table",
+   "schema": "source_sales_b2c",
+   "table": "stg_products",
+   "tags": [
+    "daily"
+   ],
+   "stage_url": "nexus_point/products/json/v0/",
+   "parents": []
+  },
+  "stg_products_dedup": {
+   "project": "raw",
+   "materialized": "table",
+   "schema": "source_sales_b2c",
+   "table": "stg_products_dedup",
+   "tags": [
+    "daily"
+   ],
+   "stage_url": null,
+   "parents": [
+    "stg_products"
+   ]
+  },
+  "stg_reef_customers": {
+   "project": "raw",
+   "materialized": "table",
+   "schema": "source_customers",
+   "table": "stg_reef_customers",
+   "tags": [
+    "daily"
+   ],
+   "stage_url": "mailchimp/customers/csv/v0/",
+   "parents": []
+  },
+  "stg_reef_customers_dedup": {
+   "project": "raw",
+   "materialized": "table",
+   "schema": "source_customers",
+   "table": "stg_reef_customers_dedup",
+   "tags": [
+    "daily"
+   ],
+   "stage_url": null,
+   "parents": [
+    "stg_reef_customers"
+   ]
+  },
+  "stg_sales_autoview": {
+   "project": "raw",
+   "materialized": "table",
+   "schema": "source_sales_b2c",
+   "table": "stg_sales_autoview",
+   "tags": [
+    "daily"
+   ],
+   "stage_url": "autoview/sales/csv/v0/year=2026/month=10/day=14",
+   "parents": []
+  },
+  "stg_sales_autoview_dedup": {
+   "project": "raw",
+   "materialized": "table",
+   "schema": "source_sales_b2c",
+   "table": "stg_sales_autoview_dedup",
+   "tags": [
+    "daily"
+   ],
+   "stage_url": null,
+   "parents": [
+    "stg_sales_autoview"
+   ]
+  },
+  "stg_standard_costs": {
+   "project": "raw",
+   "materialized": "table",
+   "schema": "source_finance",
+   "table": "stg_standard_costs",
+   "tags": [
+    "daily"
+   ],
+   "stage_url": "applications/sharepoint/standard_costs/csv/v0/",
+   "parents": []
+  },
+  "stg_standard_costs_dedup": {
+   "project": "raw",
+   "materialized": "table",
+   "schema": "source_finance",
+   "table": "stg_standard_costs_dedup",
+   "tags": [
+    "daily"
+   ],
+   "stage_url": null,
+   "parents": [
+    "stg_standard_costs"
+   ]
+  },
+  "stg_users": {
+   "project": "raw",
+   "materialized": "table",
+   "schema": "source_company",
+   "table": "stg_users",
+   "tags": [
+    "daily"
+   ],
+   "stage_url": "nexus_point/users/json/v0/",
+   "parents": []
+  },
+  "stg_users_dedup": {
+   "project": "raw",
+   "materialized": "table",
+   "schema": "source_company",
+   "table": "stg_users_dedup",
+   "tags": [
+    "daily"
+   ],
+   "stage_url": null,
+   "parents": [
+    "stg_users"
+   ]
+  },
+  "stg_valuations": {
+   "project": "raw",
+   "materialized": "table",
+   "schema": "source_trade_ins",
+   "table": "stg_valuations",
+   "tags": [
+    "daily"
+   ],
+   "stage_url": "nexus_point/valuations/json/v0/",
+   "parents": []
+  },
+  "stg_valuations_change_history": {
+   "project": "raw",
+   "materialized": "table",
+   "schema": "source_trade_ins",
+   "table": "stg_valuations_change_history",
+   "tags": [
+    "daily"
+   ],
+   "stage_url": "nexus_point/valuations/json/v0/",
+   "parents": []
+  },
+  "stg_valuations_change_history_dedup": {
+   "project": "raw",
+   "materialized": "table",
+   "schema": "source_trade_ins",
+   "table": "stg_valuations_change_history_dedup",
+   "tags": [
+    "daily"
+   ],
+   "stage_url": null,
+   "parents": [
+    "stg_valuations_change_history"
+   ]
+  },
+  "stg_valuations_dedup": {
+   "project": "raw",
+   "materialized": "table",
+   "schema": "source_trade_ins",
+   "table": "stg_valuations_dedup",
+   "tags": [
+    "daily"
+   ],
+   "stage_url": null,
+   "parents": [
+    "stg_valuations"
+   ]
+  },
+  "stg_valuations_notes": {
+   "project": "raw",
+   "materialized": "table",
+   "schema": "source_trade_ins",
+   "table": "stg_valuations_notes",
+   "tags": [
+    "daily"
+   ],
+   "stage_url": "nexus_point/valuations/notes/json/v0/",
+   "parents": []
+  },
+  "stg_valuations_notes_dedup": {
+   "project": "raw",
+   "materialized": "table",
+   "schema": "source_trade_ins",
+   "table": "stg_valuations_notes_dedup",
+   "tags": [
+    "daily"
+   ],
+   "stage_url": null,
+   "parents": [
+    "stg_valuations_notes"
+   ]
+  },
+  "stg_vehicles": {
+   "project": "raw",
+   "materialized": "table",
+   "schema": "source_vehicles",
+   "table": "stg_vehicles",
+   "tags": [
+    "daily"
+   ],
+   "stage_url": "nexus_point/vehicles/json/v0/",
+   "parents": []
+  },
+  "stg_vehicles_adverts": {
+   "project": "raw",
+   "materialized": "table",
+   "schema": "source_vehicles",
+   "table": "stg_vehicles_adverts",
+   "tags": [
+    "daily"
+   ],
+   "stage_url": "nexus_point/vehicles/adverts/json/v0/",
+   "parents": []
+  },
+  "stg_vehicles_adverts_dedup": {
+   "project": "raw",
+   "materialized": "table",
+   "schema": "source_vehicles",
+   "table": "stg_vehicles_adverts_dedup",
+   "tags": [
+    "daily"
+   ],
+   "stage_url": null,
+   "parents": [
+    "stg_vehicles_adverts"
+   ]
+  },
+  "stg_vehicles_autotrader": {
+   "project": "raw",
+   "materialized": "table",
+   "schema": "source_vehicles",
+   "table": "stg_vehicles_autotrader",
+   "tags": [
+    "daily"
+   ],
+   "stage_url": "autotrader/stock/json/v0/",
+   "parents": []
+  },
+  "stg_vehicles_autotrader_dedup": {
+   "project": "raw",
+   "materialized": "table",
+   "schema": "source_vehicles",
+   "table": "stg_vehicles_autotrader_dedup",
+   "tags": [
+    "daily"
+   ],
+   "stage_url": null,
+   "parents": [
+    "stg_vehicles_autotrader"
+   ]
+  },
+  "stg_vehicles_autoview_track": {
+   "project": "raw",
+   "materialized": "table",
+   "schema": "source_vehicles",
+   "table": "stg_vehicles_autoview_track",
+   "tags": [
+    "daily"
+   ],
+   "stage_url": "autoview/stock/track/csv/v0/",
+   "parents": []
+  },
+  "stg_vehicles_autoview_track_dedup": {
+   "project": "raw",
+   "materialized": "table",
+   "schema": "source_vehicles",
+   "table": "stg_vehicles_autoview_track_dedup",
+   "tags": [
+    "daily"
+   ],
+   "stage_url": null,
+   "parents": [
+    "stg_vehicles_autoview_track"
+   ]
+  },
+  "stg_vehicles_autoview_web": {
+   "project": "raw",
+   "materialized": "table",
+   "schema": "source_vehicles",
+   "table": "stg_vehicles_autoview_web",
+   "tags": [
+    "daily"
+   ],
+   "stage_url": "autoview/stock/web/csv/v0/",
+   "parents": []
+  },
+  "stg_vehicles_autoview_web_dedup": {
+   "project": "raw",
+   "materialized": "table",
+   "schema": "source_vehicles",
+   "table": "stg_vehicles_autoview_web_dedup",
+   "tags": [
+    "daily"
+   ],
+   "stage_url": null,
+   "parents": [
+    "stg_vehicles_autoview_web"
+   ]
+  },
+  "stg_vehicles_dedup": {
+   "project": "raw",
+   "materialized": "table",
+   "schema": "source_vehicles",
+   "table": "stg_vehicles_dedup",
+   "tags": [
+    "daily"
+   ],
+   "stage_url": null,
+   "parents": [
+    "stg_vehicles"
+   ]
+  },
+  "stg_vehicles_locations": {
+   "project": "raw",
+   "materialized": "table",
+   "schema": "source_vehicles",
+   "table": "stg_locations",
+   "tags": [
+    "daily"
+   ],
+   "stage_url": "nexus_point/vehicles/locations/json/v0/",
+   "parents": []
+  },
+  "stg_vehicles_locations_dedup": {
+   "project": "raw",
+   "materialized": "table",
+   "schema": "source_vehicles",
+   "table": "stg_vehicles_locations_dedup",
+   "tags": [
+    "daily"
+   ],
+   "stage_url": null,
+   "parents": [
+    "stg_vehicles_locations"
+   ]
+  },
+  "stg_visitor_chat": {
+   "project": "raw",
+   "materialized": "table",
+   "schema": "source_commercial_activity",
+   "table": "stg_visitor_chat",
+   "tags": [
+    "daily"
+   ],
+   "stage_url": "visitor_chat/json/v0/",
+   "parents": []
+  },
+  "stg_visitor_chat_dedup": {
+   "project": "raw",
+   "materialized": "table",
+   "schema": "source_commercial_activity",
+   "table": "stg_visitor_chat_dedup",
+   "tags": [
+    "daily"
+   ],
+   "stage_url": null,
+   "parents": [
+    "stg_visitor_chat"
+   ]
+  },
+  "stock_evolution__p": {
+   "project": "product",
+   "materialized": "incremental",
+   "schema": "product_vehicle_journey",
+   "table": "stock_evolution",
+   "tags": [
+    "daily"
+   ],
+   "stage_url": null,
+   "parents": [
+    "calendar__c",
+    "vehicles_days_advertised__c",
+    "vehicles_stock_evolution__c"
+   ]
+  },
+  "suppliers__c": {
+   "project": "transform",
+   "materialized": "incremental",
+   "schema": "product",
+   "table": "suppliers",
+   "tags": [
+    "daily"
+   ],
+   "stage_url": null,
+   "parents": [
+    "contacts_suppliers__s"
+   ]
+  },
+  "trade_sales__p": {
+   "project": "product",
+   "materialized": "table",
+   "schema": "product_sales_performance",
+   "table": "trade_sales",
+   "tags": [
+    "daily"
+   ],
+   "stage_url": null,
+   "parents": [
+    "sales_autoview__s",
+    "vehicles__c"
+   ]
+  },
+  "users__s": {
+   "project": "raw",
+   "materialized": "table",
+   "schema": "source_company",
+   "table": "users",
+   "tags": [
+    "daily"
+   ],
+   "stage_url": null,
+   "parents": [
+    "stg_users_dedup"
+   ]
+  },
+  "valuations__c": {
+   "project": "transform",
+   "materialized": "table",
+   "schema": "compute_trade_ins",
+   "table": "valuations",
+   "tags": [
+    "daily"
+   ],
+   "stage_url": null,
+   "parents": [
+    "contacts_customers__s",
+    "employees__c",
+    "invoice_valuations__s",
+    "organisation_units__s",
+    "sales__c",
+    "valuations__s",
+    "vehicles__c"
+   ]
+  },
+  "valuations__p": {
+   "project": "product",
+   "materialized": "table",
+   "schema": "product_valuations",
+   "table": "valuations",
+   "tags": [
+    "daily"
+   ],
+   "stage_url": null,
+   "parents": [
+    "valuations__c"
+   ]
+  },
+  "valuations__s": {
+   "project": "raw",
+   "materialized": "table",
+   "schema": "source_trade_ins",
+   "table": "valuations",
+   "tags": [
+    "daily"
+   ],
+   "stage_url": null,
+   "parents": [
+    "stg_valuations_dedup"
+   ]
+  },
+  "valuations_change_history__c": {
+   "project": "transform",
+   "materialized": "table",
+   "schema": "compute_trade_ins",
+   "table": "valuations_change_history",
+   "tags": [
+    "daily"
+   ],
+   "stage_url": null,
+   "parents": [
+    "employees__c",
+    "invoice_valuations__s",
+    "valuations__c",
+    "valuations_change_history__s",
+    "valuations_notes__s"
+   ]
+  },
+  "valuations_change_history__p": {
+   "project": "product",
+   "materialized": "table",
+   "schema": "product_valuations",
+   "table": "valuations_change_history",
+   "tags": [
+    "daily"
+   ],
+   "stage_url": null,
+   "parents": [
+    "invoices__s",
+    "valuations_change_history__c"
+   ]
+  },
+  "valuations_change_history__s": {
+   "project": "raw",
+   "materialized": "table",
+   "schema": "source_trade_ins",
+   "table": "valuations_change_history",
+   "tags": [
+    "daily"
+   ],
+   "stage_url": null,
+   "parents": [
+    "stg_valuations_change_history_dedup"
+   ]
+  },
+  "valuations_notes__s": {
+   "project": "raw",
+   "materialized": "table",
+   "schema": "source_trade_ins",
+   "table": "valuations_notes",
+   "tags": [
+    "daily"
+   ],
+   "stage_url": null,
+   "parents": [
+    "stg_valuations_notes_dedup"
+   ]
+  },
+  "vehicles__c": {
+   "project": "transform",
+   "materialized": "table",
+   "schema": "compute_vehicles",
+   "table": "vehicles",
+   "tags": [
+    "daily"
+   ],
+   "stage_url": null,
+   "parents": [
+    "cap_models__c",
+    "cap_sectors__s",
+    "cap_valuations__c",
+    "finance_subsidy_rate__c",
+    "organisation_units__s",
+    "suppliers__c",
+    "vehicles__s",
+    "vehicles_autotrader__s",
+    "vehicles_autoview_track__s",
+    "vehicles_autoview_web__s",
+    "vehicles_locations__s",
+    "vehicles_options__c"
+   ]
+  },
+  "vehicles__s": {
+   "project": "raw",
+   "materialized": "table",
+   "schema": "source_vehicles",
+   "table": "vehicles",
+   "tags": [
+    "daily"
+   ],
+   "stage_url": null,
+   "parents": [
+    "stg_vehicles_dedup"
+   ]
+  },
+  "vehicles_adverts__s": {
+   "project": "raw",
+   "materialized": "table",
+   "schema": "source_vehicles",
+   "table": "vehicles_adverts",
+   "tags": [
+    "daily"
+   ],
+   "stage_url": null,
+   "parents": [
+    "stg_vehicles_adverts_dedup"
+   ]
+  },
+  "vehicles_autotrader__s": {
+   "project": "raw",
+   "materialized": "table",
+   "schema": "source_vehicles",
+   "table": "vehicles_autotrader",
+   "tags": [
+    "daily"
+   ],
+   "stage_url": null,
+   "parents": [
+    "stg_vehicles_autotrader_dedup"
+   ]
+  },
+  "vehicles_autoview_track__s": {
+   "project": "raw",
+   "materialized": "table",
+   "schema": "source_vehicles",
+   "table": "vehicles_autoview_track",
+   "tags": [
+    "daily"
+   ],
+   "stage_url": null,
+   "parents": [
+    "stg_vehicles_autoview_track_dedup"
+   ]
+  },
+  "vehicles_autoview_web__s": {
+   "project": "raw",
+   "materialized": "table",
+   "schema": "source_vehicles",
+   "table": "vehicles_autoview_web",
+   "tags": [
+    "daily"
+   ],
+   "stage_url": null,
+   "parents": [
+    "stg_vehicles_autoview_web_dedup"
+   ]
+  },
+  "vehicles_costs__c": {
+   "project": "transform",
+   "materialized": "table",
+   "schema": "compute_vehicles",
+   "table": "vehicles_costs",
+   "tags": [
+    "daily"
+   ],
+   "stage_url": null,
+   "parents": [
+    "vehicles__c"
+   ]
+  },
+  "vehicles_days_advertised__c": {
+   "project": "transform",
+   "materialized": "table",
+   "schema": "compute_vehicles",
+   "table": "vehicles_days_advertised",
+   "tags": [
+    "daily"
+   ],
+   "stage_url": null,
+   "parents": [
+    "vehicles_stock_evolution__c"
+   ]
+  },
+  "vehicles_locations__s": {
+   "project": "raw",
+   "materialized": "table",
+   "schema": "source_vehicles",
+   "table": "vehicles_locations",
+   "tags": [
+    "daily"
+   ],
+   "stage_url": null,
+   "parents": [
+    "stg_vehicles_locations_dedup"
+   ]
+  },
+  "vehicles_on_off_stock__p": {
+   "project": "product",
+   "materialized": "table",
+   "schema": "product_vehicle_journey",
+   "table": "vehicles_on_off_stock",
+   "tags": [
+    "daily"
+   ],
+   "stage_url": null,
+   "parents": [
+    "vehicles__c"
+   ]
+  },
+  "vehicles_options__c": {
+   "project": "transform",
+   "materialized": "table",
+   "schema": "compute_vehicles",
+   "table": "vehicles_options",
+   "tags": [
+    "daily"
+   ],
+   "stage_url": null,
+   "parents": [
+    "vehicles__s"
+   ]
+  },
+  "vehicles_record_history__c": {
+   "project": "transform",
+   "materialized": "table",
+   "schema": "compute_vehicles",
+   "table": "vehicles_record_history",
+   "tags": [
+    "daily"
+   ],
+   "stage_url": null,
+   "parents": [
+    "organisation_units__s",
+    "vehicles__s",
+    "vehicles_locations__s"
+   ]
+  },
+  "vehicles_stock_evolution__c": {
+   "project": "transform",
+   "materialized": "table",
+   "schema": "compute_vehicles",
+   "table": "vehicles_stock_evolution",
+   "tags": [
+    "daily"
+   ],
+   "stage_url": null,
+   "parents": [
+    "calendar__c",
+    "finance_subsidy_rate__c",
+    "invoices__s",
+    "management_accounts__s",
+    "vehicles__c",
+    "vehicles_autotrader__s",
+    "vehicles_costs__c",
+    "vehicles_record_history__c"
+   ]
+  },
+  "visitor_chat__s": {
+   "project": "raw",
+   "materialized": "table",
+   "schema": "source_commercial_activity",
+   "table": "visitor_chat",
+   "tags": [
+    "daily"
+   ],
+   "stage_url": null,
+   "parents": [
+    "stg_visitor_chat_dedup"
+   ]
+  },
+  "warehouse_metering_history__s": {
+   "project": "raw",
+   "materialized": "table",
+   "schema": "source_ux_tracking",
+   "table": "warehouse_metering_history",
+   "tags": [
+    "monitoring",
+    "weekly"
+   ],
+   "stage_url": null,
+   "parents": []
+  },
+  "website_catalogue_online_rotation__c": {
+   "project": "transform",
+   "materialized": "table",
+   "schema": "compute_vehicles",
+   "table": "website_catalogue_online_rotation",
+   "tags": [
+    "daily"
+   ],
+   "stage_url": null,
+   "parents": [
+    "website_catalogue_vehicle_by_day__c"
+   ]
+  },
+  "website_catalogue_vehicle_by_day__c": {
+   "project": "transform",
+   "materialized": "table",
+   "schema": "compute_vehicles",
+   "table": "website_catalogue_vehicle_by_day",
+   "tags": [
+    "daily"
+   ],
+   "stage_url": null,
+   "parents": [
+    "vehicles_autotrader__s",
+    "vehicles_stock_evolution__c"
+   ]
+  },
+  "weekly_business_review__p": {
+   "project": "product",
+   "materialized": "table",
+   "schema": "product_sales_performance",
+   "table": "weekly_business_review",
+   "tags": [
+    "daily"
+   ],
+   "stage_url": null,
+   "parents": [
+    "sales_autoview__s",
+    "sales_performance__p"
+   ]
+  },
+  "write_downs__p": {
+   "project": "product",
+   "materialized": "table",
+   "schema": "product_vehicle_journey",
+   "table": "write_downs",
+   "tags": [
+    "daily"
+   ],
+   "stage_url": null,
+   "parents": [
+    "vehicles__c",
+    "vehicles_autoview_track__s",
+    "vehicles_autoview_web__s"
+   ]
+  },
+  "write_downs_evolution__p": {
+   "project": "product",
+   "materialized": "incremental",
+   "schema": "product_vehicle_journey",
+   "table": "write_downs_evolution",
+   "tags": [
+    "daily"
+   ],
+   "stage_url": null,
+   "parents": [
+    "cap_valuations__c",
+    "vehicles_stock_evolution__c"
+   ]
+  },
+  "write_downs_year_end__p": {
+   "project": "product",
+   "materialized": "table",
+   "schema": "product_vehicle_journey",
+   "table": "write_downs_year_end",
+   "tags": [
+    "daily"
+   ],
+   "stage_url": null,
+   "parents": [
+    "vehicles__c",
+    "vehicles_autoview_track__s",
+    "vehicles_autoview_web__s"
+   ]
+  }
+ }
+}
