@@ -7,7 +7,7 @@ shared state (user reload from Aurora) initialises before any routes.
 from fastapi import APIRouter
 
 from . import core  # noqa: F401 — initialises shared state on import
-from . import auth, settings, pages, kpi, buying_requirements, cap_lookup, mot_check, tasks, preferences, reports, orders_deliveries, subsidy_rates, assess_vehicle, keeper_change, presence, sharepoint
+from . import auth, settings, pages, kpi, buying_requirements, cap_lookup, mot_check, tasks, preferences, reports, orders_deliveries, subsidy_rates, assess_vehicle, keeper_change, presence, sharepoint, api_requests, dbt_runs
 
 router = APIRouter(
     prefix="",
@@ -15,5 +15,5 @@ router = APIRouter(
     responses={404: {"description": "Not found"}},
 )
 
-for _module in (auth, settings, pages, kpi, buying_requirements, cap_lookup, mot_check, tasks, preferences, reports, orders_deliveries, subsidy_rates, assess_vehicle, keeper_change, presence, sharepoint):
+for _module in (auth, settings, pages, kpi, buying_requirements, cap_lookup, mot_check, tasks, preferences, reports, orders_deliveries, subsidy_rates, assess_vehicle, keeper_change, presence, sharepoint, api_requests, dbt_runs):
     router.include_router(_module.router)

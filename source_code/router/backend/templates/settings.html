@@ -13,7 +13,7 @@
 </head>
 <body class="bg-light">
     {{ account_nav(user) }}
-    <div class="settings-card{% if active_section == 'sharepoint' %} settings-card-wide{% endif %}">
+    <div class="settings-card{% if active_section in ('sharepoint', 'dbt') %} settings-card-wide{% endif %}">
         <div class="d-flex align-items-center gap-3 mb-4">
             <a href="javascript:history.back()" class="btn btn-outline-secondary nav-btn">
                 <i class="fas fa-arrow-left me-1"></i>Back
@@ -307,6 +307,837 @@
         </script>
         {% endif %}
 
+        {# ── Prod To Dev ─────────────────────────────────────── #}
+        {% if active_section == 'prod-to-dev' %}
+        <div class="card mb-4">
+            <div class="card-header fw-semibold">Connection Test</div>
+            <div class="card-body">
+                <p class="form-text mt-0">
+                    Tries to connect from this environment's Lambda to the other environment's
+                    Aurora database (dev from prod, prod from dev). Read only - nothing is changed.
+                </p>
+                <div class="d-flex align-items-center gap-2">
+                    <button type="button" class="btn btn-outline-secondary" id="test-env-btn" onclick="testEnvConnection()">
+                        <i class="fas fa-plug"></i> Test Connection
+                    </button>
+                    <span class="text-muted small" id="test-env-note"></span>
+                </div>
+            </div>
+        </div>
+        <div class="card mb-4">
+            <div class="card-header fw-semibold">Copy Prod To Dev</div>
+            <div class="card-body">
+                <p class="form-text mt-0">
+                    Replaces dev's charts, KPI layout, settings, chart targets, page names, subsidy rates,
+                    SharePoint files and GA4 campaigns with prod's. Users and their access are not copied.
+                    Prod is only read. Only works on dev.
+                </p>
+                <div class="d-flex align-items-center gap-2">
+                    <button type="button" class="btn btn-outline-danger" id="copy-env-btn" onclick="copyProdToDev()">
+                        <i class="fas fa-copy"></i> Copy Prod To Dev
+                    </button>
+                    <button type="button" class="btn btn-outline-secondary" id="stop-env-btn" onclick="stopProdToDev()"
+                            title="Stops any copy that is running. The copy undoes itself, so dev is left as it was.">
+                        <i class="fas fa-stop"></i> Stop
+                    </button>
+                    <span class="text-muted small" id="copy-env-note"></span>
+                </div>
+                <pre id="copy-env-log" class="small border rounded p-2 mt-3 mb-0 bg-light" style="display: none; white-space: pre-wrap; max-height: 400px; overflow-y: auto;"></pre>
+            </div>
+        </div>
+        <script>
+            const BASE_URL = "{{ BASE_URL }}";
+            // Fetch JSON with a time limit; a non-JSON answer (e.g. a gateway
+            // error page) or no answer in time becomes an error.
+            async function getJson(url, opts, timeoutMs = 20000) {
+                const ctrl = new AbortController();
+                const t = setTimeout(() => ctrl.abort(), timeoutMs);
+                let resp;
+                try {
+                    resp = await fetch(url, { ...(opts || {}), signal: ctrl.signal });
+                } catch (e) {
+                    if (e.name === 'AbortError') throw new Error('no answer from the server after ' + timeoutMs / 1000 + 's');
+                    throw e;
+                } finally {
+                    clearTimeout(t);
+                }
+                const text = await resp.text();
+                try {
+                    return JSON.parse(text);
+                } catch (e) {
+                    throw new Error('HTTP ' + resp.status + ': ' + (text.slice(0, 300) || '(empty response)'));
+                }
+            }
+            async function stopProdToDev() {
+                const btn = document.getElementById('stop-env-btn');
+                const note = document.getElementById('copy-env-note');
+                btn.disabled = true;
+                try {
+                    const data = await getJson(BASE_URL + '/settings/prod-to-dev/stop', { method: 'POST' });
+                    // A running copy's own poll shows the final message; this covers nothing running.
+                    if (!document.getElementById('copy-env-btn').disabled) note.textContent = data.message;
+                } catch (e) {
+                    note.textContent = 'Stop failed: ' + e.message;
+                } finally {
+                    btn.disabled = false;
+                }
+            }
+            async function copyProdToDev() {
+                if (!confirm('Replace dev settings and charts with prod? Anything set up only in dev will be lost.')) return;
+                const btn = document.getElementById('copy-env-btn');
+                const note = document.getElementById('copy-env-note');
+                const logBox = document.getElementById('copy-env-log');
+                btn.disabled = true;
+                logBox.style.display = 'none';
+                // Cycle "Copying", "Copying.", "Copying..", "Copying..." while waiting.
+                let dots = 0;
+                note.textContent = 'Copying';
+                const timer = setInterval(() => {
+                    dots = (dots + 1) % 4;
+                    note.textContent = 'Copying' + '.'.repeat(dots);
+                }, 400);
+                try {
+                    const start = await getJson(BASE_URL + '/settings/prod-to-dev/copy', { method: 'POST' });
+                    if (start.status !== 'started') throw new Error(start.message || 'could not start');
+                    logBox.textContent = '';
+                    logBox.style.display = '';
+                    // Poll the job every second, filling the log as lines arrive.
+                    while (true) {
+                        await new Promise(r => setTimeout(r, 1000));
+                        const job = await getJson(BASE_URL + '/settings/prod-to-dev/job/' + start.job_id);
+                        logBox.textContent = job.log.join('\n');
+                        logBox.scrollTop = logBox.scrollHeight;
+                        if (job.status === 'done' || job.status === 'failed' || job.status === 'stopped') {
+                            clearInterval(timer);
+                            note.textContent = job.status === 'failed' ? 'Failed: ' + job.message : job.message;
+                            break;
+                        }
+                    }
+                } catch (e) {
+                    clearInterval(timer);
+                    note.textContent = 'Failed: ' + e.message;
+                } finally {
+                    btn.disabled = false;
+                }
+            }
+            async function testEnvConnection() {
+                const btn = document.getElementById('test-env-btn');
+                const note = document.getElementById('test-env-note');
+                btn.disabled = true;
+                note.textContent = 'Connecting...';
+                try {
+                    const resp = await fetch(BASE_URL + '/settings/prod-to-dev/test', { method: 'POST' });
+                    const data = await resp.json();
+                    note.textContent = data.status === 'ok'
+                        ? data.message
+                        : 'Failed: ' + (data.message || 'unknown error');
+                } catch (e) {
+                    note.textContent = 'Failed: ' + e.message;
+                } finally {
+                    btn.disabled = false;
+                }
+            }
+        </script>
+        {% endif %}
+
+        {# ── API Requests ────────────────────────────────────── #}
+        {% if active_section == 'api-requests' %}
+        <style>
+            #nx-routes { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 2px 16px; }
+            #nx-routes .nx-route { display: flex; align-items: center; gap: 6px; }
+            #nx-routes .nx-remove { border: none; background: none; color: #adb5bd; padding: 0 4px; font-size: 0.8rem; }
+            #nx-routes .nx-remove:hover { color: #dc3545; }
+        </style>
+        {# One button per API. Each API's cards sit in a div with data-api-source
+           matching its key in SOURCES (routers/api_requests.py). #}
+        <div class="d-flex gap-2 flex-wrap mb-3" id="api-source-buttons"></div>
+        <div data-api-source="nexus">
+        <div id="nx-error" class="alert alert-danger py-2 px-3" style="display:none"></div>
+        <div class="card mb-4">
+            <div class="card-header fw-semibold d-flex align-items-center gap-2">
+                <span>Nexus Point Endpoints</span>
+                <button type="button" class="btn btn-sm btn-outline-secondary ms-auto" onclick="nxTickAll(true)">Tick All</button>
+                <button type="button" class="btn btn-sm btn-outline-secondary" onclick="nxTickAll(false)">Untick All</button>
+            </div>
+            <div class="card-body">
+                <div id="nx-routes" class="mb-3"><span class="text-muted">Loading...</span></div>
+                <div class="d-flex align-items-center gap-2 flex-wrap">
+                    <input class="form-control" id="nx-new-route" placeholder="e.g. invoices/invoice-vehicles"
+                           style="width: 320px;" autocomplete="off"
+                           onkeydown="if (event.key === 'Enter') nxAddRoute()">
+                    <button type="button" class="btn btn-outline-secondary" onclick="nxAddRoute()">
+                        <i class="fas fa-plus me-1"></i>Add Endpoint
+                    </button>
+                    <span class="text-muted small" id="nx-route-note"></span>
+                </div>
+            </div>
+        </div>
+        <div class="card mb-4">
+            <div class="card-header fw-semibold">Nexus Point Request</div>
+            <div class="card-body">
+                <p class="form-text mt-0">
+                    Fetches the ticked endpoints from the Nexus Point API and saves each one to S3 exactly as the
+                    ingestion job does: same retries, same file format, same folders. Endpoints run one after
+                    another; a failed endpoint is skipped and the rest still run. Each endpoint must finish within
+                    10 minutes (the Lambda limit), so use a recent Updated Since for the big ones.
+                </p>
+                <div class="d-flex gap-3 flex-wrap mb-3">
+                    <div>
+                        <label for="nx-since" class="form-label mb-1">Updated Since (UK Time)</label>
+                        <input class="form-control" type="datetime-local" id="nx-since" style="width: 220px;">
+                        <div class="form-text">Blank = every row ever</div>
+                    </div>
+                    <div>
+                        <label for="nx-lookback" class="form-label mb-1">Look Back (Hours)</label>
+                        <input class="form-control" type="number" id="nx-lookback" min="1" max="720" style="width: 110px;"
+                               onclick="this.select()" oninput="nxFillSince()">
+                        <div class="form-text">Default: 3. Fills Updated Since</div>
+                    </div>
+                    <div>
+                        <label for="nx-per-page" class="form-label mb-1">Items Per Page</label>
+                        <input class="form-control" type="number" id="nx-per-page" min="1" max="100" style="width: 110px;" onclick="this.select()">
+                        <div class="form-text">Default: 100 (the API maximum)</div>
+                    </div>
+                    <div>
+                        <label for="nx-workers" class="form-label mb-1">Workers</label>
+                        <input class="form-control" type="number" id="nx-workers" min="1" max="10" style="width: 110px;" onclick="this.select()">
+                        <div class="form-text">Default: 4</div>
+                    </div>
+                    <div>
+                        <label for="nx-folder" class="form-label mb-1">Save To</label>
+                        <select class="form-select" id="nx-folder" style="width: 230px;">
+                            <option value="v0">v0 - Read By dbt</option>
+                            <option value="dev">dev - Test Folder, Not Read</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label for="nx-host" class="form-label mb-1">API Host</label>
+                        <input class="form-control" id="nx-host" style="width: 300px;" autocomplete="off">
+                    </div>
+                </div>
+                <div class="d-flex align-items-center gap-2">
+                    <button type="button" class="btn btn-primary" id="nx-start-btn" onclick="nxStart()">
+                        <i class="fas fa-cloud-download-alt me-1"></i>Start Requests
+                    </button>
+                    <button type="button" class="btn btn-outline-secondary" id="nx-stop-btn" onclick="nxStop()"
+                            title="Stops after the current page batch. The endpoint it was on is not saved; endpoints already saved stay saved.">
+                        <i class="fas fa-stop"></i> Stop
+                    </button>
+                    <span class="text-muted small" id="nx-note"></span>
+                </div>
+                <div class="form-text mt-2">Look Back, Items Per Page, Workers and API Host are remembered from the last run.</div>
+                <pre id="nx-log" class="small border rounded p-2 mt-3 mb-0 bg-light" style="display: none; white-space: pre-wrap; max-height: 450px; overflow-y: auto;"></pre>
+            </div>
+        </div>
+        </div>{# /nexus #}
+        <script src="{{ static_url('js/api_requests.js') }}"></script>
+        <script>
+            const BASE_URL = "{{ BASE_URL }}";
+
+            // Source buttons: show one API's cards at a time.
+            async function apiLoadSources() {
+                const d = await apiGetJson(BASE_URL + '/api/api-requests/sources');
+                const box = document.getElementById('api-source-buttons');
+                box.innerHTML = d.sources.map(s =>
+                    `<button type="button" class="btn btn-sm btn-outline-secondary" data-key="${s.key}"
+                             onclick="apiShowSource('${s.key}')">${s.label}</button>`).join('');
+                if (d.sources.length) apiShowSource(d.sources[0].key);
+            }
+            function apiShowSource(key) {
+                document.querySelectorAll('#api-source-buttons button').forEach(b => {
+                    b.classList.toggle('btn-dark', b.dataset.key === key);
+                    b.classList.toggle('btn-outline-secondary', b.dataset.key !== key);
+                });
+                document.querySelectorAll('[data-api-source]').forEach(el => {
+                    el.style.display = el.dataset.apiSource === key ? '' : 'none';
+                });
+            }
+            apiLoadSources();
+
+            function nxEsc(v) {
+                return String(v ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+            }
+
+            async function nxLoad() {
+                const err = document.getElementById('nx-error');
+                try {
+                    const d = await apiGetJson(BASE_URL + '/api/api-requests/nexus/config');
+                    if (d.status !== 'ok') throw new Error(d.message || d.detail || 'could not load');
+                    err.style.display = 'none';
+                    nxRenderRoutes(d.routes);
+                    document.getElementById('nx-per-page').value = d.nexus_per_page;
+                    document.getElementById('nx-workers').value = d.nexus_workers;
+                    document.getElementById('nx-host').value = d.nexus_host;
+                    document.getElementById('nx-lookback').value = d.nexus_lookback_hours;
+                    nxFillSince();
+                    // A run started earlier (or from another page) is still going - follow it.
+                    if (d.open_job_id) nxFollow(d.open_job_id);
+                } catch (e) {
+                    err.textContent = 'Could not load: ' + e.message;
+                    err.style.display = '';
+                }
+            }
+
+            // Updated Since = UK time now minus Look Back hours, whatever the browser's own time zone.
+            function nxFillSince() {
+                const hours = Number(document.getElementById('nx-lookback').value);
+                if (!(hours > 0)) return;
+                const parts = Object.fromEntries(new Intl.DateTimeFormat('en-GB', {
+                    timeZone: 'Europe/London', year: 'numeric', month: '2-digit', day: '2-digit',
+                    hour: '2-digit', minute: '2-digit', hourCycle: 'h23',
+                }).formatToParts(new Date(Date.now() - hours * 3600000)).map(p => [p.type, p.value]));
+                document.getElementById('nx-since').value =
+                    `${parts.year}-${parts.month}-${parts.day}T${parts.hour}:${parts.minute}`;
+            }
+
+            function nxRenderRoutes(routes) {
+                const ticked = new Set(nxTicked());
+                const firstLoad = !document.querySelector('#nx-routes input');
+                document.getElementById('nx-routes').innerHTML = routes.length ? routes.map((r, i) => `
+                    <div class="nx-route form-check">
+                        <input class="form-check-input" type="checkbox" id="nx-r-${i}" value="${nxEsc(r)}"
+                               ${firstLoad || ticked.has(r) ? 'checked' : ''}>
+                        <label class="form-check-label" for="nx-r-${i}">${nxEsc(r)}</label>
+                        <button type="button" class="nx-remove" title="Remove from the list"
+                                onclick="nxRemoveRoute('${nxEsc(r)}')"><i class="fas fa-times"></i></button>
+                    </div>`).join('') : '<span class="text-muted">No endpoints - add one below.</span>';
+            }
+
+            function nxTicked() {
+                return [...document.querySelectorAll('#nx-routes input:checked')].map(el => el.value);
+            }
+
+            function nxTickAll(on) {
+                document.querySelectorAll('#nx-routes input').forEach(el => { el.checked = on; });
+            }
+
+            async function nxAddRoute() {
+                const box = document.getElementById('nx-new-route');
+                const note = document.getElementById('nx-route-note');
+                try {
+                    const d = await apiPostJson(BASE_URL + '/api/api-requests/nexus/routes', { route: box.value });
+                    if (d.status !== 'ok') { note.textContent = d.message; return; }
+                    note.textContent = '';
+                    box.value = '';
+                    const c = await apiGetJson(BASE_URL + '/api/api-requests/nexus/config');
+                    nxRenderRoutes(c.routes);
+                } catch (e) {
+                    note.textContent = 'Failed: ' + e.message;
+                }
+            }
+
+            async function nxRemoveRoute(route) {
+                if (!confirm(`Remove ${route} from the list?`)) return;
+                try {
+                    await apiPostJson(BASE_URL + '/api/api-requests/nexus/routes/delete', { route });
+                    const c = await apiGetJson(BASE_URL + '/api/api-requests/nexus/config');
+                    nxRenderRoutes(c.routes);
+                } catch (e) {
+                    document.getElementById('nx-route-note').textContent = 'Failed: ' + e.message;
+                }
+            }
+
+            function nxShowLog(lines) {
+                const logBox = document.getElementById('nx-log');
+                logBox.style.display = '';
+                logBox.textContent = lines.join('\n');
+                logBox.scrollTop = logBox.scrollHeight;
+            }
+
+            async function nxTrack(promise) {
+                const btn = document.getElementById('nx-start-btn');
+                const note = document.getElementById('nx-note');
+                btn.disabled = true;
+                note.textContent = 'Running...';
+                try {
+                    const job = await promise;
+                    note.textContent = job.status === 'failed' ? 'Failed: ' + job.message : job.message;
+                } catch (e) {
+                    note.textContent = 'Failed: ' + e.message;
+                } finally {
+                    btn.disabled = false;
+                }
+            }
+
+            function nxFollow(jobId) {
+                nxTrack(watchApiRequest(BASE_URL, jobId, { onLog: nxShowLog }));
+            }
+
+            function nxStart() {
+                const routes = nxTicked();
+                if (!routes.length) { document.getElementById('nx-note').textContent = 'Tick at least one endpoint'; return; }
+                const since = document.getElementById('nx-since').value;
+                const folder = document.getElementById('nx-folder').value;
+                const where = folder === 'v0' ? 'the v0 folder that dbt reads (prod and dev dbt both read it)' : 'the dev test folder';
+                const msg = `Fetch ${routes.length} endpoint(s) updated since ${since ? since.replace('T', ' ') : 'THE START - every row'}` +
+                            ` and save them to ${where}?`;
+                if (!confirm(msg)) return;
+                document.getElementById('nx-log').textContent = '';
+                nxTrack(runApiRequest(BASE_URL, 'nexus', {
+                    routes, updated_since: since, folder,
+                    per_page: document.getElementById('nx-per-page').value,
+                    workers: document.getElementById('nx-workers').value,
+                    lookback_hours: document.getElementById('nx-lookback').value,
+                    host: document.getElementById('nx-host').value,
+                }, { onLog: nxShowLog }));
+            }
+
+            async function nxStop() {
+                const btn = document.getElementById('nx-stop-btn');
+                btn.disabled = true;
+                try {
+                    const d = await stopApiRequest(BASE_URL, 'nexus');
+                    if (!document.getElementById('nx-start-btn').disabled) document.getElementById('nx-note').textContent = d.message;
+                } catch (e) {
+                    document.getElementById('nx-note').textContent = 'Stop failed: ' + e.message;
+                } finally {
+                    btn.disabled = false;
+                }
+            }
+
+            nxLoad();
+        </script>
+        {% endif %}
+
+        {# ── Run dbt ─────────────────────────────────────────── #}
+        {% if active_section == 'dbt' %}
+        <style>
+            .dbt-small { font-size: 0.85rem; }
+            #dbt-steps td, #dbt-runs td, #dbt-jobs td { vertical-align: top; }
+            #dbt-steps textarea { font-size: 0.8rem; min-width: 420px; }
+            .dbt-model-list { font-size: 0.75rem; color: #6c757d; max-width: 520px; }
+            .dbt-warn { color: #b45309; }
+        </style>
+        <div id="dbt-error" class="alert alert-danger py-2 px-3" style="display:none"></div>
+        <p class="form-text mt-0" id="dbt-env-note"></p>
+
+        <div class="card mb-4">
+            <div class="card-header fw-semibold">Plan From A Model</div>
+            <div class="card-body dbt-small">
+                <p class="form-text mt-0">
+                    Pick the model you want up to date. The plan lists every model it reads from, directly or
+                    further back, split into one step per project in the order they must run: raw, then transform,
+                    then product. <span id="dbt-lineage-note"></span>
+                </p>
+                <div class="d-flex align-items-end gap-3 flex-wrap mb-3">
+                    <div>
+                        <label for="dbt-model" class="form-label mb-1">Model</label>
+                        <input class="form-control" id="dbt-model" list="dbt-model-options" style="width: 360px;"
+                               placeholder="e.g. sales_performance__p" autocomplete="off"
+                               onkeydown="if (event.key === 'Enter') dbtPlan()">
+                        <datalist id="dbt-model-options"></datalist>
+                    </div>
+                    <div class="form-check mb-2">
+                        <input class="form-check-input" type="checkbox" id="dbt-upstream" checked>
+                        <label class="form-check-label" for="dbt-upstream">Include Upstream</label>
+                    </div>
+                    <div class="form-check mb-2">
+                        <input class="form-check-input" type="checkbox" id="dbt-downstream">
+                        <label class="form-check-label" for="dbt-downstream">Include Downstream</label>
+                    </div>
+                    <button type="button" class="btn btn-outline-secondary" onclick="dbtPlan()">Show Plan</button>
+                </div>
+                <div id="dbt-plan"></div>
+            </div>
+        </div>
+
+        <div class="card mb-4">
+            <div class="card-header fw-semibold">Run A Job</div>
+            <div class="card-body dbt-small">
+                <div class="d-flex align-items-end gap-3 flex-wrap">
+                    <div>
+                        <label for="dbt-job" class="form-label mb-1">Job</label>
+                        <select class="form-select" id="dbt-job" style="width: 200px;" onchange="dbtJobChanged()"></select>
+                    </div>
+                    <div>
+                        <label for="dbt-select" class="form-label mb-1">Select</label>
+                        <input class="form-control" id="dbt-select" style="width: 420px;" autocomplete="off">
+                    </div>
+                    <div class="form-check mb-2">
+                        <input class="form-check-input" type="checkbox" id="dbt-job-fr">
+                        <label class="form-check-label" for="dbt-job-fr">Full Refresh</label>
+                    </div>
+                    <button type="button" class="btn btn-primary" id="dbt-job-btn" onclick="dbtRunJob()">
+                        <i class="fas fa-play me-1"></i>Run
+                    </button>
+                </div>
+                <div class="form-text mt-2">
+                    Anything dbt's <code>--select</code> takes, e.g. <code>+vehicles__c</code> (with everything
+                    upstream) or <code>vehicles__c+</code> (with everything downstream), within this job's project.
+                </div>
+            </div>
+        </div>
+
+        <div class="d-flex align-items-end gap-3 flex-wrap mb-4">
+            <div>
+                <label for="dbt-date" class="form-label mb-1">Current Date</label>
+                <input class="form-control" type="date" id="dbt-date" style="width: 180px;">
+                <div class="form-text">Fills {current_date} in the command. Default: today</div>
+            </div>
+        </div>
+
+        <div class="card mb-4" id="dbt-current-card" style="display:none">
+            <div class="card-header fw-semibold d-flex align-items-center gap-2">
+                <span id="dbt-current-title">Current Run</span>
+                <button type="button" class="btn btn-sm btn-outline-danger ms-auto" id="dbt-stop-btn" onclick="dbtStop()">
+                    <i class="fas fa-stop"></i> Stop
+                </button>
+            </div>
+            <div class="card-body dbt-small">
+                <div id="dbt-current-status" class="mb-2"></div>
+                <div id="dbt-current-links" class="mb-2"></div>
+                <pre id="dbt-log" class="small border rounded p-2 mb-0 bg-light" style="white-space: pre-wrap; max-height: 500px; overflow-y: auto;"></pre>
+            </div>
+        </div>
+
+        <div class="card mb-4">
+            <div class="card-header fw-semibold">Recent Runs</div>
+            <div class="card-body dbt-small">
+                <table class="table table-sm mb-0" id="dbt-runs">
+                    <thead><tr><th>Started</th><th>Job</th><th>Step</th><th>By</th><th>Status</th><th>Command</th><th></th></tr></thead>
+                    <tbody></tbody>
+                </table>
+            </div>
+        </div>
+
+        <div class="card mb-4">
+            <div class="card-header fw-semibold d-flex align-items-center">
+                <span>Jobs</span>
+                <button type="button" class="btn btn-sm btn-primary ms-auto" onclick="dbtEditJob(null)">
+                    <i class="fas fa-plus me-1"></i>Add Job
+                </button>
+            </div>
+            <div class="card-body dbt-small">
+                <p class="form-text mt-0">
+                    The ECS task each project runs, as set up in Rundeck. The command can use
+                    <code>{select}</code>, <code>{environment}</code> and <code>{current_date}</code>.
+                    A plan step uses the first job with the same project.
+                </p>
+                <table class="table table-sm mb-0" id="dbt-jobs">
+                    <thead><tr><th>Name</th><th>Project</th><th>Task Definition</th><th>Default Select</th><th>Command</th><th></th></tr></thead>
+                    <tbody></tbody>
+                </table>
+                <div id="dbt-job-form" class="border rounded p-3 mt-3" style="display:none">
+                    <input type="hidden" id="dbt-f-id">
+                    <div class="d-flex gap-3 flex-wrap mb-2">
+                        <div><label class="form-label mb-1" for="dbt-f-name">Name</label>
+                            <input class="form-control" id="dbt-f-name" style="width: 180px;"></div>
+                        <div><label class="form-label mb-1" for="dbt-f-project">Project</label>
+                            <select class="form-select" id="dbt-f-project" style="width: 140px;">
+                                <option value="raw">Raw</option><option value="transform">Transform</option>
+                                <option value="product">Product</option><option value="">None</option>
+                            </select></div>
+                        <div><label class="form-label mb-1" for="dbt-f-td">Task Definition</label>
+                            <input class="form-control" id="dbt-f-td" style="width: 260px;"></div>
+                        <div><label class="form-label mb-1" for="dbt-f-container">Container Name</label>
+                            <input class="form-control" id="dbt-f-container" style="width: 140px;"></div>
+                        <div><label class="form-label mb-1" for="dbt-f-cp">Capacity Provider</label>
+                            <input class="form-control" id="dbt-f-cp" style="width: 160px;"></div>
+                    </div>
+                    <div class="d-flex gap-3 flex-wrap mb-2">
+                        <div><label class="form-label mb-1" for="dbt-f-select">Default Select</label>
+                            <input class="form-control" id="dbt-f-select" style="width: 300px;"></div>
+                        <div><label class="form-label mb-1" for="dbt-f-mem">Memory (MB)</label>
+                            <input class="form-control" type="number" id="dbt-f-mem" style="width: 120px;" placeholder="Task default"></div>
+                        <div><label class="form-label mb-1" for="dbt-f-wh">Snowflake Warehouse Override</label>
+                            <input class="form-control" id="dbt-f-wh" style="width: 220px;" placeholder="None"></div>
+                        <div><label class="form-label mb-1" for="dbt-f-order">Order</label>
+                            <input class="form-control" type="number" id="dbt-f-order" style="width: 90px;"></div>
+                    </div>
+                    <div class="mb-2"><label class="form-label mb-1" for="dbt-f-command">Command</label>
+                        <input class="form-control font-monospace" id="dbt-f-command"></div>
+                    <div class="d-flex align-items-center gap-2">
+                        <button type="button" class="btn btn-primary btn-sm" onclick="dbtSaveJob()">Save</button>
+                        <button type="button" class="btn btn-outline-secondary btn-sm" onclick="document.getElementById('dbt-job-form').style.display='none'">Cancel</button>
+                        <span class="text-muted small" id="dbt-f-note"></span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <script src="{{ static_url('js/api_requests.js') }}"></script>
+        <script>
+            const BASE_URL = "{{ BASE_URL }}";
+            let dbtJobs = [];
+            let dbtPlanSteps = [];
+            let dbtCurrentRun = null;
+            let dbtFollowing = false;
+
+            function dbtEsc(v) {
+                return String(v ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+            }
+            function dbtTime(iso) {
+                if (!iso) return '-';
+                return new Date(iso).toLocaleString('en-GB', { timeZone: 'Europe/London', day: '2-digit', month: 'short',
+                                                               hour: '2-digit', minute: '2-digit' });
+            }
+            const DBT_STATUS = { waiting: 'Starting', queued: 'Waiting For Previous Step', running: 'Running',
+                                 done: 'Done', failed: 'Failed', stopped: 'Stopped', cancelled: 'Not Run' };
+            function dbtStatusHtml(r) {
+                const cls = { done: 'text-success', failed: 'text-danger', running: 'text-primary', waiting: 'text-primary' }[r.status] || 'text-muted';
+                return `<span class="${cls}">${DBT_STATUS[r.status] || r.status}</span>` +
+                       (r.message ? `<div class="dbt-model-list">${dbtEsc(r.message)}</div>` : '');
+            }
+            function dbtLinks(r) {
+                const l = r.links || {};
+                return [l.ecs ? `<a href="${l.ecs}" target="_blank">ECS Task</a>` : '',
+                        l.logs ? `<a href="${l.logs}" target="_blank">CloudWatch Log</a>` : ''].filter(Boolean).join(' &middot; ');
+            }
+
+            async function dbtLoad() {
+                const err = document.getElementById('dbt-error');
+                try {
+                    const d = await apiGetJson(BASE_URL + '/api/dbt/config');
+                    if (d.status !== 'ok') throw new Error(d.message || d.detail || 'could not load');
+                    err.style.display = 'none';
+                    dbtJobs = d.jobs;
+                    document.getElementById('dbt-env-note').innerHTML =
+                        `Runs on the <strong>${dbtEsc(d.env)}</strong> ECS cluster <code>${dbtEsc(d.cluster)}</code> (${dbtEsc(d.region)}) with <code>--target ${dbtEsc(d.env)}</code>, ` +
+                        `from this site and every other one (dev and local included), so every run writes to <strong>PROD</strong>.`;
+                    if (!document.getElementById('dbt-date').value) document.getElementById('dbt-date').value = d.today;
+                    document.getElementById('dbt-model-options').innerHTML = d.models.map(m => `<option value="${dbtEsc(m)}">`).join('');
+                    const built = Object.entries(d.lineage_built || {}).map(([p, t]) => `${p} ${dbtTime(t)}`).join(', ');
+                    document.getElementById('dbt-lineage-note').textContent = d.models.length
+                        ? `Model relationships last read from the dbt projects: ${built}.`
+                        : 'No model relationships loaded - run scripts/build_dbt_lineage.py and deploy.';
+                    dbtRenderJobs();
+                    dbtRenderRuns(d.runs);
+                    if (d.open_run_id && !dbtFollowing) dbtFollow(d.open_run_id);
+                } catch (e) {
+                    err.textContent = 'Could not load: ' + e.message;
+                    err.style.display = '';
+                }
+            }
+
+            function dbtRenderJobs() {
+                const sel = document.getElementById('dbt-job');
+                const keep = sel.value;
+                sel.innerHTML = dbtJobs.map(j => `<option value="${j.job_id}">${dbtEsc(j.name)}</option>`).join('');
+                if (keep && dbtJobs.some(j => String(j.job_id) === keep)) sel.value = keep; else dbtJobChanged();
+                document.querySelector('#dbt-jobs tbody').innerHTML = dbtJobs.map(j => `<tr>
+                    <td class="fw-semibold">${dbtEsc(j.name)}</td>
+                    <td>${dbtEsc(j.project || '-')}</td>
+                    <td><code>${dbtEsc(j.task_definition)}</code></td>
+                    <td><code>${dbtEsc(j.default_select)}</code></td>
+                    <td><code>${dbtEsc(j.command)}</code></td>
+                    <td class="text-nowrap">
+                        <button class="btn btn-sm btn-outline-secondary" onclick="dbtEditJob(${j.job_id})">Edit</button>
+                        <button class="btn btn-sm btn-outline-danger" onclick="dbtDeleteJob(${j.job_id})">Delete</button>
+                    </td></tr>`).join('') || '<tr><td colspan="6" class="text-muted">No jobs.</td></tr>';
+            }
+
+            function dbtJobChanged() {
+                const j = dbtJobs.find(x => String(x.job_id) === document.getElementById('dbt-job').value);
+                document.getElementById('dbt-select').value = j ? j.default_select : '';
+            }
+
+            function dbtRenderRuns(runs) {
+                document.querySelector('#dbt-runs tbody').innerHTML = runs.map(r => `<tr>
+                    <td class="text-nowrap">${dbtTime(r.started_at || r.created_at)}</td>
+                    <td class="text-nowrap">${dbtEsc(r.job_name)}</td>
+                    <td>${r.step} of ${r.steps}</td>
+                    <td>${dbtEsc(r.created_by)}</td>
+                    <td>${dbtStatusHtml(r)}</td>
+                    <td><div class="dbt-model-list"><code>${dbtEsc(r.command)}</code></div></td>
+                    <td class="text-nowrap">${dbtLinks(r)}</td></tr>`).join('') ||
+                    '<tr><td colspan="7" class="text-muted">No runs yet.</td></tr>';
+            }
+
+            async function dbtPlan() {
+                const model = document.getElementById('dbt-model').value.trim();
+                const box = document.getElementById('dbt-plan');
+                if (!model) return;
+                box.textContent = 'Working out the plan...';
+                const q = new URLSearchParams({ model, upstream: document.getElementById('dbt-upstream').checked ? 1 : 0,
+                                                downstream: document.getElementById('dbt-downstream').checked ? 1 : 0 });
+                try {
+                    const d = await apiGetJson(BASE_URL + '/api/dbt/plan?' + q);
+                    if (d.status !== 'ok') { box.textContent = d.message; return; }
+                    dbtPlanSteps = d.steps;
+                    const rows = d.steps.map((s, i) => {
+                        const refresh = s.models.filter(m => m.needs_full_refresh_on_column_change).map(m => m.name);
+                        return `<tr>
+                            <td><input class="form-check-input" type="checkbox" id="dbt-step-on-${i}" checked></td>
+                            <td class="text-nowrap"><strong>${i + 1}. ${dbtEsc(s.project)}</strong>
+                                <div class="dbt-model-list">${s.job_name ? dbtEsc(s.job_name) : '<span class="text-danger">No job for this project</span>'}</div>
+                                <div class="dbt-model-list">${s.models.length} model(s)</div></td>
+                            <td><textarea class="form-control font-monospace" id="dbt-step-select-${i}" rows="3">${dbtEsc(s.select)}</textarea>
+                                ${refresh.length ? `<div class="dbt-model-list dbt-warn mt-1">Need Full Refresh if a column was added, removed or renamed: ${dbtEsc(refresh.join(', '))}</div>` : ''}</td>
+                            <td><div class="form-check"><input class="form-check-input" type="checkbox" id="dbt-step-fr-${i}">
+                                <label class="form-check-label" for="dbt-step-fr-${i}">Full Refresh</label></div></td>
+                        </tr>`;
+                    }).join('');
+                    box.innerHTML = `
+                        <div class="mb-2"><strong>${dbtEsc(d.model)}</strong> reads directly from:
+                            ${d.parents.length ? d.parents.map(dbtEsc).join(', ') : 'no other models'}.
+                            Read directly by: ${d.children.length ? d.children.map(dbtEsc).join(', ') : 'nothing'}.</div>
+                        ${d.feeds.length ? `<div class="mb-2">The raw models read these S3 folders, so their ingestion jobs (or
+                            <a href="${BASE_URL}/settings/section/api-requests">API Requests</a>) need to have run first:
+                            <div class="dbt-model-list">${d.feeds.map(dbtEsc).join(', ')}</div></div>` : ''}
+                        <table class="table table-sm mb-2" id="dbt-steps">
+                            <thead><tr><th></th><th>Step</th><th>Select</th><th></th></tr></thead>
+                            <tbody>${rows}</tbody>
+                        </table>
+                        <div class="d-flex align-items-center gap-2">
+                            <button type="button" class="btn btn-primary" id="dbt-plan-btn" onclick="dbtRunPlan()">
+                                <i class="fas fa-play me-1"></i>Run Ticked Steps In Order
+                            </button>
+                            <span class="text-muted small">Each step starts when the one before it finishes. Keep this page open.</span>
+                        </div>`;
+                } catch (e) {
+                    box.textContent = 'Failed: ' + e.message;
+                }
+            }
+
+            function dbtStart(steps) {
+                return apiPostJson(BASE_URL + '/api/dbt/run', {
+                    steps, current_date: document.getElementById('dbt-date').value,
+                });
+            }
+
+            async function dbtRunPlan() {
+                const steps = dbtPlanSteps.map((s, i) => ({
+                    on: document.getElementById('dbt-step-on-' + i).checked,
+                    job_id: s.job_id,
+                    select: document.getElementById('dbt-step-select-' + i).value,
+                    full_refresh: document.getElementById('dbt-step-fr-' + i).checked,
+                    project: s.project,
+                })).filter(s => s.on);
+                if (!steps.length) return;
+                const fr = steps.filter(s => s.full_refresh).map(s => s.project);
+                if (!confirm(`Run ${steps.length} step(s): ${steps.map(s => s.project).join(', then ')}?` +
+                             (fr.length ? `\n\nFull refresh on: ${fr.join(', ')} - every selected model in those steps is rebuilt from scratch.` : ''))) return;
+                await dbtStartAndFollow(steps);
+            }
+
+            async function dbtRunJob() {
+                const fr = document.getElementById('dbt-job-fr').checked;
+                const job = dbtJobs.find(x => String(x.job_id) === document.getElementById('dbt-job').value);
+                if (!job) return;
+                const select = document.getElementById('dbt-select').value;
+                if (!confirm(`Run ${job.name} --select ${select}${fr ? ' with --full-refresh' : ''}?`)) return;
+                await dbtStartAndFollow([{ job_id: job.job_id, select, full_refresh: fr }]);
+            }
+
+            async function dbtStartAndFollow(steps) {
+                const err = document.getElementById('dbt-error');
+                try {
+                    const d = await dbtStart(steps);
+                    if (d.status !== 'ok') throw new Error(d.message || 'could not start');
+                    err.style.display = 'none';
+                    document.getElementById('dbt-log').textContent = '';
+                    dbtFollow(d.run.run_id);
+                } catch (e) {
+                    err.textContent = 'Could not start: ' + e.message;
+                    err.style.display = '';
+                }
+            }
+
+            // Poll the run every 3 seconds, adding log lines as they arrive and
+            // moving on to the next step when the server starts it.
+            async function dbtFollow(runId) {
+                dbtFollowing = true;
+                const card = document.getElementById('dbt-current-card');
+                const logBox = document.getElementById('dbt-log');
+                card.style.display = '';
+                let token = '';
+                let shownStart = 0;
+                let headed = false;
+                const add = lines => {
+                    if (!lines.length) return;
+                    const atEnd = logBox.scrollTop + logBox.clientHeight >= logBox.scrollHeight - 20;
+                    logBox.textContent += (logBox.textContent ? '\n' : '') + lines.join('\n');
+                    if (atEnd) logBox.scrollTop = logBox.scrollHeight;
+                };
+                try {
+                    while (true) {
+                        const d = await apiGetJson(`${BASE_URL}/api/dbt/run/${runId}?token=${encodeURIComponent(token || '')}`);
+                        const r = d.run;
+                        dbtCurrentRun = r;
+                        if (!headed) {
+                            add([`===== Step ${r.step} of ${r.steps}: ${r.job_name} =====`, r.command]);
+                            headed = true;
+                        }
+                        add(r.start_log.slice(shownStart));
+                        shownStart = r.start_log.length;
+                        add(d.lines);
+                        token = d.token || token;
+                        document.getElementById('dbt-current-title').textContent = `Current Run - Step ${r.step} of ${r.steps}: ${r.job_name}`;
+                        document.getElementById('dbt-current-status').innerHTML = dbtStatusHtml(r);
+                        document.getElementById('dbt-current-links').innerHTML = dbtLinks(r);
+                        if (d.next_run_id) {
+                            runId = d.next_run_id; token = ''; shownStart = 0; headed = false;
+                            continue;
+                        }
+                        const lastStep = r.step >= r.steps;
+                        if (['failed', 'stopped', 'cancelled'].includes(r.status) || (r.status === 'done' && lastStep)) break;
+                        await new Promise(res => setTimeout(res, 3000));
+                    }
+                } catch (e) {
+                    document.getElementById('dbt-current-status').textContent = 'Lost touch with the run: ' + e.message + ' - reload the page to pick it up again.';
+                } finally {
+                    dbtFollowing = false;
+                    dbtLoad();
+                }
+            }
+
+            async function dbtStop() {
+                if (!dbtCurrentRun || !confirm('Stop this run? Steps after it will not run.')) return;
+                const d = await apiPostJson(`${BASE_URL}/api/dbt/run/${dbtCurrentRun.run_id}/stop`);
+                document.getElementById('dbt-current-status').textContent = d.message;
+            }
+
+            function dbtEditJob(id) {
+                const j = dbtJobs.find(x => x.job_id === id) || { name: '', project: 'raw', task_definition: '',
+                    container_name: 'dbt', capacity_provider: 'low_intensity', default_select: '',
+                    command: 'run --select {select} --target {environment} --threads 20', memory_reservation: '',
+                    snowflake_wh_override: '', sort_order: (Math.max(0, ...dbtJobs.map(x => x.sort_order || 0)) + 10) };
+                document.getElementById('dbt-f-id').value = id || '';
+                document.getElementById('dbt-f-name').value = j.name;
+                document.getElementById('dbt-f-project').value = j.project;
+                document.getElementById('dbt-f-td').value = j.task_definition;
+                document.getElementById('dbt-f-container').value = j.container_name;
+                document.getElementById('dbt-f-cp').value = j.capacity_provider;
+                document.getElementById('dbt-f-select').value = j.default_select;
+                document.getElementById('dbt-f-mem').value = j.memory_reservation ?? '';
+                document.getElementById('dbt-f-wh').value = j.snowflake_wh_override;
+                document.getElementById('dbt-f-order').value = j.sort_order;
+                document.getElementById('dbt-f-command').value = j.command;
+                document.getElementById('dbt-f-note').textContent = '';
+                document.getElementById('dbt-job-form').style.display = '';
+            }
+
+            async function dbtSaveJob() {
+                const note = document.getElementById('dbt-f-note');
+                const d = await apiPostJson(BASE_URL + '/api/dbt/jobs', {
+                    job_id: document.getElementById('dbt-f-id').value || null,
+                    name: document.getElementById('dbt-f-name').value,
+                    project: document.getElementById('dbt-f-project').value,
+                    task_definition: document.getElementById('dbt-f-td').value,
+                    container_name: document.getElementById('dbt-f-container').value,
+                    capacity_provider: document.getElementById('dbt-f-cp').value,
+                    default_select: document.getElementById('dbt-f-select').value,
+                    memory_reservation: document.getElementById('dbt-f-mem').value,
+                    snowflake_wh_override: document.getElementById('dbt-f-wh').value,
+                    sort_order: document.getElementById('dbt-f-order').value,
+                    command: document.getElementById('dbt-f-command').value,
+                });
+                if (d.status !== 'ok') { note.textContent = d.message; return; }
+                document.getElementById('dbt-job-form').style.display = 'none';
+                dbtLoad();
+            }
+
+            async function dbtDeleteJob(id) {
+                const j = dbtJobs.find(x => x.job_id === id);
+                if (!j || !confirm(`Delete ${j.name}?`)) return;
+                await apiPostJson(BASE_URL + '/api/dbt/jobs/delete', { job_id: id });
+                dbtLoad();
+            }
+
+            dbtLoad();
+        </script>
+        {% endif %}
+
         {# ── Live Users ──────────────────────────────────────── #}
         {% if active_section == 'live-users' %}
         <form method="post" action="{{ BASE_URL }}/settings/section/live-users">
@@ -397,6 +1228,48 @@
             </div>
             <button type="submit" class="btn btn-primary">Save Live Users</button>
         </form>
+        <div class="card mt-4">
+            <div class="card-header fw-semibold">Test Microsoft Photo</div>
+            <div class="card-body">
+                <p class="form-text mt-0">
+                    Tries to fetch one person's Microsoft 365 photo through Graph, and lists the permissions
+                    the app registration has been granted. Photos need ProfilePhoto.Read.All or User.Read.All.
+                </p>
+                <div class="d-flex align-items-center gap-2 flex-wrap">
+                    <input class="form-control" type="email" id="photo-test-email" placeholder="name@carsupermarket.com"
+                           style="width: 320px;" autocomplete="off">
+                    <button type="button" class="btn btn-outline-secondary" id="photo-test-btn" onclick="testPhoto()">
+                        <i class="fas fa-user-circle"></i> Test Photo
+                    </button>
+                    <span class="text-muted small" id="photo-test-note"></span>
+                </div>
+                <img id="photo-test-img" alt="" style="display: none; width: 96px; height: 96px; border-radius: 50%; margin-top: 12px;">
+            </div>
+        </div>
+        <script>
+            async function testPhoto() {
+                const btn = document.getElementById('photo-test-btn');
+                const note = document.getElementById('photo-test-note');
+                const img = document.getElementById('photo-test-img');
+                const email = document.getElementById('photo-test-email').value.trim();
+                if (!email) { note.textContent = 'Enter an email address'; return; }
+                btn.disabled = true;
+                img.style.display = 'none';
+                note.textContent = 'Fetching...';
+                try {
+                    const form = new FormData();
+                    form.append('email', email);
+                    const resp = await fetch("{{ BASE_URL }}/settings/live-users/test-photo", { method: 'POST', body: form });
+                    const data = await resp.json();
+                    note.textContent = data.message;
+                    if (data.image) { img.src = data.image; img.style.display = ''; }
+                } catch (e) {
+                    note.textContent = 'Failed: ' + e.message;
+                } finally {
+                    btn.disabled = false;
+                }
+            }
+        </script>
         {% endif %}
 
         {# ── SharePoint Files ────────────────────────────────── #}
