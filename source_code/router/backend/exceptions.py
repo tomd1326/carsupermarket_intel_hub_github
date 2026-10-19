@@ -17,10 +17,15 @@ BASE_URL = os.getenv("BASE_URL", "")
 # "'static_url' is undefined" while rendering, so the real error is replaced by
 # a Jinja traceback. Imported lazily to avoid a circular import: core imports
 # page_registry, and main imports both.
+#
+# The page header (page_header in _navigation.html) also needs the other
+# helpers core registers (presence_config, user_details, user_menu, ...), so
+# all of core's globals are copied across. Each of those keeps its last known
+# values if the database is down, so the error page still draws.
 def _register_globals():
     try:
-        from routers.core import static_url
-        templates.env.globals['static_url'] = static_url
+        from routers import core
+        templates.env.globals.update(core.templates.env.globals)
     except Exception:  # pragma: no cover - fall back to an unversioned path
         templates.env.globals['static_url'] = lambda path: f"{BASE_URL}/static/{path.lstrip('/')}"
 

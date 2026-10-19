@@ -1,4 +1,4 @@
-{% from '_navigation.html' import account_nav with context %}
+{% from '_navigation.html' import page_header with context %}
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -10,6 +10,7 @@
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css" rel="stylesheet">
     <link href="{{ static_url('css/theme.css') }}" rel="stylesheet">
     <link href="{{ static_url('css/charts.css') }}" rel="stylesheet">
+    <script src="{{ static_url('js/aws_login.js') }}"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
     <script src="{{ static_url('js/charts.js') }}"></script>
     <script src="{{ static_url('js/kpi_targets.js') }}"></script>
@@ -34,11 +35,16 @@
             display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 12px;
             border-bottom: 1px solid #cbd5e1;
             position: sticky; top: var(--kpi-top-bar-h, 0px); z-index: 20;
-            background: #f1f5f9; padding-top: 8px;
+            background: var(--c-page-bg); padding-top: 8px;
         }
+        /* Same height as the Add Chart button below the tabs (.btn-edit in
+           charts.css: 0.9rem text at Bootstrap's 1.5 line height, 7px padding
+           and 1px border top and bottom), whatever the section font size. The
+           text is centred in that height rather than padded. */
         .kpi-tab {
             display: flex; align-items: center; gap: 8px;
-            padding: 8px 16px; margin-bottom: -1px; cursor: pointer;
+            height: calc(0.9rem * 1.5 + 16px);
+            padding: 0 16px; margin-bottom: -1px; cursor: pointer;
             background: #e2e8f0; border: 1px solid #cbd5e1; border-radius: 8px 8px 0 0;
             font-size: var(--kpi-section-font, 0.82rem); font-weight: 700; color: #475569;
         }
@@ -401,21 +407,15 @@
         .vehicles-table tbody tr.grey-row td { background: #e5e7eb; }
         .vehicles-table tbody tr.grey-row:hover td { background: #d9dce1; }
         /* Admin View / User View switch: shared style in theme.css. */
-        /* Top bar: three columns so the page's buttons sit in the centre. The
-           account strip is normally placed absolutely at the top right of the
-           page; here it sits in the bar so it stays on screen with it. */
-        .kpi-top-bar { display: grid; grid-template-columns: 1fr auto 1fr; gap: 16px; }
-        .top-bar-left { display: flex; align-items: center; gap: 16px; min-width: 0; }
-        .top-bar-actions { display: flex; align-items: center; gap: 10px; }
-        .kpi-top-bar .account-nav { position: static; justify-self: end; }
-        /* One size for every button and label in the bar (Settings > Appearance,
-           "Top bar size"). Padding is in em so it grows with the text. */
-        .kpi-top-bar .btn, .kpi-top-bar .account-nav .nav-btn {
-            font-size: var(--kpi-toolbar-font, 0.88rem); line-height: 1.3; padding: 0.45em 1em;
-        }
+        /* The shared header row (page_header) stays at the top while the charts
+           scroll under it; the section tabs pin just beneath it. Below the
+           popups (z-index) so a popup covers it. One size for every button and
+           label in it (Settings > Appearance, "Top bar size"); padding is in
+           em so it grows with the text. */
+        .kpi-top-bar { position: sticky; top: 0; z-index: 100; }
+        .kpi-top-bar .btn { font-size: var(--kpi-toolbar-font, 0.88rem); line-height: 1.3; padding: 0.45em 1em; }
         .kpi-top-bar .view-toggle button { font-size: var(--kpi-toolbar-font, 0.88rem); line-height: 1.3; padding: 0.3em 0.9em; }
-        .kpi-top-bar .status-text, .kpi-top-bar .account-nav { font-size: var(--kpi-toolbar-font, 0.88rem); }
-        /* Data Labels On / Off on each chart row: the same switch, sized to the
+        .kpi-top-bar .status-text, .kpi-top-bar .account-nav { font-size: var(--kpi-toolbar-font, 0.88rem); }        /* Data Labels On / Off on each chart row: the same switch, sized to the
            row's other buttons. Its own class, since setPageView() resets every
            .view-toggle button. */
         .labels-toggle { display: inline-flex; align-items: center; background: #e2e8f0; border-radius: 6px; padding: 2px; gap: 2px; }
@@ -462,14 +462,9 @@
     </style>
 </head>
 <body>
-    <!-- Title and status on the left, the page's buttons in the centre, Home /
-         user / Logout on the right. The whole bar stays at the top when scrolling. -->
-    <div class="top-bar kpi-top-bar" id="kpiTopBar">
-        <div class="top-bar-left">
-            <h1>{{ page_name('kpi') }}</h1>
-            <span class="status-text" id="statusText"></span>
-        </div>
-        <div class="top-bar-actions">
+    <!-- The shared header row, kept at the top when scrolling: the page's
+         buttons and status sit beside the title. -->
+    {% call page_header(page_name('kpi'), user, 'kpi-top-bar') %}
         <button class="btn btn-load" id="loadBtn" onclick="loadAll(true)">
             <i class="fas fa-sync-alt" id="loadIcon"></i> Load Data
         </button>
@@ -485,10 +480,10 @@
         </button>
         <button class="btn btn-edit admin-only" onclick="openNotesModal()">
             <i class="fas fa-sticky-note"></i> Notes
-        </button>        {% endif %}
-        </div>
-        {{ account_nav(user) }}
-    </div>
+        </button>
+        {% endif %}
+        <span class="status-text" id="statusText"></span>
+    {% endcall %}
 
     <div class="page-content page-is-loading" id="pageContent">
         <div class="page-loading"><i class="fas fa-sync-alt spin"></i> <span>Loading<span class="loading-dots"></span></span></div>
@@ -1386,7 +1381,9 @@
     }
     // The operators of a row's added metrics, in order.
     function plusOps(list) { return list.map(p => p.op || '+'); }
-    const PLUS_OPS = [['+', '+ Plus'], ['-', '- Minus'], ['*', '* Times'], ['/', '/ Divided By']];
+    // The symbol only, so the operator box stays narrow and the metric beside
+    // it has room to show its name. Its tooltip says what each one does.
+    const PLUS_OPS = [['+', '+'], ['-', '-'], ['*', '*'], ['/', '/']];
 
     function sectionDomId(name) {
         return 'sec-' + name.toLowerCase().replace(/[^a-z0-9]+/g, '-');
@@ -1430,6 +1427,7 @@
             if (layoutResp.sections) SECTIONS = layoutResp.sections;
             hiddenSections = new Set(layoutResp.hidden_sections || []);
             loadCollapsedRows(layoutResp.collapsed_rows || []);
+            loadRollingRows(layoutResp.rolling_rows || []);
             myCharts = layoutResp.my_charts || [];
             layout = layoutResp.layout || { rows: [] };
             if (layoutResp.settings) settings = layoutResp.settings;
@@ -1464,8 +1462,10 @@
         layoutLoadFailed = true;
         setPageLoading(false);
         document.getElementById('loadIcon').classList.remove('spin');
-        document.getElementById('statusText').textContent =
+        const status = document.getElementById('statusText');
+        status.textContent =
             what + ' - saving is turned off so the saved charts are not overwritten. ' + err.message;
+        awsLoginIfExpired(status, err.message);
         console.error(err);
         fetch(BASE_URL + '/kpi/client-error', {
             method: 'POST',
@@ -1747,19 +1747,37 @@
     }
 
     // Daily charts showing the 7-day average instead of each day's figure.
-    // Each person's own choice, kept in their browser, like collapsed rows.
+    // Each person's own choice, saved against their login on the server like
+    // collapsed rows, so it follows them to any browser.
     const ROLLING_KEY = 'kpiRolling7';
-    function rollingRows() {
-        try { return new Set(JSON.parse(localStorage.getItem(ROLLING_KEY) || '[]')); }
-        catch (e) { return new Set(); }
+    let rollingSet = new Set();
+    function loadRollingRows(rows) {
+        rollingSet = new Set(rows);
+        // Choices made before this was saved on the server were kept in the
+        // browser; carry them over once.
+        let local = [];
+        try { local = JSON.parse(localStorage.getItem(ROLLING_KEY) || '[]'); } catch (e) {}
+        if (local.length) {
+            local.forEach(id => rollingSet.add(id));
+            try { localStorage.removeItem(ROLLING_KEY); } catch (e) {}
+            saveRollingRows();
+        }
     }
-    function rollingOn(id) { return rollingRows().has(id); }
+    function rollingOn(id) { return rollingSet.has(id); }
+    function saveRollingRows() {
+        fetch(BASE_URL + '/kpi/rolling-rows', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ rows: [...rollingSet] }),
+        }).then(r => r.json()).then(j => {
+            if (j.status !== 'ok') console.error('7-day average save failed: ' + j.message);
+        }).catch(err => console.error('7-day average save failed', err));
+    }
 
     function setRolling(id, on) {
         if (rollingOn(id) === on) return;
-        const set = rollingRows();
-        if (on) set.add(id); else set.delete(id);
-        try { localStorage.setItem(ROLLING_KEY, JSON.stringify([...set])); } catch (e) {}
+        if (on) rollingSet.add(id); else rollingSet.delete(id);
+        saveRollingRows();
         const row = findRow(id);
         if (row) rebuildCustomRow(row, false);
     }
@@ -3589,7 +3607,7 @@
                 const opOptions = PLUS_OPS.map(([v, label]) =>
                     `<option value="${v}" ${(ops[i] || '+') === v ? 'selected' : ''}>${escHtml(label)}</option>`).join('');
                 return `<div class="plus-row">
-                    <select class="plus-op" title="How this metric joins the ones before it" onchange="setPlusOp('${side}', ${i}, this.value)">${opOptions}</select>
+                    <select class="plus-op" title="How this metric joins the ones before it: + plus, - minus, * times, / divided by" onchange="setPlusOp('${side}', ${i}, this.value)">${opOptions}</select>
                     <select onchange="setPlus('${side}', ${i}, this.value)">
                         <option value="">(choose a metric)</option>${missing}${metricGroupHtml('snowflake')}${metricGroupHtml('sharepoint')}${metricGroupHtml('autotrader')}
                     </select>
@@ -4712,7 +4730,7 @@
     // Watched rather than read once: the Top Bar Size setting and window
     // width both change it.
     (function trackTopBarHeight() {
-        const bar = document.getElementById('kpiTopBar');
+        const bar = document.querySelector('.kpi-top-bar');
         const set = () => document.documentElement.style.setProperty(
             '--kpi-top-bar-h', bar.getBoundingClientRect().height + 'px');
         new ResizeObserver(set).observe(bar);

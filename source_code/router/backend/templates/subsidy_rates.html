@@ -1,4 +1,4 @@
-{% from '_navigation.html' import account_nav with context %}
+{% from '_navigation.html' import page_header with context %}
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -15,16 +15,14 @@
         @font-face { font-family: 'DM Sans'; src: url('{{ BASE_URL }}/static/fonts/DMSans-SemiBold.ttf'); font-weight: 600; }
         @font-face { font-family: 'DM Sans'; src: url('{{ BASE_URL }}/static/fonts/DMSans-Bold.ttf');     font-weight: 700; }
         body, button, input, select, textarea { font-family: 'DM Sans', system-ui, sans-serif; }
-        body { background-color: #003c57; min-height: 100vh; }
+        body { background-color: var(--c-page-bg); color: var(--c-text); min-height: 100vh; }
 
-        .page-wrap { min-height: 100vh; padding: 16px 28px 28px; }
-        .brand-logo { width: 36px; height: 36px; border-radius: 8px; }
-        .page-title { color: #ffffff; font-weight: 600; font-size: 1.2rem; letter-spacing: -0.2px; }
-        .page-sub { color: rgba(255,255,255,0.55); font-size: 0.78rem; margin-top: 0; }
-        .card { border: none; border-radius: 12px; box-shadow: 0 4px 24px rgba(0,0,0,0.18); }
+        .page-wrap { padding: 16px 28px 28px; }
+        .page-sub { color: var(--c-text-muted); font-size: 0.78rem; margin-top: 0; }
+        .card { border: 1px solid var(--c-border); border-radius: var(--radius-lg); box-shadow: none; }
         .card-body { padding: 14px 18px; }
-        .back-link { color: rgba(255,255,255,0.6); font-size: 0.82rem; text-decoration: none; }
-        .back-link:hover { color: #ffffff; }
+        .back-link { color: var(--c-text-muted); font-size: 0.82rem; text-decoration: none; }
+        .back-link:hover { color: var(--c-text); }
 
         /* Every control on the filter row is the same height, so the row reads as one unit. */
         .control-row { display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-end; }
@@ -33,8 +31,8 @@
         .control-row .btn { height: 36px; font-size: 0.86rem; padding: 0 14px; border-radius: 7px; display: inline-flex; align-items: center; }
         .control-row .form-select, .control-row .form-control { padding: 0 10px; }
 
-        .btn-process { background-color: #7ed321; border: none; color: #0d3d5f; font-weight: 700; border-radius: 7px; transition: background 0.15s; }
-        .btn-process:hover { background-color: #6cba18; color: #0d3d5f; }
+        .btn-process { background-color: var(--c-primary); border: none; color: var(--c-surface); font-weight: 700; border-radius: 7px; transition: background 0.15s; }
+        .btn-process:hover { background-color: var(--c-primary-hover); color: var(--c-surface); }
 
         .control-label { font-size: 0.7rem; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: #7a8a95; margin-bottom: 3px; display: block; }
 
@@ -115,18 +113,12 @@
     </style>
 </head>
 <body>
-{{ account_nav(user) }}
+{{ page_header(page_name('subsidy_rates'), user) }}
 
 <div class="page-wrap">
     <div class="container-fluid" style="max-width: 1040px;">
 
-        <div class="d-flex align-items-center gap-3 mb-1">
-            <img src="{{ BASE_URL }}/static/icon.png" alt="CarSupermarket" class="brand-logo">
-            <div>
-                <h1 class="page-title mb-0">{{ page_name('subsidy_rates') }}</h1>
-                <div class="page-sub">Every whole month between the lender's benchmark terms, worked out on a straight line.</div>
-            </div>
-        </div>
+        <div class="page-sub">Every whole month between the lender's benchmark terms, worked out on a straight line.</div>
 
         {% if load_error %}
         <div class="alert alert-danger mt-3 mb-0">

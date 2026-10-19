@@ -1,4 +1,4 @@
-{% from '_navigation.html' import account_nav with context %}
+{% from '_navigation.html' import page_header with context %}
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -11,15 +11,9 @@
     <link href="{{ static_url('css/theme.css') }}" rel="stylesheet">
     {% include '_settings_head.html' %}
 </head>
-<body class="bg-light">
-    {{ account_nav(user) }}
+<body>
+    {{ page_header('Settings', user) }}
     <div class="settings-card{% if active_section in ('sharepoint', 'dbt') %} settings-card-wide{% endif %}">
-        <div class="d-flex align-items-center gap-3 mb-4">
-            <a href="javascript:history.back()" class="btn btn-outline-secondary nav-btn">
-                <i class="fas fa-arrow-left me-1"></i>Back
-            </a>
-            <h4 class="mb-0">Settings</h4>
-        </div>
 
         <div class="settings-layout">
         {% include '_settings_nav.html' %}
@@ -1136,6 +1130,189 @@
 
             dbtLoad();
         </script>
+        {% endif %}
+
+        {# ── Appearance ──────────────────────────────────────── #}
+        {% if active_section == 'appearance' %}
+        <form method="post" action="{{ BASE_URL }}/settings/section/appearance">
+            <div class="card mb-4">
+                <div class="card-header fw-semibold">Colours</div>
+                <div class="card-body">
+                    <p class="form-text mt-0">
+                        Colours for every page. A change applies to every page on its next load.
+                    </p>
+                    <div class="d-flex gap-4 flex-wrap">
+                        <div>
+                            <label for="ap_page_bg" class="form-label mb-1">Page Background</label>
+                            <input class="form-control form-control-color" type="color" id="ap_page_bg" name="ap_page_bg" value="{{ settings.ap_page_bg }}">
+                            <div class="form-text">Default: light blue-grey</div>
+                        </div>
+                        <div>
+                            <label for="ap_header_bg" class="form-label mb-1">Header Row</label>
+                            <input class="form-control form-control-color" type="color" id="ap_header_bg" name="ap_header_bg" value="{{ settings.ap_header_bg }}">
+                            <div class="form-text">Default: white</div>
+                        </div>
+                        <div>
+                            <label for="ap_surface" class="form-label mb-1">Cards And Tables</label>
+                            <input class="form-control form-control-color" type="color" id="ap_surface" name="ap_surface" value="{{ settings.ap_surface }}">
+                            <div class="form-text">Default: white</div>
+                        </div>
+                        <div>
+                            <label for="ap_menu_bg" class="form-label mb-1">Page Menu Panel</label>
+                            <input class="form-control form-control-color" type="color" id="ap_menu_bg" name="ap_menu_bg" value="{{ settings.ap_menu_bg }}">
+                            <div class="form-text">Default: white</div>
+                        </div>
+                        <div>
+                            <label for="ap_text" class="form-label mb-1">Body Text</label>
+                            <input class="form-control form-control-color" type="color" id="ap_text" name="ap_text" value="{{ settings.ap_text }}">
+                            <div class="form-text">Default: dark grey</div>
+                        </div>
+                        <div>
+                            <label for="ap_heading" class="form-label mb-1">Headings</label>
+                            <input class="form-control form-control-color" type="color" id="ap_heading" name="ap_heading" value="{{ settings.ap_heading }}">
+                            <div class="form-text">Default: navy</div>
+                        </div>
+                        <div>
+                            <label for="ap_muted" class="form-label mb-1">Muted Text</label>
+                            <input class="form-control form-control-color" type="color" id="ap_muted" name="ap_muted" value="{{ settings.ap_muted }}">
+                            <div class="form-text">Default: grey</div>
+                        </div>
+                        <div>
+                            <label for="ap_menu_text" class="form-label mb-1">Page Menu Text</label>
+                            <input class="form-control form-control-color" type="color" id="ap_menu_text" name="ap_menu_text" value="{{ settings.ap_menu_text }}">
+                            <div class="form-text">Default: dark grey</div>
+                        </div>
+                        <div>
+                            <label for="ap_border" class="form-label mb-1">Borders</label>
+                            <input class="form-control form-control-color" type="color" id="ap_border" name="ap_border" value="{{ settings.ap_border }}">
+                            <div class="form-text">Default: grey</div>
+                        </div>
+                        <div>
+                            <label for="ap_primary" class="form-label mb-1">Main Buttons</label>
+                            <input class="form-control form-control-color" type="color" id="ap_primary" name="ap_primary" value="{{ settings.ap_primary }}">
+                            <div class="form-text">Default: blue</div>
+                        </div>
+                        <div>
+                            <label for="ap_primary_hover" class="form-label mb-1">Main Buttons Under The Pointer</label>
+                            <input class="form-control form-control-color" type="color" id="ap_primary_hover" name="ap_primary_hover" value="{{ settings.ap_primary_hover }}">
+                            <div class="form-text">Default: darker blue</div>
+                        </div>
+                        <div>
+                            <label for="ap_table_header_bg" class="form-label mb-1">Table Heading Background</label>
+                            <input class="form-control form-control-color" type="color" id="ap_table_header_bg" name="ap_table_header_bg" value="{{ settings.ap_table_header_bg }}">
+                            <div class="form-text">Default: light blue</div>
+                        </div>
+                        <div>
+                            <label for="ap_table_header_text" class="form-label mb-1">Table Heading Text</label>
+                            <input class="form-control form-control-color" type="color" id="ap_table_header_text" name="ap_table_header_text" value="{{ settings.ap_table_header_text }}">
+                            <div class="form-text">Default: navy</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="card mb-4">
+                <div class="card-header fw-semibold">Transparency And Shape</div>
+                <div class="card-body">
+                    <div class="d-flex gap-4 flex-wrap">
+                        <div>
+                            <label for="ap_header_opacity" class="form-label mb-1">Header Row Opacity (%)</label>
+                            <input class="form-control" type="number" id="ap_header_opacity" name="ap_header_opacity" value="{{ settings.ap_header_opacity }}" min="0" max="100" style="width: 110px;" onclick="this.select()">
+                            <div class="form-text">Default: 100. 100 = solid.</div>
+                        </div>
+                        <div>
+                            <label for="ap_surface_opacity" class="form-label mb-1">Cards And Tables Opacity (%)</label>
+                            <input class="form-control" type="number" id="ap_surface_opacity" name="ap_surface_opacity" value="{{ settings.ap_surface_opacity }}" min="0" max="100" style="width: 110px;" onclick="this.select()">
+                            <div class="form-text">Default: 100. Lower lets the page colour show through.</div>
+                        </div>
+                        <div>
+                            <label for="ap_menu_opacity" class="form-label mb-1">Page Menu Opacity (%)</label>
+                            <input class="form-control" type="number" id="ap_menu_opacity" name="ap_menu_opacity" value="{{ settings.ap_menu_opacity }}" min="0" max="100" style="width: 110px;" onclick="this.select()">
+                            <div class="form-text">Default: 100</div>
+                        </div>
+                        <div>
+                            <label for="ap_radius" class="form-label mb-1">Corner Rounding (px)</label>
+                            <input class="form-control" type="number" id="ap_radius" name="ap_radius" value="{{ settings.ap_radius }}" min="0" max="30" style="width: 110px;" onclick="this.select()">
+                            <div class="form-text">Default: 8. Cards, buttons and panels.</div>
+                        </div>
+                        <div>
+                            <label for="ap_header_shadow" class="form-label mb-1">Header Shadow Strength (%)</label>
+                            <input class="form-control" type="number" id="ap_header_shadow" name="ap_header_shadow" value="{{ settings.ap_header_shadow }}" min="0" max="100" style="width: 110px;" onclick="this.select()">
+                            <div class="form-text">Default: 6. 0 = no shadow.</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        
+            <div class="card mb-4">
+                <div class="card-header fw-semibold">Header &amp; Menus</div>
+                <div class="card-body">
+                    <p class="form-text mt-0">
+                        The header row at the top of every page: the menu button and the page name on the
+                        left, the live users and email on the right. The same on every page.
+                    </p>
+                    <div class="d-flex gap-4 flex-wrap mb-3">
+                        <div>
+                            <label for="page_title_size" class="form-label mb-1">Page Title Size (px)</label>
+                            <input class="form-control" type="number" id="page_title_size" name="page_title_size"
+                                   value="{{ settings.page_title_size }}" min="14" max="40" style="width: 110px;" onclick="this.select()">
+                            <div class="form-text">Default: 22</div>
+                        </div>
+                        <div>
+                            <label for="page_menu_btn_size" class="form-label mb-1">Menu Button Size (px)</label>
+                            <input class="form-control" type="number" id="page_menu_btn_size" name="page_menu_btn_size"
+                                   value="{{ settings.page_menu_btn_size }}" min="24" max="64" style="width: 110px;" onclick="this.select()">
+                            <div class="form-text">Default: 40</div>
+                        </div>
+                        <div>
+                            <label for="page_head_pad_y" class="form-label mb-1">Header Padding Top/Bottom (px)</label>
+                            <input class="form-control" type="number" id="page_head_pad_y" name="page_head_pad_y"
+                                   value="{{ settings.page_head_pad_y }}" min="0" max="40" style="width: 110px;" onclick="this.select()">
+                            <div class="form-text">Default: 14</div>
+                        </div>
+                        <div>
+                            <label for="page_head_pad_x" class="form-label mb-1">Header Padding Left/Right (px)</label>
+                            <input class="form-control" type="number" id="page_head_pad_x" name="page_head_pad_x"
+                                   value="{{ settings.page_head_pad_x }}" min="0" max="60" style="width: 110px;" onclick="this.select()">
+                            <div class="form-text">Default: 20</div>
+                        </div>
+                        <div>
+                            <label for="page_head_gap" class="form-label mb-1">Gap Between Button and Title (px)</label>
+                            <input class="form-control" type="number" id="page_head_gap" name="page_head_gap"
+                                   value="{{ settings.page_head_gap }}" min="0" max="40" style="width: 110px;" onclick="this.select()">
+                            <div class="form-text">Default: 14</div>
+                        </div>
+                    </div>
+                    <p class="form-text mt-0">
+                        The account menu is the email address at the top right of every page, with
+                        links to My Account and Settings. The page menu is the button at the top left,
+                        listing every page the person can open, grouped by the categories on Page Names.
+                    </p>
+                    <div class="d-flex gap-4 flex-wrap">
+                        <div>
+                            <label for="account_menu_font_size" class="form-label mb-1">Account Menu Text Size (px)</label>
+                            <input class="form-control" type="number" id="account_menu_font_size" name="account_menu_font_size"
+                                   value="{{ settings.account_menu_font_size }}" min="10" max="24" style="width: 110px;" onclick="this.select()">
+                            <div class="form-text">Default: 14</div>
+                        </div>
+                        <div>
+                            <label for="side_menu_font_size" class="form-label mb-1">Page Menu Text Size (px)</label>
+                            <input class="form-control" type="number" id="side_menu_font_size" name="side_menu_font_size"
+                                   value="{{ settings.side_menu_font_size }}" min="10" max="24" style="width: 110px;" onclick="this.select()">
+                            <div class="form-text">Default: 15. The menu opened from the button at the top left.</div>
+                        </div>
+                        <div>
+                            <label for="side_menu_width" class="form-label mb-1">Page Menu Width (px)</label>
+                            <input class="form-control" type="number" id="side_menu_width" name="side_menu_width"
+                                   value="{{ settings.side_menu_width }}" min="180" max="480" style="width: 110px;" onclick="this.select()">
+                            <div class="form-text">Default: 260</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+
+            <button type="submit" class="btn btn-primary">Save Appearance</button>
+        </form>
         {% endif %}
 
         {# ── Live Users ──────────────────────────────────────── #}

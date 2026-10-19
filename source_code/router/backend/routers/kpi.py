@@ -2287,14 +2287,17 @@ def kpi_layout_get(request: Request, user: str = Depends(require_page_api('kpi')
             "metric_names": metric_names, "at_periods": at_periods, "at_ppc_periods": at_ppc_periods,
             "hidden_sections": [s for s in (_read_kpi_layout_value('hidden_sections') or []) if s in sections],
             "collapsed_rows": _user_row_list(_COLLAPSED_KEY, user),
+            "rolling_rows": _user_row_list(_ROLLING_KEY, user),
             "my_charts": _user_row_list(_MY_CHARTS_KEY, user)}
 
 
 # ── Per-user chart row lists ─────────────────────────────────────────────────
-# Each user's own collapsed rows and My Charts, stored as {user: [row ids]}
-# so they follow the person to any browser. The section row order stays the
-# admin's; My Charts keeps the order the user set.
+# Each user's own collapsed rows, rows showing the 7-day average, and My
+# Charts, stored as {user: [row ids]} so they follow the person to any
+# browser. The section row order stays the admin's; My Charts keeps the order
+# the user set.
 _COLLAPSED_KEY = 'collapsed_rows'
+_ROLLING_KEY = 'rolling_rows'
 _MY_CHARTS_KEY = 'my_charts'
 
 
@@ -2323,6 +2326,11 @@ def _save_user_row_list(key: str, user: str, payload: dict, keep_order: bool) ->
 @router.post("/kpi/collapsed-rows")
 def kpi_collapsed_rows_save(request: Request, payload: dict, user: str = Depends(require_page_api('kpi'))):
     return _save_user_row_list(_COLLAPSED_KEY, user, payload, keep_order=False)
+
+
+@router.post("/kpi/rolling-rows")
+def kpi_rolling_rows_save(request: Request, payload: dict, user: str = Depends(require_page_api('kpi'))):
+    return _save_user_row_list(_ROLLING_KEY, user, payload, keep_order=False)
 
 
 @router.post("/kpi/my-charts")

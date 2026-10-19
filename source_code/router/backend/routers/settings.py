@@ -1,12 +1,14 @@
 """Settings page, user management and app settings (admin only)."""
 
 from fastapi import APIRouter, Request, Form, Depends, HTTPException
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 import datetime
 import time
 import hashlib
 import logging
+import os
 import re
+import subprocess
 import zoneinfo
 
 
@@ -16,6 +18,7 @@ from utils.db_utils import (get_database_connection, get_settings, save_settings
                             load_user_details, update_user_details,
                             load_all_page_access, set_page_access_many,
                             delete_user_and_access, ALWAYS_ENABLED_USERS, ADMIN_DETAILS,
+                            APPEARANCE_COLOUR_SETTINGS,
                             get_prod_pricer_connection, load_page_names, save_page_names)
 
 from . import core
@@ -40,6 +43,7 @@ SETTINGS_SECTIONS = [
     ("cap-credentials",     "CAP Credentials",     "CAP Credential Override"),
     ("email",               "Email",               "Email"),
     ("live-users",          "Live Users",          "Live Users"),
+    ("appearance",          "Appearance",          "Appearance"),
     ("sharepoint",          "SharePoint",          "SharePoint Files"),
     ("prod-to-dev",         "Prod To Dev",         "Copy Prod To Dev"),
     ("api-requests",        "API Requests",        "API Requests"),
@@ -271,6 +275,88 @@ def save_live_users(
     logger.info("Settings [Live Users] updated by %s", user)
     return _section_redirect("live-users")
 
+
+# Settings > Appearance: every colour, opacity and size the pages share.
+# core.appearance_css turns these into the tokens in theme.css.
+_APPEARANCE_INTS = {
+    # key: (lowest, highest)
+    'account_menu_font_size': (10, 24), 'side_menu_font_size': (10, 24), 'side_menu_width': (180, 480),
+    'page_title_size': (14, 40), 'page_menu_btn_size': (24, 64), 'page_head_pad_y': (0, 40),
+    'page_head_pad_x': (0, 60), 'page_head_gap': (0, 40),
+    'ap_surface_opacity': (0, 100), 'ap_header_opacity': (0, 100), 'ap_menu_opacity': (0, 100),
+    'ap_radius': (0, 30), 'ap_header_shadow': (0, 100),
+}
+
+
+@router.post("/settings/section/appearance")
+async def save_appearance(request: Request, user: str = Depends(get_current_user)):
+    if user != 'tdrayson':
+        raise HTTPException(status_code=403, detail="Forbidden")
+    form = await request.form()
+    values = {}
+    for key in APPEARANCE_COLOUR_SETTINGS:
+        # Colours go into a style block, so only '#rrggbb' is accepted.
+        value = str(form.get(key, "")).strip().lower()
+        if not re.fullmatch(r'#[0-9a-f]{6}', value):
+            raise HTTPException(status_code=400, detail=f"{key} must be a colour like #ffffff")
+        values[key] = value
+    for key, (low, high) in _APPEARANCE_INTS.items():
+        try:
+            values[key] = min(high, max(low, int(str(form.get(key, "")).strip())))
+        except ValueError:
+            raise HTTPException(status_code=400, detail=f"{key} must be a whole number")
+    with get_database_connection() as conn:
+        save_settings_partial(conn, values)
+    # This container uses the new values straight away; others within a minute.
+    core.reload_presence_config()
+    logger.info("Settings [Appearance] updated by %s", user)
+    return _section_redirect("appearance")
+
+# Sign in to AWS again when the SSO session has expired. Only works where the
+# app runs on your own machine (not on Lambda): `aws sso login` opens the sign-in
+# page in a browser on the machine it runs on, so on Lambda it would do nothing
+# useful. Pages that hit the "AWS credentials expired" error show a button for it.
+# Errors are returned as JSON, not raised: a raised HTTPException is turned into
+# the HTML error page (exceptions.py), which the button's script cannot read.
+_sso_login_process = None
+
+
+@router.post("/api/aws-sso-login")
+def aws_sso_login(user: str = Depends(get_current_user)):
+    global _sso_login_process
+    if not user:
+        raise HTTPException(status_code=401)
+    # Lambda always sets AWS_LAMBDA_FUNCTION_NAME; anywhere else is your own computer.
+    if os.getenv('AWS_LAMBDA_FUNCTION_NAME'):
+        return JSONResponse({"detail": "AWS sign-in can only be started when the app runs on your own computer"}, status_code=400)
+    if _sso_login_process is not None and _sso_login_process.poll() is None:
+        return {"status": "running"}
+    command = ["aws", "sso", "login"]
+    profile = os.getenv("AWS_PROFILE")
+    if profile:
+        command += ["--profile", profile]
+    try:
+        _sso_login_process = subprocess.Popen(command, stdin=subprocess.DEVNULL,
+                                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except OSError as e:
+        logger.error("aws sso login could not start: %s", e)
+        return JSONResponse({"detail": f"Could not start the AWS CLI: {e}"}, status_code=500)
+    logger.info("aws sso login started for %s", user)
+    return {"status": "running"}
+
+
+@router.get("/api/aws-sso-login")
+def aws_sso_login_status(user: str = Depends(get_current_user)):
+    """running while the sign-in is open, then ok or failed. Local only, like the POST."""
+    if not user:
+        raise HTTPException(status_code=401)
+    proc = _sso_login_process
+    if proc is None:
+        return {"status": "idle"}
+    code = proc.poll()
+    if code is None:
+        return {"status": "running"}
+    return {"status": "ok" if code == 0 else "failed"}
 
 @router.post("/settings/live-users/test-photo")
 def test_microsoft_photo(email: str = Form(...), user: str = Depends(get_current_user)):
@@ -868,24 +954,32 @@ def page_names_page(request: Request, user: str = Depends(get_current_user)):
         "pages": PAGES, "stored": stored, "load_error": load_error,
         "max_length": _PAGE_NAME_MAX,
         "site_name_key": core.SITE_NAME_KEY, "site_name_default": core.SITE_NAME_DEFAULT,
+        "category_prefix": core.CATEGORY_PREFIX,
+        "categories_in_use": sorted({v for k, v in stored.items() if k.startswith(core.CATEGORY_PREFIX)}),
         "sections": SETTINGS_SECTIONS, "active_section": "page_names",
     })
 
 
 @router.post("/settings/page-names")
 async def save_page_names_route(request: Request, user: str = Depends(get_current_user)):
-    """Fields arrive as name__<page_key>. A blank box, or one holding the
-    default name, stores nothing, so that page follows its default."""
+    """Fields arrive as name__<page_key> and category__<page_key>. A blank
+    box, or one holding the default name, stores nothing, so that page follows
+    its default. Categories are stored in the same table as cat__<page_key>:
+    save_page_names replaces every row, so names, categories and the site name
+    must all be saved together here."""
     if user != ADMIN_USERNAME:
         raise HTTPException(status_code=403)
     form = await request.form()
     names = {}
     for page in PAGES:
         label = str(form.get(f"name__{page.key}", "")).strip()
-        if len(label) > _PAGE_NAME_MAX:
+        category = str(form.get(f"category__{page.key}", "")).strip()
+        if len(label) > _PAGE_NAME_MAX or len(category) > _PAGE_NAME_MAX:
             return _user_redirect("page_names", nameerr=f"Names+must+be+{_PAGE_NAME_MAX}+characters+or+fewer")
         if label and label != page.label:
             names[page.key] = label
+        if category:
+            names[core.CATEGORY_PREFIX + page.key] = category
     site = str(form.get("site_name", "")).strip()
     if len(site) > _PAGE_NAME_MAX:
         return _user_redirect("page_names", nameerr=f"Names+must+be+{_PAGE_NAME_MAX}+characters+or+fewer")
@@ -1019,6 +1113,7 @@ async def save_user_details(request: Request, user: str = Depends(get_current_us
         }
     with get_database_connection() as conn:
         update_user_details(conn, details)
+    core.reload_user_details()   # this container's account menu; others within a minute
     logger.info("User details saved for %d users by %s", len(details), user)
     return _user_redirect("users", detailsok=1)
 
@@ -1076,6 +1171,7 @@ def add_user(
             'last_name':  new_last_name.strip(),
             'email':      new_email.strip(),
         }})
+    core.reload_user_details()
     logger.info("User %s created by admin", username)
     return _user_redirect(redirect_to, useradded=username)
 

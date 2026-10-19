@@ -15,7 +15,7 @@ import datetime
 from utils.s3_tools import download_file
 from utils.db_utils import (get_database_connection, get_settings)
 
-from .core import (BASE_URL, templates, s3_bucketname, _track, get_current_user, _uk_now)
+from .core import (BASE_URL, templates, s3_bucketname, _track, require_page, require_page_api, _uk_now)
 from .buying_requirements import _get_cb_extra, _get_cb_extra_cached
 
 logger = logging.getLogger(__name__)
@@ -42,18 +42,14 @@ def _prewarm_cb_extra() -> None:
 
 
 @router.get("/mot-check", response_class=HTMLResponse)
-def mot_check_page(request: Request, user: str = Depends(get_current_user)):
-    if not user:
-        return RedirectResponse(url=BASE_URL + "/login", status_code=303)
+def mot_check_page(request: Request, user: str = Depends(require_page('mot_check'))):
     _track(request, 'page_view', '/mot-check')
     _prewarm_cb_extra()
     return templates.TemplateResponse("mot_check.html", {"request": request, "user": user, "BASE_URL": BASE_URL})
 
 
 @router.get("/mot-check/progress")
-def mot_check_progress(request: Request, user: str = Depends(get_current_user)):
-    if not user:
-        raise HTTPException(status_code=403)
+def mot_check_progress(request: Request, user: str = Depends(require_page_api('mot_check'))):
     sid = request.session.get('session_id', '')
     with _mot_lock:
         p = _mot_progress.get(sid)
@@ -72,9 +68,7 @@ def mot_check_progress(request: Request, user: str = Depends(get_current_user)):
 
 
 @router.post("/mot-check/process")
-def mot_check_process(request: Request, payload: dict, user: str = Depends(get_current_user)):
-    if not user:
-        raise HTTPException(status_code=403)
+def mot_check_process(request: Request, payload: dict, user: str = Depends(require_page_api('mot_check'))):
 
     vrms = [v.strip().upper() for v in (payload.get("vrms") or []) if v.strip()]
     if not vrms:
@@ -429,9 +423,7 @@ def _mot_build_and_upload(results: list, vrms: list, user: str):
 
 
 @router.get("/mot-check/history")
-def mot_check_history(user: str = Depends(get_current_user)):
-    if not user:
-        raise HTTPException(status_code=403)
+def mot_check_history(user: str = Depends(require_page_api('mot_check'))):
     import boto3
     env = 'prod' if os.getenv('AWS_REGION') == 'eu-west-1' else 'dev'
     prefix = _MOT_S3_PREFIX.format(env=env)
@@ -491,9 +483,7 @@ def mot_check_history(user: str = Depends(get_current_user)):
 
 
 @router.get("/mot-check/download/{filename}")
-def mot_check_download(filename: str, user: str = Depends(get_current_user)):
-    if not user:
-        raise HTTPException(status_code=403)
+def mot_check_download(filename: str, user: str = Depends(require_page_api('mot_check'))):
     env = 'prod' if os.getenv('AWS_REGION') == 'eu-west-1' else 'dev'
     s3_key = _MOT_S3_PREFIX.format(env=env) + filename
     fd, tmp_path = tempfile.mkstemp(suffix=".xlsx")
@@ -510,9 +500,7 @@ def mot_check_download(filename: str, user: str = Depends(get_current_user)):
 
 
 @router.get("/mot-check/load/{filename}")
-def mot_check_load(filename: str, user: str = Depends(get_current_user)):
-    if not user:
-        raise HTTPException(status_code=403)
+def mot_check_load(filename: str, user: str = Depends(require_page_api('mot_check'))):
     import boto3 as _boto3
     env = 'prod' if os.getenv('AWS_REGION') == 'eu-west-1' else 'dev'
     prefix = _MOT_S3_PREFIX.format(env=env)

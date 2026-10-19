@@ -181,12 +181,50 @@ SETTINGS_DEFAULTS = {
     'presence_border_colour':           '#ffffff',
     'presence_text_colour':             '#ffffff',
     'presence_more_colour':             '#64748b',
+    # Text size in the menu under the email, top right. Pixels.
+    'account_menu_font_size':           14,
+    # The page menu opened from the burger at the top left. Pixels.
+    'side_menu_font_size':              15,
+    'side_menu_width':                  260,
+    # The header row at the top of every page (page_header). Pixels.
+    'page_title_size':                  22,
+    'page_menu_btn_size':               40,
+    'page_head_pad_y':                  14,
+    'page_head_pad_x':                  20,
+    'page_head_gap':                    14,
+    # Settings > Appearance: colours ('#rrggbb', see APPEARANCE_COLOUR_SETTINGS),
+    # opacities (percent, 100 = solid), corner rounding and header shadow.
+    'ap_page_bg':                       '#f1f5f9',
+    'ap_surface':                       '#ffffff',
+    'ap_header_bg':                     '#ffffff',
+    'ap_menu_bg':                       '#ffffff',
+    'ap_text':                          '#343a40',
+    'ap_heading':                       '#1e3a5f',
+    'ap_muted':                         '#6c757d',
+    'ap_border':                        '#b0b0b0',
+    'ap_menu_text':                     '#343a40',
+    'ap_primary':                       '#0d6efd',
+    'ap_primary_hover':                 '#0b5ed7',
+    'ap_table_header_bg':               '#dbeafe',
+    'ap_table_header_text':             '#1e3a5f',
+    'ap_surface_opacity':               100,
+    'ap_header_opacity':                100,
+    'ap_menu_opacity':                  100,
+    'ap_radius':                        8,
+    'ap_header_shadow':                 6,
 }
 
 BOOL_SETTINGS = {'calc_buying_reqs', 'get_stock', 'enable_cars_bought', 'kpi_ai_summary', 'cap_override_enabled'}
 
 # Live users colours, stored as '#rrggbb' text.
 PRESENCE_COLOUR_SETTINGS = {'presence_border_colour', 'presence_text_colour', 'presence_more_colour'}
+
+# Settings > Appearance colours, stored as '#rrggbb' text.
+APPEARANCE_COLOUR_SETTINGS = {
+    'ap_page_bg', 'ap_surface', 'ap_header_bg', 'ap_menu_bg', 'ap_text', 'ap_heading',
+    'ap_muted', 'ap_border', 'ap_menu_text', 'ap_primary', 'ap_primary_hover',
+    'ap_table_header_bg', 'ap_table_header_text',
+}
 
 # Per-user bool settings stored as e.g. calc_buying_reqs__buyer, get_stock__buyer.
 PER_USER_BOOL_SETTINGS = {'calc_buying_reqs', 'get_stock'}
@@ -210,7 +248,7 @@ def get_settings(conn, user: str = None) -> dict:
         row_map = dict(rows)
         result = dict(SETTINGS_DEFAULTS)
         STRING_SETTINGS = {'cap_override_subscriber_id', 'cap_override_password',
-                           'email_sender', 'email_test_recipient', 'login_mode'} | PRESENCE_COLOUR_SETTINGS
+                           'email_sender', 'email_test_recipient', 'login_mode'} | PRESENCE_COLOUR_SETTINGS | APPEARANCE_COLOUR_SETTINGS
         for key, value in rows:
             if key in BOOL_SETTINGS or key in STRING_SETTINGS or '__' in key:
                 continue
@@ -233,7 +271,7 @@ def get_settings(conn, user: str = None) -> dict:
         result['email_test_recipient'] = row_map.get('email_test_recipient', '')
         # 'both' = username or email address at login, 'email' = email address only.
         result['login_mode'] = row_map.get('login_mode', 'both')
-        for key in PRESENCE_COLOUR_SETTINGS:
+        for key in PRESENCE_COLOUR_SETTINGS | APPEARANCE_COLOUR_SETTINGS:
             result[key] = row_map.get(key, SETTINGS_DEFAULTS[key])
         # valuation_cache_hours: integer, global.
         try:
@@ -671,6 +709,13 @@ def load_user_details(conn) -> dict:
     """Returns {username: {'first_name', 'last_name', 'email'}} for all users.
     Missing values come back as empty strings."""
     _ensure_user_detail_columns(conn)
+    return read_user_details(conn)
+
+
+def read_user_details(conn) -> dict:
+    """load_user_details without the column check. The account menu reads this
+    on every page, and ALTER TABLE locks the users table even when the columns
+    already exist, holding up logins."""
     with conn.cursor() as cur:
         cur.execute("SELECT username, first_name, last_name, email FROM users")
         details = {

@@ -1,0 +1,35 @@
+{% from '_navigation.html' import page_header with context %}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>My Account</title>
+    <link rel="icon" type="image/png" href="{{ BASE_URL }}/static/icon.png">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css" rel="stylesheet">
+    <link href="{{ static_url('css/theme.css') }}" rel="stylesheet">
+    {% include '_settings_head.html' %}
+    <style>
+        .account-details { display: grid; grid-template-columns: max-content auto; gap: 8px 24px; margin: 0; }
+        .account-details dt { font-weight: normal; color: var(--c-text-muted); }
+        .account-details dd { margin: 0; }
+    </style>
+</head>
+<body>
+    {{ page_header('My Account', user) }}
+    <div class="settings-card" style="max-width: 720px;">
+
+        <div class="card">
+            <div class="card-header fw-semibold">Account Details</div>
+            <div class="card-body">
+                <dl class="account-details">
+                    <dt>First Name</dt><dd>{{ details.first_name or '-' }}</dd>
+                    <dt>Last Name</dt><dd>{{ details.last_name or '-' }}</dd>
+                    <dt>Email</dt><dd>{{ details.email or '-' }}</dd>
+                </dl>
+            </div>
+        </div>
+    </div>
+</body>
+</html>

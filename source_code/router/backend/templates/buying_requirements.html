@@ -1,4 +1,4 @@
-{% from '_navigation.html' import account_nav with context %}
+{% from '_navigation.html' import page_header with context %}
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -14,18 +14,12 @@
     <link href="{{ static_url('css/buying_requirements.css') }}" rel="stylesheet">
 </head>
 <body>
-    {{ account_nav(user) }}
+    {{ page_header(page_name('buying_requirements'), user) }}
 
     <div id="resize-ghost"></div>
 
     <div class="container-fluid mt-3 px-4">
     <div class="controls-area">
-        <div class="d-flex align-items-center gap-3 mb-2">
-            <h2 class="mb-0">{{ page_name('buying_requirements') }}</h2>
-            <a href="javascript:history.back()" class="btn btn-outline-secondary nav-btn">
-                <i class="fas fa-arrow-left me-1"></i>Back
-            </a>
-        </div>
 
         <div id="fetch-loading" class="text-muted mb-2" style="display:flex;align-items:center">
             <span class="spinner-border me-2"></span>

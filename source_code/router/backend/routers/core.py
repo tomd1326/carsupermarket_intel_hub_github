@@ -16,8 +16,9 @@ from fastapi.templating import Jinja2Templates
 
 from utils.db_utils import (get_database_connection, get_prod_pricer_connection,
                             load_all_users, load_all_page_access, load_page_names,
-                            record_event, get_settings, SETTINGS_DEFAULTS)
-from .page_registry import ALL_PAGE_KEYS, CONFIGURED_MARKER, DEFAULT_PAGE_KEYS, PAGES_BY_KEY
+                            record_event, get_settings, read_user_details,
+                            SETTINGS_DEFAULTS)
+from .page_registry import ALL_PAGE_KEYS, CONFIGURED_MARKER, DEFAULT_PAGE_KEYS, PAGES, PAGES_BY_KEY
 
 logger = logging.getLogger(__name__)
 
@@ -156,13 +157,58 @@ def site_name() -> str:
 templates.env.globals['site_name'] = site_name
 
 
+# Each page's menu category (Settings > Page Names), stored in the same
+# page_names table as cat__<page_key>, so it is cached and refreshed with the
+# page names. Blank = no category. Only how the menu is laid out; it has no
+# part in who may open a page.
+CATEGORY_PREFIX = 'cat__'
+
+
+def page_category(page_key: str) -> str:
+    if time.time() - _PAGE_NAMES_LOADED_AT >= PAGE_NAMES_TTL_SECONDS:
+        reload_page_names()
+    return PAGE_NAMES.get(CATEGORY_PREFIX + page_key, '')
+
+
+def user_menu(user: str | None) -> dict:
+    """The burger menu's pages for this user, in PAGES order:
+    {'pages': [...no category...], 'categories': [(name, [...]), ...]}.
+    Each page is {'key', 'name', 'url'}. Usage in a template:
+    {% set menu = user_menu(user_name) %}"""
+    allowed = get_user_pages(user)
+    loose, grouped = [], {}
+    for page in PAGES:
+        if page.key not in allowed:
+            continue
+        item = {'key': page.key, 'name': page_name(page.key), 'url': BASE_URL + page.path}
+        category = page_category(page.key)
+        if category:
+            grouped.setdefault(category, []).append(item)
+        else:
+            loose.append(item)
+    return {'pages': loose, 'categories': list(grouped.items())}
+
+
+templates.env.globals['page_category'] = page_category
+templates.env.globals['user_menu'] = user_menu
+
+
 # Live users settings (Settings > Live Users), cached per process the same way
 # as page names. Every page reads them to draw the circles, so they must not
-# cost a database read per page.
+# cost a database read per page. The page header's and menus' sizes ride
+# along, as every page draws them too.
 PRESENCE_SETTING_KEYS = ('presence_enabled', 'presence_interval_seconds', 'presence_drop_off_seconds',
                          'presence_circle_size', 'presence_max_circles', 'presence_border_width',
                          'presence_gap', 'presence_border_colour', 'presence_text_colour',
-                         'presence_more_colour', 'presence_ring_width', 'presence_ring_gap')
+                         'presence_more_colour', 'presence_ring_width', 'presence_ring_gap',
+                         'account_menu_font_size', 'side_menu_font_size', 'side_menu_width',
+                         'page_title_size', 'page_menu_btn_size', 'page_head_pad_y',
+                         'page_head_pad_x', 'page_head_gap',
+                         'ap_page_bg', 'ap_surface', 'ap_header_bg', 'ap_menu_bg', 'ap_text',
+                         'ap_heading', 'ap_muted', 'ap_border', 'ap_menu_text', 'ap_primary',
+                         'ap_primary_hover', 'ap_table_header_bg', 'ap_table_header_text',
+                         'ap_surface_opacity', 'ap_header_opacity', 'ap_menu_opacity',
+                         'ap_radius', 'ap_header_shadow')
 _PRESENCE_CONFIG: dict = {k: SETTINGS_DEFAULTS[k] for k in PRESENCE_SETTING_KEYS}
 _PRESENCE_LOADED_AT: float = 0.0
 PRESENCE_TTL_SECONDS = 60
@@ -187,6 +233,45 @@ def presence_config() -> dict:
 
 
 templates.env.globals['presence_config'] = presence_config
+
+
+def _rgba(hex_colour: str, opacity_pct) -> str:
+    """'#rrggbb' and a percentage as an rgba() colour. A stored value that is
+    not a valid colour falls back to white, so a bad row cannot break a page."""
+    h = str(hex_colour or '').strip().lstrip('#')
+    if len(h) != 6 or any(c not in '0123456789abcdefABCDEF' for c in h):
+        h = 'ffffff'
+    try:
+        alpha = max(0, min(100, int(opacity_pct))) / 100
+    except (TypeError, ValueError):
+        alpha = 1
+    return f"rgba({int(h[0:2], 16)}, {int(h[2:4], 16)}, {int(h[4:6], 16)}, {alpha:g})"
+
+
+def appearance_css() -> str:
+    """The Settings > Appearance values as one :root rule, drawn by page_header
+    on every page. It sets the shared tokens in theme.css, so a change here
+    reaches every page. Colours are '#rrggbb' only (validated on save)."""
+    c = presence_config()
+    radius = max(0, min(30, int(c['ap_radius'])))
+    shadow = max(0, min(100, int(c['ap_header_shadow']))) / 100
+    return (
+        ":root{"
+        f"--c-page-bg:{c['ap_page_bg']};"
+        f"--c-surface:{_rgba(c['ap_surface'], c['ap_surface_opacity'])};"
+        f"--c-text:{c['ap_text']};--c-text-heading:{c['ap_heading']};--c-text-muted:{c['ap_muted']};"
+        f"--c-border:{c['ap_border']};"
+        f"--c-primary:{c['ap_primary']};--c-primary-hover:{c['ap_primary_hover']};"
+        f"--c-table-header-bg:{c['ap_table_header_bg']};--c-table-header-text:{c['ap_table_header_text']};"
+        f"--radius-lg:{radius}px;--radius-md:{round(radius * 0.75)}px;--radius-sm:{round(radius * 0.5)}px;"
+        f"--page-head-bg:{_rgba(c['ap_header_bg'], c['ap_header_opacity'])};"
+        f"--page-head-shadow:{shadow:g};"
+        f"--side-menu-bg:{_rgba(c['ap_menu_bg'], c['ap_menu_opacity'])};--side-menu-text:{c['ap_menu_text']};"
+        "}"
+    )
+
+
+templates.env.globals['appearance_css'] = appearance_css
 
 # Generic initialization
 s3_bucketname = 'aa-raw-sources-uk'
@@ -240,6 +325,38 @@ def is_admin(user: str | None) -> bool:
 # Not 'is_admin': some pages pass an is_admin True/False of their own, which
 # would hide a function of the same name.
 templates.env.globals['user_is_admin'] = is_admin
+
+
+# Name and email for the account menu at the top right of every page, cached
+# per process the same way as page names. Settings > Users reloads this
+# container's copy on save; other containers catch up within the TTL. A failed
+# read keeps the last copy and waits the same time before trying again.
+_USER_DETAILS: dict = {}
+_USER_DETAILS_LOADED_AT: float = 0.0
+USER_DETAILS_TTL_SECONDS = 60
+
+
+def reload_user_details() -> None:
+    global _USER_DETAILS_LOADED_AT
+    _USER_DETAILS_LOADED_AT = time.time()
+    try:
+        with get_database_connection() as conn:
+            details = read_user_details(conn)
+        _USER_DETAILS.clear()
+        _USER_DETAILS.update(details)
+    except Exception as e:
+        logger.warning("Could not load user details - using the last known values: %s", e)
+
+
+def user_details(username: str | None) -> dict:
+    """{'first_name', 'last_name', 'email'}, empty strings where not stored.
+    Usage in a template:  {% set ud = user_details(user_name) %}"""
+    if time.time() - _USER_DETAILS_LOADED_AT >= USER_DETAILS_TTL_SECONDS:
+        reload_user_details()
+    return dict(_USER_DETAILS.get(username) or {'first_name': '', 'last_name': '', 'email': ''})
+
+
+templates.env.globals['user_details'] = user_details
 
 
 def _permissions_are_fresh() -> bool:
