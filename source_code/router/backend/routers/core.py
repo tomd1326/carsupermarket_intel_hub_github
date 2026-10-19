@@ -162,7 +162,7 @@ templates.env.globals['site_name'] = site_name
 PRESENCE_SETTING_KEYS = ('presence_enabled', 'presence_interval_seconds', 'presence_drop_off_seconds',
                          'presence_circle_size', 'presence_max_circles', 'presence_border_width',
                          'presence_gap', 'presence_border_colour', 'presence_text_colour',
-                         'presence_more_colour')
+                         'presence_more_colour', 'presence_ring_width', 'presence_ring_gap')
 _PRESENCE_CONFIG: dict = {k: SETTINGS_DEFAULTS[k] for k in PRESENCE_SETTING_KEYS}
 _PRESENCE_LOADED_AT: float = 0.0
 PRESENCE_TTL_SECONDS = 60
@@ -235,6 +235,11 @@ def _reload_users_from_aurora():
 
 def is_admin(user: str | None) -> bool:
     return user == ADMIN_USERNAME
+
+
+# Not 'is_admin': some pages pass an is_admin True/False of their own, which
+# would hide a function of the same name.
+templates.env.globals['user_is_admin'] = is_admin
 
 
 def _permissions_are_fresh() -> bool:

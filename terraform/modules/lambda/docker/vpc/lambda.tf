@@ -48,4 +48,12 @@ resource "aws_lambda_function" "function" {
     BillingPlatform = var.tags_billing_platform
     ManagedBy       = var.tags_managed_by
   }
+
+  # The code is deployed by the deploy_docker_image job. plan_tf runs alongside
+  # build_docker_image, so it reads the previous image's digest; applying that
+  # plan rolled the Lambda back to old code (2026-10-19). Terraform only sets
+  # the image when it first creates the function.
+  lifecycle {
+    ignore_changes = [image_uri]
+  }
 }

@@ -4,7 +4,10 @@
 .live-users {
     display: flex;
     align-items: center;
-    gap: var(--live-user-gap, 4px);
+    /* The outer ring is drawn outside each circle and takes no space, so the
+       gap is widened by the ring on both sides: Gap Between Circles stays the
+       space between the rings you see. */
+    gap: calc(var(--live-user-gap, 4px) + 2 * (var(--live-user-ring-width, 1px) + var(--live-user-ring-gap, 1px)));
     margin-right: 0.25rem;
 }
 .live-users:empty { display: none; }
@@ -23,5 +26,13 @@
     line-height: 1;
     cursor: default;
     user-select: none;
+    /* Microsoft 365 style ring: same colour as the circle, with a see-through
+       gap between. An outline follows the round corners and leaves the gap
+       showing the bar behind, whatever its colour. */
+    outline: var(--live-user-ring-width, 1px) solid var(--live-user-ring-colour, transparent);
+    outline-offset: var(--live-user-ring-gap, 1px);
 }
-.live-user-more { background: var(--live-user-more-colour, #64748b); }
+.live-user-more {
+    background: var(--live-user-more-colour, #64748b);
+    --live-user-ring-colour: var(--live-user-more-colour, #64748b);
+}
