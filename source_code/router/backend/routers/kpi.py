@@ -20,9 +20,11 @@ from utils.db_utils import (get_database_connection, get_prod_pricer_connection,
                             add_ga4_campaign, remove_ga4_campaign)
 from utils.snowflake_client import SnowflakeClient
 from utils import sharepoint_sources
+from utils import at_invoices
 
 from .core import (BASE_URL, templates, _track, get_current_user, is_admin,
-                   require_page, require_page_api, _uk_now)
+                   require_page, require_page_api, _uk_now,
+                   s3_bucketname, s3_bucket_region, _S3_ENV)
 
 logger = logging.getLogger(__name__)
 
@@ -1041,11 +1043,13 @@ def kpi_metrics(request: Request, user: str = Depends(require_page_api('kpi'))):
             "has_target": False,
         })
     for col, description in _AT_METRICS.items():
+        if col in _AT_HIDDEN_METRICS:
+            continue
         metrics.append({
             "source": "autotrader",
             "column": col,
             "description": description,
-            "suggested_agg": "avg",
+            "suggested_agg": "sum" if col in _AT_SUM_METRICS else "avg",
             "has_n1": True,
             "has_target": False,
         })
@@ -1077,6 +1081,7 @@ KPI_DEFAULT_SETTINGS = {
     "period_font_px": 12,    # monthly / weekly / daily at the right of the title line
     "toolbar_font_px": 14,   # every button and label in the top bar
     "at_font_px": 13,        # Autotrader figures boxes (Published, Capped etc.)
+    "at_table_font_px": 11,  # Settings > Autotrader rows table
     "legend_font_px": 10,   # series names in the legend above stacked charts
     # Line thickness in px on line charts. Halves allowed, so these are the
     # only settings that are not whole numbers (see _clamp_setting).
@@ -1113,6 +1118,7 @@ KPI_SETTING_LIMITS = {
     "period_font_px": (8, 24),
     "toolbar_font_px": (10, 22),
     "at_font_px": (9, 22),
+    "at_table_font_px": (8, 16),
     "legend_font_px": (8, 24),
     "main_line_px": (0.5, 8),
     "n1_line_px": (0.5, 8),
@@ -1847,11 +1853,20 @@ def _validate_stacked_row(row: dict) -> str | None:
     if len(series) > _KPI_SERIES_MAX:
         return f"At most {_KPI_SERIES_MAX} series in a chart"
     for s in series:
-        if not isinstance(s, dict) or set(s) - {"source", "metric", "label", "colour"}:
+        if not isinstance(s, dict) or set(s) - {"source", "metric", "label", "colour", "multiply_by"}:
             return "bad series"
         error = _validate_layout_metric(s.get("source", "snowflake"), s.get("metric"))
         if error:
             return error
+        # Multiply By on a series: each day of its metric times the same day
+        # of a second metric (e.g. PPC clicks x cost per PPC click).
+        multiply_by = s.get("multiply_by")
+        if multiply_by is not None:
+            if not isinstance(multiply_by, dict) or set(multiply_by) - {"source", "metric"}:
+                return "bad series multiply_by"
+            error = _validate_layout_metric(multiply_by.get("source", "snowflake"), multiply_by.get("metric"))
+            if error:
+                return error
         label = s.get("label", "")
         if not isinstance(label, str) or len(label) > 60:
             return "Series names must be 60 characters or fewer"
@@ -2076,6 +2091,13 @@ def _validate_layout(layout: dict, sections: list) -> str | None:
         decimals = row.get("decimals", 0)
         if not isinstance(decimals, int) or not (0 <= decimals <= 3):
             return f"bad decimals: {decimals}"
+        # Hover box format, set apart from the labels: "" = the figure in full.
+        if row.get("hover_fmt", "") not in ("", "num", "pct", "pct100", "k", "km", "gbp", "gbpkm"):
+            return f"bad hover_fmt: {row.get('hover_fmt')}"
+        hover_decimals = row.get("hover_decimals")
+        if hover_decimals is not None and (isinstance(hover_decimals, bool) or not isinstance(hover_decimals, int)
+                                           or not 0 <= hover_decimals <= 4):
+            return f"bad hover_decimals: {hover_decimals}"
         if row.get("target_mode", "snowflake") not in KPI_TARGET_MODES + ("inputs", "calc"):
             return f"bad target mode: {row.get('target_mode')}"
         # Vertical axis minimum and maximum per period (m/w/d). Missing or null
@@ -2469,39 +2491,77 @@ def kpi_at_allowance(request: Request, user: str = Depends(require_page_api('kpi
 
 
 # ── Autotrader allowance and costs (Settings > Autotrader) ───────────────────
-# Dated rows typed in Settings, each applying from its date until the next:
+# The dated rows in Settings are what the charts read. Each applies from its
+# From date until its To date, or, with no To, until the next row's From.
+# A day no row covers has no figures (unknown, not zero). Rows come from:
+#   source 'invoice'  Apply Invoices To Rows: one row for every change in the
+#                     imported monthly PDFs (see utils/at_invoices.py), with
+#                     From and To. What was actually charged.
+#   source 'email'    an adjustment email, read or typed in. Estimated: used
+#                     after the last invoice, until that month's invoice is
+#                     imported and applied (Apply replaces email rows for the
+#                     days the invoices cover).
+# Row fields. Costs on email rows are per calendar month, as in Autotrader's
+# emails. Costs on invoice rows are the invoiced cost for the row's own days
+# (From to To, which invoice rows always have):
 #   from           YYYY-MM-DD
-#   base           base advert slots (charged)
-#   flex_pct       flex % of base (free); flex slots = base x flex %, rounded
-#   total          optional: total allowance including tactical, typed for past
-#                  periods; when blank the Autotrader API figure is used
-#   slot_cost      cost per advert slot per month
+#   to             YYYY-MM-DD, or None to run until the next row
+#   base           contracted advert slots
+#   flex_pct       Bonus Advert Allowance as a % of base; flex slots = base x
+#                  flex %, rounded to a whole slot. Free
+#   tactical       tactical advert slots
+#   me_cost        Market Extension package (£)
+#   finance_cost   Finance Calculator (£)
+#   tactical_cost  tactical adverts (£)
+#   connect_cost   Connect Retail Strategy (£)
+#   source         'invoice' or 'email'
+# An email row's month cost becomes a day's cost by dividing by the days in
+# that month; an invoice row's cost by dividing by the row's days. Nothing is
+# rounded in storage or in the chart figures.
 # The cost per PPC advert view changes separately, so it has its own dated
 # list under 'at_ppc_cost_periods': {from, ppc_view_cost}.
-# The API total is saved once a day under 'at_allowance_history' whenever the
-# page asks for it (/kpi/at-allowance), so tactical slots build a history.
-# Tactical = total - (base + flex). Charged = base + tactical (flex is free).
+# The API total allowance is still saved once a day under
+# 'at_allowance_history' (/kpi/at-allowance), shown in Settings as a check.
 _AT_PERIODS_KEY = "at_allowance_periods"
 _AT_PPC_KEY = "at_ppc_cost_periods"
 _AT_HISTORY_KEY = "at_allowance_history"
-_AT_PERIOD_FIELDS = ("from", "base", "flex_pct", "total", "slot_cost")
+_AT_PERIOD_FIELDS = ("from", "base", "flex_pct", "tactical", "me_cost", "finance_cost",
+                     "tactical_cost", "connect_cost", "to", "source")
+_AT_ROW_SOURCES = ("invoice", "email")
 _AT_PPC_FIELDS = ("from", "ppc_view_cost")
 
 # The chart metrics worked out from those settings: name -> description.
-# Fixed in code because each is a calculation, not a column.
+# Fixed in code because each is a calculation, not a column. PPC is never in
+# the costs here: it has its own metric (at_cost_per_ppc_click).
 _AT_METRICS = {
-    "at_base_slots": "Base allowance (advert slots), from Settings > Autotrader",
-    "at_flex_slots": "Flex slots: base allowance x flex %, rounded. Free",
+    "at_base_slots": "Base (contracted) advert slots, from the Settings > Autotrader Costs rows (invoices, then adjustment emails)",
+    "at_flex_slots": "Flex slots (Bonus Advert Allowance): base x 10%, rounded to a whole slot. Free",
     "at_allowance_incl_flex": "Allowance including flex: base + flex",
-    "at_total_allowance": "Total allowance including tactical: from the Autotrader API, or typed in Settings for past periods",
-    "at_tactical_slots": "Tactical slots: total allowance including tactical - allowance including flex",
+    "at_tactical_slots": "Tactical advert slots",
+    "at_total_allowance": "Total slots: base + flex + tactical",
     "at_charged_slots": "Charged slots: base + tactical (flex is free)",
-    "at_cost_per_slot_month": "Cost per advert slot per month",
-    "at_cost_per_slot_day": ("Cost per advert slot per day: the monthly cost / the days in that month. "
-                             "Charged slots multiplied by this, as a Sum chart, gives the slot cost"),
-    "at_cost_per_ppc_view": ("Cost per PPC advert view. PPC advert views multiplied by this, "
-                             "as a Sum chart, gives the PPC cost"),
+    "at_cost_base": "Market Extension package cost per day (£). Sum for a week or month",
+    "at_cost_finance": "Finance Calculator cost per day (£). Adds cost, not slots. Sum for a week or month",
+    "at_cost_tactical": "Tactical adverts cost per day (£). Sum for a week or month",
+    "at_cost_connect": "Connect Retail Strategy cost per day (£). Charged by the day, not by slot",
+    "at_cost_slots": "The same figure as at_cost_total (Connect is now shared over the slots too)",
+    "at_cost_total": ("Total Autotrader cost per day (£): Market Extension + Finance Calculator + tactical + "
+                      "Connect. Excludes PPC"),
+    "at_cost_per_slot_day": ("Cost per slot per day: total cost (Connect included) / total slots (flex included). "
+                             "For a week or month, use at_cost_total (Sum) divided by at_total_allowance (Sum) "
+                             "instead of averaging this"),
+    "at_cost_per_slot_month": "Cost per slot per day x the days in that month",
+    "at_estimated": "1 on days costed from an adjustment email row (no invoice yet), 0 on days from an invoice row",
+    "at_cost_per_ppc_click": ("Cost per PPC click (£) for each date, from the PPC Cost rows: each invoiced "
+                              "month's PPC cost / its clicks, then the latest price after the last invoice"),
+    "at_cost_per_ppc_view": ("The same figure as at_cost_per_ppc_click, under its old name (kept so charts "
+                             "made with it still work)"),
 }
+# Still work in saved charts, but not offered in the metric lists.
+_AT_HIDDEN_METRICS = {"at_cost_per_ppc_view", "at_cost_slots", "at_cost_connect"}
+# Costs (and the estimated-day count) add up over a week or month; the rest are averages.
+_AT_SUM_METRICS = {"at_cost_base", "at_cost_finance", "at_cost_tactical", "at_cost_connect",
+                   "at_cost_slots", "at_cost_total", "at_estimated"}
 
 
 def _record_at_allowance(capacity: int) -> None:
@@ -2516,9 +2576,9 @@ def _record_at_allowance(capacity: int) -> None:
         logger.warning("Saving the Autotrader allowance history failed: %s", e)
 
 
-def _validate_at_rows(rows, fields: tuple, optional: tuple, what: str) -> str | None:
-    if not isinstance(rows, list) or len(rows) > 200:
-        return f"{what}: at most 200 rows"
+def _validate_at_rows(rows, fields: tuple, optional: tuple, what: str, max_rows: int = 200) -> str | None:
+    if not isinstance(rows, list) or len(rows) > max_rows:
+        return f"{what}: at most {max_rows} rows"
     seen = set()
     for p in rows:
         if not isinstance(p, dict) or set(p) - set(fields):
@@ -2532,6 +2592,19 @@ def _validate_at_rows(rows, fields: tuple, optional: tuple, what: str) -> str | 
         seen.add(p["from"])
         for field in fields[1:]:
             v = p.get(field)
+            if field == "to":
+                if v is None:
+                    continue
+                try:
+                    if datetime.date.fromisoformat(v) < datetime.date.fromisoformat(p["from"]):
+                        return f"{what} {p['from']}: the To date is before the From date"
+                except (TypeError, ValueError):
+                    return f"{what} {p['from']}: bad To date"
+                continue
+            if field == "source":
+                if v not in _AT_ROW_SOURCES:
+                    return f"{what} {p['from']}: bad source"
+                continue
             if v is None and field in optional:
                 continue
             if isinstance(v, bool) or not isinstance(v, (int, float)) or v < 0:
@@ -2549,10 +2622,32 @@ def _at_ppc_periods(allowance_rows: list) -> list:
             for p in allowance_rows if p.get("ppc_view_cost") is not None]
 
 
+def _at_row_from_old(p: dict) -> dict:
+    """A row saved before the costs were split by product: {from, base,
+    flex_pct, total, slot_cost}, where base and tactical slots were each
+    charged slot_cost a month. Turned into the same charge in the new fields,
+    so the old figures still apply until the row is replaced."""
+    base = p.get("base") or 0
+    incl_flex = base + at_invoices.flex_slots(base, p.get("flex_pct") or 0)
+    tactical = max(0, p["total"] - incl_flex) if p.get("total") is not None else 0
+    slot_cost = p.get("slot_cost") or 0
+    return {"from": p["from"], "base": base, "flex_pct": p.get("flex_pct") or 0, "tactical": tactical,
+            "me_cost": slot_cost * base, "finance_cost": 0,
+            "tactical_cost": slot_cost * tactical, "connect_cost": 0}
+
+
 def _at_allowance_periods() -> list:
-    """The allowance rows, without the PPC cost they used to carry."""
-    return [{k: v for k, v in p.items() if k in _AT_PERIOD_FIELDS}
-            for p in (_read_kpi_layout_value(_AT_PERIODS_KEY) or [])]
+    """The Settings rows, sorted by date, without the PPC cost they used to
+    carry. Rows saved before To and Source existed run until the next row
+    and count as email rows."""
+    rows = []
+    for p in (_read_kpi_layout_value(_AT_PERIODS_KEY) or []):
+        if "me_cost" not in p and "slot_cost" in p:
+            p = _at_row_from_old(p)
+        row = {k: p.get(k) for k in _AT_PERIOD_FIELDS}
+        row["source"] = row["source"] or "email"
+        rows.append(row)
+    return sorted(rows, key=lambda p: p["from"])
 
 
 @router.post("/kpi/at-periods")
@@ -2563,8 +2658,13 @@ def kpi_at_periods_save(request: Request, payload: dict, user: str = Depends(req
         return {"status": "error", "message": "Only the admin can change the Autotrader settings"}
     periods = (payload or {}).get("periods")
     ppc = (payload or {}).get("ppc_periods")
-    err = (_validate_at_rows(periods, _AT_PERIOD_FIELDS, ("total",), "Allowance")
+    # Up to 1,000: Apply Invoices adds a row for every change, several a month.
+    err = (_validate_at_rows(periods, _AT_PERIOD_FIELDS, (), "Autotrader row", max_rows=1000)
            or _validate_at_rows(ppc, _AT_PPC_FIELDS, (), "PPC Cost"))
+    if not err:
+        no_to = next((p for p in periods if p.get("source") == "invoice" and not p.get("to")), None)
+        if no_to:
+            err = f"Autotrader row {no_to['from']}: invoice rows need a To date (their costs are for From to To)"
     if err:
         return {"status": "error", "message": err}
     periods = sorted(periods, key=lambda p: p["from"])
@@ -2577,54 +2677,173 @@ def kpi_at_periods_save(request: Request, payload: dict, user: str = Depends(req
     return {"status": "ok", "periods": periods, "ppc_periods": ppc}
 
 
+# ── Autotrader invoices (Settings > Autotrader > Invoices) ───────────────────
+# The page sends each PDF as base64 text in JSON, as the Supplier Stock
+# Evaluator upload does: a raw PDF body through API Gateway arrives broken
+# unless the API is set up for binary types. Invoices are about 45 KB.
+_AT_INVOICE_MAX_BYTES = 5 * 1024 * 1024
+
+
+def _at_invoice_summary() -> dict:
+    with get_prod_pricer_connection() as conn:
+        invoices = at_invoices.list_invoices(conn)
+        cover = at_invoices.coverage(at_invoices.read_lines(conn))
+    return {"status": "ok", "invoices": invoices, "coverage": cover}
+
+
+@router.get("/kpi/at-invoices")
+def kpi_at_invoices(request: Request, user: str = Depends(require_page_api('kpi'))):
+    """The imported invoices, oldest first, and the days they cover."""
+    try:
+        return _at_invoice_summary()
+    except Exception as e:
+        logger.error(f"Autotrader invoice list failed: {e}")
+        return {"status": "error", "message": str(e)}
+
+
+@router.get("/kpi/at-invoices/rows")
+def kpi_at_invoice_rows(request: Request, user: str = Depends(require_page_api('kpi'))):
+    """The Settings rows the imported invoices give: one per change, with
+    From and To (see at_invoices.rows_from_lines). Nothing is saved here: the
+    page puts them in its rows, then Save saves them."""
+    try:
+        with get_prod_pricer_connection() as conn:
+            lines = at_invoices.read_lines(conn)
+            ppc_rows, ppc_missing = at_invoices.ppc_rows(conn)
+        return {"status": "ok", "rows": at_invoices.rows_from_lines(lines),
+                "coverage": at_invoices.coverage(lines),
+                "ppc_rows": ppc_rows, "ppc_missing": ppc_missing}
+    except Exception as e:
+        logger.error(f"Autotrader invoice rows failed: {e}")
+        return {"status": "error", "message": str(e)}
+
+
+@router.post("/kpi/at-invoices/import")
+def kpi_at_invoice_import(request: Request, payload: dict, user: str = Depends(require_page_api('kpi'))):
+    """Import one invoice PDF: {filename, data (base64)}. Admin only. The PDF
+    is kept in S3; its lines replace any already stored for that invoice."""
+    import base64
+    import binascii
+    if not is_admin(user):
+        return {"status": "error", "message": "Only the admin can import invoices"}
+    filename = str((payload or {}).get("filename") or "")[:200]
+    try:
+        pdf = base64.b64decode(str((payload or {}).get("data") or ""), validate=True)
+    except (binascii.Error, ValueError):
+        return {"status": "error", "message": f"{filename}: the file could not be read"}
+    if not pdf or len(pdf) > _AT_INVOICE_MAX_BYTES:
+        return {"status": "error", "message": f"{filename}: empty, or larger than 5 MB"}
+    try:
+        invoice = at_invoices.parse_invoice(pdf)
+    except Exception as e:
+        # Anything raised here would otherwise reach the app's HTML error
+        # page, which the Settings popup cannot read.
+        if not isinstance(e, ValueError):
+            logger.error(f"Autotrader invoice read failed for {filename}: {e}")
+        return {"status": "error", "message": f"{filename}: {e}"}
+
+    # Keep the original PDF. Not saving it is reported, but does not stop the
+    # import: the figures are what the charts need.
+    s3_key = f"applications/pricing/uk-vehicle-list-evaluator/{_S3_ENV}/autotrader_invoices/{invoice['invoice_number']}.pdf"
+    s3_error = None
+    try:
+        import boto3
+        boto3.client("s3", region_name=s3_bucket_region).put_object(
+            Bucket=s3_bucketname, Key=s3_key, Body=pdf, ContentType="application/pdf")
+    except Exception as e:
+        logger.warning(f"Autotrader invoice PDF not saved to S3: {e}")
+        s3_key, s3_error = None, str(e)
+    try:
+        with get_prod_pricer_connection() as conn:
+            replaced = at_invoices.save_invoice(conn, invoice, s3_key, user, _uk_now())
+    except ValueError as e:
+        return {"status": "error", "message": f"{filename}: {e}"}
+    except Exception as e:
+        logger.error(f"Autotrader invoice save failed: {e}")
+        return {"status": "error", "message": f"{filename}: {e}"}
+    lines_total = sum(l["charge"] for l in invoice["lines"])
+    return {"status": "ok", "invoice_number": invoice["invoice_number"], "replaced": replaced,
+            "lines": len(invoice["lines"]), "lines_total": float(lines_total), "s3_error": s3_error,
+            "ppc": float(invoice["ppc"]), "ppc_clicks": invoice["ppc_clicks"]}
+
+
+@router.post("/kpi/at-invoices/delete")
+def kpi_at_invoice_delete(request: Request, payload: dict, user: str = Depends(require_page_api('kpi'))):
+    """Delete one imported invoice and its lines: {invoice_number}. Admin only.
+    The PDF stays in S3."""
+    if not is_admin(user):
+        return {"status": "error", "message": "Only the admin can delete invoices"}
+    number = str((payload or {}).get("invoice_number") or "")
+    try:
+        with get_prod_pricer_connection() as conn:
+            if not at_invoices.delete_invoice(conn, number):
+                return {"status": "error", "message": f"Invoice {number} not found"}
+        return _at_invoice_summary()
+    except Exception as e:
+        logger.error(f"Autotrader invoice delete failed: {e}")
+        return {"status": "error", "message": str(e)}
+
+
 def _at_setting_values():
-    """A function (date, metric) -> value for the _AT_METRICS, from the saved
-    rows and the API history. Reads both once, so build it once per load."""
+    """A function (date, metric) -> value for the _AT_METRICS, from the
+    Settings rows (invoice rows and adjustment email rows, see the comment
+    above _AT_PERIODS_KEY). Reads them once, so build it once per load."""
     import bisect
     raw = _read_kpi_layout_value(_AT_PERIODS_KEY) or []
-    periods = sorted(raw, key=lambda p: p["from"])
+    periods = _at_allowance_periods()
     starts = [p["from"] for p in periods]
     ppc = sorted(_at_ppc_periods(raw), key=lambda p: p["from"])
     ppc_starts = [p["from"] for p in ppc]
-    history = _read_kpi_layout_value(_AT_HISTORY_KEY) or {}
-    hist_dates = sorted(history)
 
-    def value(d: datetime.date, metric: str):
+    def day_figures(d: datetime.date):
+        """{base, flex, tactical, cost_base, cost_finance, cost_tactical,
+        cost_connect, estimated} for one day, or None when no row covers it."""
         iso = d.isoformat()
-        if metric == "at_cost_per_ppc_view":
-            k = bisect.bisect_right(ppc_starts, iso) - 1
-            return ppc[k]["ppc_view_cost"] if k >= 0 else None
         i = bisect.bisect_right(starts, iso) - 1
         if i < 0:
-            return None      # before the first row: nothing set
+            return None      # before the first row
         p = periods[i]
-        base = p["base"]
-        flex = int(base * p["flex_pct"] / 100 + 0.5)   # nearest whole slot
-        incl_flex = base + flex
-        total = p.get("total")
-        if total is None:
-            # The latest API figure saved on or before this day. None before
-            # the first one, which counts as no tactical slots.
-            j = bisect.bisect_right(hist_dates, iso) - 1
-            total = history[hist_dates[j]] if j >= 0 else incl_flex
-        tactical = max(0, total - incl_flex)
-        if metric == "at_base_slots":
-            return base
-        if metric == "at_flex_slots":
-            return flex
-        if metric == "at_allowance_incl_flex":
-            return incl_flex
-        if metric == "at_total_allowance":
-            return total
-        if metric == "at_tactical_slots":
-            return tactical
-        if metric == "at_charged_slots":
-            return base + tactical
-        if metric == "at_cost_per_slot_month":
-            return p["slot_cost"]
-        if metric == "at_cost_per_slot_day":
-            return p["slot_cost"] / calendar.monthrange(d.year, d.month)[1]
-        return None
+        if p.get("to") and iso > p["to"]:
+            return None      # after this row's To and before the next row: unknown, not zero
+        if p["source"] == "invoice" and p.get("to"):
+            days = (datetime.date.fromisoformat(p["to"]) - datetime.date.fromisoformat(p["from"])).days + 1
+        else:
+            days = calendar.monthrange(d.year, d.month)[1]
+        return {"base": p["base"], "flex": at_invoices.flex_slots(p["base"], p["flex_pct"]),
+                "tactical": p["tactical"], "cost_base": p["me_cost"] / days,
+                "cost_finance": p["finance_cost"] / days, "cost_tactical": p["tactical_cost"] / days,
+                "cost_connect": p["connect_cost"] / days,
+                "estimated": 0 if p["source"] == "invoice" else 1}
+
+    def value(d: datetime.date, metric: str):
+        if metric in ("at_cost_per_ppc_click", "at_cost_per_ppc_view"):
+            k = bisect.bisect_right(ppc_starts, d.isoformat()) - 1
+            return ppc[k]["ppc_view_cost"] if k >= 0 else None
+        f = day_figures(d)
+        if f is None:
+            return None
+        total_slots = f["base"] + f["flex"] + f["tactical"]
+        # Connect is shared over the slots like every other product.
+        cost_slots = f["cost_base"] + f["cost_finance"] + f["cost_tactical"] + f["cost_connect"]
+        per_slot_day = cost_slots / total_slots if total_slots else None
+        return {
+            "at_base_slots": f["base"],
+            "at_flex_slots": f["flex"],
+            "at_allowance_incl_flex": f["base"] + f["flex"],
+            "at_tactical_slots": f["tactical"],
+            "at_total_allowance": total_slots,
+            "at_charged_slots": f["base"] + f["tactical"],
+            "at_cost_base": f["cost_base"],
+            "at_cost_finance": f["cost_finance"],
+            "at_cost_tactical": f["cost_tactical"],
+            "at_cost_connect": f["cost_connect"],
+            "at_cost_slots": cost_slots,
+            "at_cost_total": cost_slots,
+            "at_cost_per_slot_day": per_slot_day,
+            "at_cost_per_slot_month": (per_slot_day * calendar.monthrange(d.year, d.month)[1]
+                                       if per_slot_day is not None else None),
+            "at_estimated": f["estimated"],
+        }.get(metric)
 
     return value
 

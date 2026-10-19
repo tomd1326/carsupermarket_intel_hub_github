@@ -175,6 +175,9 @@ SETTINGS_DEFAULTS = {
     'presence_max_circles':             5,
     'presence_border_width':            2,
     'presence_gap':                     4,
+    # Outer ring in each person's own colour, as on Microsoft 365 (0 = no ring).
+    'presence_ring_width':              1,
+    'presence_ring_gap':                1,
     'presence_border_colour':           '#ffffff',
     'presence_text_colour':             '#ffffff',
     'presence_more_colour':             '#64748b',
@@ -538,12 +541,14 @@ def _ensure_page_presence_table(conn) -> None:
 
 
 def touch_page_presence(conn, tab_id: str, seq: int, session_id: str, username: str, environment: str,
-                        page: str, drop_off_seconds: int, only_user: str | None = None) -> list:
+                        page: str, drop_off_seconds: int, only_user: str | None = None,
+                        all_pages: bool = False) -> list:
     """Record that this tab is on `page`, then return who else is on it.
 
-    Returns [(username, first_name, last_name)], one entry per person however
-    many tabs they have open, seen within drop_off_seconds. only_user limits
-    the list to that one person.
+    Returns [(username, first_name, last_name, pages)], one entry per person
+    however many tabs they have open, seen within drop_off_seconds. pages is
+    every page that person has open. only_user limits the list to that one
+    person. all_pages lists people on any page, not just this one.
 
     seq goes up by one with every message a tab sends. A message only counts
     if its seq is higher than the last one stored, so a heartbeat that arrives
@@ -571,22 +576,23 @@ def touch_page_presence(conn, tab_id: str, seq: int, session_id: str, username: 
         cur.execute("DELETE FROM page_presence WHERE last_seen_at < NOW() - INTERVAL '1 hour'")
         cur.execute(
             """
-            SELECT p.username, MAX(u.first_name), MAX(u.last_name)
+            SELECT p.username, MAX(u.first_name), MAX(u.last_name), ARRAY_AGG(DISTINCT p.page)
             FROM page_presence p
             LEFT JOIN users u ON u.username = p.username
             WHERE p.environment = %s
-              AND p.page = %s
+              AND (%s OR p.page = %s)
               AND NOT p.left_tab
               AND p.last_seen_at >= NOW() - (INTERVAL '1 second' * %s)
               AND (%s IS NULL OR p.username = %s)
             GROUP BY p.username
             ORDER BY p.username
             """,
-            (environment, page, drop_off_seconds, only_user, only_user),
+            (environment, all_pages, page, drop_off_seconds, only_user, only_user),
         )
         rows = [
-            (u, ADMIN_DETAILS[u]['first_name'], ADMIN_DETAILS[u]['last_name']) if u in ADMIN_DETAILS else (u, f, l)
-            for u, f, l in cur.fetchall()
+            (u, ADMIN_DETAILS[u]['first_name'], ADMIN_DETAILS[u]['last_name'], pages) if u in ADMIN_DETAILS
+            else (u, f, l, pages)
+            for u, f, l, pages in cur.fetchall()
         ]
     conn.commit()
     return rows

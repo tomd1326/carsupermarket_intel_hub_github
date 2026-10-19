@@ -41,7 +41,10 @@
         el.className = 'live-user' + (extraClass ? ' ' + extraClass : '');
         el.textContent = text;
         el.title = title;
-        if (colour) el.style.background = colour;
+        if (colour) {
+            el.style.background = colour;
+            el.style.setProperty('--live-user-ring-colour', colour);   // outer ring in the same colour
+        }
         return el;
     }
 
@@ -57,6 +60,8 @@
         s.setProperty('--live-user-border-colour', c.presence_border_colour);
         s.setProperty('--live-user-text-colour', c.presence_text_colour);
         s.setProperty('--live-user-more-colour', c.presence_more_colour);
+        s.setProperty('--live-user-ring-width', c.presence_ring_width + 'px');
+        s.setProperty('--live-user-ring-gap', c.presence_ring_gap + 'px');
     }
 
     // The viewer's own circle is always shown and not counted: Max Circles
@@ -66,7 +71,8 @@
         const own = users.filter(u => u.username === me);
         const others = users.filter(u => u.username !== me);
         const shown = others.length > maxCircles ? others.slice(0, maxCircles - 1) : others;
-        const here = u => u.name + ' is here';
+        // On Home the server sends the pages each person has open.
+        const here = u => u.pages ? u.name + ' - ' + u.pages.join(', ') : u.name + ' is here';
         own.concat(shown).forEach(u => box.appendChild(circle(u.initials, here(u), colourFor(u.username))));
         const rest = others.slice(shown.length);
         if (rest.length) {

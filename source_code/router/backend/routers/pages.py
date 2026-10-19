@@ -79,7 +79,6 @@ def home(request: Request, user: str = Depends(get_current_user)):
     return templates.TemplateResponse("home.html", {
         "request": request, "user": user, "BASE_URL": BASE_URL,
         "pages": [p for p in PAGES if p.key in allowed],
-        "is_admin": is_admin(user),
     })
 
 

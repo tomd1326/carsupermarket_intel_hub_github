@@ -171,6 +171,32 @@
         .at-period-table input[type="date"] { width: 140px; }
         .at-period-table .at-worked { color: #475569; text-align: right; }
         .at-period-table .btn { padding: 3px 9px; font-size: 0.78rem; }
+        .at-period-table td.num, .at-period-table th.num { text-align: right; }
+        .at-period-table input[type="number"] { text-align: right; }
+        /* Settings > Autotrader rows: fills the pane exactly (fixed column
+           widths, boxes as wide as their column) so it never scrolls sideways.
+           Text size from Settings > Appearance ("Autotrader Rows Text Size"). */
+        .at-rows-table { width: 100%; table-layout: fixed; font-size: var(--kpi-at-table-font, 11px); margin-bottom: 6px; }
+        .at-rows-table th { max-width: none; padding: 3px 3px; font-size: inherit; line-height: 1.2; }
+        .at-rows-table td { padding: 2px 3px; overflow: hidden; }
+        .at-rows-table input { width: 100%; box-sizing: border-box; padding: 2px 3px; font-size: inherit; }
+        .at-rows-table input[type="date"] { width: 100%; }
+        .at-rows-table input[type="number"] { -moz-appearance: textfield; }
+        .at-rows-table input[type="number"]::-webkit-outer-spin-button,
+        .at-rows-table input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+        .at-rows-table .btn { padding: 2px 6px; font-size: inherit; }
+        .at-rows-table td.at-cpspd, .at-rows-table th.at-cpspd { font-weight: 700; color: #0d3d6e; text-align: right; }
+        .at-rows-table tr.at-continued td { color: #64748b; font-style: italic; }
+        .at-rows-table tr.at-month-total td { font-weight: 700; background: #eef2f7; border-top: 1px solid #cbd5e1; border-bottom: 2px solid #94a3b8; }
+        .at-rows-table tr.at-month-total td.at-cpspd { color: #0d3d6e; }
+        .at-month-toggle { cursor: pointer; }
+        .at-rows-table tr.at-month-bar td { border-bottom: 1px solid #cbd5e1; border-top: 2px solid #94a3b8; }
+        .at-month-toggle i { width: 1em; }
+        .at-messages { font-size: 0.8rem; margin: 0 0 6px; }
+        .at-messages div { padding: 1px 0; }
+        .at-messages .at-ok { color: #15803d; }
+        .at-messages .at-warn { color: #b45309; }
+        .at-messages .at-err { color: #b91c1c; }
         .section-add-btn { padding: 4px 12px; font-size: 0.8rem; margin: 2px 0 8px; }
         .target-dates-overlay { z-index: 210; }
         .target-paste {
@@ -307,12 +333,17 @@
         }
         .veh-filter .btn { padding: 3px 9px; font-size: 0.78rem; }
         /* Stacked chart series rows: metric, name, colour, order, remove. */
-        .series-row { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr) auto auto auto auto auto; gap: 5px; margin-bottom: 6px; align-items: center; }
+        /* Fixed widths for the colour and button columns: each row is its own
+           grid, so "auto" columns sized to their content would make the
+           heading row (empty there) split the space differently. */
+        .series-row { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(0, 1.2fr) minmax(0, 1fr) 34px 34px 34px 34px 34px; gap: 5px; margin-bottom: 6px; align-items: center; }
         .series-row select, .series-row input[type="text"] {
             width: 100%; min-width: 0; padding: 5px 8px; border: 1px solid #cbd5e1; border-radius: 6px; background: #fff; font-size: 0.82rem;
         }
         .series-row input[type="color"] { width: 34px; height: 30px; padding: 1px 2px; border: 1px solid #cbd5e1; border-radius: 6px; background: #fff; cursor: pointer; }
-        .series-row .btn { padding: 3px 8px; font-size: 0.76rem; }
+        .series-row .btn { width: 100%; padding: 3px 0; font-size: 0.76rem; }
+        .series-row select.series-multiplied { border-color: #2a78d6; background: #eef5fd; }
+        .series-row.series-head { margin-bottom: 2px; font-size: 0.76rem; font-weight: 600; color: #475569; }
         .series-row .series-own { outline: 2px solid #0f172a; outline-offset: 1px; }
         /* Settings > Appearance colour themes: name, swatches, add / remove. */
         .theme-row { display: flex; align-items: center; gap: 8px; padding: 6px 0; border-bottom: 1px solid #f1f5f9; flex-wrap: wrap; }
@@ -331,7 +362,12 @@
         .theme-row .theme-uses { font-size: 0.76rem; color: #64748b; white-space: nowrap; }
         /* Wide enough for the longest column names (about 45 characters) with
            the heading, format and order controls beside them. */
-        .modal-box.settings-modal { width: 1500px; max-width: 96vw; max-height: 92vh; overflow-y: auto; }
+        /* The overlay puts boxes 10vh from the top (charts.css). Settings sits
+           1cm higher than that, and its height is capped so its bottom edge
+           stays at least 1cm above the bottom of the window:
+           (10vh - 1cm) + 90vh = 100vh - 1cm. */
+        .modal-overlay#settingsModal { padding-top: calc(10vh - 1cm); }
+        .modal-box.settings-modal { width: 1500px; max-width: 96vw; max-height: 90vh; overflow-y: auto; }
         /* minmax(0, ...): a plain 1fr column cannot be narrower than its longest
            unbroken column name, which pushed the grid past the box edge and
            hid the Add buttons. With 0 as the minimum the columns always fit the
@@ -455,7 +491,7 @@
     </div>
 
     <div class="page-content page-is-loading" id="pageContent">
-        <div class="page-loading"><i class="fas fa-sync-alt spin"></i> Loading<span class="loading-dots"></span></div>
+        <div class="page-loading"><i class="fas fa-sync-alt spin"></i> <span>Loading<span class="loading-dots"></span></span></div>
         <div id="sectionTabs" class="kpi-tabs" role="tablist"></div>
         <div id="sectionsContainer"></div>
     </div>
@@ -708,6 +744,32 @@
                 </div>
             </div>
             <div class="modal-grid">
+                <div class="modal-field">
+                    <label for="hoverFmtSelect">Hover Format</label>
+                    <select id="hoverFmtSelect" title="The box shown when hovering over a point, set apart from the labels">
+                        <option value="">Full Figure</option>
+                        <option value="num">Number</option>
+                        <option value="pct">Percent (%) - value is already a %</option>
+                        <option value="pct100">Percent (%) - from a decimal, 1.02 = 102%</option>
+                        <option value="k">Thousands (k)</option>
+                        <option value="km">Thousands (k) and millions (M)</option>
+                        <option value="gbp">Pounds (£)</option>
+                        <option value="gbpkm">Pounds (£) in thousands (k) and millions (M)</option>
+                    </select>
+                </div>
+                <div class="modal-field">
+                    <label for="hoverDecimalsSelect">Hover Decimals</label>
+                    <select id="hoverDecimalsSelect">
+                        <option value="">As Needed (Up To 4)</option>
+                        <option value="0">0</option>
+                        <option value="1">1</option>
+                        <option value="2">2</option>
+                        <option value="3">3</option>
+                        <option value="4">4</option>
+                    </select>
+                </div>
+            </div>
+            <div class="modal-grid">
                 <div class="modal-field stacked-only">
                     <label for="themeSelect">Colour Theme</label>
                     <select id="themeSelect" onchange="renderSeriesList()"></select>
@@ -905,7 +967,7 @@
                 <button type="button" data-tab="setGroupNames" onclick="showSettingsTab(this.dataset.tab)">Column Names</button>
                 <button type="button" data-tab="setGroupTargets" onclick="showSettingsTab(this.dataset.tab)">Targets</button>
                 <button type="button" data-tab="setGroupVehicles" onclick="showSettingsTab(this.dataset.tab)">View Vehicles</button>
-                <button type="button" data-tab="setGroupAutotrader" onclick="showSettingsTab(this.dataset.tab)">Autotrader</button>
+                <button type="button" data-tab="setGroupAutotrader" onclick="showSettingsTab(this.dataset.tab)">Autotrader Costs</button>
                 <button type="button" data-tab="setGroupAppearance" onclick="showSettingsTab(this.dataset.tab)">Appearance</button>
             </nav>
             <div class="settings-panes">
@@ -920,43 +982,98 @@
                 Sections with no charts are hidden on the page.
             </div>
             </div>
-            <!-- Autotrader: dated allowance and cost rows, used by the Autotrader
-                 Settings metrics in Edit Chart. -->
+            <!-- Autotrader: imported invoices, adjustment email rows and PPC
+                 cost rows, used by the Autotrader Costs metrics in Edit Chart. -->
             <div class="settings-pane" id="setGroupAutotrader">
-            <div class="modal-section-title">Allowance</div>
+            <div class="modal-section-title at-month-toggle" data-at-box="atInvoiceListBox" onclick="toggleAtBox(this)" title="Collapse or expand">
+                <i class="fas fa-chevron-right"></i> Invoices</div>
+            <label class="btn btn-edit section-add-btn">
+                <i class="fas fa-file-upload"></i> Import Invoice PDFs
+                <input type="file" id="atInvoiceFile" accept="application/pdf,.pdf" multiple hidden onchange="importAtInvoices(this)">
+            </label>
+            <div id="atInvoiceMessages" class="at-messages"></div>
+            <div id="atInvoiceListBox">
+            <button type="button" class="btn btn-edit section-add-btn" onclick="downloadAtInvoicesCsv()">
+                <i class="fas fa-file-csv"></i> Download CSV
+            </button>
             <div class="at-period-scroll">
             <table class="at-period-table">
                 <thead><tr>
-                    <th>From</th><th>Base Allowance</th><th>Flex %</th><th>Allowance Including Flex</th>
-                    <th>Total Allowance Including Tactical</th><th>Tactical Allowance</th>
-                    <th>Cost Per Advert Slot Per Month (£)</th><th></th>
+                    <th>Invoice</th><th>Issued</th><th>Covers</th><th class="num">Cost Excluding PPC (£)</th>
+                    <th class="num">PPC (£)</th><th class="num">PPC Clicks</th><th class="num">Cost Per PPC Click (£)</th><th>Imported</th><th></th>
+                </tr></thead>
+                <tbody id="atInvoiceList"></tbody>
+            </table>
+            </div>
+            </div>
+            <div class="modal-hint" id="atInvoiceCoverage"></div>
+            <button type="button" class="btn btn-edit section-add-btn" onclick="applyAtInvoiceRows()">
+                <i class="fas fa-file-import"></i> Apply Invoices To Rows
+            </button>
+            <div class="modal-section-title" style="margin-top:16px;">Rows (Invoices And Adjustment Emails)</div>
+            <textarea id="atEmailPaste" class="target-paste" rows="5"
+                      placeholder="Paste an Autotrader adjustment email here, then press Read Email"></textarea>
+            <button type="button" class="btn btn-edit section-add-btn" onclick="readAtEmail()">
+                <i class="fas fa-envelope-open-text"></i> Read Email
+            </button>
+            <div id="atEmailMessages" class="at-messages"></div>
+            <div style="margin-bottom:4px;">
+                <button type="button" class="btn btn-edit" onclick="setAtMonthsCollapsed(true)"><i class="fas fa-compress-alt"></i> Collapse All</button>
+                <button type="button" class="btn btn-edit" onclick="setAtMonthsCollapsed(false)"><i class="fas fa-expand-alt"></i> Expand All</button>
+            </div>
+            <table class="at-period-table at-rows-table">
+                <colgroup>
+                    <col style="width:9%"><col style="width:9%"><col style="width:5.5%"><col style="width:5%">
+                    <col style="width:4%"><col style="width:5%"><col style="width:7.5%"><col style="width:6%">
+                    <col style="width:5%"><col style="width:6.5%"><col style="width:6%"><col style="width:6.5%">
+                    <col style="width:4.5%"><col style="width:7.5%"><col style="width:8.5%"><col style="width:4%">
+                </colgroup>
+                <thead><tr>
+                    <th>From</th><th>To</th><th>Source</th><th class="num">Base Slots</th><th class="num">Flex %</th>
+                    <th class="num" title="Base + flex + tactical">Total Slots</th>
+                    <th class="num" title="Invoice rows: cost for the row's From to To days. Estimate rows: cost per month">Market Extension (£)</th>
+                    <th class="num" title="Invoice rows: cost for the row's From to To days. Estimate rows: cost per month">Finance Calculator (£)</th>
+                    <th class="num">Tactical Slots</th>
+                    <th class="num" title="Invoice rows: cost for the row's From to To days. Estimate rows: cost per month">Tactical (£)</th>
+                    <th class="num" title="Invoice rows: cost for the row's From to To days. Estimate rows: cost per month">Connect (£)</th>
+                    <th class="at-cpspd" title="(Market Extension + Finance Calculator + Tactical + Connect) per day / Total Slots. The same figure as the at_cost_per_slot_day chart metric">Cost Per Slot Per Day (£)</th>
+                    <th class="num">Days</th><th class="num" title="Every product including Connect, for these days. PPC not included">Cost (£)</th>
+                    <th class="num">Month Running Total (£)</th><th></th>
                 </tr></thead>
                 <tbody id="atPeriodList"></tbody>
             </table>
-            </div>
             <button type="button" class="btn btn-edit section-add-btn" onclick="addAtPeriod()">
-                <i class="fas fa-plus"></i> Add Allowance Row
+                <i class="fas fa-plus"></i> Add Row
             </button>
-            <div class="modal-section-title" style="margin-top:16px;">PPC Cost</div>
+            <div class="modal-section-title at-month-toggle" style="margin-top:16px;" data-at-box="atPpcListBox" onclick="toggleAtBox(this)" title="Collapse or expand">
+                <i class="fas fa-chevron-right"></i> PPC Cost</div>
+            <div id="atPpcListBox">
             <div class="at-period-scroll">
             <table class="at-period-table">
-                <thead><tr><th>From</th><th>Cost Per PPC Advert View (£)</th><th></th></tr></thead>
+                <thead><tr><th>From</th><th class="num">Cost Per PPC Click (£)</th><th></th></tr></thead>
                 <tbody id="atPpcList"></tbody>
             </table>
             </div>
             <button type="button" class="btn btn-edit section-add-btn" onclick="addAtPpc()">
                 <i class="fas fa-plus"></i> Add PPC Cost Row
             </button>
+            </div>
             <div class="modal-hint">
-                Each row applies from its date until the next row's in the same list, so the
-                allowance and the PPC cost can change on different dates. Flex is free: Flex Slots = Base Allowance
-                x Flex %, rounded to the nearest slot. Leave Total Allowance Including Tactical blank to use the
-                figure from the Autotrader API, saved each day the page is opened (today: <span id="atApiTotal">-</span>);
-                type it for past periods from before that. Tactical Allowance = Total - Allowance Including Flex.
-                Base and tactical slots are charged at the cost per advert slot.<br>
-                In Edit Chart these are under Autotrader Settings. Slot cost: Metric "at_charged_slots",
-                Multiplied By "at_cost_per_slot_day", Sum. PPC cost: Metric "at_advert_views_ppc",
-                Multiplied By "at_cost_per_ppc_view", Sum.
+                The charts read the rows. Each row applies from its From date to its To date, or with no To,
+                until the next row. A day no row covers is left blank. Apply Invoices To Rows adds a row for every
+                change in the imported invoices (each line's charge spread evenly over its own days, PPC left out)
+                and replaces any adjustment email rows for the days the invoices cover; an email row that runs on
+                past the last invoice is kept from the day after it. Email rows are estimates. Invoices import
+                straight away; rows and PPC rows save with Save.<br>
+                Read Email adds a row from the go-live date, with products the email does not list copied from the
+                email's current figures. Those current figures are only a check against the row before. Flex is
+                free: Flex Slots = Base Slots x Flex %, rounded to a whole slot. A month's cost is spread over the
+                days in that month. Autotrader API allowance today: <span id="atApiTotal">-</span>.<br>
+                In Edit Chart these are under Autotrader Costs. Costs (Sum): "at_cost_total", or each product
+                on its own. Cost per slot per day for a week or month: Metric "at_cost_total", Sum, Divided By
+                "at_total_allowance". PPC cost per click for each date: Metric "at_cost_per_ppc_click" (each invoiced month's PPC
+                cost / its clicks; Apply Invoices fills the PPC Cost rows). PPC cost: Metric "at_advert_views_ppc",
+                Multiplied By "at_cost_per_ppc_click", Sum.
             </div>
             </div>
             <!-- Charts: the list of charts, then the settings every chart shares,
@@ -1160,6 +1277,10 @@
                     <input type="number" id="setAtFont" step="1">
                 </div>
                 <div class="modal-field">
+                    <label for="setAtTableFont">Autotrader Rows Text Size (px)</label>
+                    <input type="number" id="setAtTableFont" step="1">
+                </div>
+                <div class="modal-field">
                     <label for="setLegendFont">Chart Legend Size (px)</label>
                     <input type="number" id="setLegendFont" step="1">
                 </div>
@@ -1185,7 +1306,7 @@
     // chart's fixed or per-date target in its Targets popup; every other
     // target option is the admin's.
     const IS_ADMIN = {{ 'true' if kpi_is_admin else 'false' }};
-    const SOURCE_LABELS = { snowflake: 'Snowflake', sharepoint: 'SharePoint', autotrader: 'Autotrader Settings' };
+    const SOURCE_LABELS = { snowflake: 'Snowflake', sharepoint: 'SharePoint', autotrader: 'Autotrader Costs' };
     const Y_MIN_INPUTS = { m: 'yMinM', w: 'yMinW', d: 'yMinD' };
     const Y_MAX_INPUTS = { m: 'yMaxM', w: 'yMaxW', d: 'yMaxD' };
 
@@ -1199,7 +1320,7 @@
     let themes = [];
     // Settings > Autotrader: dated allowance and cost rows (see kpi.py _AT_PERIODS_KEY).
     let atPeriods = [];
-    let atPpcPeriods = [];   // dated cost per PPC advert view, a separate list
+    let atPpcPeriods = [];   // dated cost per PPC click, a separate list
     // Display names for raw columns, shared by every chart ({ 'source|column':
     // name }), from /kpi/layout. Set in a stacked chart's series list or in
     // Settings > Column Names.
@@ -2292,7 +2413,20 @@
     // Hover box: the figure in full, whatever the Label Format and Decimals
     // (no k / M, up to 4 decimals). The % or £ stays, as it says what the
     // figure is; a decimal shown as a % is still shown as a %.
+    // Hover Format / Hover Decimals in Edit Chart override this, apart from
+    // the labels: a format gives that format at those decimals (0 if unset);
+    // decimals alone give the figure in full at exactly those decimals.
     function rowFullFormatter(row, pct = false) {
+        const hd = row.hover_decimals;
+        if (row.hover_fmt && !pct) return rowFormatter({ ...row, fmt: row.hover_fmt, decimals: hd ?? 0 });
+        if (hd !== null && hd !== undefined) {
+            const fixed = v => v.toLocaleString('en-GB', { minimumFractionDigits: hd, maximumFractionDigits: hd });
+            row = fmtRow(row);
+            if (pct || row.fmt === 'pct') return v => fixed(v) + '%';
+            if (row.fmt === 'pct100') return v => fixed(v * 100) + '%';
+            if (row.fmt === 'gbp' || row.fmt === 'gbpkm') return v => withPound(fixed(v));
+            return fixed;
+        }
         row = fmtRow(row);
         const full = v => v.toLocaleString('en-GB', { maximumFractionDigits: 4 });
         if (pct || row.fmt === 'pct') return v => full(v) + '%';
@@ -2304,6 +2438,14 @@
     }
 
     // Axis ticks keep only the decimals they need (up to 3).
+    // Hover Format / Hover Decimals from Edit Chart. Always both set (''/null
+    // when unset), so clearing them replaces what the saved chart had.
+    function hoverFields() {
+        const dec = document.getElementById('hoverDecimalsSelect').value;
+        return { hover_fmt: document.getElementById('hoverFmtSelect').value,
+                 hover_decimals: dec === '' ? null : parseInt(dec, 10) };
+    }
+
     function rowTickFormatter(row) {
         row = fmtRow(row);
         const fmt = v => v.toLocaleString('en-GB', { maximumFractionDigits: 3 });
@@ -3113,7 +3255,8 @@
 
     function fetchStackedData(row) {
         const cur = rowCurrent(row);
-        return Promise.all(row.series.map(s => fetchMetricData(s.source || 'snowflake', s.metric, row.agg, 'none', cur)))
+        return Promise.all(row.series.map(s => fetchMetricData(s.source || 'snowflake', s.metric, row.agg, 'none', cur,
+                                                                 '', s.multiply_by || null)))
             .then(results => {
                 const bad = results.findIndex(r => r.status !== 'ok');
                 if (bad >= 0) return { ...results[bad], message: `${seriesLabel(row.series[bad])}: ${results[bad].message}` };
@@ -3397,7 +3540,7 @@
         const options = items.map(m =>
             `<option value="${escHtml(metricKey(m.source, m.column))}">${escHtml(metricOptionText(m.source, m.column))}</option>`).join('');
         const label = { snowflake: 'Snowflake - daily_summary', sharepoint: 'SharePoint - Daily Spend and Enquiries',
-                        autotrader: 'Autotrader Settings - Allowance and Costs' }[source] || source;
+                        autotrader: 'Autotrader Costs' }[source] || source;
         return `<optgroup label="${label}">${options}</optgroup>`;
     }
 
@@ -3553,6 +3696,10 @@
         document.getElementById('sectionSelect').innerHTML =
             SECTIONS.map(s => `<option value="${escHtml(s)}">${escHtml(s)}</option>`).join('');
 
+        // A new chart starts with the hover box in full; an existing one
+        // overwrites these below.
+        document.getElementById('hoverFmtSelect').value = '';
+        document.getElementById('hoverDecimalsSelect').value = '';
         if (row) {
             metricSelect.value = metricKey(rowSource(row), row.metric);
             document.getElementById('metricDesc').textContent = rowMetricInfo(row).description || '';
@@ -3564,6 +3711,8 @@
             document.getElementById('invertSelect').value = row.invert ? '1' : '0';
             document.getElementById('fmtSelect').value = row.fmt || 'num';
             document.getElementById('decimalsSelect').value = String(row.decimals || 0);
+            document.getElementById('hoverFmtSelect').value = row.hover_fmt || '';
+            document.getElementById('hoverDecimalsSelect').value = row.hover_decimals ?? '';
             fillAxisInputs(Y_MIN_INPUTS, 'yMinAll', row.y_min);
             fillAxisInputs(Y_MAX_INPUTS, 'yMaxAll', row.y_max);
             showYMinInputs();
@@ -4091,7 +4240,7 @@
 
     // Options for a series' metric list: every metric, grouped by source,
     // keeping a saved one that has gone from the list.
-    function seriesMetricOptions(s) {
+    function seriesMetricOptions(s, blank = '(choose a metric)') {
         const key = s.metric ? metricKey(s.source || 'snowflake', s.metric) : '';
         const group = source => {
             const items = metricsCatalogue.filter(m => m.source === source);
@@ -4103,18 +4252,25 @@
                 }).join('') + '</optgroup>';
         };
         const missing = key && !metricsByKey[key] ? `<option value="${escHtml(key)}" selected>${escHtml(s.metric)}</option>` : '';
-        return '<option value="">(choose a metric)</option>' + missing + group('snowflake') + group('sharepoint') + group('autotrader');
+        return `<option value="">${blank}</option>` + missing + group('snowflake') + group('sharepoint') + group('autotrader');
     }
 
     function renderSeriesList() {
         const theme = themeById(document.getElementById('themeSelect').value);
         const last = seriesDraft.length - 1;
-        document.getElementById('seriesList').innerHTML = seriesDraft.map((s, i) => {
+        // Headings over the boxes, so it is clear the second list multiplies the first.
+        const head = seriesDraft.length ? `<div class="series-row series-head">
+                <span>Metric</span><span>Multiplied By</span><span>Legend Name</span>
+                <span></span><span></span><span></span><span></span><span></span></div>` : '';
+        document.getElementById('seriesList').innerHTML = head + seriesDraft.map((s, i) => {
             const themeColour = theme.colours[i] || SERIES_SPARE_COLOUR;
             const colour = s.colour || themeColour;
             return `
                 <div class="series-row">
                     <select onchange="onSeriesMetric(${i}, this.value)">${seriesMetricOptions(s)}</select>
+                    <select title="Multiplied By: each day of the metric times the same day of this one"
+                            class="${s.multiply_by && s.multiply_by.metric ? 'series-multiplied' : ''}"
+                            onchange="onSeriesMultiply(${i}, this.value)">${seriesMetricOptions(s.multiply_by || {}, '(Not Multiplied)')}</select>
                     <input type="text" maxlength="60" value="${escHtml(s.label || '')}" placeholder="${escHtml(s.metric || 'Legend name')}"
                            title="Name in the legend. Shared: every chart using this column takes it (Settings > Column Names)"
                            oninput="seriesDraft[${i}].label = this.value">
@@ -4141,6 +4297,12 @@
         renderSeriesList();
     }
 
+    function onSeriesMultiply(i, key) {
+        const cut = key.indexOf('|');
+        seriesDraft[i].multiply_by = key ? { source: cut > 0 ? key.slice(0, cut) : 'snowflake', metric: cut > 0 ? key.slice(cut + 1) : key } : null;
+        renderSeriesList();
+    }
+
     function addSeries() {
         seriesDraft.push({ source: 'snowflake', metric: '', label: '', colour: null });
         renderSeriesList();
@@ -4158,6 +4320,7 @@
         document.getElementById('chartModalError').classList.remove('show');
         const series = seriesDraft.filter(s => s.metric).map(s => ({
             source: s.source || 'snowflake', metric: s.metric, label: String(s.label || '').trim(), colour: s.colour || null,
+            ...(s.multiply_by && s.multiply_by.metric ? { multiply_by: s.multiply_by } : {}),
         }));
         if (!series.length) { showChartError('Add at least one series.'); return; }
         if (series.length !== seriesDraft.length) { showChartError('Choose a metric for each series, or remove it.'); return; }
@@ -4205,6 +4368,7 @@
             include_current: readCurrentInputs(),
             fmt: document.getElementById('fmtSelect').value,
             decimals: parseInt(document.getElementById('decimalsSelect').value, 10),
+            ...hoverFields(),
             invert: document.getElementById('invertSelect').value === '1',
             target_mode: mode,
             stack_target: target,
@@ -4295,6 +4459,7 @@
             include_current: readCurrentInputs(),
             fmt: document.getElementById('fmtSelect').value,
             decimals: parseInt(document.getElementById('decimalsSelect').value, 10),
+            ...hoverFields(),
             invert: document.getElementById('invertSelect').value === '1',
             target_mode: mode,
             y_min: yMin,
@@ -4508,7 +4673,7 @@
         months_after: 'setMonthsAfter', weeks_after: 'setWeeksAfter', days_after: 'setDaysAfter',
         section_font_px: 'setSectionFont', title_font_px: 'setTitleFont',
         subtitle_font_px: 'setSubtitleFont', period_font_px: 'setPeriodFont',
-        toolbar_font_px: 'setToolbarFont', at_font_px: 'setAtFont',
+        toolbar_font_px: 'setToolbarFont', at_font_px: 'setAtFont', at_table_font_px: 'setAtTableFont',
         legend_font_px: 'setLegendFont',
         main_line_px: 'setMainLinePx', n1_line_px: 'setN1LinePx', target_line_px: 'setTargetLinePx',
         main_line_colour: 'setMainLineColour', n1_line_colour: 'setN1LineColour',
@@ -4536,6 +4701,7 @@
         if (settings.period_font_px) root.setProperty('--kpi-period-font', settings.period_font_px + 'px');
         if (settings.toolbar_font_px) root.setProperty('--kpi-toolbar-font', settings.toolbar_font_px + 'px');
         if (settings.at_font_px) root.setProperty('--kpi-at-font', settings.at_font_px + 'px');
+        if (settings.at_table_font_px) root.setProperty('--kpi-at-table-font', settings.at_table_font_px + 'px');
         // Settings > Targets: Targets button for every user or the admin only.
         // The admin sees it either way, except in User View when it is off.
         document.body.classList.toggle('targets-off', Number(settings.targets_for_all) === 0);
@@ -4557,50 +4723,550 @@
     // Edited as a copy; Save sends the whole list, sorted by date on the server.
     let atDraft = [];
     let atPpcDraft = [];
-    const AT_FIELDS = ['base', 'flex_pct', 'total', 'slot_cost'];
-
+    const AT_FIELDS = ['base', 'flex_pct', 'tactical', 'me_cost', 'finance_cost', 'tactical_cost', 'connect_cost'];
+    // Set when Apply Invoices saves the rows itself, so the charts reload
+    // when the box is closed or saved.
+    let atRowsSaved = false;
+    const AT_FIELD_LABELS = { base: 'Base Slots', flex_pct: 'Flex %', tactical: 'Tactical Slots',
+        me_cost: 'Market Extension', finance_cost: 'Finance Calculator', tactical_cost: 'Tactical',
+        connect_cost: 'Connect' };
     function loadAtDraft() {
         atDraft = atPeriods.map(p => ({ ...p }));
         atPpcDraft = atPpcPeriods.map(p => ({ ...p }));
         renderAtPpcDraft();
         document.getElementById('atApiTotal').textContent =
             atApiCapacity === null ? 'not available' : atApiCapacity.toLocaleString('en-GB');
+        document.getElementById('atEmailMessages').innerHTML = '';
+        document.getElementById('atInvoiceMessages').innerHTML = '';
+        // Everything starts collapsed: the two lists and every month of rows.
+        document.querySelectorAll('[data-at-box]').forEach(h => setAtBox(h, false));
+        atCollapsed.clear();
+        atFigures().months.forEach((t, m) => atCollapsed.add(m));
+        renderAtDraft();
+        loadAtInvoices();
+    }
+
+    // Flex and the totals worked out the same way as the server (kpi.py
+    // _at_setting_values): flex rounded half up to a whole slot.
+    function atWorked(p) {
+        const base = Number(p.base) || 0;
+        const flex = Math.floor(base * (Number(p.flex_pct) || 0) / 100 + 0.5);
+        const totalSlots = base + flex + (Number(p.tactical) || 0);
+        const monthTotal = ['me_cost', 'finance_cost', 'tactical_cost', 'connect_cost']
+            .reduce((t, f) => t + (Number(p[f]) || 0), 0);
+        return { flex, totalSlots, monthTotal };
+    }
+
+    const atFmt = (v, dp = 0) => (v === null || v === undefined ? '-'
+        : Number(v).toLocaleString('en-GB', { minimumFractionDigits: dp, maximumFractionDigits: dp }));
+    const atDateUk = iso => (iso ? iso.split('-').reverse().join('/') : '-');
+    // 'YYYY-MM-DD' plus n days, worked in UTC so clock changes cannot shift it.
+    const atAddDays = (iso, n) => {
+        const d = new Date(iso + 'T00:00:00Z');
+        d.setUTCDate(d.getUTCDate() + n);
+        return d.toISOString().slice(0, 10);
+    };
+
+    // The last day each row covers: its To, or the day before the next row
+    // starts, or null when it runs on (the last row with no To).
+    function atRowEnds(rows) {
+        const sorted = [...rows].filter(p => p.from).sort((a, b) => a.from.localeCompare(b.from));
+        return sorted.map((p, k) => {
+            const next = sorted[k + 1];
+            const untilNext = next ? atAddDays(next.from, -1) : null;
+            const end = p.to && (!untilNext || p.to < untilNext) ? p.to : untilNext;
+            return { row: p, end };
+        });
+    }
+
+    // Apply Invoices To Rows: the invoice rows (one per change, with From and
+    // To) replace every invoice row in the list, and every email row for the
+    // days the invoices cover. An email row that runs on past the last
+    // invoiced day is kept, from the day after it. Saved with Save.
+    async function applyAtInvoiceRows() {
+        let resp;
+        try {
+            resp = await fetch(BASE_URL + '/kpi/at-invoices/rows').then(atReadJson);
+            if (resp.status !== 'ok') throw new Error(resp.message || 'failed');
+        } catch (err) {
+            atMessages('atInvoiceMessages', [{ kind: 'err', text: 'Apply Invoices: ' + err.message }]);
+            return;
+        }
+        if (!resp.rows.length) {
+            atMessages('atInvoiceMessages', [{ kind: 'warn', text: 'No invoices imported yet, so there is nothing to apply.' }]);
+            return;
+        }
+        const last = resp.coverage.to;
+        const kept = [];
+        let dropped = 0;
+        atRowEnds(atDraft).forEach(({ row, end }) => {
+            if (row.source === 'invoice') return;                  // replaced by the new invoice rows
+            if (row.from > last) { kept.push(row); return; }
+            if (end === null || end > last) { kept.push({ ...row, from: atAddDays(last, 1) }); return; }
+            dropped++;
+        });
+        // A blank From (a row still being filled in) is kept as it is.
+        atDraft = [...resp.rows.map(r => ({ ...r })), ...kept, ...atDraft.filter(p => !p.from)];
+        // PPC Cost rows: one per invoiced month at its cost per click. They
+        // replace the PPC rows starting on or before the last invoiced day; a
+        // replaced row that ran on past it is kept from the day after, as the
+        // price until the next invoice. Rows starting later are kept.
+        let ppc = atPpcPeriods.map(p => ({ ...p }));
+        if (resp.ppc_rows.length) {
+            const sortedPpc = [...ppc].sort((a, b) => a.from.localeCompare(b.from));
+            const keptPpc = sortedPpc.filter(p => p.from > last);
+            const runsOn = sortedPpc.filter(p => p.from <= last).pop();
+            if (runsOn && !keptPpc.some(p => p.from === atAddDays(last, 1))) keptPpc.push({ ...runsOn, from: atAddDays(last, 1) });
+            ppc = [...resp.ppc_rows.map(p => ({ ...p })), ...keptPpc];
+        }
+        const done = `Added ${resp.rows.length} invoice rows covering ${atDateUk(resp.coverage.from)} to ${atDateUk(last)}`
+            + (dropped ? `, replacing ${dropped} email row${dropped === 1 ? '' : 's'} for those days` : '')
+            + (resp.ppc_rows.length ? `, and ${resp.ppc_rows.length} PPC cost per click row${resp.ppc_rows.length === 1 ? '' : 's'}` : '');
+        const notes = resp.ppc_missing.length ? [{ kind: 'warn', text: 'No PPC clicks stored for '
+            + resp.ppc_missing.join(', ') + ' (imported before clicks were read): import those PDFs again, then Apply.' }] : [];
+        // Saved straight away, like an imported invoice, so closing the box
+        // without Save does not lose them. PPC rows being edited by hand are
+        // replaced by what is saved here.
+        try {
+            await atPostPeriods(atRowsPayload(), ppc);
+            atPpcDraft = atPpcPeriods.map(p => ({ ...p }));
+            renderAtPpcDraft();
+            atRowsSaved = true;
+            atMessages('atInvoiceMessages', [{ kind: 'ok', text: done + '. Saved.' }, ...notes]);
+        } catch (err) {
+            atMessages('atInvoiceMessages', [{ kind: 'err', text: done + ', but NOT saved: ' + err.message
+                + ' Fix that row, then press Save.' }, ...notes]);
+        }
         renderAtDraft();
     }
 
-    // Flex and the totals worked out the same way as the server (kpi.py _at_setting_values).
-    function atWorked(p, isLatest) {
-        const base = Number(p.base) || 0;
-        const flex = Math.round(base * (Number(p.flex_pct) || 0) / 100);
-        const inclFlex = base + flex;
-        const total = p.total !== null && p.total !== '' && p.total !== undefined ? Number(p.total)
-            : (isLatest ? atApiCapacity : null);
-        return { inclFlex, total, tactical: total === null ? null : Math.max(0, total - inclFlex) };
+    const atDaysInMonth = iso => { const [y, m] = iso.split('-').map(Number); return new Date(Date.UTC(y, m, 0)).getUTCDate(); };
+    const atMonthEnd = iso => iso.slice(0, 8) + String(atDaysInMonth(iso)).padStart(2, '0');
+    const atDayCount = (a, b) => Math.round((Date.parse(b + 'T00:00:00Z') - Date.parse(a + 'T00:00:00Z')) / 864e5) + 1;
+    const AT_PRODUCT_COSTS = ['me_cost', 'finance_cost', 'tactical_cost', 'connect_cost'];
+    const atMonthLabel = iso => new Date(iso + 'T00:00:00Z').toLocaleDateString('en-GB', { month: 'short', year: 'numeric', timeZone: 'UTC' });
+
+    // Each row cut into one piece per calendar month it covers, worked out the
+    // same way as the charts (kpi.py _at_setting_values): a month's cost / the
+    // days in that month, per day. The last row with no To is shown to the end
+    // of its month. Returns pieces in date order:
+    // {i, key, first, start, end, days, cost, slotCost, slotDays, perSlotDay}.
+    function atPieces() {
+        const index = new Map(atDraft.map((p, i) => [p, i]));
+        const pieces = [];
+        atRowEnds(atDraft).forEach(({ row, end }) => {
+            const i = index.get(row);
+            const last = end || atMonthEnd(row.from);
+            if (last < row.from) return;
+            const w = atWorked(row);
+            // Invoice rows hold the cost for their own From to To days; email
+            // rows hold a month's cost.
+            const rowDays = row.source === 'invoice' && row.to ? atDayCount(row.from, row.to) : null;
+            for (let start = row.from, first = true; start <= last; first = false) {
+                const pieceEnd = atMonthEnd(start) < last ? atMonthEnd(start) : last;
+                const dim = rowDays || atDaysInMonth(start);
+                const days = atDayCount(start, pieceEnd);
+                // Connect is shared over the slots like every other product.
+                const slotPerDay = AT_PRODUCT_COSTS.reduce((t, f) => t + (Number(row[f]) || 0), 0) / dim;
+                const totalPerDay = slotPerDay;
+                // Each product's cost for these days, for the month totals.
+                const products = Object.fromEntries(AT_PRODUCT_COSTS.map(f => [f, (Number(row[f]) || 0) / dim * days]));
+                pieces.push({ i, key: first ? `r${i}` : `r${i}-${start.slice(0, 7)}`, first, start, end: pieceEnd, days,
+                              cost: totalPerDay * days, slotCost: slotPerDay * days, slotDays: w.totalSlots * days,
+                              perSlotDay: w.totalSlots ? slotPerDay / w.totalSlots : null, products });
+                start = atAddDays(pieceEnd, 1);
+            }
+        });
+        return pieces;
+    }
+
+    // Running total within each month, and each month's total: cost, days
+    // covered (of the days in the month), and cost per slot per day for the
+    // whole month = slot cost / slot-days (not an average of the rows).
+    function atFigures() {
+        const pieces = atPieces();
+        const months = new Map();
+        pieces.forEach(p => {
+            const m = p.start.slice(0, 7);
+            const t = months.get(m) || { cost: 0, slotCost: 0, slotDays: 0, days: 0, dim: atDaysInMonth(p.start), last: null,
+                                         products: Object.fromEntries(AT_PRODUCT_COSTS.map(f => [f, 0])) };
+            t.cost += p.cost; t.slotCost += p.slotCost; t.slotDays += p.slotDays; t.days += p.days;
+            AT_PRODUCT_COSTS.forEach(f => { t.products[f] += p.products[f]; });
+            p.running = t.cost;
+            t.last = p.key;
+            months.set(m, t);
+        });
+        return { pieces, months };
+    }
+
+    const atCpspd = v => (v === null || v === undefined ? '-' : atFmt(v, 2));
+
+    // Invoices and PPC Cost lists: shown or hidden by clicking their heading.
+    // Both start collapsed each time the popup opens.
+    function setAtBox(heading, show) {
+        document.getElementById(heading.dataset.atBox).style.display = show ? '' : 'none';
+        heading.querySelector('i').className = 'fas fa-chevron-' + (show ? 'down' : 'right');
+    }
+    function toggleAtBox(heading) {
+        setAtBox(heading, document.getElementById(heading.dataset.atBox).style.display === 'none');
+    }
+
+    // Months folded to their total line. Kept while the popup is open.
+    const atCollapsed = new Set();
+    function toggleAtMonth(m) {
+        if (atCollapsed.has(m)) atCollapsed.delete(m); else atCollapsed.add(m);
+        renderAtDraft();
+    }
+    function setAtMonthsCollapsed(collapse) {
+        atCollapsed.clear();
+        if (collapse) atFigures().months.forEach((t, m) => atCollapsed.add(m));
+        renderAtDraft();
     }
 
     function renderAtDraft() {
-        const order = atDraft.map((p, i) => i).sort((a, b) => String(atDraft[a].from).localeCompare(String(atDraft[b].from)));
-        const latest = order[order.length - 1];
-        const fmt = v => (v === null || v === undefined ? '-' : Number(v).toLocaleString('en-GB'));
-        const box = (i, field, step, placeholder = '') => {
+        // Money boxes show 2 decimals; the full figure stays in the draft and
+        // is saved unchanged unless the box is typed in.
+        const money = new Set(['me_cost', 'finance_cost', 'tactical_cost', 'connect_cost']);
+        const box = (i, field, step) => {
             const v = atDraft[i][field];
-            return `<input type="number" min="0" step="${step}" value="${v === null || v === undefined ? '' : v}"
-                        placeholder="${placeholder}" oninput="setAtField(${i}, '${field}', this.value)">`;
+            const shown = v === null || v === undefined || v === '' ? '' : money.has(field) ? Number(v).toFixed(2) : v;
+            return `<input type="number" min="0" step="${step}" value="${shown}"
+                        oninput="setAtField(${i}, '${field}', this.value)">`;
         };
-        document.getElementById('atPeriodList').innerHTML = order.map(i => {
-            const w = atWorked(atDraft[i], i === latest);
+        // Dates re-draw the table when the box is left (blur), not on every
+        // key: a re-draw while typing would replace the box being typed in.
+        const dateBox = (i, field, title = '') => `<input type="date" value="${escHtml(atDraft[i][field] || '')}" title="${title}"
+                        oninput="setAtField(${i}, '${field}', this.value)" onblur="renderAtDraft()">`;
+        const editRow = (i, p) => {
+            const w = atWorked(atDraft[i]);
             return `<tr data-at="${i}">
-                <td><input type="date" value="${escHtml(atDraft[i].from || '')}" oninput="setAtField(${i}, 'from', this.value)"></td>
+                <td>${dateBox(i, 'from')}</td>
+                <td>${dateBox(i, 'to', 'Blank: until the next row')}</td>
+                <td title="${atDraft[i].source === 'invoice' ? 'Costs are for this row\'s From to To days' : 'Costs are per month'}">${atDraft[i].source === 'invoice' ? 'Invoice' : 'Estimate'}</td>
                 <td>${box(i, 'base', 1)}</td>
                 <td>${box(i, 'flex_pct', 'any')}</td>
-                <td class="at-worked at-incl">${fmt(w.inclFlex)}</td>
-                <td>${box(i, 'total', 1, i === latest ? 'From API' : 'Blank: from API')}</td>
-                <td class="at-worked at-tac">${fmt(w.tactical)}</td>
-                <td>${box(i, 'slot_cost', 'any')}</td>
+                <td class="num" data-cell="slots">${atFmt(w.totalSlots)}</td>
+                <td>${box(i, 'me_cost', 'any')}</td>
+                <td>${box(i, 'finance_cost', 'any')}</td>
+                <td>${box(i, 'tactical', 1)}</td>
+                <td>${box(i, 'tactical_cost', 'any')}</td>
+                <td>${box(i, 'connect_cost', 'any')}</td>
+                <td class="at-cpspd" data-key="${p ? p.key : ''}" data-cell="cpspd">${p ? atCpspd(p.perSlotDay) : '-'}</td>
+                <td class="num" data-key="${p ? p.key : ''}" data-cell="days">${p ? p.days : '-'}</td>
+                <td class="num" data-key="${p ? p.key : ''}" data-cell="cost">${p ? atFmt(p.cost, 2) : '-'}</td>
+                <td class="num" data-key="${p ? p.key : ''}" data-cell="running">${p ? atFmt(p.running, 2) : '-'}</td>
                 <td><button type="button" class="btn btn-remove-chart" title="Delete Row" onclick="removeAtPeriod(${i})">
                     <i class="fas fa-trash"></i></button></td>
             </tr>`;
-        }).join('') || '<tr><td colspan="8" class="modal-hint">No rows yet. Add one starting from the date the current contract began.</td></tr>';
+        };
+        const { pieces, months } = atFigures();
+        const html = [];
+        // Rows still being filled in (no From yet) at the top, so they are seen.
+        atDraft.forEach((p, i) => { if (!p.from) html.push(editRow(i, null)); });
+        // A month's totals: under each product column, that product's cost for
+        // the days covered this month (what the invoice charged, for invoice rows).
+        const totalCells = (m, t) => {
+            const prod = f => `<td class="num" data-month="${m}" data-cell="${f}">${atFmt(t.products[f], 2)}</td>`;
+            return `${prod('me_cost')}${prod('finance_cost')}<td></td>${prod('tactical_cost')}${prod('connect_cost')}
+                <td class="at-cpspd" data-month="${m}" data-cell="cpspd">${atCpspd(t.slotDays ? t.slotCost / t.slotDays : null)}</td>
+                <td class="num" data-month="${m}" data-cell="days" title="Days covered of the days in the month">${t.days} of ${t.dim}</td>
+                <td class="num" data-month="${m}" data-cell="cost"></td>
+                <td class="num" data-month="${m}" data-cell="running">${atFmt(t.cost, 2)}</td><td></td>`;
+        };
+        let monthShown = null;
+        pieces.forEach(p => {
+            const m = p.start.slice(0, 7);
+            const t = months.get(m);
+            const folded = atCollapsed.has(m);
+            if (m !== monthShown) {
+                // Month bar above the month's rows, clicked to collapse or
+                // expand. Collapsed, it carries the month's totals itself.
+                monthShown = m;
+                html.push(`<tr class="at-month-total at-month-bar">
+                    <td colspan="6" class="at-month-toggle" onclick="toggleAtMonth('${m}')" title="${folded ? 'Expand' : 'Collapse'} this month">
+                        <i class="fas fa-chevron-${folded ? 'right' : 'down'}"></i> ${atMonthLabel(p.start)}</td>
+                    ${folded ? totalCells(m, t) : '<td colspan="10"></td>'}
+                </tr>`);
+            }
+            if (folded) {
+                return;
+            } else if (p.first) {
+                html.push(editRow(p.i, p));
+            } else {
+                // A row that runs on into this month: its days here, read only.
+                html.push(`<tr class="at-continued">
+                    <td>${atDateUk(p.start)}</td><td>${atDateUk(p.end)}</td>
+                    <td colspan="9">Continued from the row starting ${atDateUk(atDraft[p.i].from)}</td>
+                    <td class="at-cpspd" data-key="${p.key}" data-cell="cpspd">${atCpspd(p.perSlotDay)}</td>
+                    <td class="num" data-key="${p.key}" data-cell="days">${p.days}</td>
+                    <td class="num" data-key="${p.key}" data-cell="cost">${atFmt(p.cost, 2)}</td>
+                    <td class="num" data-key="${p.key}" data-cell="running">${atFmt(p.running, 2)}</td><td></td>
+                </tr>`);
+            }
+            if (t.last === p.key) {
+                html.push(`<tr class="at-month-total">
+                    <td colspan="6">Total ${atMonthLabel(p.start)}</td>${totalCells(m, t)}
+                </tr>`);
+            }
+        });
+        document.getElementById('atPeriodList').innerHTML = html.join('')
+            || '<tr><td colspan="16" class="modal-hint">No rows yet. Apply the invoices, paste an adjustment email above, or add a row.</td></tr>';
+    }
+
+    // ── Invoices: imported straight away, not on Save ────────────────────────
+    function atMessages(id, items) {
+        document.getElementById(id).innerHTML = items
+            .map(m => `<div class="at-${m.kind}">${escHtml(m.text)}</div>`).join('');
+    }
+
+    async function loadAtInvoices() {
+        const list = document.getElementById('atInvoiceList');
+        try {
+            const resp = await fetch(BASE_URL + '/kpi/at-invoices').then(atReadJson);
+            if (resp.status !== 'ok') throw new Error(resp.message || 'load failed');
+            renderAtInvoices(resp);
+        } catch (err) {
+            list.innerHTML = `<tr><td colspan="9" class="modal-hint">Invoices could not be loaded: ${escHtml(err.message)}</td></tr>`;
+        }
+    }
+
+    let atInvoicesShown = [];
+    // Download CSV: the invoices list as shown, full figures (not rounded).
+    function downloadAtInvoicesCsv() {
+        const cell = v => { const s = v === null || v === undefined ? '' : String(v); return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
+        const lines = [['Invoice', 'Issued', 'Covers From', 'Covers To', 'Cost Excluding PPC', 'PPC', 'PPC Clicks', 'Cost Per PPC Click', 'Imported']]
+            .concat(atInvoicesShown.map(inv => [inv.invoice_number, inv.issued, inv.date_from, inv.date_to, inv.lines_total, inv.ppc,
+                inv.ppc_clicks, inv.ppc_clicks ? inv.ppc / inv.ppc_clicks : '', inv.imported_at.slice(0, 10)]));
+        const blob = new Blob([lines.map(r => r.map(cell).join(',')).join('\r\n')], { type: 'text/csv' });
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = 'autotrader_invoices.csv';
+        a.click();
+        URL.revokeObjectURL(a.href);
+    }
+
+    function renderAtInvoices(resp) {
+        atInvoicesShown = resp.invoices;
+        document.getElementById('atInvoiceList').innerHTML = resp.invoices.map(inv => `<tr>
+                <td>${escHtml(inv.invoice_number)}</td>
+                <td>${atDateUk(inv.issued)}</td>
+                <td>${atDateUk(inv.date_from)} - ${atDateUk(inv.date_to)}</td>
+                <td class="num">${atFmt(inv.lines_total, 2)}</td>
+                <td class="num">${atFmt(inv.ppc, 2)}</td>
+                <td class="num">${inv.ppc_clicks === null ? (inv.ppc ? 'Import Again' : '-') : atFmt(inv.ppc_clicks)}</td>
+                <td class="num">${inv.ppc_clicks ? atFmt(inv.ppc / inv.ppc_clicks, 4) : '-'}</td>
+                <td>${atDateUk(inv.imported_at.slice(0, 10))}${inv.has_pdf ? '' : ' (PDF not saved)'}</td>
+                <td><button type="button" class="btn btn-remove-chart" title="Delete Invoice"
+                            onclick="deleteAtInvoice('${escHtml(inv.invoice_number)}')"><i class="fas fa-trash"></i></button></td>
+            </tr>`).join('') || '<tr><td colspan="9" class="modal-hint">No invoices imported yet.</td></tr>';
+        const c = resp.coverage;
+        document.getElementById('atInvoiceCoverage').textContent = !c.from ? ''
+            : `Invoiced ${atDateUk(c.from)} to ${atDateUk(c.to)}. `
+              + (c.gaps.length ? 'Missing (left blank on the charts): '
+                  + c.gaps.map(g => `${atDateUk(g[0])} - ${atDateUk(g[1])}`).join(', ') + '.'
+                : 'No missing days.');
+    }
+
+    // The reply as JSON. When the server sends its HTML error page instead
+    // (signed out, no access, or an error the endpoint did not catch), this
+    // turns it into a readable message: the status, and the last line of the
+    // page's Technical Details (the Python error) when there is one.
+    async function atReadJson(r) {
+        const text = await r.text();
+        try { return JSON.parse(text); } catch (e) { /* not JSON: an HTML page */ }
+        if (r.status === 401) return { status: 'error', message: 'Signed out. Log in again, then import.' };
+        if (r.status === 403) return { status: 'error', message: 'No access to the KPI page.' };
+        const page = new DOMParser().parseFromString(text, 'text/html');
+        const detail = (page.querySelector('pre')?.textContent || '').trim().split('\n').pop()
+            || page.querySelector('p')?.textContent || '';
+        return { status: 'error', message: `Server error ${r.status}${detail ? ': ' + detail.trim() : ''}` };
+    }
+
+    function atFileBase64(file) {
+        return new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = () => resolve(String(reader.result).split(',')[1] || '');
+            reader.onerror = () => reject(new Error('could not read the file'));
+            reader.readAsDataURL(file);
+        });
+    }
+
+    // One PDF at a time, so each gets its own message and a refused one does
+    // not stop the rest.
+    async function importAtInvoices(input) {
+        const files = [...input.files];
+        input.value = '';
+        if (!files.length) return;
+        const messages = [];
+        for (const [n, file] of files.entries()) {
+            atMessages('atInvoiceMessages', [...messages, { kind: 'ok', text: `Importing ${n + 1} of ${files.length}: ${file.name}` }]);
+            try {
+                const resp = await fetch(BASE_URL + '/kpi/at-invoices/import', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ filename: file.name, data: await atFileBase64(file) }),
+                }).then(atReadJson);
+                if (resp.status !== 'ok') {
+                    messages.push({ kind: 'err', text: resp.message || `${file.name}: import failed` });
+                    continue;
+                }
+                messages.push({ kind: 'ok', text: `${file.name}: invoice ${resp.invoice_number}, ${resp.lines} lines, `
+                    + `£${atFmt(resp.lines_total, 2)} excluding PPC`
+                    + (resp.ppc_clicks ? `; PPC £${atFmt(resp.ppc, 2)} for ${atFmt(resp.ppc_clicks)} clicks` : '')
+                    + (resp.replaced ? ' (replaced the earlier import)' : '') });
+                if (resp.s3_error) messages.push({ kind: 'warn', text: `${file.name}: imported, but the PDF was not saved to S3: ${resp.s3_error}` });
+            } catch (err) {
+                messages.push({ kind: 'err', text: `${file.name}: ${err.message}` });
+            }
+        }
+        if (messages.some(m => m.kind === 'ok')) {
+            messages.push({ kind: 'warn', text: 'The charts read the rows: press Apply Invoices To Rows, then Save.' });
+        }
+        atMessages('atInvoiceMessages', messages);
+        loadAtInvoices();
+    }
+
+    async function deleteAtInvoice(number) {
+        if (!confirm(`Delete invoice ${number}? Its rows stay in the list until you press Apply Invoices To Rows again.`)) return;
+        try {
+            const resp = await fetch(BASE_URL + '/kpi/at-invoices/delete', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ invoice_number: number }),
+            }).then(atReadJson);
+            if (resp.status !== 'ok') throw new Error(resp.message || 'delete failed');
+            atMessages('atInvoiceMessages', [{ kind: 'ok', text: `Invoice ${number} deleted.` }]);
+            renderAtInvoices(resp);
+        } catch (err) {
+            atMessages('atInvoiceMessages', [{ kind: 'err', text: `Invoice ${number}: ${err.message}` }]);
+        }
+    }
+
+    // ── Adjustment emails: read into a draft row, checked, then saved with Save ──
+    // Products as Autotrader names them in the email. Anything else with a
+    // quantity or price stops the read, so nothing is guessed.
+    const AT_EMAIL_PRODUCTS = [
+        { id: 'base', re: /^Contracted Adverts/i },
+        { id: 'bonus', re: /^Bonus Advert Allowance/i },
+        { id: 'me', re: /^Market Extension/i },
+        { id: 'finance', re: /^Finance Calculator/i },
+        { id: 'tactical', re: /^Tactical Adverts/i },
+        { id: 'connect', re: /^(Retail Strategy|Connect)/i },
+    ];
+    const AT_MONTHS = ['january', 'february', 'march', 'april', 'may', 'june', 'july', 'august',
+                       'september', 'october', 'november', 'december'];
+
+    // {current: {product: {qty, money}}, changes: {...}, goLive: 'YYYY-MM-DD'|null, unknown: [names]}
+    function parseAtEmail(text) {
+        const out = { current: {}, changes: {}, goLive: null, unknown: [] };
+        let section = null;
+        for (const raw of text.split(/\r?\n/)) {
+            const line = raw.trim();
+            if (!line) continue;
+            const live = line.match(/go live on\s+(?:[A-Za-z]+,?\s+)?(\d{1,2})(?:st|nd|rd|th)?\s+([A-Za-z]+),?\s+(\d{4})/i);
+            if (live) {
+                const month = AT_MONTHS.indexOf(live[2].toLowerCase()) + 1;
+                if (month) out.goLive = `${live[3]}-${String(month).padStart(2, '0')}-${live[1].padStart(2, '0')}`;
+            }
+            if (/current monthly spend is made up of/i.test(line)) { section = out.current; continue; }
+            if (/changes we discussed/i.test(line)) { section = out.changes; continue; }
+            if (!section || /^all other products/i.test(line)) continue;
+            // Cells are tab-separated when pasted from Outlook; otherwise the
+            // name runs up to the first number after a word.
+            let cells = line.split('\t').map(c => c.trim()).filter(c => c !== '');
+            if (cells.length === 1) {
+                const m = line.match(/^(.*?[A-Za-z)])\s+(\d[\d,]*)(?:\s+(.*))?$/);
+                if (!m) continue;
+                cells = [m[1], m[2], ...(m[3] || '').split(/\s+/)];
+            }
+            const qtyCell = cells.slice(1).find(c => /^\d[\d,]*$/.test(c));
+            const moneyCell = cells.slice(1).find(c => /^£[\d,]+(\.\d+)?$/.test(c));
+            if (!qtyCell && !moneyCell) continue;     // a heading line
+            const product = AT_EMAIL_PRODUCTS.find(p => p.re.test(cells[0]));
+            if (!product) { out.unknown.push(cells[0]); continue; }
+            section[product.id] = {
+                qty: qtyCell ? Number(qtyCell.replace(/,/g, '')) : null,
+                money: moneyCell ? Number(moneyCell.replace(/[£,]/g, '')) : null,
+            };
+        }
+        return out;
+    }
+
+    // Row fields from one section of the email; fields the section does not
+    // give are left out, so they can be filled from elsewhere.
+    function atEmailFields(sec) {
+        const row = {};
+        if (sec.base && sec.base.qty !== null) row.base = sec.base.qty;
+        if (sec.bonus && sec.bonus.qty !== null) {
+            const base = row.base;
+            row.flex_pct = base && Math.floor(base * 0.1 + 0.5) !== sec.bonus.qty
+                ? Math.round(sec.bonus.qty / base * 10000) / 100 : 10;
+        }
+        if (sec.tactical) {
+            if (sec.tactical.qty !== null) row.tactical = sec.tactical.qty;
+            if (sec.tactical.money !== null) row.tactical_cost = sec.tactical.money;
+        }
+        if (sec.me && sec.me.money !== null) row.me_cost = sec.me.money;
+        if (sec.finance && sec.finance.money !== null) row.finance_cost = sec.finance.money;
+        if (sec.connect && sec.connect.money !== null) row.connect_cost = sec.connect.money;
+        return row;
+    }
+
+    function readAtEmail() {
+        const box = document.getElementById('atEmailPaste');
+        const email = parseAtEmail(box.value);
+        const messages = [];
+        if (email.unknown.length) {
+            atMessages('atEmailMessages', [{ kind: 'err', text: 'Products not recognised, so nothing was added: '
+                + email.unknown.join(', ') }]);
+            return;
+        }
+        if (!email.goLive) {
+            atMessages('atEmailMessages', [{ kind: 'err', text: 'No go-live date found (e.g. "go live on Thursday, 5th November 2026").' }]);
+            return;
+        }
+        const changes = atEmailFields(email.changes);
+        if (!Object.keys(changes).length) {
+            atMessages('atEmailMessages', [{ kind: 'err', text: 'No changed products found under "The changes we discussed".' }]);
+            return;
+        }
+        const current = atEmailFields(email.current);
+        // The row in force the day before go-live: what the email's current
+        // figures are checked against.
+        const before = atDraft.filter(p => p.from && p.from < email.goLive)
+            .sort((a, b) => a.from.localeCompare(b.from)).pop();
+        const currentRow = from => ({ from, ...Object.fromEntries(AT_FIELDS.map(f => [f, current[f] ?? null])),
+                                      to: null, source: 'email' });
+        if (before) {
+            const diffs = AT_FIELDS.filter(f => current[f] !== undefined && Number(before[f]) !== current[f])
+                .map(f => `${AT_FIELD_LABELS[f]} ${atFmt(current[f], 2)} in the email, ${atFmt(before[f], 2)} in the row from ${atDateUk(before.from)}`);
+            if (diffs.length) messages.push({ kind: 'warn', text: 'The email\'s current figures differ from the row before: ' + diffs.join('; ') });
+            // The row before ends (e.g. the last invoice row) with days still to
+            // go before go-live: the email's current figures cover those days.
+            if (before.to && before.to < atAddDays(email.goLive, -1) && Object.keys(current).length) {
+                atDraft.push(currentRow(atAddDays(before.to, 1)));
+                messages.push({ kind: 'warn', text: `Added a row for the email's current figures from ${atDateUk(atAddDays(before.to, 1))}, `
+                    + 'the day after the row before ends. Check its From date.' });
+            }
+        } else if (Object.keys(current).length) {
+            // No row before: add the current figures, with the From date left
+            // for you to type in. Save will not go through until it is.
+            atDraft.push(currentRow(''));
+            messages.push({ kind: 'warn', text: 'Added a row for the current figures. Type the date they started in its From box (left blank).' });
+        }
+        // Products the email does not list stay as they were: from the email's
+        // current figures, then the row before.
+        const row = { from: email.goLive, to: null, source: 'email' };
+        AT_FIELDS.forEach(f => { row[f] = changes[f] ?? current[f] ?? (before ? before[f] : null); });
+        const missing = AT_FIELDS.filter(f => row[f] === null || row[f] === undefined);
+        const existing = atDraft.findIndex(p => p.from === email.goLive);
+        if (existing >= 0) atDraft.splice(existing, 1, row); else atDraft.push(row);
+        messages.unshift({ kind: 'ok', text: `${existing >= 0 ? 'Replaced' : 'Added'} the row from ${atDateUk(email.goLive)}: `
+            + `£${atFmt(atWorked(row).monthTotal, 2)} a month. Check it, then Save.` });
+        if (missing.length) messages.push({ kind: 'warn', text: 'Not in the email, so fill in: ' + missing.map(f => AT_FIELD_LABELS[f]).join(', ') });
+        atMessages('atEmailMessages', messages);
+        box.value = '';
+        renderAtDraft();
     }
 
     function renderAtPpcDraft() {
@@ -4637,27 +5303,40 @@
     }
 
     // As setAtPpcField: the draft is updated and only the worked-out cells
-    // (Allowance Including Flex, Tactical Allowance) are refreshed in place.
+    // (Flex Slots, Total Slots, Total Per Month) are refreshed in place.
     function setAtField(i, field, value) {
-        atDraft[i][field] = field === 'from' ? value : (value === '' ? null : Number(value));
+        atDraft[i][field] = field === 'from' ? value : field === 'to' ? (value || null)
+            : (value === '' ? null : Number(value));
         updateAtWorked();
     }
 
+    // Figures typed in only change the worked-out cells, so those are updated
+    // in place (the boxes are not re-drawn). Dates change which rows and
+    // month totals there are, so those re-draw the table instead (renderAtDraft).
     function updateAtWorked() {
-        const order = atDraft.map((p, i) => i).sort((a, b) => String(atDraft[a].from).localeCompare(String(atDraft[b].from)));
-        const latest = order[order.length - 1];
-        const fmt = v => (v === null || v === undefined ? '-' : Number(v).toLocaleString('en-GB'));
-        document.querySelectorAll('#atPeriodList tr[data-at]').forEach(tr => {
-            const i = Number(tr.dataset.at);
-            const w = atWorked(atDraft[i], i === latest);
-            tr.querySelector('.at-incl').textContent = fmt(w.inclFlex);
-            tr.querySelector('.at-tac').textContent = fmt(w.tactical);
+        const list = document.getElementById('atPeriodList');
+        list.querySelectorAll('tr[data-at]').forEach(tr => {
+            tr.querySelector('[data-cell="slots"]').textContent = atFmt(atWorked(atDraft[Number(tr.dataset.at)]).totalSlots);
+        });
+        const { pieces, months } = atFigures();
+        const set = (sel, cell, text) => { const el = list.querySelector(`[${sel}][data-cell="${cell}"]`); if (el) el.textContent = text; };
+        pieces.forEach(p => {
+            set(`data-key="${p.key}"`, 'cpspd', atCpspd(p.perSlotDay));
+            set(`data-key="${p.key}"`, 'cost', atFmt(p.cost, 2));
+            set(`data-key="${p.key}"`, 'running', atFmt(p.running, 2));
+        });
+        months.forEach((t, m) => {
+            AT_PRODUCT_COSTS.forEach(f => set(`data-month="${m}"`, f, atFmt(t.products[f], 2)));
+            set(`data-month="${m}"`, 'cpspd', atCpspd(t.slotDays ? t.slotCost / t.slotDays : null));
+            set(`data-month="${m}"`, 'running', atFmt(t.cost, 2));
         });
     }
 
     function addAtPeriod() {
-        const last = atDraft.length ? { ...atDraft[atDraft.length - 1] } : { base: null, flex_pct: null, slot_cost: null };
-        atDraft.push({ ...last, from: new Date().toISOString().slice(0, 10), total: null });
+        const latest = [...atDraft].sort((a, b) => String(a.from).localeCompare(String(b.from))).pop();
+        const copy = latest ? { ...latest } : { base: null, flex_pct: 10, tactical: 0, me_cost: null,
+            finance_cost: null, tactical_cost: 0, connect_cost: 0 };
+        atDraft.push({ ...copy, from: new Date().toISOString().slice(0, 10), to: null, source: 'email' });
         renderAtDraft();
     }
 
@@ -4667,29 +5346,52 @@
     }
 
     // Saves the rows if they changed. Returns true when saved, so the charts reload.
-    async function saveAtPeriods() {
+    // The rows as the server takes them, checked. Throws with a message for the page.
+    function atRowsPayload() {
         const payload = atDraft.map(p => {
+            // Same key order as the server (kpi.py _AT_PERIOD_FIELDS), so an
+            // unchanged list compares equal and is not saved again.
             const row = { from: p.from };
             AT_FIELDS.forEach(f => { row[f] = p[f] === undefined || p[f] === '' ? null : p[f]; });
+            row.to = p.to || null;
+            row.source = p.source === 'invoice' ? 'invoice' : 'email';
             return row;
         });
-        const bad = payload.find(p => !p.from || ['base', 'flex_pct', 'slot_cost'].some(f => p[f] === null));
-        if (bad) throw new Error('Autotrader: every allowance row needs a From date, Base Allowance, Flex % and Cost Per Advert Slot.');
-        const ppcPayload = atPpcDraft.map(p => ({ from: p.from, ppc_view_cost: p.ppc_view_cost ?? null }));
-        if (ppcPayload.some(p => !p.from || p.ppc_view_cost === null)) {
-            throw new Error('Autotrader: every PPC cost row needs a From date and a cost.');
-        }
-        const sortKey = list => JSON.stringify([...list].sort((a, b) => String(a.from).localeCompare(String(b.from))));
-        if (sortKey(payload) === sortKey(atPeriods) && sortKey(ppcPayload) === sortKey(atPpcPeriods)) return false;
+        const bad = payload.find(p => !p.from || AT_FIELDS.some(f => p[f] === null));
+        if (bad) throw new Error('Autotrader: every row needs a From date and every figure (0 if none).');
+        const backwards = payload.find(p => p.to && p.to < p.from);
+        if (backwards) throw new Error(`Autotrader: the row from ${atDateUk(backwards.from)} has a To date before its From date.`);
+        const noTo = payload.find(p => p.source === 'invoice' && !p.to);
+        if (noTo) throw new Error(`Autotrader: the invoice row from ${atDateUk(noTo.from)} needs a To date (its costs are for From to To).`);
+        return payload;
+    }
+
+    // Saves the rows and PPC rows; on success they become the saved lists.
+    async function atPostPeriods(payload, ppcPayload) {
         const resp = await fetch(BASE_URL + '/kpi/at-periods', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ periods: payload, ppc_periods: ppcPayload }),
-        }).then(r => r.json());
+        }).then(atReadJson);
         if (resp.status !== 'ok') throw new Error('Autotrader: ' + (resp.message || 'save failed'));
         atPeriods = resp.periods;
         atPpcPeriods = resp.ppc_periods;
         atDraft = atPeriods.map(p => ({ ...p }));
+    }
+
+    // Save button: saves the rows and PPC rows if they changed. Returns true
+    // when saved (or when Apply Invoices already saved), so the charts reload.
+    async function saveAtPeriods() {
+        const payload = atRowsPayload();
+        const ppcPayload = atPpcDraft.map(p => ({ from: p.from, ppc_view_cost: p.ppc_view_cost ?? null }));
+        if (ppcPayload.some(p => !p.from || p.ppc_view_cost === null)) {
+            throw new Error('Autotrader: every PPC cost row needs a From date and a cost.');
+        }
+        const savedByApply = atRowsSaved;
+        atRowsSaved = false;
+        const sortKey = list => JSON.stringify([...list].sort((a, b) => String(a.from).localeCompare(String(b.from))));
+        if (sortKey(payload) === sortKey(atPeriods) && sortKey(ppcPayload) === sortKey(atPpcPeriods)) return savedByApply;
+        await atPostPeriods(payload, ppcPayload);
         atPpcDraft = atPpcPeriods.map(p => ({ ...p }));
         return true;
     }
@@ -4713,6 +5415,7 @@
             + `chart period label ${lim('period_font_px')} px (monthly / weekly / daily at the right of the title), `
             + `top bar ${lim('toolbar_font_px')} px (every button and label in the bar at the top), `
             + `Autotrader figures ${lim('at_font_px')} px (Advert Allowance, Published, Capped, Unpublished), `
+            + `Autotrader rows text ${lim('at_table_font_px')} px (Settings > Autotrader Costs), `
             + `chart legend ${lim('legend_font_px')} px (the series names above stacked charts). `
             + 'Applies to the KPI page for everyone.';
         sectionDraft = SECTIONS.map(name => ({ name, from: name, hidden: hiddenSections.has(name) }));
@@ -5349,6 +6052,11 @@
 
     function closeSettingsModal() {
         document.getElementById('settingsModal').classList.remove('open');
+        // Rows saved by Apply Invoices change the charts, Save or not.
+        if (atRowsSaved) {
+            atRowsSaved = false;
+            loadAll();
+        }
     }
 
     async function saveSettings() {
