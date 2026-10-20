@@ -63,7 +63,7 @@
                     </div>
                     <table class="table table-sm table-bordered pn-table mb-0">
                         <thead class="table-light">
-                            <tr><th>Default Name</th><th>Name Shown</th><th>Menu Category</th></tr>
+                            <tr><th>Default Name</th><th>Name Shown</th><th>Menu Category</th><th>Menu Order</th></tr>
                         </thead>
                         <tbody>
                             {% for page in pages %}
@@ -83,6 +83,11 @@
                                            list="pn-categories"
                                            value="{{ stored.get(category_prefix ~ page.key, '') }}">
                                 </td>
+                                <td style="width: 110px;">
+                                    <input type="number" class="form-control form-control-sm"
+                                           name="order__{{ page.key }}" min="1" max="999" step="1"
+                                           value="{{ stored.get(order_prefix ~ page.key, '') }}">
+                                </td>
                             </tr>
                             {% endfor %}
                         </tbody>
@@ -93,8 +98,33 @@
                     </datalist>
                     <div class="pn-note mt-2">
                         Menu Category groups pages under a heading in the menu at the top left.
-                        Pages with a blank category are listed on their own, above the headings.
+                        Pages with a blank category are listed on their own, below the headings.
+                        Menu Order sets the order of pages within their heading: lowest first.
+                        Pages with no number go after the numbered ones, in the default order.
                     </div>
+                    {% if categories_in_use %}
+                    <div class="fw-semibold mt-3 mb-1">Category Order</div>
+                    <table class="table table-sm table-bordered pn-table mb-0" style="max-width: 400px;">
+                        <thead class="table-light">
+                            <tr><th>Category</th><th>Order</th></tr>
+                        </thead>
+                        <tbody>
+                            {% for value in categories_in_use %}
+                            <tr>
+                                <td>{{ value }}<input type="hidden" name="catname__{{ loop.index }}" value="{{ value }}"></td>
+                                <td style="width: 110px;">
+                                    <input type="number" class="form-control form-control-sm"
+                                           name="catorder__{{ loop.index }}" min="1" max="999" step="1"
+                                           value="{{ loop.index }}">
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                    <div class="pn-note mt-1">
+                        Lowest first. A new category typed above goes last until you number it here.
+                    </div>
+                    {% endif %}
                     <div class="text-end mt-3">
                         <button type="submit" class="btn btn-primary" {% if load_error %}disabled{% endif %}>Save Changes</button>
                     </div>

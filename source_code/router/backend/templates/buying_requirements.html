@@ -49,11 +49,6 @@
                 <i class="fas fa-file-excel me-1"></i>Open Cars Bought
             </a>
             <span id="cb-total-badge" class="text-muted small"></span>
-            {% if show_sharepoint_log %}
-            <button class="btn btn-outline-secondary btn-sm" onclick="openSharePointLog()">
-                <i class="fas fa-list me-1"></i>View Log
-            </button>
-            {% endif %}
         </div>
         <div id="sp-warning" class="alert alert-danger py-1 px-2 small d-none mb-2"></div>
 
@@ -189,23 +184,6 @@
             <button class="btn btn-primary btn-sm" onclick="applyColumnsSelection()">Apply</button>
         </div>
     </div>
-
-    {% if show_sharepoint_log %}
-    <!-- SharePoint log popup (tdrayson only) -->
-    <div id="splog-backdrop" class="vehicle-modal-backdrop" style="display:none" onclick="closeSharePointLog()"></div>
-    <div id="splog-modal" class="vehicle-modal" style="display:none" role="dialog" aria-modal="true">
-        <div class="vehicle-modal-header">
-            <span class="vehicle-modal-title">SharePoint file log — newest first</span>
-            <button class="btn btn-outline-secondary btn-sm ms-3" onclick="loadSharePointLog()">
-                <i class="fas fa-sync-alt me-1"></i>Refresh
-            </button>
-            <button class="vehicle-modal-close" onclick="closeSharePointLog()" aria-label="Close">&times;</button>
-        </div>
-        <div class="vehicle-modal-body">
-            <div id="splog-body" class="splog-body"></div>
-        </div>
-    </div>
-    {% endif %}
 
     <!-- Vehicle popup -->
     <div id="vehicle-modal-backdrop" class="vehicle-modal-backdrop" style="display:none" onclick="closeVehicleModal()"></div>

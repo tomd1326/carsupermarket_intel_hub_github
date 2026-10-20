@@ -937,6 +937,23 @@ _REDIRECT_TARGETS = {
 _PAGE_NAME_MAX = 100
 
 
+def _categories_in_order(stored: dict) -> list[str]:
+    """Categories in use, in their saved order, then any others A-Z."""
+    in_use = {v for k, v in stored.items() if k.startswith(core.CATEGORY_PREFIX)}
+    positions = sorted(
+        (int(k[len(core.CATEGORY_POS_PREFIX):]), v) for k, v in stored.items()
+        if k.startswith(core.CATEGORY_POS_PREFIX) and k[len(core.CATEGORY_POS_PREFIX):].isdigit()
+    )
+    saved = [v for _, v in positions if v in in_use]
+    return saved + sorted(in_use - set(saved))
+
+
+def _order_number(form, field: str):
+    """A whole number from 1 to 999, or None when blank or not a number."""
+    value = str(form.get(field, "")).strip()
+    return int(value) if value.isdigit() and 1 <= int(value) <= 999 else None
+
+
 @router.get("/settings/page-names", response_class=HTMLResponse)
 def page_names_page(request: Request, user: str = Depends(get_current_user)):
     """One box per page, holding its current name. Blank = the default name."""
@@ -955,7 +972,8 @@ def page_names_page(request: Request, user: str = Depends(get_current_user)):
         "max_length": _PAGE_NAME_MAX,
         "site_name_key": core.SITE_NAME_KEY, "site_name_default": core.SITE_NAME_DEFAULT,
         "category_prefix": core.CATEGORY_PREFIX,
-        "categories_in_use": sorted({v for k, v in stored.items() if k.startswith(core.CATEGORY_PREFIX)}),
+        "order_prefix": core.ORDER_PREFIX,
+        "categories_in_use": _categories_in_order(stored),
         "sections": SETTINGS_SECTIONS, "active_section": "page_names",
     })
 
@@ -980,6 +998,27 @@ async def save_page_names_route(request: Request, user: str = Depends(get_curren
             names[page.key] = label
         if category:
             names[core.CATEGORY_PREFIX + page.key] = category
+        order = _order_number(form, f"order__{page.key}")
+        if order is not None:
+            names[core.ORDER_PREFIX + page.key] = str(order)
+    # Category order: the boxes on the page are catorder__<n> (category name in
+    # catname__<n>). Categories with no number, or new ones typed in this save,
+    # go after the numbered ones.
+    used = []
+    for page in PAGES:
+        c = names.get(core.CATEGORY_PREFIX + page.key)
+        if c and c not in used:
+            used.append(c)
+    numbered = {}
+    for key in form.keys():
+        if key.startswith("catname__"):
+            name = str(form.get(key, "")).strip()
+            n = _order_number(form, "catorder__" + key[len("catname__"):])
+            if name in used and n is not None:
+                numbered[name] = n
+    ranked = sorted(used, key=lambda c: (c not in numbered, numbered.get(c, 0), used.index(c)))
+    for position, name in enumerate(ranked, start=1):
+        names[core.CATEGORY_POS_PREFIX + str(position)] = name
     site = str(form.get("site_name", "")).strip()
     if len(site) > _PAGE_NAME_MAX:
         return _user_redirect("page_names", nameerr=f"Names+must+be+{_PAGE_NAME_MAX}+characters+or+fewer")

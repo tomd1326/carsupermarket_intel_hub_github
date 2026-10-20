@@ -18,6 +18,7 @@ from utils.db_utils import (get_database_connection, get_prod_pricer_connection,
                             load_all_users, load_all_page_access, load_page_names,
                             record_event, get_settings, read_user_details,
                             SETTINGS_DEFAULTS)
+from utils import app_log
 from .page_registry import ALL_PAGE_KEYS, CONFIGURED_MARKER, DEFAULT_PAGE_KEYS, PAGES, PAGES_BY_KEY
 
 logger = logging.getLogger(__name__)
@@ -170,23 +171,53 @@ def page_category(page_key: str) -> str:
     return PAGE_NAMES.get(CATEGORY_PREFIX + page_key, '')
 
 
+# Menu order (Settings > Page Names), in the same page_names table:
+# ord__<page_key> holds a page's position number, and catpos__<n> holds the
+# name of the category in position n (keyed by position, as a category name
+# can be longer than the 64-character page_key column).
+ORDER_PREFIX = 'ord__'
+CATEGORY_POS_PREFIX = 'catpos__'
+
+
+def page_order(page_key: str) -> int | None:
+    value = PAGE_NAMES.get(ORDER_PREFIX + page_key, '')
+    return int(value) if value.isdigit() else None
+
+
+def category_order() -> list[str]:
+    """Category names in their saved order."""
+    positions = []
+    for key, name in PAGE_NAMES.items():
+        if key.startswith(CATEGORY_POS_PREFIX) and key[len(CATEGORY_POS_PREFIX):].isdigit():
+            positions.append((int(key[len(CATEGORY_POS_PREFIX):]), name))
+    return [name for _, name in sorted(positions)]
+
+
 def user_menu(user: str | None) -> dict:
-    """The burger menu's pages for this user, in PAGES order:
-    {'pages': [...no category...], 'categories': [(name, [...]), ...]}.
+    """The burger menu's pages for this user:
+    {'categories': [(name, [...]), ...], 'pages': [...no category...]}.
+    Pages follow their saved order number, then PAGES order; categories
+    follow the saved category order, then the order they are first met.
     Each page is {'key', 'name', 'url'}. Usage in a template:
     {% set menu = user_menu(user_name) %}"""
     allowed = get_user_pages(user)
+    if time.time() - _PAGE_NAMES_LOADED_AT >= PAGE_NAMES_TTL_SECONDS:
+        reload_page_names()
+    ranked = sorted(
+        (p for p in PAGES if p.key in allowed),
+        key=lambda p: (page_order(p.key) is None, page_order(p.key) or 0),
+    )
     loose, grouped = [], {}
-    for page in PAGES:
-        if page.key not in allowed:
-            continue
+    for page in ranked:
         item = {'key': page.key, 'name': page_name(page.key), 'url': BASE_URL + page.path}
         category = page_category(page.key)
         if category:
             grouped.setdefault(category, []).append(item)
         else:
             loose.append(item)
-    return {'pages': loose, 'categories': list(grouped.items())}
+    saved = category_order()
+    names = sorted(grouped, key=lambda c: saved.index(c) if c in saved else len(saved))
+    return {'categories': [(c, grouped[c]) for c in names], 'pages': loose}
 
 
 templates.env.globals['page_category'] = page_category
@@ -489,4 +520,5 @@ def get_current_user(request: Request):
         _active_sessions.pop(request.session.get('session_id'), None)
         request.session.clear()
         return None
+    app_log.note_user(user)
     return user

@@ -222,26 +222,14 @@ body { background-color: var(--c-page-bg); color: var(--c-text); }
 .side-menu-top {
     display: flex;
     align-items: center;
-    justify-content: space-between;
-    padding: 12px 12px 12px 18px;
+    gap: var(--page-head-gap, 14px);
+    /* Same padding and button size as .page-head, so the burger in the panel
+       sits exactly over the burger in the header. */
+    padding: var(--page-head-pad-y, 14px) var(--page-head-pad-x, 20px);
     margin-bottom: 4px;
     border-bottom: 1px solid var(--c-border-soft);
 }
 .side-menu-title { font-weight: 700; color: var(--c-text-heading); }
-.side-menu-close {
-    width: 32px;
-    height: 32px;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    padding: 0;
-    background: none;
-    border: 1px solid transparent;
-    border-radius: var(--radius-md);
-    color: var(--c-text-muted);
-    cursor: pointer;
-}
-.side-menu-close:hover { background: var(--c-surface-alt); color: var(--c-text); }
 .side-menu-item {
     display: block;
     padding: 7px 18px;

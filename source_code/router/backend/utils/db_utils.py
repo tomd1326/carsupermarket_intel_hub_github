@@ -146,6 +146,9 @@ def _get_vehicle_pool() -> psycopg2.pool.ThreadedConnectionPool:
 
 
 SETTINGS_DEFAULTS = {
+    # Logs page (routers/logs.py): days kept, and rows per page.
+    'logs_retention_days':              30,
+    'logs_page_size':                   100,
     'number_to_buy':                    200,
     'max_days_sales':                   90,
     'max_dts':                          45,

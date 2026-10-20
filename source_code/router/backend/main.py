@@ -44,10 +44,10 @@ logging.getLogger('filelock').setLevel(logging.WARNING)
 logging.getLogger('list_processor.autotrader_client').setLevel(logging.WARNING)
 logging.getLogger('list_processor.cap_client').setLevel(logging.WARNING)
 
-# Keep recent SharePoint-file log lines in memory so the View Log button can
-# show them. Must come after basicConfig, which clears existing handlers.
-from utils.sharepoint_log import install as _install_sharepoint_log
-_install_sharepoint_log()
+# Store SharePoint-file lines, warnings and errors in Aurora for the Logs page.
+# Must come after basicConfig, which clears existing handlers.
+from utils import app_log
+app_log.install()
 
 
 class BasePathMiddleware(BaseHTTPMiddleware):
@@ -55,6 +55,9 @@ class BasePathMiddleware(BaseHTTPMiddleware):
         # Re-add the base path to URL path
         new_path = re.sub(r'^/dev', '', request.url.path)
         request.scope['path'] = new_path
+        # Page and endpoint for the Logs page; read by anything logged while
+        # this request runs.
+        app_log.begin_request(new_path)
         response = await call_next(request)
         return response
 

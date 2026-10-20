@@ -1,0 +1,330 @@
+{% from '_navigation.html' import page_header with context %}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Logs</title>
+    <link rel="icon" type="image/png" href="{{ BASE_URL }}/static/icon.png">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css" rel="stylesheet">
+    <link href="{{ static_url('css/theme.css') }}" rel="stylesheet">
+    <style>
+        /* Separate borders (not collapse) so the sticky header keeps its lines.
+           The frame is on .logs-scroll, so the last column and last row skip
+           their own border rather than doubling it. */
+        .logs-table { font-size: 12px; border-collapse: separate; border-spacing: 0; }
+        .logs-table th { white-space: nowrap; position: sticky; top: 0; background: #f8f9fa; z-index: 1; border-bottom: 1px solid var(--c-border); }
+        .logs-table th, .logs-table td { border-right: 1px solid var(--c-border-soft); }
+        .logs-table td { vertical-align: top; border-bottom: 1px solid var(--c-border-soft); }
+        .logs-table th:last-child, .logs-table td:last-child { border-right: none; }
+        .logs-table tbody tr:last-child td { border-bottom: none; }
+        .logs-msg { font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace; white-space: pre-wrap; word-break: break-word; min-width: 420px; }
+        .logs-num { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
+        .logs-nowrap { white-space: nowrap; }
+        .logs-row-warning { background: #fffbeb; }
+        .logs-row-error { background: #fef2f2; }
+        .logs-scroll { max-height: calc(100vh - 330px); overflow: auto; border: 1px solid var(--c-border); border-radius: 4px; }
+    </style>
+</head>
+<body>
+    {{ page_header('Logs', user) }}
+
+    <div class="container-fluid mt-3 px-4">
+        <div class="d-flex align-items-end gap-2 flex-wrap mb-2">
+            <div>
+                <label class="form-label small mb-0" for="f-source">Source</label>
+                <select id="f-source" class="form-select form-select-sm">
+                    <option value="">All</option>
+                    <option value="snowflake">Snowflake</option>
+                    <option value="sharepoint">SharePoint</option>
+                    <option value="app">Warnings And Errors</option>
+                </select>
+            </div>
+            <div>
+                <label class="form-label small mb-0" for="f-level">Level</label>
+                <select id="f-level" class="form-select form-select-sm">
+                    <option value="">All</option>
+                    <option value="INFO">Info</option>
+                    <option value="WARNING">Warning</option>
+                    <option value="ERROR">Error</option>
+                </select>
+            </div>
+            <div>
+                <label class="form-label small mb-0" for="f-page">Page</label>
+                <select id="f-page" class="form-select form-select-sm"><option value="">All</option></select>
+            </div>
+            <div>
+                <label class="form-label small mb-0" for="f-task">Snowflake Task</label>
+                <select id="f-task" class="form-select form-select-sm" style="max-width:260px"><option value="">All</option></select>
+            </div>
+            <div>
+                <label class="form-label small mb-0" for="f-from">From</label>
+                <input type="date" id="f-from" class="form-control form-control-sm">
+            </div>
+            <div>
+                <label class="form-label small mb-0" for="f-to">To</label>
+                <input type="date" id="f-to" class="form-control form-control-sm">
+            </div>
+            <div>
+                <label class="form-label small mb-0" for="f-table">Snowflake Table</label>
+                <input type="text" id="f-table" class="form-control form-control-sm" style="width:200px" placeholder="e.g. DAILY_SUMMARY">
+            </div>
+            <div>
+                <label class="form-label small mb-0" for="f-min">Slower Than (Ms)</label>
+                <input type="number" id="f-min" class="form-control form-control-sm" min="0" step="100" style="width:110px">
+            </div>
+            <div>
+                <label class="form-label small mb-0" for="f-q">Message Contains</label>
+                <input type="text" id="f-q" class="form-control form-control-sm" style="width:200px">
+            </div>
+            <div>
+                <label class="form-label small mb-0" for="f-sort">Sort By</label>
+                <select id="f-sort" class="form-select form-select-sm">
+                    <option value="newest">Newest First</option>
+                    <option value="duration">Slowest First</option>
+                </select>
+            </div>
+            <div class="form-check mb-1">
+                <input class="form-check-input" type="checkbox" id="f-failed">
+                <label class="form-check-label small" for="f-failed">Failed Queries Only</label>
+            </div>
+            <button class="btn btn-primary btn-sm" onclick="loadLogs(0)"><i class="fas fa-search me-1"></i>Apply</button>
+            <button class="btn btn-outline-secondary btn-sm" onclick="resetFilters()">Reset</button>
+            <button id="refresh-btn" class="btn btn-outline-primary btn-sm" onclick="refreshLogs()" title="Reload the log, keeping the filters, sort and page">
+                <i class="fas fa-sync-alt me-1"></i>Refresh
+            </button>
+        </div>
+
+        <div class="d-flex align-items-center gap-2 flex-wrap mb-2">
+            <button id="impact-btn" class="btn btn-outline-primary btn-sm" onclick="loadImpact()">
+                <i class="fas fa-snowflake me-1"></i>Load Snowflake Impact For These Rows
+            </button>
+            <span id="impact-note" class="small text-muted"></span>
+            <span class="flex-grow-1"></span>
+            <span id="count-label" class="small text-muted"></span>
+            <button class="btn btn-outline-secondary btn-sm" onclick="pageBy(-1)">Previous</button>
+            <button class="btn btn-outline-secondary btn-sm" onclick="pageBy(1)">Next</button>
+            <button class="btn btn-outline-secondary btn-sm" data-bs-toggle="collapse" data-bs-target="#log-settings">
+                <i class="fas fa-cog me-1"></i>Log Settings
+            </button>
+        </div>
+
+        <div id="log-settings" class="collapse mb-2">
+            <div class="card card-body py-2 d-flex flex-row align-items-end gap-3 flex-wrap">
+                <div>
+                    <label class="form-label small mb-0" for="s-days">Days Kept</label>
+                    <input type="number" id="s-days" class="form-control form-control-sm" min="1" max="365" value="{{ retention_days }}" style="width:100px">
+                </div>
+                <div>
+                    <label class="form-label small mb-0" for="s-size">Rows Per Page</label>
+                    <input type="number" id="s-size" class="form-control form-control-sm" min="10" max="500" value="{{ page_size }}" style="width:100px">
+                </div>
+                <button class="btn btn-primary btn-sm" onclick="saveLogSettings()">Save</button>
+                <span id="s-msg" class="small"></span>
+            </div>
+        </div>
+
+        <div id="logs-error" class="alert alert-danger py-1 px-2 small d-none"></div>
+
+        <div class="logs-scroll">
+            <table class="table table-sm table-hover mb-0 logs-table">
+                <thead>
+                    <tr>
+                        <th>Time</th><th>Source</th><th>Level</th><th>Page</th><th>Task</th><th>User</th>
+                        <th>Snowflake Table</th><th>Message</th><th class="logs-num">Duration (Ms)</th><th class="logs-num">Rows</th>
+                        <th class="logs-num">Bytes Scanned</th><th class="logs-num">Cache %</th>
+                        <th>Query Id</th>
+                    </tr>
+                </thead>
+                <tbody id="logs-body"></tbody>
+            </table>
+        </div>
+        <div class="small text-muted mt-2">
+            Bytes Scanned and Cache % come from Snowflake's recent query history for the app's own user: the last 7 days only.
+            Older rows show a dash. Partition counts and credits cannot be read with the app's Snowflake role.
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
+    <script>
+        const BASE_URL = "{{ BASE_URL }}";
+        const FILTER_IDS = ['source', 'level', 'page', 'task', 'table', 'from', 'to', 'min', 'q', 'sort'];
+        let offset = 0, total = 0, pageSize = {{ page_size }};
+        let impactCache = {};
+
+        function el(id) { return document.getElementById(id); }
+
+        function showError(msg) {
+            const box = el('logs-error');
+            box.textContent = msg || '';
+            box.classList.toggle('d-none', !msg);
+        }
+
+        function fmtBytes(n) {
+            if (n === null || n === undefined) return '-';
+            const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+            let i = 0, v = Number(n);
+            while (v >= 1024 && i < units.length - 1) { v /= 1024; i++; }
+            return (i === 0 ? v : v.toFixed(1)) + ' ' + units[i];
+        }
+
+        function buildQuery() {
+            const p = new URLSearchParams();
+            p.set('source', el('f-source').value);
+            p.set('level', el('f-level').value);
+            p.set('page', el('f-page').value);
+            p.set('task', el('f-task').value);
+            p.set('table', el('f-table').value);
+            p.set('date_from', el('f-from').value);
+            p.set('date_to', el('f-to').value);
+            if (el('f-min').value) p.set('min_duration_ms', el('f-min').value);
+            p.set('q', el('f-q').value);
+            p.set('sort', el('f-sort').value);
+            if (el('f-failed').checked) p.set('failed_only', 'true');
+            p.set('offset', offset);
+            return p.toString();
+        }
+
+        function cell(text, cls) {
+            const td = document.createElement('td');
+            if (cls) td.className = cls;
+            td.textContent = (text === null || text === undefined || text === '') ? '' : text;
+            return td;
+        }
+
+        function renderRows(rows) {
+            const body = el('logs-body');
+            body.innerHTML = '';
+            if (!rows.length) {
+                const tr = document.createElement('tr');
+                const td = cell('No log entries match these filters.');
+                td.colSpan = 13;
+                td.className = 'text-muted p-2';
+                tr.appendChild(td);
+                body.appendChild(tr);
+                return;
+            }
+            rows.forEach(r => {
+                const tr = document.createElement('tr');
+                const lvl = (r.level || '').toLowerCase();
+                if (lvl === 'warning' || lvl === 'error') tr.className = 'logs-row-' + lvl;
+                tr.dataset.queryId = r.query_id || '';
+                tr.appendChild(cell(r.time, 'logs-nowrap'));
+                tr.appendChild(cell(r.source));
+                tr.appendChild(cell(r.level));
+                tr.appendChild(cell(r.page));
+                tr.appendChild(cell(r.task));
+                tr.appendChild(cell(r.user));
+                tr.appendChild(cell(r.tables));
+                tr.appendChild(cell(r.message, 'logs-msg'));
+                tr.appendChild(cell(r.duration_ms === null ? '' : r.duration_ms.toLocaleString(), 'logs-num'));
+                tr.appendChild(cell(r.rows_returned === null ? '' : r.rows_returned.toLocaleString(), 'logs-num'));
+                const bytes = cell('', 'logs-num'); bytes.dataset.col = 'bytes';
+                const cache = cell('', 'logs-num'); cache.dataset.col = 'cache';
+                tr.appendChild(bytes);
+                tr.appendChild(cache);
+                tr.appendChild(cell(r.query_id, 'logs-nowrap'));
+                body.appendChild(tr);
+            });
+            applyImpact();
+        }
+
+        function applyImpact() {
+            document.querySelectorAll('#logs-body tr').forEach(tr => {
+                const qid = tr.dataset.queryId;
+                if (!qid || !(qid in impactCache)) return;
+                const i = impactCache[qid];
+                const bytes = tr.querySelector('[data-col="bytes"]');
+                const cache = tr.querySelector('[data-col="cache"]');
+                if (!i) { bytes.textContent = '-'; cache.textContent = '-'; return; }
+                bytes.textContent = fmtBytes(i.bytes_scanned);
+                cache.textContent = (i.cache_percent === null || i.cache_percent === undefined) ? '-' : i.cache_percent + '%';
+            });
+        }
+
+        function loadLogs(newOffset) {
+            offset = newOffset;
+            showError('');
+            fetch(BASE_URL + '/logs/data?' + buildQuery())
+                .then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+                .then(resp => {
+                    total = resp.total; pageSize = resp.page_size;
+                    renderRows(resp.rows);
+                    const from = total ? offset + 1 : 0;
+                    el('count-label').textContent = from + '-' + Math.min(offset + pageSize, total) + ' of ' + total.toLocaleString();
+                })
+                .catch(err => showError('Could not load the log: ' + err.message));
+        }
+
+        function pageBy(dir) {
+            const next = offset + dir * pageSize;
+            if (next < 0 || next >= total) return;
+            loadLogs(next);
+        }
+
+        function resetFilters() {
+            FILTER_IDS.forEach(id => { const e = el('f-' + id); if (e.tagName === 'SELECT') e.selectedIndex = 0; else e.value = ''; });
+            el('f-sort').value = 'newest';
+            el('f-failed').checked = false;
+            loadLogs(0);
+        }
+
+        // Reloads the rows and the Page and Task lists, keeping every filter,
+        // the sort and the current page. Snowflake impact is not re-fetched;
+        // what was already loaded stays on screen.
+        function refreshLogs() {
+            const btn = el('refresh-btn');
+            btn.disabled = true;
+            loadFilters();
+            loadLogs(offset);
+            setTimeout(() => { btn.disabled = false; }, 600);
+        }
+
+        function loadFilters() {
+            fetch(BASE_URL + '/logs/filters').then(r => r.json()).then(resp => {
+                [['f-page', resp.pages], ['f-task', resp.tasks]].forEach(([id, items]) => {
+                    const sel = el(id);
+                    const keep = sel.value;
+                    while (sel.options.length > 1) sel.remove(1);
+                    (items || []).forEach(v => { const o = document.createElement('option'); o.value = v; o.textContent = v; sel.appendChild(o); });
+                    sel.value = keep;
+                });
+            }).catch(() => {});
+        }
+
+        function loadImpact() {
+            const ids = Array.from(document.querySelectorAll('#logs-body tr'))
+                .map(tr => tr.dataset.queryId).filter(Boolean);
+            if (!ids.length) { el('impact-note').textContent = 'No Snowflake queries on this page.'; return; }
+            const btn = el('impact-btn');
+            btn.disabled = true;
+            el('impact-note').textContent = 'Loading...';
+            fetch(BASE_URL + '/logs/impact', {
+                method: 'POST', headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({query_ids: ids})
+            }).then(r => r.json()).then(resp => {
+                if (resp.status !== 'ok') { el('impact-note').textContent = resp.message || 'Failed.'; return; }
+                ids.forEach(id => { impactCache[id] = resp.impact[id] || null; });
+                applyImpact();
+                const found = ids.filter(id => impactCache[id]).length;
+                el('impact-note').textContent = found + ' of ' + ids.length + ' found in Snowflake history.';
+            }).catch(err => { el('impact-note').textContent = 'Failed: ' + err.message; })
+              .finally(() => { btn.disabled = false; });
+        }
+
+        function saveLogSettings() {
+            const msg = el('s-msg');
+            fetch(BASE_URL + '/logs/settings', {
+                method: 'POST', headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({retention_days: parseInt(el('s-days').value, 10), page_size: parseInt(el('s-size').value, 10)})
+            }).then(r => { if (!r.ok) throw new Error('Days kept must be 1 to 365 and rows per page 10 to 500.'); return r.json(); })
+              .then(() => { msg.className = 'small text-success'; msg.textContent = 'Saved.'; loadLogs(0); })
+              .catch(err => { msg.className = 'small text-danger'; msg.textContent = err.message; });
+        }
+
+        loadFilters();
+        loadLogs(0);
+    </script>
+</body>
+</html>
