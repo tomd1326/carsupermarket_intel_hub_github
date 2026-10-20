@@ -1,4 +1,4 @@
-{% from '_navigation.html' import account_nav with context %}
+{% from '_navigation.html' import page_header with context %}
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -152,12 +152,7 @@
     </style>
 </head>
 <body>
-    <div id="resize-ghost"></div>
-    {{ account_nav(user, show_back=True) }}
-
-    <div class="controls">
-        <div class="page-header">
-            <h2>{{ page_name('stock_list') }}</h2>
+    {% call page_header(page_name('stock_list'), user) %}
             <button id="fetchBtn" class="btn btn-primary btn-sm" onclick="fetchData(true)">
                 <i class="fas fa-sync-alt me-1"></i>Refresh Data
             </button>
@@ -168,7 +163,10 @@
             {% endif %}
             <span id="sf-status" class="toolbar-text"><i class="fas fa-snowflake me-1 text-info"></i>Snowflake</span>
             <span id="apex-updated" class="toolbar-text" style="display:none">Apex data updated: <strong id="apex-updated-val"></strong></span>
-        </div>
+    {% endcall %}
+    <div id="resize-ghost"></div>
+
+    <div class="controls">
 
         <div class="page-loading"><i class="fas fa-sync-alt spin"></i> <span>Loading<span class="loading-dots"></span></span></div>
 

@@ -1,4 +1,4 @@
-{% from '_navigation.html' import account_nav with context %}
+{% from '_navigation.html' import page_header with context %}
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -14,22 +14,7 @@
         @font-face { font-family: 'DM Sans'; src: url('{{ BASE_URL }}/static/fonts/DMSans-Regular.ttf');  font-weight: 400; }
         @font-face { font-family: 'DM Sans'; src: url('{{ BASE_URL }}/static/fonts/DMSans-Bold.ttf');     font-weight: 700; }
         body, button, input, select, textarea { font-family: 'DM Sans', system-ui, sans-serif; font-size: 14px; }
-        body { background: #f1f5f9; }
-
-        .top-bar {
-            background: #fff;
-            border-bottom: 1px solid #e2e8f0;
-            padding: 12px 28px;
-            display: flex;
-            align-items: center;
-            gap: 16px;
-            position: sticky;
-            top: 0;
-            z-index: 100;
-        }
-        .top-bar h1 { font-size: 1.1rem; font-weight: 700; margin: 0; color: #0f172a; }
-        .top-bar .back-link { color: #64748b; text-decoration: none; font-size: 0.9rem; }
-        .top-bar .back-link:hover { color: #0f172a; }
+        body { background: var(--c-page-bg); }
         .page-content { padding: 24px 32px; }
 
         .charts-row {
@@ -64,18 +49,15 @@
         .legend-item { display: flex; align-items: center; gap: 4px; }
         .legend-dot { width: 14px; height: 3px; border-radius: 2px; display: inline-block; }
         .legend-dot-dashed { width: 14px; height: 0; border-top: 2px dashed #9ca3af; display: inline-block; }
-        /* Shared Back / Home / nav button size across all pages */
     </style>
 </head>
 <body>
-    {{ account_nav(user) }}
-    <div class="top-bar">
-        <h1>{{ page_name('weekly_business_review') }}</h1>
+    {% call page_header(page_name('weekly_business_review'), user) %}
         <button class="btn btn-load" id="loadBtn" onclick="loadAll()">
             <i class="fas fa-sync-alt" id="loadIcon"></i> Load Data
         </button>
         <span class="status-text" id="statusText"></span>
-    </div>
+    {% endcall %}
 
     <div class="page-content">
         <div class="charts-row">

@@ -1,4 +1,4 @@
-{% from '_navigation.html' import account_nav with context %}
+{% from '_navigation.html' import page_header with context %}
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -15,14 +15,12 @@
         @font-face { font-family: 'DM Sans'; src: url('{{ BASE_URL }}/static/fonts/DMSans-SemiBold.ttf'); font-weight: 600; }
         @font-face { font-family: 'DM Sans'; src: url('{{ BASE_URL }}/static/fonts/DMSans-Bold.ttf');     font-weight: 700; }
         body, button, input, select, textarea { font-family: 'DM Sans', system-ui, sans-serif; }
-        body { background-color: #003c57; }
-        .page-header { color: #ffffff; font-weight: 600; letter-spacing: -0.3px; }
-        .back-link { color: rgba(255,255,255,0.6) !important; text-decoration: none; }
-        .back-link:hover { color: #ffffff !important; }
+        body { background-color: var(--c-page-bg); color: var(--c-text); }
 
         .panel {
-            background: #ffffff;
-            border-radius: 12px;
+            background: var(--c-surface);
+            border: 1px solid var(--c-border);
+            border-radius: var(--radius-lg);
             padding: 18px 20px;
         }
         .panel-title { font-weight: 600; font-size: 0.95rem; color: #0d3d5f; margin-bottom: 14px; }
@@ -47,11 +45,11 @@
             padding: 7px 8px; font-size: 0.85rem; color: #33424f;
         }
         .btn-run {
-            background-color: #7ed321; border: none; color: #0d3d5f; font-weight: 600;
+            background-color: var(--c-primary); border: none; color: var(--c-surface); font-weight: 600;
             flex-shrink: 0;
         }
-        .btn-run:hover { background-color: #6cba18; color: #0d3d5f; }
-        .btn-run:disabled { background-color: #b8d98a; color: #4a5a45; }
+        .btn-run:hover { background-color: var(--c-primary-hover); color: var(--c-surface); }
+        .btn-run:disabled { background-color: var(--c-disabled-bg); color: var(--c-disabled-text); }
 
         /* Task history table */
         .task-search {
@@ -86,7 +84,7 @@
         .badge-error { background-color: #fbe7e7; color: #c53030; }
         .task-progress-cell { display: flex; align-items: center; gap: 8px; }
         .task-progress { height: 18px; width: 140px; flex: 0 0 140px; background-color: #cfd9e2; position: relative; }
-        .task-progress-bar { background-color: #7ed321; transition: width 0.6s ease; }
+        .task-progress-bar { background-color: var(--c-primary); transition: width 0.6s ease; }
         .task-progress-pct {
             position: absolute; inset: 0; display: flex; align-items: center;
             justify-content: center; font-size: 0.72rem; font-weight: 600; color: #33424f;
@@ -99,17 +97,13 @@
         }
         .btn-download-icon:hover { color: #0d3d5f; }
         .empty-state { color: #8a96a3; font-size: 0.85rem; text-align: center; padding: 30px 0; }
-        /* Shared Back / Home / nav button size across all pages */
     </style>
 </head>
 <body>
-    {{ account_nav(user) }}
+    {{ page_header(page_name('apex_reports'), user) }}
     <div class="container py-4" style="max-width: 1300px;">
-        <div class="d-flex align-items-center justify-content-between mb-4">
-            <h3 class="page-header mb-0">{{ page_name('apex_reports') }}</h3>
-        </div>
 
-        <div class="panel shadow-sm mb-3 run-panel">
+        <div class="panel mb-3 run-panel">
             <div class="panel-title">Run a Report</div>
             <div class="run-row">
                 <select id="report-select" class="report-select" onchange="syncDateRange()">
@@ -131,7 +125,7 @@
             </div>
         </div>
 
-        <div class="panel shadow-sm">
+        <div class="panel">
             <div class="panel-title mb-3">Task History</div>
             <div class="d-flex align-items-center gap-2 mb-3">
                 <input id="task-search" class="task-search" type="text"

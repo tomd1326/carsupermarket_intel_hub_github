@@ -22,7 +22,7 @@
 
 :root {
     /* ── Surfaces ─────────────────────────────────────────────────────── */
-    --c-page-bg:          #ffffff;   /* page background */
+    --c-page-bg:          #f1f5f9;   /* page background: light blue-grey, so white cards, tables and the header row stand out. Change it here and every page follows. */
     --c-surface:          #ffffff;   /* cards, panels, popups */
     --c-surface-alt:      #f8f9fa;   /* zebra striping, hover fills, muted bars */
     --c-surface-sunken:   #f3f4f6;   /* inset tracks, e.g. behind a toggle group */
@@ -78,44 +78,174 @@
    Small, genuinely cross-page pieces. Anything used by exactly one page
    belongs in that page's own stylesheet, not here. */
 
-/* Back / Home / nav buttons — same size wherever they appear. */
+/* Nav-style buttons (e.g. Assess Vehicle detail's "New Search") — one size. */
 .nav-btn { font-size: 1rem; padding: 0.35rem 0.7rem; }
 
-/* Global account/navigation strip. Home always sits immediately before the
-   signed-in user, in the same top-right position on every application page.
-   Absolute, not fixed: it sits at the top of the page and scrolls away with
-   it. Fixed kept it on screen, floating over tables and charts scrolled
-   underneath it. */
-.account-nav {
-    position: absolute;
-    top: 18px;
-    right: 22px;
+/* Every page sits on the shared tinted background; cards, tables and the header row stay white (--c-surface). Pages must not set their own body colour. */
+body { background-color: var(--c-page-bg); color: var(--c-text); }
+/* Bootstrap's own cards and primary buttons follow the same tokens. */
+.card { background-color: var(--c-surface); border-radius: var(--radius-lg); }
+.btn-primary { background-color: var(--c-primary); border-color: var(--c-primary); }
+.btn-primary:hover, .btn-primary:focus { background-color: var(--c-primary-hover); border-color: var(--c-primary-hover); }
+
+/* ── Page header ──────────────────────────────────────────────────────────
+   The row at the top of every page (page_header in _navigation.html): the
+   page menu button and the page name on the left, the page's own buttons
+   beside them, and the live users circles and account menu on the right.
+   It is the first thing in <body> on every page, so the button and title sit
+   in the same place everywhere. The sizes and padding are set on the row
+   from Settings > Live Users > Header & Menus; the fallbacks here are the
+   defaults. Titles are Proper Case, never text-transform. */
+.page-head {
+    position: relative;
     z-index: 1040;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    padding: var(--page-head-pad-y, 14px) var(--page-head-pad-x, 20px);
+    background: var(--page-head-bg, var(--c-surface));
+    border-bottom: 1px solid var(--c-border-soft);
+    box-shadow: 0 1px 3px rgba(15, 23, 42, var(--page-head-shadow, 0.06));
+}
+.page-head-left {
+    display: flex;
+    align-items: center;
+    gap: var(--page-head-gap, 14px);
+    min-width: 0;
+}
+.page-head-title {
+    margin: 0;
+    font-size: var(--page-title-size, 22px);
+    font-weight: 700;
+    line-height: 1.2;
+    color: var(--c-text-heading);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.page-head-actions {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+    margin-left: calc(var(--page-head-gap, 14px) / 2);
+}
+.side-menu-btn {
+    flex: none;
+    width: var(--page-menu-btn-size, 40px);
+    height: var(--page-menu-btn-size, 40px);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    background: var(--c-surface);
+    border: 1px solid var(--c-border);
+    border-radius: var(--radius-lg);
+    color: var(--c-text);
+    font-size: calc(var(--page-menu-btn-size, 40px) * 0.45);
+    cursor: pointer;
+}
+.side-menu-btn:hover { background: var(--c-surface-alt); }
+
+/* Right of the header: live users circles and the account menu. */
+.account-nav {
+    flex: none;
     display: flex;
     align-items: center;
     gap: 0.5rem;
     color: var(--c-text-muted);
     font-size: 0.85rem;
 }
-/* Home button: same text size as the user name beside it. Two classes, so a
-   page's own .btn font-size rule cannot change it on that page alone. */
-.account-nav .nav-btn {
-    margin-right: 0.25rem;
-    font-size: 0.85rem;
-    line-height: 1.4;
-    padding: 0.25rem 0.6rem;
+/* Account menu: the email button and the panel under it, linking to My
+   Account and (admin only) Settings. Text size: Settings > Live Users >
+   Header & Menus. */
+.account-menu { position: relative; }
+.account-menu-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    padding: 0;
+    border: 0;
+    background: none;
+    color: inherit;
+    font: inherit;
+    cursor: pointer;
 }
-.account-nav .account-logout { color: inherit; text-decoration: none; }
-.account-nav .account-logout:hover { color: var(--c-text); }
-/* Use on a top row that already has right-aligned controls, so those controls
-   stop before the account strip rather than sitting underneath it.
-   --account-nav-space is the strip's measured width (static/js/account_nav.js),
-   so live users circles appearing cannot push the strip over the row. The
-   290px is only used for the moment before the script has run. */
-.account-nav-clear { padding-right: var(--account-nav-space, 290px); }
-/* Home page: same strip on the dark background. */
-.account-nav-dark { color: rgba(255, 255, 255, 0.6); font-size: 0.9rem; }
-.account-nav-dark .account-logout:hover { color: #ffffff; }
+.account-menu-btn:hover { color: var(--c-text); }
+.account-menu-caret { font-size: 0.7em; transition: transform 0.15s; }
+.account-menu.open .account-menu-caret { transform: rotate(180deg); }
+.account-menu-panel {
+    position: absolute;
+    top: calc(100% + 8px);
+    right: 0;
+    z-index: 1050;
+    min-width: 180px;
+    padding: 6px 0;
+    background: var(--c-surface);
+    border: 1px solid var(--c-border);
+    border-radius: var(--radius-lg);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.12);
+    color: var(--c-text);
+    font-size: var(--account-menu-font-size, 14px);
+    text-align: left;
+    white-space: nowrap;
+}
+.account-menu-item {
+    display: block;
+    padding: 6px 14px;
+    color: var(--c-text);
+    text-decoration: none;
+}
+.account-menu-item:hover { background: var(--c-surface-alt); color: var(--c-text); }
+
+/* Page menu panel down the left of the window, opened by .side-menu-btn.
+   Drawn after the header rather than inside it, so a sticky header cannot
+   hold it underneath the page; it has its own close button. Text size and
+   width: Settings > Live Users > Header & Menus. */
+.side-menu-panel {
+    position: fixed;
+    top: 0;
+    left: 0;
+    bottom: 0;
+    z-index: 1060;
+    width: var(--side-menu-width, 260px);
+    padding: 0 0 16px;
+    overflow-y: auto;
+    background: var(--side-menu-bg, var(--c-surface));
+    color: var(--side-menu-text, var(--c-text));
+    border-right: 1px solid var(--c-border);
+    box-shadow: 4px 0 16px rgba(0, 0, 0, 0.12);
+    font-size: var(--side-menu-font-size, 15px);
+    text-align: left;
+}
+.side-menu-top {
+    display: flex;
+    align-items: center;
+    gap: var(--page-head-gap, 14px);
+    /* Same padding and button size as .page-head, so the burger in the panel
+       sits exactly over the burger in the header. */
+    padding: var(--page-head-pad-y, 14px) var(--page-head-pad-x, 20px);
+    margin-bottom: 4px;
+    border-bottom: 1px solid var(--c-border-soft);
+}
+.side-menu-title { font-weight: 700; color: var(--c-text-heading); }
+.side-menu-item {
+    display: block;
+    padding: 7px 18px;
+    color: var(--side-menu-text, var(--c-text));
+    text-decoration: none;
+}
+.side-menu-item:hover { background: var(--c-surface-alt); color: var(--side-menu-text, var(--c-text)); }
+.side-menu-item.side-menu-sub { padding-left: 30px; }
+.side-menu-heading {
+    margin-top: 10px;
+    padding: 4px 18px;
+    font-size: 0.85em;
+    font-weight: 700;
+    color: var(--c-text-muted);
+}
+.side-menu-divider { margin: 8px 0; border-top: 1px solid var(--c-border-soft); }
 
 /* Card / panel surface. */
 .panel {
@@ -219,8 +349,7 @@
    Windows has animations turned off */
 .spin { display: inline-block; animation: css-spin 0.8s linear infinite; }
 
-/* Page title row: heading, then Back and the page's own buttons, left-aligned.
-   The top-right corner is left to .account-nav. */
+/* A row of a page's own buttons below the page header, left-aligned. */
 .page-header { display: flex; align-items: center; flex-wrap: wrap; gap: 1rem; margin-bottom: 1rem; }
 .page-header h2 { margin: 0; font-size: 20px; font-weight: 700; }
 

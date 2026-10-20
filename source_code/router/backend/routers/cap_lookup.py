@@ -12,7 +12,7 @@ from zoneinfo import ZoneInfo
 
 from utils.s3_tools import download_file
 
-from .core import (BASE_URL, templates, s3_bucketname, _track, get_current_user, _uk_now,
+from .core import (BASE_URL, templates, s3_bucketname, _track, _uk_now,
                    require_page, require_page_api)
 
 logger = logging.getLogger(__name__)
@@ -167,9 +167,7 @@ def cap_lookup_process(request: Request, payload: dict, user: str = Depends(requ
 
 
 @router.get("/cap-lookup/history")
-def cap_lookup_history(user: str = Depends(get_current_user)):
-    if not user:
-        raise HTTPException(status_code=403)
+def cap_lookup_history(user: str = Depends(require_page_api('cap_lookup'))):
     import boto3
     env = 'prod' if os.getenv('AWS_REGION') == 'eu-west-1' else 'dev'
     prefix = _CAP_LOOKUP_S3_PREFIX.format(env=env)
@@ -204,9 +202,7 @@ def cap_lookup_history(user: str = Depends(get_current_user)):
 
 
 @router.get("/cap-lookup/download/{filename}")
-def cap_lookup_download(filename: str, user: str = Depends(get_current_user)):
-    if not user:
-        raise HTTPException(status_code=403)
+def cap_lookup_download(filename: str, user: str = Depends(require_page_api('cap_lookup'))):
     env = 'prod' if os.getenv('AWS_REGION') == 'eu-west-1' else 'dev'
     s3_key = _CAP_LOOKUP_S3_PREFIX.format(env=env) + filename
     fd, tmp_path = tempfile.mkstemp(suffix=".xlsx")
@@ -227,9 +223,7 @@ def cap_lookup_download(filename: str, user: str = Depends(get_current_user)):
 
 
 @router.get("/cap-lookup/load/{filename}")
-def cap_lookup_load(filename: str, user: str = Depends(get_current_user)):
-    if not user:
-        raise HTTPException(status_code=403)
+def cap_lookup_load(filename: str, user: str = Depends(require_page_api('cap_lookup'))):
     import openpyxl
     env = 'prod' if os.getenv('AWS_REGION') == 'eu-west-1' else 'dev'
     s3_key = _CAP_LOOKUP_S3_PREFIX.format(env=env) + filename

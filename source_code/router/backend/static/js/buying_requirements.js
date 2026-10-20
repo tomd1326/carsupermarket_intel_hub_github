@@ -1216,11 +1216,11 @@ function renderTable() {
             const bg = greenScale(Number(row[4]) || 0, maxSales);
             if (bg) td.style.background = bg;
         }
-        { const td = add(row[23] != null ? fmtInt(row[23]) : ''); if ((row[23] || 0) === 0) td.style.background = '#d8d8d8'; }
-        { const td = add(row[24] != null ? fmtInt(row[24]) : ''); if ((row[24] || 0) === 0) td.style.background = '#d8d8d8'; }
-        { const td = add(row[7] != null ? fmtInt(row[7]) : ''); if ((row[7] || 0) === 0) td.style.background = '#d8d8d8'; }
-        { const td = add(fmtInt(row[3])); if ((row[3] || 0) === 0) td.style.background = '#d8d8d8'; }
-        { const td = add(row[26] != null ? fmtInt(row[26]) : ''); if ((row[26] || 0) === 0) td.style.background = '#d8d8d8'; }
+        { const td = add(row[23] != null ? fmtInt(row[23]) : ''); if ((row[23] || 0) === 0) td.style.background = '#ffffff'; }
+        { const td = add(row[24] != null ? fmtInt(row[24]) : ''); if ((row[24] || 0) === 0) td.style.background = '#ffffff'; }
+        { const td = add(row[7] != null ? fmtInt(row[7]) : ''); if ((row[7] || 0) === 0) td.style.background = '#ffffff'; }
+        { const td = add(fmtInt(row[3])); if ((row[3] || 0) === 0) td.style.background = '#ffffff'; }
+        { const td = add(row[26] != null ? fmtInt(row[26]) : ''); if ((row[26] || 0) === 0) td.style.background = '#ffffff'; }
         add(row[18] != null ? fmt(row[18], 1) : '');
         add(row[19] != null ? fmt(row[19], 1) : '');
         { const td = add(row[6]  != null ? fmtInt(row[6])  : ''); if ((row[6]  || 0) > 0) td.style.background = '#fef08a'; }
@@ -2299,78 +2299,8 @@ function closeVehicleModal() {
     document.getElementById('vehicle-modal').style.display = 'none';
 }
 
-/* ── SharePoint file log popup (tdrayson only) ───────────────
- * Shows the recent Daily Buyers Sheet / Cars Bought log lines held in memory
- * by the server, newest first. The buffer is per-process and does not survive
- * a cold start, so an empty list after a quiet spell is expected.
- */
-function openSharePointLog() {
-    const modal = document.getElementById('splog-modal');
-    if (!modal) return;
-    document.getElementById('splog-backdrop').style.display = 'block';
-    modal.style.display = 'flex';
-    loadSharePointLog();
-}
-
-function closeSharePointLog() {
-    const modal = document.getElementById('splog-modal');
-    if (!modal) return;
-    document.getElementById('splog-backdrop').style.display = 'none';
-    modal.style.display = 'none';
-}
-
-function loadSharePointLog() {
-    const body = document.getElementById('splog-body');
-    if (!body) return;
-    body.innerHTML = '<div class="text-muted small p-2">Loading&hellip;</div>';
-    fetch(window.BASE_URL + '/buying-requirements/sharepoint-log')
-        .then(r => r.json())
-        .then(resp => {
-            if (resp.status !== 'ok') {
-                body.innerHTML = '<div class="text-danger small p-2">' + (resp.message || 'Failed to load log') + '</div>';
-                return;
-            }
-            const entries = resp.entries || [];
-            if (!entries.length) {
-                body.innerHTML = '<div class="text-muted small p-2">No SharePoint log entries in memory yet. Run Refresh Data, then reopen this.</div>';
-                return;
-            }
-            body.innerHTML = '';
-            entries.forEach(e => {
-                const row = document.createElement('div');
-                row.className = 'splog-row splog-' + (e.level || '').toLowerCase();
-                const ts = document.createElement('span');
-                ts.className = 'splog-ts';
-                ts.textContent = _fmtLogTs(e.ts);
-                const lvl = document.createElement('span');
-                lvl.className = 'splog-level';
-                lvl.textContent = e.level || '';
-                const msg = document.createElement('span');
-                msg.className = 'splog-msg';
-                msg.textContent = e.message || '';
-                row.appendChild(ts);
-                row.appendChild(lvl);
-                row.appendChild(msg);
-                body.appendChild(row);
-            });
-        })
-        .catch(err => {
-            body.innerHTML = '<div class="text-danger small p-2">Failed to load log: ' + err + '</div>';
-        });
-}
-
-// ISO (UTC) → local "DD/MM/YYYY HH:MM:SS"
-function _fmtLogTs(iso) {
-    if (!iso) return '';
-    const d = new Date(iso);
-    if (isNaN(d.getTime())) return iso;
-    const p = n => String(n).padStart(2, '0');
-    return p(d.getDate()) + '/' + p(d.getMonth() + 1) + '/' + d.getFullYear() +
-           ' ' + p(d.getHours()) + ':' + p(d.getMinutes()) + ':' + p(d.getSeconds());
-}
-
 document.addEventListener('keydown', e => {
-    if (e.key === 'Escape') { closeVehicleModal(); closeColumnsModal(); closeSharePointLog(); }
+    if (e.key === 'Escape') { closeVehicleModal(); closeColumnsModal(); }
 });
 
 document.getElementById('vehicle-modal-table').addEventListener('click', e => {

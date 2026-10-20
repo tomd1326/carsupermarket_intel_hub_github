@@ -1,34 +1,71 @@
-/* Keeps page content clear of the top-right account strip (.account-nav).
+/* Opens and closes the two menus drawn by page_header (_navigation.html):
  *
- * The strip's width changes: live users circles come and go, names differ in
- * length, and the Settings cog is admin only. A fixed gap cannot cover every
- * case, so this measures the strip and sets --account-nav-space on <html>:
- * the distance from the right edge of the window to the strip's left edge,
- * plus a small gap. .account-nav-clear (theme.css) pads by that amount, so a
- * top row such as Orders & Deliveries' font controls always stops before it.
+ *  - the account menu: the email button at the top right and the panel under it
+ *  - the page menu: the button at the top left and the panel down the left of
+ *    the window. The panel is drawn after the header rather than inside it, so
+ *    it is paired with its button here, and has its own close button.
+ *
+ * For both: clicking outside or pressing Escape closes the menu, and Escape
+ * (or the page menu's close button) puts focus back on the button that opened
+ * it. Opening the page menu moves focus to its first link.
  */
 (function () {
-    // A page that calls account_nav twice loads this twice.
-    if (window.accountNavSpaceStarted) return;
-    window.accountNavSpaceStarted = true;
-    const GAP_PX = 16;
+    // Guard against the script being loaded twice on one page.
+    if (window.accountNavStarted) return;
+    window.accountNavStarted = true;
 
-    function measure() {
-        // Use the first strip that is actually drawn at the top right.
-        const nav = Array.from(document.querySelectorAll('.account-nav'))
-            .find(el => getComputedStyle(el).position === 'absolute');
-        if (!nav) return;
-        const space = document.documentElement.clientWidth - nav.getBoundingClientRect().left + GAP_PX;
-        document.documentElement.style.setProperty('--account-nav-space', space + 'px');
+    function startAccountMenus() {
+        document.querySelectorAll('.account-menu').forEach((menu, i) => {
+            const btn = menu.querySelector('.account-menu-btn');
+            const panel = menu.querySelector('.account-menu-panel');
+            if (!btn || !panel) return;
+            const setOpen = open => {
+                panel.hidden = !open;
+                btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+                menu.classList.toggle('open', open);
+            };
+            panel.id = 'account-menu-panel-' + i;
+            btn.setAttribute('aria-controls', panel.id);
+            btn.addEventListener('click', () => setOpen(panel.hidden));
+            document.addEventListener('click', e => { if (!menu.contains(e.target)) setOpen(false); });
+            document.addEventListener('keydown', e => {
+                if (e.key !== 'Escape' || panel.hidden) return;
+                setOpen(false);
+                btn.focus();
+            });
+        });
+    }
+
+    function startPageMenu() {
+        const btn = document.querySelector('.side-menu-btn');
+        const panel = document.querySelector('.side-menu-panel');
+        if (!btn || !panel) return;
+        const close = panel.querySelector('.side-menu-close');
+        const setOpen = (open, refocus) => {
+            panel.hidden = !open;
+            btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+            if (open) {
+                const first = panel.querySelector('.side-menu-item');
+                if (first) first.focus();
+            } else if (refocus) {
+                btn.focus();
+            }
+        };
+        panel.id = 'side-menu-panel';
+        btn.setAttribute('aria-controls', panel.id);
+        btn.addEventListener('click', () => setOpen(panel.hidden, true));
+        if (close) close.addEventListener('click', () => setOpen(false, true));
+        document.addEventListener('click', e => {
+            if (!panel.hidden && !panel.contains(e.target) && !btn.contains(e.target)) setOpen(false, false);
+        });
+        document.addEventListener('keydown', e => {
+            if (e.key === 'Escape' && !panel.hidden) setOpen(false, true);
+        });
     }
 
     function start() {
-        measure();
-        if (window.ResizeObserver) {
-            const ro = new ResizeObserver(measure);
-            document.querySelectorAll('.account-nav').forEach(el => ro.observe(el));
-        }
-        window.addEventListener('resize', measure);
+        startAccountMenus();
+        startPageMenu();
     }
 
     if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start);

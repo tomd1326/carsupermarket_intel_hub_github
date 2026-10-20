@@ -1,9 +1,5 @@
-{# Shared navigation controls. Import with context so BASE_URL is available. #}
-{% macro home_button(extra_class='') -%}
-<a href="{{ BASE_URL }}/home" class="btn btn-outline-secondary nav-btn{% if extra_class %} {{ extra_class }}{% endif %}">
-    <i class="fas fa-home me-1"></i>Home
-</a>
-{%- endmacro %}
+{# Shared navigation controls. Import with context so BASE_URL is available:
+   {% from '_navigation.html' import page_header with context %} #}
 
 {# Live users circles. Filled by live_users.js; who is listed is decided by the
    server (routers/presence.py). #}
@@ -17,31 +13,98 @@
 {% endif %}{% endif %}
 {%- endmacro %}
 
-{# The top-right strip on every page, Home included: live users, Home, user
-   name, Logout and (admin only) the Settings cog. Every page calls this, so
-   the popup scroll lock rides along with it. Home passes show_home=False and
-   dark=True. account_nav.js keeps .account-nav-clear rows clear of it. #}
-{% macro account_nav(user_name=None, show_back=False, show_home=True, dark=False) -%}
+{# The header row at the top of every page: the page menu (burger) and the
+   page's name on the left, then any buttons the page passes in, and on the
+   right the live users circles and the account menu (email, with links to My
+   Account and, admin only, Settings).
+
+   It must be the first thing in <body>, outside any page container, so the
+   burger and title sit in the same place on every page. Sizes and padding
+   come from Settings > Live Users > Header & Menus.
+
+       {{ page_header(page_name('mot_check'), user) }}
+       {% call page_header(page_name('kpi'), user, 'kpi-top-bar') %}
+           ...buttons beside the title...
+       {% endcall %}
+
+   The page menu panel is drawn after the header, not inside it, so a sticky
+   header (KPI) cannot trap it underneath the page. It has its own close
+   button; account_nav.js opens and closes it and the account menu. Every page
+   calls this, so the popup scroll lock rides along with it. #}
+{% macro page_header(title, user_name=None, extra_class='') -%}
 <script src="{{ static_url('js/popup_scroll_lock.js') }}" defer></script>
 <script src="{{ static_url('js/account_nav.js') }}" defer></script>
-<div class="account-nav{% if dark %} account-nav-dark{% endif %}">
-    {% if show_back %}
-    <a href="javascript:history.back()" class="btn btn-outline-secondary nav-btn">
-        <i class="fas fa-arrow-left me-1"></i>Back
-    </a>
-    {% endif %}
-    {{ live_users(user_name) }}
-    {% if show_home %}{{ home_button() }}{% endif %}
+{% set pc = presence_config() %}
+{# Settings > Appearance, as the shared tokens every page reads (core.appearance_css). #}
+<style>{{ appearance_css()|safe }}</style>
+<header class="page-head{% if extra_class %} {{ extra_class }}{% endif %}"
+        style="--page-title-size: {{ pc.page_title_size }}px; --page-head-pad-y: {{ pc.page_head_pad_y }}px; --page-head-pad-x: {{ pc.page_head_pad_x }}px; --page-menu-btn-size: {{ pc.page_menu_btn_size }}px; --page-head-gap: {{ pc.page_head_gap }}px">
+    <div class="page-head-left">
+        {% if user_name %}
+        <button type="button" class="side-menu-btn" aria-expanded="false" aria-label="Menu" title="Menu">
+            <i class="fas fa-bars" aria-hidden="true"></i>
+        </button>
+        {% endif %}
+        <h1 class="page-head-title">{{ title }}</h1>
+        {% if caller is defined %}<div class="page-head-actions">{{ caller() }}</div>{% endif %}
+    </div>
     {% if user_name %}
-    <span class="account-user">{{ user_name }}</span>
-    <span aria-hidden="true">&middot;</span>
-    <a href="{{ BASE_URL }}/logout" class="account-logout">
-        <i class="fas fa-sign-out-alt"></i> Logout
-    </a>
+    {% set ud = user_details(user_name) %}
+    <div class="account-nav">
+        {{ live_users(user_name) }}
+        <span class="account-menu">
+            <button type="button" class="account-menu-btn" aria-expanded="false">
+                <span class="account-user">{{ ud.email or user_name }}</span>
+                <i class="fas fa-chevron-down account-menu-caret" aria-hidden="true"></i>
+            </button>
+            <div class="account-menu-panel" hidden style="--account-menu-font-size: {{ pc.account_menu_font_size }}px">
+                <a href="{{ BASE_URL }}/my-account" class="account-menu-item">
+                    <i class="fas fa-user me-2" aria-hidden="true"></i>My Account
+                </a>
+                {% if user_is_admin(user_name) %}
+                <a href="{{ BASE_URL }}/logs" class="account-menu-item">
+                    <i class="fas fa-list me-2" aria-hidden="true"></i>Logs
+                </a>
+                <a href="{{ BASE_URL }}/settings-page" class="account-menu-item">
+                    <i class="fas fa-cog me-2" aria-hidden="true"></i>Settings
+                </a>
+                {% endif %}
+            </div>
+        </span>
+    </div>
+    {% endif %}
+</header>
+{% if user_name %}
+{# Only the pages this user may open (user_menu, from the page registry),
+   grouped under the categories set on Settings > Page Names. #}
+{% set menu = user_menu(user_name) %}
+<nav class="side-menu-panel" aria-label="Pages" hidden
+     style="--side-menu-font-size: {{ pc.side_menu_font_size }}px; --side-menu-width: {{ pc.side_menu_width }}px; --page-head-pad-y: {{ pc.page_head_pad_y }}px; --page-head-pad-x: {{ pc.page_head_pad_x }}px; --page-menu-btn-size: {{ pc.page_menu_btn_size }}px; --page-head-gap: {{ pc.page_head_gap }}px">
+    {# The burger stays where it is in the header and closes the menu. #}
+    <div class="side-menu-top">
+        <button type="button" class="side-menu-btn side-menu-close" aria-label="Close Menu" title="Close Menu">
+            <i class="fas fa-bars" aria-hidden="true"></i>
+        </button>
+        <span class="side-menu-title">Menu</span>
+    </div>
+    <a href="{{ BASE_URL }}/home" class="side-menu-item"><i class="fas fa-home me-2" aria-hidden="true"></i>Home</a>
+    {% for category, items in menu.categories %}
+    <div class="side-menu-heading">{{ category }}</div>
+    {% for p in items %}
+    <a href="{{ p.url }}" class="side-menu-item side-menu-sub">{{ p.name }}</a>
+    {% endfor %}
+    {% endfor %}
+    {% if menu.categories and menu.pages %}<div class="side-menu-divider"></div>{% endif %}
+    {% for p in menu.pages %}
+    <a href="{{ p.url }}" class="side-menu-item">{{ p.name }}</a>
+    {% endfor %}
+    <div class="side-menu-divider"></div>
+    <a href="{{ BASE_URL }}/my-account" class="side-menu-item"><i class="fas fa-user me-2" aria-hidden="true"></i>My Account</a>
     {% if user_is_admin(user_name) %}
-    <span aria-hidden="true">&middot;</span>
-    <a href="{{ BASE_URL }}/settings-page" class="account-logout" title="Settings" aria-label="Settings"><i class="fas fa-cog"></i></a>
+    <a href="{{ BASE_URL }}/logs" class="side-menu-item"><i class="fas fa-list me-2" aria-hidden="true"></i>Logs</a>
+    <a href="{{ BASE_URL }}/settings-page" class="side-menu-item"><i class="fas fa-cog me-2" aria-hidden="true"></i>Settings</a>
     {% endif %}
-    {% endif %}
-</div>
+    <a href="{{ BASE_URL }}/logout" class="side-menu-item"><i class="fas fa-sign-out-alt me-2" aria-hidden="true"></i>Logout</a>
+</nav>
+{% endif %}
 {%- endmacro %}

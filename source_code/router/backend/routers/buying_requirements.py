@@ -21,7 +21,6 @@ from utils.sharepoint_client import SharePointClient
 from utils import sharepoint_sources
 from list_processor.cap_client import CAPClient
 from utils.file_handler import read_dataframe_file, write_dataframe_file
-from utils.sharepoint_log import get_entries as get_sharepoint_log_entries
 
 from .core import (BASE_URL, _S3_ENV, templates, s3_bucketname, _track, get_current_user,
                    is_admin, require_page, require_page_api)
@@ -83,28 +82,11 @@ def buying_requirements(request: Request, user: str = Depends(require_page('buyi
         settings = get_settings(conn, user=user)
     _track(request, 'page_view', '/buying-requirements')
     enable_cars_bought = is_admin(user) or settings.get('enable_cars_bought', False)
-    show_sharepoint_log = is_admin(user)
     _prewarm_sharepoint(enable_cars_bought)
     # How old cached purchases may be before the page fetches live: the
     # shorter check interval of the two sheets (Settings > SharePoint).
     sp_cache_minutes = min(_sp_cache_seconds(_DBS_KEY), _sp_cache_seconds(_CB_KEY)) // 60
-    return templates.TemplateResponse("buying_requirements.html", {"request": request, "user": user, "BASE_URL": BASE_URL, "settings": settings, "enable_cars_bought": enable_cars_bought, "show_sharepoint_log": show_sharepoint_log, "sp_cache_minutes": sp_cache_minutes})
-
-
-@router.get("/buying-requirements/sharepoint-log")
-def buying_requirements_sharepoint_log(request: Request,
-                                       user: str = Depends(require_page_api('buying_requirements'))):
-    """Recent SharePoint-file log lines, newest first. Admin only.
-
-    Keeps its own admin check ON TOP of the page permission — a diagnostic
-    affordance, not something granting the page should hand over."""
-    if not is_admin(user):
-        raise HTTPException(status_code=403, detail="Forbidden")
-    try:
-        return {"status": "ok", "entries": get_sharepoint_log_entries()}
-    except Exception as e:
-        logger.error(f"Buying requirements SharePoint log failed: {e}")
-        return {"status": "error", "message": str(e)}
+    return templates.TemplateResponse("buying_requirements.html", {"request": request, "user": user, "BASE_URL": BASE_URL, "settings": settings, "enable_cars_bought": enable_cars_bought, "sp_cache_minutes": sp_cache_minutes})
 
 
 # NEW

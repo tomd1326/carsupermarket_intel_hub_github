@@ -11,7 +11,7 @@ import logging
 from utils.snowflake_client import SnowflakeClient
 
 from .core import (BASE_URL, templates, _track, get_current_user, require_page,
-                   require_page_api, get_user_pages, is_admin)
+                   require_page_api, get_user_pages, is_admin, user_details)
 from .page_registry import PAGES
 
 logger = logging.getLogger(__name__)
@@ -79,6 +79,20 @@ def home(request: Request, user: str = Depends(get_current_user)):
     return templates.TemplateResponse("home.html", {
         "request": request, "user": user, "BASE_URL": BASE_URL,
         "pages": [p for p in PAGES if p.key in allowed],
+    })
+
+
+@router.get("/my-account", response_class=HTMLResponse)
+def my_account(request: Request, user: str = Depends(get_current_user)):
+    """The signed-in user's own details, opened from the email menu at the top
+    right. Like /home it is not in the page registry: everyone who is logged in
+    can open their own account."""
+    if not user:
+        return RedirectResponse(url=BASE_URL + "/login", status_code=303)
+    _track(request, 'page_view', '/my-account')
+    return templates.TemplateResponse("my_account.html", {
+        "request": request, "user": user, "BASE_URL": BASE_URL,
+        "details": user_details(user),
     })
 
 

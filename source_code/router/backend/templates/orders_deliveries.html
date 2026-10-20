@@ -1,4 +1,4 @@
-{% from '_navigation.html' import account_nav with context %}
+{% from '_navigation.html' import page_header with context %}
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -21,24 +21,22 @@
     <link href="{{ static_url('css/orders_deliveries.css') }}" rel="stylesheet">
 </head>
 <body>
-    {{ account_nav(user) }}
-    <div class="container-fluid py-4" style="max-width: 100%; padding-left: 24px; padding-right: 24px;">
-        <div class="d-flex align-items-center mb-3 account-nav-clear">
-            <h3 class="page-header mb-0">{{ page_name('orders_deliveries') }}</h3>
+    {% call page_header(page_name('orders_deliveries'), user) %}
             <span class="cache-note ms-3" id="cache-note"></span>
             <button class="btn btn-refresh ms-2" id="refresh-btn" onclick="refreshData()" title="Reload the latest data from Snowflake">
                 <i class="fas fa-rotate-right"></i> Refresh Data
             </button>
             <!-- Page font resizer — scales everything except the vehicle grid,
                  which has its own resizer next to its CSV button. -->
-            <div class="d-flex align-items-center gap-1 ms-auto">
+            <div class="d-flex align-items-center gap-1 ms-2">
                 <span class="text-muted">Font</span>
                 <button class="btn btn-outline-secondary px-2 py-0" onclick="changeFont('page', -1)">&minus;</button>
                 <span id="font-size-label" class="text-muted" style="min-width:32px;text-align:center">{{ font_summary }}</span>
                 <button class="btn btn-outline-secondary px-2 py-0" onclick="changeFont('page', 1)">+</button>
                 <button class="btn btn-outline-secondary px-2 py-0" title="Reset font size" onclick="resetFont('page')"><i class="fas fa-rotate-left"></i></button>
             </div>
-        </div>
+    {% endcall %}
+    <div class="container-fluid py-4" style="max-width: 100%; padding-left: 24px; padding-right: 24px;">
 
         <div class="panel shadow-sm mb-3" id="control-bar">
             <div class="control-row" id="toolbar-row">

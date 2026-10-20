@@ -1,4 +1,4 @@
-{% from '_navigation.html' import account_nav with context %}
+{% from '_navigation.html' import page_header with context %}
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -134,9 +134,7 @@
     </style>
 </head>
 <body>
-    {{ account_nav(user) }}
-    <div class="top-bar">
-        <h1>{{ page_name('google_ads_campaigns') }}</h1>
+    {% call page_header(page_name('google_ads_campaigns'), user) %}
         <button class="btn btn-load" id="loadBtn" onclick="loadGa4Campaigns()">
             <i class="fas fa-sync-alt" id="loadIcon"></i> Load Data
         </button>
@@ -144,7 +142,7 @@
             <i class="fas fa-cog"></i> Settings
         </button>
         <span class="status-text" id="statusText"></span>
-    </div>
+    {% endcall %}
 
     <div class="page-content">
         <div class="category-section" id="ga4CampaignSection">

@@ -1,4 +1,4 @@
-{% from '_navigation.html' import account_nav with context %}
+{% from '_navigation.html' import page_header with context %}
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -60,15 +60,9 @@
         .pa-note { font-size: 0.85rem; color: #64748b; }
     </style>
 </head>
-<body class="bg-light">
-    {{ account_nav(user) }}
+<body>
+    {{ page_header('Settings', user) }}
     <div class="settings-card page-access-card">
-        <div class="d-flex align-items-center gap-3 mb-4">
-            <a href="{{ BASE_URL }}/settings-page" class="btn btn-outline-secondary nav-btn">
-                <i class="fas fa-arrow-left me-1"></i>Back
-            </a>
-            <h4 class="mb-0">Settings</h4>
-        </div>
 
         <div class="settings-layout">
         {% include '_settings_nav.html' %}
