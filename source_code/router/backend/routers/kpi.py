@@ -3395,7 +3395,8 @@ def _vehicle_view_config(stored) -> dict:
         grey_rules = [{"column": column, "op": "=", "value": stored.get("grey_value", "STATUS_CANCELLED")}] if column else []
     return {"table": stored.get("table") or _VEHICLE_TABLE_DEFAULT,
             "columns": stored.get("columns") or [],
-            "grey_rules": grey_rules}
+            "grey_rules": grey_rules,
+            "filters": stored.get("filters") or []}
 
 
 def _vehicle_views(stored) -> list:
@@ -3422,7 +3423,7 @@ def _vehicle_view_for_table(stored, table: str) -> dict:
     for view in _vehicle_views(stored):
         if view["table"] == table:
             return view
-    return {"table": table, "columns": [], "grey_rules": []}
+    return {"table": table, "columns": [], "grey_rules": [], "filters": []}
 
 
 def _vehicle_tables() -> list:
@@ -3526,11 +3527,26 @@ def _vehicle_table_columns(table: str) -> list:
 
 
 def _validate_vehicle_view(view) -> str | None:
-    if not isinstance(view, dict) or set(view) - {"table", "columns", "grey_rules"}:
+    if not isinstance(view, dict) or set(view) - {"table", "columns", "grey_rules", "filters"}:
         return "bad vehicle view"
     error = _validate_filter_list(view.get("grey_rules", []), "grey-out rule")
     if error:
         return error
+    # Quick filters shown above the list: [{column, label}].
+    quick = view.get("filters", [])
+    if not isinstance(quick, list) or len(quick) > _VEHICLE_FILTERS_MAX:
+        return f"At most {_VEHICLE_FILTERS_MAX} quick filters"
+    quick_seen = set()
+    for q in quick:
+        if not isinstance(q, dict) or set(q) - {"column", "label"}:
+            return "bad quick filter"
+        name = q.get("column")
+        if not isinstance(name, str) or not re.fullmatch(_IDENTIFIER, name) or name in quick_seen:
+            return f"Choose a different column for each quick filter: {name}"
+        quick_seen.add(name)
+        label = q.get("label", "")
+        if not isinstance(label, str) or len(label) > 60:
+            return "Quick filter names must be 60 characters or fewer"
     table = view.get("table")
     if not isinstance(table, str) or not re.fullmatch(rf"{_IDENTIFIER}\.{_IDENTIFIER}", table):
         return "bad vehicle table"
@@ -3770,6 +3786,23 @@ def kpi_vehicles(request: Request, row_id: str, start: str, end: str,
             select_cols += f", COALESCE({' OR '.join(grey_parts)}, FALSE) AS GREY_ROW__"
             # The SELECT's placeholders come before the WHERE's.
             params = grey_params + params
+        # Quick filter columns not already shown are read as extra values after
+        # the grey flag. Each filter says which value in the row to use.
+        shown_index = {c["column"]: i for i, c in enumerate(shown)}
+        next_index = len(shown) + (1 if grey else 0)
+        quick_filters = []
+        for q in view["filters"]:
+            if q["column"] not in live:
+                continue
+            if q["column"] in shown_index:
+                index = shown_index[q["column"]]
+            else:
+                select_cols += f", {q['column']}"
+                index = next_index
+                shown_index[q["column"]] = index
+                next_index += 1
+            quick_filters.append({"column": q["column"], "label": q.get("label") or q["column"],
+                                  "type": live[q["column"]], "index": index})
         with SnowflakeClient() as sf:
             rows, _ = sf.execute(f"""
                 SELECT {select_cols}
@@ -3792,6 +3825,7 @@ def kpi_vehicles(request: Request, row_id: str, start: str, end: str,
         # true/false grey flag as one extra value at the end.
         "rows": [[_json_cell(v) for v in r] for r in rows[:_VEHICLE_ROW_LIMIT]],
         "grey_flag": grey,
+        "quick_filters": quick_filters,
         "truncated": len(rows) > _VEHICLE_ROW_LIMIT,
         "row_limit": _VEHICLE_ROW_LIMIT,
         "missing_columns": missing,

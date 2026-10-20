@@ -292,17 +292,23 @@
         /* ── Point popup and View Vehicles ──────────────────────────────────── */
         .chart-wrap canvas { cursor: pointer; }
         /* Narrow until the vehicles load, then full width for the table. */
-        .modal-box.point-modal { width: 560px; max-width: 96vw; max-height: 86vh; display: flex; flex-direction: column; }
+        .modal-box.point-modal { width: fit-content; min-width: 560px; max-width: 96vw; max-height: 86vh; display: flex; flex-direction: column; }
         .modal-box.point-modal.has-vehicles { width: 1400px; }
         .modal-overlay#pointModal { padding-top: 6vh; }
         .point-figures { display: flex; gap: 22px; flex-wrap: wrap; font-size: 0.86rem; color: #334155; margin-bottom: 12px; }
         .point-figures b { color: #0f172a; }
         .point-calc { font-size: 0.84rem; color: #334155; margin: -4px 0 12px; padding: 8px 10px; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 6px; display: none; }
-        .point-calc.show { display: block; }
+        .point-calc.show { display: block; overflow-x: auto; }
         .point-calc table { border-collapse: collapse; width: 100%; }
-        .point-calc th { text-align: right; font-weight: 600; color: #64748b; font-size: 0.78rem; padding: 2px 10px 4px; border-bottom: 1px solid #e2e8f0; }
+        .point-calc th { white-space: nowrap; }
+        .point-calc .calc-how { margin-bottom: 10px; padding-bottom: 8px; border-bottom: 1px solid #e2e8f0; line-height: 1.6; }
+        .point-calc .calc-how-title { font-weight: 700; color: #0f172a; margin-bottom: 2px; }
+        .point-calc .calc-how-label { color: #64748b; }
+        .point-calc .calc-how b { color: #0f172a; }
+        .point-calc tr.calc-groups th { text-align: center; color: #334155; font-size: 0.8rem; border-bottom: 2px solid #cbd5e1; }        .point-calc th { text-align: right; font-weight: 600; color: #64748b; font-size: 0.78rem; padding: 2px 10px 4px; border-bottom: 1px solid #e2e8f0; }
         .point-calc td { text-align: right; padding: 3px 10px; font-variant-numeric: tabular-nums; }
-        .point-calc th:first-child, .point-calc td:first-child { text-align: left; padding-left: 0; }
+        .point-calc .calc-date { text-align: left; padding-left: 0; }
+        .point-calc .calc-start { border-left: 2px solid #cbd5e1; }
         .point-calc .calc-tot { color: #64748b; }
         .point-calc .calc-res { font-weight: 700; color: #0f172a; }
         .point-calc .calc-foot td { border-top: 1px solid #e2e8f0; color: #334155; }
@@ -376,6 +382,33 @@
             width: 100%; min-width: 0; padding: 5px 8px; border: 1px solid #cbd5e1; border-radius: 6px; background: #fff; font-size: 0.82rem;
         }
         .veh-filter .btn { padding: 3px 9px; font-size: 0.78rem; }
+        /* Quick filters above the vehicle list (popup) and their setup rows (Settings). */
+        .veh-quick { display: none; flex-wrap: wrap; gap: 10px; align-items: flex-end; margin-top: 12px; }
+        .veh-quick.show { display: flex; }
+        .veh-quick label { display: flex; flex-direction: column; gap: 2px; font-size: 0.76rem; font-weight: 600; color: #475569; }
+        .veh-quick select, .veh-quick input {
+            padding: 4px 8px; border: 1px solid #cbd5e1; border-radius: 6px; background: #fff; font-size: 0.82rem; max-width: 190px;
+        }
+        .veh-quick input[type="number"] { width: 90px; }
+        .veh-multi-field { display: flex; flex-direction: column; gap: 2px; font-size: 0.76rem; font-weight: 600; color: #475569; }
+        .veh-multi { position: relative; font-weight: 400; }
+        .veh-multi summary {
+            padding: 4px 8px; border: 1px solid #cbd5e1; border-radius: 6px; background: #fff; font-size: 0.82rem;
+            cursor: pointer; min-width: 110px; max-width: 190px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #0f172a;
+        }
+        .veh-multi-list {
+            position: absolute; z-index: 20; top: 100%; left: 0; min-width: 100%; max-height: 260px; overflow: auto;
+            background: #fff; border: 1px solid #cbd5e1; border-radius: 6px; padding: 4px 8px; box-shadow: 0 4px 12px rgba(0,0,0,.12);
+        }
+        .veh-multi-list label { display: flex; flex-direction: row; gap: 6px; align-items: center; font-weight: 400; font-size: 0.82rem; color: #0f172a; white-space: nowrap; padding: 2px 0; }
+        .veh-multi-list a { display: block; font-size: 0.76rem; padding: 2px 0 4px; }
+        .veh-quick .veh-quick-range { display: flex; gap: 4px; align-items: center; }
+        .veh-quick .veh-quick-count { font-size: 0.78rem; color: #64748b; margin-left: auto; }
+        .veh-quick-row { display: grid; grid-template-columns: 1.4fr 1.4fr auto auto auto; gap: 6px; margin-bottom: 6px; align-items: center; }
+        .veh-quick-row select, .veh-quick-row input {
+            width: 100%; min-width: 0; padding: 5px 8px; border: 1px solid #cbd5e1; border-radius: 6px; background: #fff; font-size: 0.82rem;
+        }
+        .veh-quick-row .btn { padding: 3px 9px; font-size: 0.78rem; }
         /* Stacked chart series rows: metric, name, colour, order, remove. */
         /* Fixed widths for the colour and button columns: each row is its own
            grid, so "auto" columns sized to their content would make the
@@ -555,6 +588,7 @@
                     <i class="fas fa-download"></i> CSV
                 </button>
             </div>
+            <div class="veh-quick" id="vehiclesQuick"></div>
             <div class="vehicles-wrap" id="vehiclesWrap">
                 <table class="vehicles-table" id="vehiclesTable"></table>
             </div>
@@ -1368,6 +1402,14 @@
                     <i class="fas fa-plus"></i> Add Rule
                 </button>
                 <div class="modal-hint">Checked on every row whether or not the column is shown, e.g. INVOICE_STATUS equals STATUS_CANCELLED.</div>
+            </div>
+            <div class="modal-field">
+                <label>Quick Filters At The Top Of The List</label>
+                <div id="vehQuickList"></div>
+                <button type="button" class="btn btn-edit section-add-btn" onclick="addVehQuickFilter()">
+                    <i class="fas fa-plus"></i> Add Filter
+                </button>
+                <div class="modal-hint">Each filter appears above the vehicle list: a tick-list of the values in the list for a text column (tick several, none ticked shows all), or a from / to box for a number or date column. The column does not have to be shown in the list. The name is the label above the filter (blank uses the column name).</div>
             </div>
             <div class="veh-cols">
                 <div>
@@ -3006,7 +3048,10 @@
         const start = meta.starts[index];
         if (!start) return;
         const end = meta.kind === 'd' ? start : meta.kind === 'w' ? addDaysIso(start, 6) : lastDayOfMonthIso(start);
-        pointState = { row, start, end, data: null, sort: null };
+        pointState = { row, start, end, data: null, sort: null, filterVals: {} };
+        const quickBar = document.getElementById('vehiclesQuick');
+        quickBar.classList.remove('show');
+        quickBar.innerHTML = '';
 
         const period = { d: 'daily', w: 'weekly', m: 'monthly' }[meta.kind];
         document.getElementById('pointTitle').textContent = `${rowTitle(row)} - ${period}`;
@@ -3075,20 +3120,32 @@
         // One table: a column for each column used (a side of several columns
         // also gets its total), then the result. One row per point, or one per
         // day when the daily chart shows the 7-day average.
-        const sides = d.calc ? [[d.calc.num, 'Top'], [d.calc.den, 'Bottom']] : [[d, 'Total']];
+        // [side, group heading, its total column's heading]
+        const sides = d.calc ? [[d.calc.num, 'Top', 'Top Total'], [d.calc.den, 'Divided By', 'Bottom Total']] : [[d, 'Total', 'Total']];
         const cols = [];
-        sides.forEach(([sideData, label]) => {
+        // groups: one heading over each side's columns ("Top", "Divided By") and
+        // the result. start: the first column of a group after the first, which
+        // gets a line on its left so the groups read apart.
+        const groups = [];
+        sides.forEach(([sideData, label, totalHead], s) => {
             const parts = sideData.side_parts || [];
+            const first = cols.length;
             parts.forEach(p => cols.push({ head: (p.op ? p.op + ' ' : '') + metricName(p.source, p.name), title: p.name,
                                            cell: i => partFmt(p, at(p.data, i)) }));
-            if (parts.length > 1) cols.push({ head: label, total: true, cell: i => plain(at(sideData, i)) });
+            if (parts.length > 1) cols.push({ head: totalHead, total: true, cell: i => plain(at(sideData, i)) });
+            const span = parts.length + (parts.length > 1 ? 1 : 0);
+            if (span) {
+                groups.push({ label, span, start: s > 0 });
+                if (s > 0) cols[first].start = true;
+            }
         });
         const scale100 = d.calc && d.calc.scale === 100;
-        cols.push({ head: d.calc ? `Top / Bottom${scale100 ? ' x 100' : ''}` : 'Result', result: true,
+        cols.push({ head: d.calc ? `Top / Bottom${scale100 ? ' x 100' : ''}` : 'Result', result: true, start: !!d.calc,
                     cell: (i, v) => (blank(v) ? '-' : resultFmt(v)) });
+        groups.push({ label: 'Result', span: 1, start: true });
         const rolling = kind === 'd' && rollingOn(row.id);
         const rowsHtml = [];
-        const cellHtml = (i, v) => cols.map(c => `<td class="${c.result ? 'calc-res' : c.total ? 'calc-tot' : ''}">${escHtml(c.cell(i, v))}</td>`).join('');
+        const cellHtml = (i, v) => cols.map(c => `<td class="${c.result ? 'calc-res' : c.total ? 'calc-tot' : ''}${c.start ? ' calc-start' : ''}">${escHtml(c.cell(i, v))}</td>`).join('');
         let footer = '';
         if (rolling) {
             // The chart point is the average of this day and the 6 before it.
@@ -3097,7 +3154,7 @@
                 const v = d.values[j];
                 if (blank(v)) continue;
                 included.push(v);
-                rowsHtml.push(`<tr><td>${escHtml(ukDate(d.dates[j]))}</td>${cellHtml(j, v)}</tr>`);
+                rowsHtml.push(`<tr><td class="calc-date">${escHtml(ukDate(d.dates[j]))}</td>${cellHtml(j, v)}</tr>`);
             }
             const sum = included.reduce((a, b) => a + b, 0);
             footer = `<tr class="calc-foot"><td colspan="${cols.length}">7-day average: ${escHtml(included.length ? resultFmt(sum) : '-')}`
@@ -3106,8 +3163,52 @@
         } else {
             rowsHtml.push(`<tr>${cellHtml(index, result ? result.v : null)}</tr>`);
         }
-        box.innerHTML = `<table><thead><tr>${rolling ? '<th>Date</th>' : ''}`
-            + cols.map(c => `<th${c.title ? ` title="${escHtml(c.title)}"` : ''}>${escHtml(c.head)}</th>`).join('')
+        // The group row only helps when there are two sides (a divided chart).
+        const groupRow = d.calc
+            ? `<tr class="calc-groups">${rolling ? '<th></th>' : ''}`
+              + groups.map(g => `<th colspan="${g.span}"${g.start ? ' class="calc-start"' : ''}>${escHtml(g.label)}</th>`).join('') + '</tr>'
+            : '';
+        // The calculation written out: once with the column names, once with this
+        // point's numbers, so anyone can see how the figure (often a %) is made.
+        // A side of several columns is put in brackets.
+        const sideText = (sideData, val) => {
+            const parts = sideData.side_parts || [];
+            if (!parts.length) return { text: val ? plain(at(sideData, index)) : 'Value', many: false };
+            const text = parts.map((p, n) => (n ? ` ${p.op || '+'} ` : (p.op && p.op !== '+' ? p.op + ' ' : ''))
+                + (val ? partFmt(p, at(p.data, index)) : metricName(p.source, p.name))).join('');
+            return { text, many: parts.length > 1 };
+        };
+        const wrap = s => (s.many ? `(${s.text})` : s.text);
+        const resultText = result && !blank(result.v) ? resultFmt(result.v) : '-';
+        let words, numbers;
+        if (d.calc) {
+            const top = sideText(d.calc.num, false), bottom = sideText(d.calc.den, false);
+            const topN = sideText(d.calc.num, true), bottomN = sideText(d.calc.den, true);
+            const x100 = scale100 ? ' x 100' : '';
+            words = `${wrap(top)} / ${wrap(bottom)}${x100}`;
+            const sums = topN.many || bottomN.many
+                ? `${wrap(topN)} / ${wrap(bottomN)} = ${plain(at(d.calc.num, index))} / ${plain(at(d.calc.den, index))}`
+                : `${topN.text} / ${bottomN.text}`;
+            numbers = `${sums}${x100} = ${resultText}`;
+        } else {
+            words = sideText(d, false).text;
+            numbers = `${sideText(d, true).text} = ${resultText}`;
+        }
+        // No figure on either side (e.g. today, before the data is loaded): say so
+        // rather than a line of dashes.
+        const sideBlank = sideData => blank(at(sideData, index))
+            && (sideData.side_parts || []).every(p => blank(at(p.data, index)));
+        if (!rolling && (d.calc ? sideBlank(d.calc.num) && sideBlank(d.calc.den) : sideBlank(d))) {
+            numbers = 'No figures for this point yet';
+        }
+        const howHtml = `<div class="calc-how"><div class="calc-how-title">How This Is Worked Out</div>`
+            + `<div><span class="calc-how-label">Calculation:</span> ${escHtml(words)}</div>`
+            + (rolling
+                ? `<div>Worked out for each day below, then the chart shows the average of the last 7 days.</div>`
+                : `<div><span class="calc-how-label">For this point:</span> <b>${escHtml(numbers)}</b></div>`)
+            + `</div>`;
+        box.innerHTML = howHtml + `<table><thead>${groupRow}<tr>${rolling ? '<th class="calc-date">Date</th>' : ''}`
+            + cols.map(c => `<th${c.start ? ' class="calc-start"' : ''}${c.title ? ` title="${escHtml(c.title)}"` : ''}>${escHtml(c.head)}</th>`).join('')
             + `</tr></thead><tbody>${rowsHtml.join('')}</tbody>${footer ? `<tfoot>${footer}</tfoot>` : ''}</table>`;
         box.classList.add('show');
     }
@@ -3152,6 +3253,7 @@
             else if (snapshot && state.start !== state.end) inspect = `For inspection - a single-day snapshot (${ukDate(state.end)}), not every day in the period.`;
             status.innerHTML = escHtml(notes.join(' - '))
                 + (inspect ? `<span class="point-inspect">${escHtml(inspect)}</span>` : '');
+            renderQuickFilters();
             renderVehiclesTable();
             document.querySelector('#pointModal .point-modal').classList.add('has-vehicles');
             document.getElementById('vehiclesWrap').classList.add('show');
@@ -3229,11 +3331,111 @@
         renderVehiclesTable();
     }
 
+    // ── Quick filters above the list (set per table in Settings > View Vehicles) ──
+    // A text or true/false column gets a drop-down of the values found in the
+    // loaded list; a number or date column gets from / to boxes. They only narrow
+    // the rows already loaded, so the totals row and the CSV follow them.
+    function quickFilterKind(f) {
+        if (VEHICLE_NUMBER_TYPES.includes(f.type)) return 'num';
+        if (VEH_DATE_TYPES.includes(f.type)) return 'date';
+        return 'select';
+    }
+
+    function renderQuickFilters() {
+        const bar = document.getElementById('vehiclesQuick');
+        const filters = pointState.data.quick_filters || [];
+        if (!filters.length) { bar.classList.remove('show'); bar.innerHTML = ''; return; }
+        bar.innerHTML = filters.map((f, n) => {
+            const kind = quickFilterKind(f);
+            if (kind === 'select') {
+                const values = [...new Set(pointState.data.rows.map(r => r[f.index])
+                    .filter(v => v !== null && v !== undefined && v !== ''))]
+                    .map(v => typeof v === 'boolean' ? (v ? 'Yes' : 'No') : String(v))
+                    .sort((a, b) => a.localeCompare(b, 'en-GB', { numeric: true }));
+                return `<div class="veh-multi-field">${escHtml(f.label)}
+                    <details class="veh-multi"><summary id="vehMultiSum${n}">All</summary>
+                    <div class="veh-multi-list">
+                    <a href="#" onclick="clearQuickSelect(${n}); return false;">Clear</a>
+                    ${values.map(v => `<label><input type="checkbox" value="${escHtml(v)}"
+                        onchange="toggleQuickSelect(${n}, this)"> ${escHtml(v)}</label>`).join('')}
+                    </div></details></div>`;
+            }
+            const t = kind === 'num' ? 'number' : 'date';
+            const step = kind === 'num' ? ' step="any"' : '';
+            return `<label>${escHtml(f.label)}<span class="veh-quick-range">
+                <input type="${t}"${step} title="From" oninput="setQuickFilter(${n}, 'min', this.value)">
+                <input type="${t}"${step} title="To" oninput="setQuickFilter(${n}, 'max', this.value)"></span></label>`;
+        }).join('') + '<span class="veh-quick-count" id="vehQuickCount"></span>';
+        bar.classList.add('show');
+    }
+
+    // Tick-list filter: selected = the ticked values; none ticked means all.
+    function toggleQuickSelect(n, box) {
+        const f = pointState.data.quick_filters[n];
+        const cur = pointState.filterVals[f.column] || {};
+        const sel = new Set(cur.sel || []);
+        if (box.checked) sel.add(box.value); else sel.delete(box.value);
+        pointState.filterVals[f.column] = { ...cur, sel: [...sel] };
+        showQuickSelectSummary(n);
+        renderVehiclesTable();
+    }
+
+    function clearQuickSelect(n) {
+        const f = pointState.data.quick_filters[n];
+        pointState.filterVals[f.column] = { ...pointState.filterVals[f.column], sel: [] };
+        document.querySelectorAll(`#vehMultiSum${n}`).forEach(s =>
+            s.parentElement.querySelectorAll('input[type=checkbox]').forEach(b => { b.checked = false; }));
+        showQuickSelectSummary(n);
+        renderVehiclesTable();
+    }
+
+    function showQuickSelectSummary(n) {
+        const f = pointState.data.quick_filters[n];
+        const sel = (pointState.filterVals[f.column] || {}).sel || [];
+        document.getElementById(`vehMultiSum${n}`).textContent =
+            !sel.length ? 'All' : sel.length === 1 ? sel[0] : `${sel.length} selected`;
+    }
+
+    // Clicking elsewhere closes an open tick-list.
+    document.addEventListener('click', e => {
+        document.querySelectorAll('.veh-multi[open]').forEach(d => { if (!d.contains(e.target)) d.removeAttribute('open'); });
+    });
+
+    function setQuickFilter(n, key, value) {
+        const f = pointState.data.quick_filters[n];
+        pointState.filterVals[f.column] = { ...pointState.filterVals[f.column], [key]: value };
+        renderVehiclesTable();
+    }
+
+    // Rows that pass every quick filter that has a value.
+    function filteredVehicleRows() {
+        const { data, filterVals } = pointState;
+        const active = (data.quick_filters || []).filter(f => {
+            const v = filterVals[f.column];
+            return v && ((v.sel && v.sel.length) || v.min || v.max);
+        });
+        if (!active.length) return data.rows;
+        return data.rows.filter(r => active.every(f => {
+            const v = filterVals[f.column], cell = r[f.index], kind = quickFilterKind(f);
+            if (kind === 'select') {
+                const text = typeof cell === 'boolean' ? (cell ? 'Yes' : 'No') : String(cell === null || cell === undefined ? '' : cell);
+                return v.sel.includes(text);
+            }
+            if (cell === null || cell === undefined) return false;
+            if (kind === 'num') {
+                return (!v.min || cell >= parseFloat(v.min)) && (!v.max || cell <= parseFloat(v.max));
+            }
+            const day = String(cell).slice(0, 10);   // ISO date, so text order is date order
+            return (!v.min || day >= v.min) && (!v.max || day <= v.max);
+        }));
+    }
+
     // The loaded vehicles in the order the table shows them.
     function sortedVehicleRows() {
-        const { data, sort } = pointState;
-        if (!sort) return data.rows;
-        return [...data.rows].sort((p, q) => {
+        const { sort } = pointState;
+        const filtered = filteredVehicleRows();
+        if (!sort) return filtered;
+        return [...filtered].sort((p, q) => {
             const a = p[sort.index], b = q[sort.index];
             if (a === null || a === undefined) return 1;
             if (b === null || b === undefined) return -1;
@@ -3291,6 +3493,8 @@
         }).join('') + '</tr>').join('');
         document.getElementById('vehiclesTable').innerHTML =
             `<thead><tr>${head}</tr></thead><tbody>${body}</tbody>${vehiclesSummaryRow(data.columns, rows, isGrey)}`;
+        const count = document.getElementById('vehQuickCount');
+        if (count) count.textContent = `${rows.length.toLocaleString('en-GB')} of ${data.rows.length.toLocaleString('en-GB')} vehicles`;
     }
 
     // Row under the list with each column's Total or Average (set per column in
@@ -6314,7 +6518,8 @@
             blank_grey: !!c.blank_grey })),
             grey_rules: (draft.grey_rules || []).map(r => ({
                 column: r.column, op: r.op,
-                value: VEH_NO_VALUE_OPS.includes(r.op) ? '' : String(r.value || '').trim() })) };
+                value: VEH_NO_VALUE_OPS.includes(r.op) ? '' : String(r.value || '').trim() })),
+            filters: (draft.filters || []).filter(f => f.column).map(f => ({ column: f.column, label: (f.label || '').trim() })) };
     }
 
     // A saved column, with a format and decimals filled in where it has none
@@ -6341,12 +6546,15 @@
                 shown: shownBefore.map(c => vehColumnSetting(c, types[c.column])),
                 live: resp.columns,
                 grey_rules: JSON.parse(JSON.stringify(resp.view.grey_rules || [])),
+                filters: JSON.parse(JSON.stringify(resp.view.filters || [])),
                 saved: JSON.stringify(vehViewPayload({ table: resp.view.table,
+                    filters: resp.view.filters || [],
                     shown: resp.view.columns.map(c => ({ column: c.column, label: c.label || '',
                         format: c.format, decimals: c.decimals, summary: c.summary, blank_grey: c.blank_grey })),
                     grey_rules: resp.view.grey_rules || [] })),
             };
             renderGreyRules();
+            renderVehQuickFilters();
             const select = document.getElementById('vehTableSelect');
             const tables = resp.tables.includes(resp.table) ? resp.tables : [resp.table, ...resp.tables];
             select.innerHTML = tables.map(t => `<option value="${escHtml(t)}">${escHtml(t)}</option>`).join('');
@@ -6412,6 +6620,46 @@
         const ops = vehOpsFor(greyRuleKind(column)).map(([op]) => op);
         if (!ops.includes(r.op)) { r.op = ops[0]; r.value = ''; }
         renderGreyRules();
+    }
+
+    // ── Quick filters (Settings) ──
+    // The filters shown above the vehicle list for this table: a column and the
+    // label shown above it. Any column of the table can be used.
+    function renderVehQuickFilters() {
+        if (!vehViewDraft) return;
+        const columns = vehViewDraft.live.map(c => c.column);
+        const list = vehViewDraft.filters;
+        document.getElementById('vehQuickList').innerHTML = list.map((f, i) => {
+            const cols = (f.column && !columns.includes(f.column) ? [f.column] : []).concat(columns);
+            return `
+                <div class="veh-quick-row">
+                    <select onchange="vehViewDraft.filters[${i}].column = this.value; renderVehQuickFilters()">
+                        <option value="">(choose a column)</option>
+                        ${cols.map(c => `<option value="${escHtml(c)}" ${c === f.column ? 'selected' : ''}>${escHtml(c)}${columns.includes(c) ? '' : ' (not in the table)'}</option>`).join('')}
+                    </select>
+                    <input type="text" maxlength="60" value="${escHtml(f.label || '')}" placeholder="${escHtml(f.column || 'Name')}"
+                           title="Name shown above the filter" oninput="vehViewDraft.filters[${i}].label = this.value">
+                    <button type="button" class="btn btn-edit" title="Move up" onclick="moveVehQuickFilter(${i}, -1)"
+                            ${i === 0 ? 'disabled' : ''}><i class="fas fa-arrow-up"></i></button>
+                    <button type="button" class="btn btn-edit" title="Move down" onclick="moveVehQuickFilter(${i}, 1)"
+                            ${i === list.length - 1 ? 'disabled' : ''}><i class="fas fa-arrow-down"></i></button>
+                    <button type="button" class="btn btn-remove-chart" title="Remove filter"
+                            onclick="vehViewDraft.filters.splice(${i}, 1); renderVehQuickFilters()"><i class="fas fa-trash"></i></button>
+                </div>`;
+        }).join('') || '<div class="point-status" style="padding:2px 0 6px;">No quick filters.</div>';
+    }
+
+    function addVehQuickFilter() {
+        if (!vehViewDraft) return;
+        vehViewDraft.filters.push({ column: '', label: '' });
+        renderVehQuickFilters();
+    }
+
+    function moveVehQuickFilter(i, step) {
+        const list = vehViewDraft.filters, j = i + step;
+        if (j < 0 || j >= list.length) return;
+        [list[i], list[j]] = [list[j], list[i]];
+        renderVehQuickFilters();
     }
 
     // Each table's columns are saved separately. Switching loads the other
