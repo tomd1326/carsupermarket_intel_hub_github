@@ -881,27 +881,104 @@ def _run_prod_to_dev(job_id: str) -> None:
     _job_finish(job_id, "done", message)
 
 
+def _users_source(q) -> tuple:
+    """(can_view_prod, source) for the Users page and its CSV export. Local
+    and dev open on prod's accounts (the real users) unless ?source=this;
+    prod itself only has its own."""
+    can_view_prod = core._ENV != 'prod'
+    source = 'this' if not can_view_prod or q.get('source') == 'this' else 'prod'
+    return can_view_prod, source
+
+
+def _read_prod_users() -> tuple:
+    """(people, last_logins) from prod's database. Read only: nothing is
+    created or changed there."""
+    with get_prod_activity_connection() as conn:
+        try:
+            people = read_user_details(conn)
+            last_logins = get_last_login_per_user(conn, write=False)
+        except Exception:
+            conn.rollback()
+            raise
+    return people, last_logins
+
+
 @router.get("/settings/users", response_class=HTMLResponse)
 def users_page(request: Request, user: str = Depends(get_current_user)):
     if user != ADMIN_USERNAME:
         return RedirectResponse(url=BASE_URL + "/home", status_code=303)
+    can_view_prod, source = _users_source(request.query_params)
+    viewing_prod = can_view_prod and source == 'prod'
     last_logins = {}
-    user_details = {}
+    people = {}
+    all_users = []
     login_mode = 'both'
-    try:
-        with get_database_connection() as conn:
-            last_logins = get_last_login_per_user(conn)
-            user_details = load_user_details(conn)
-            login_mode = get_settings(conn).get('login_mode', 'both')
-    except Exception as e:
-        logger.warning("Failed to load user accounts data: %s", e)
+    error = None
+    if viewing_prod:
+        # Never falls back to this environment's users under a Prod heading.
+        try:
+            people, last_logins = _read_prod_users()
+            all_users = sorted(people)
+        except Exception as e:
+            logger.warning("Failed to load prod user accounts: %s", e)
+            error = str(getattr(e, 'detail', None) or e)[:300]
+    else:
+        try:
+            with get_database_connection() as conn:
+                last_logins = get_last_login_per_user(conn)
+                people = load_user_details(conn)
+                login_mode = get_settings(conn).get('login_mode', 'both')
+        except Exception as e:
+            logger.warning("Failed to load user accounts data: %s", e)
+        all_users = sorted(VALID_USERS)
     return templates.TemplateResponse("users.html", {
         "request": request, "user": user, "BASE_URL": BASE_URL,
         "login_mode": login_mode, "admin_username": ADMIN_USERNAME,
-        "all_users": sorted(VALID_USERS), "user_details": user_details,
-        "last_logins": last_logins,
+        "all_users": all_users, "people": people,
+        "last_logins": last_logins, "error": error,
+        "can_view_prod": can_view_prod, "source": source, "viewing_prod": viewing_prod,
+        "this_env": core._ENV,
         "sections": SETTINGS_SECTIONS, "active_section": "users",
     })
+
+
+@router.get("/settings/users/export")
+def users_export(request: Request, user: str = Depends(get_current_user)):
+    """CSV of the accounts the Users page shows: prod (read only) or this
+    environment, chosen by ?source=. No passwords or hashes."""
+    if user != ADMIN_USERNAME:
+        raise HTTPException(status_code=403, detail="Forbidden")
+    can_view_prod, source = _users_source(request.query_params)
+    try:
+        if can_view_prod and source == 'prod':
+            people, last_logins = _read_prod_users()
+            usernames = sorted(people)
+        else:
+            with get_database_connection() as conn:
+                last_logins = get_last_login_per_user(conn)
+                people = load_user_details(conn)
+            usernames = sorted(VALID_USERS)
+    except Exception as e:
+        logger.warning("Users export failed (%s): %s", source, e)
+        raise HTTPException(status_code=500, detail="Could not load users for the export")
+
+    out = io.StringIO()
+    writer = csv.writer(out)
+    writer.writerow(['Username', 'First Name', 'Last Name', 'Email', 'Last Login', 'Last Seen'])
+    for u in usernames:
+        d = people.get(u, {})
+        ll = last_logins.get(u, {})
+        writer.writerow([_csv_cell(v) for v in (
+            u, d.get('first_name') or '', d.get('last_name') or '', d.get('email') or '',
+            ll.get('last_login') or 'Never', ll.get('last_seen') or 'Never',
+        )])
+    filename = f"users_{source}_{_uk_now().date().isoformat()}.csv"
+    # The BOM makes Excel read the file as UTF-8.
+    return Response(
+        content='﻿' + out.getvalue(),
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 _ENDED_BY_LABELS = {
@@ -1226,7 +1303,10 @@ async def save_page_names_route(request: Request, user: str = Depends(get_curren
 
 def _user_redirect(redirect_to: str, **params):
     base = BASE_URL + _REDIRECT_TARGETS.get(redirect_to, "/settings-page")
-    qs = "&".join(f"{k}={v}" for k, v in params.items())
+    if redirect_to == "users":
+        # Users page opens on prod; changes are made here, so show this environment.
+        params = {"source": "this", **params}
+    qs ="&".join(f"{k}={v}" for k, v in params.items())
     return RedirectResponse(url=f"{base}?{qs}", status_code=303)
 
 
@@ -1325,6 +1405,61 @@ def save_page_access(
 _MIN_PASSWORD_LENGTH = 6
 
 
+def _writes_to_prod(source: str) -> bool:
+    """True when local or dev is changing prod's users (the Users page's Prod
+    view). On prod itself its own database already is prod."""
+    return source == 'prod' and core._ENV != 'prod'
+
+
+def _prod_users_redirect(**params):
+    return _user_redirect("users", source="prod", **params)
+
+
+def _end_prod_sessions(conn, reason: str, target: str) -> int:
+    """End a prod user's open sessions after a password change or delete. Only
+    when prod's session table is in the current format, so nothing on prod is
+    created or converted from here; prod's own sign-in check covers the rest."""
+    try:
+        if not user_sessions_ready(conn):
+            return 0
+        timeout = read_session_settings(conn)['session_timeout_minutes']
+        return close_sessions(conn, reason, timeout, username=target, ensure=False)
+    except Exception as e:
+        conn.rollback()
+        logger.warning("Could not end prod sessions for %s (%s): %s", target, reason, e)
+        return 0
+
+
+def _save_prod_user(mode: str, target: str, details: dict, password: str, user: str):
+    """save_user against prod's database. Prod's containers pick the change up
+    when their user cache next reloads (within about a minute)."""
+    if mode not in ('add', 'edit'):
+        raise HTTPException(status_code=400, detail="Unknown mode")
+    if (mode == 'add' or password) and len(password) < _MIN_PASSWORD_LENGTH:
+        return _prod_users_redirect(pwderr="Password+must+be+at+least+6+characters")
+    ended = 0
+    with get_prod_activity_connection() as conn:
+        try:
+            exists = target in read_user_details(conn)
+            if mode == 'add' and exists:
+                return _prod_users_redirect(pwderr="User+already+exists+on+prod")
+            if mode == 'edit' and not exists:
+                return _prod_users_redirect(pwderr="User+not+found+on+prod")
+            if password:
+                upsert_user(conn, target, hashlib.sha256(password.encode()).hexdigest())
+            update_user_details(conn, {target: details}, ensure=False)
+        except Exception:
+            conn.rollback()
+            raise
+        if mode == 'edit' and password:
+            ended = _end_prod_sessions(conn, 'password_changed', target)
+    logger.info("PROD user %s %s by %s%s", target, 'created' if mode == 'add' else 'saved', user,
+                f" (password changed, {ended} sessions ended)" if mode == 'edit' and password else "")
+    if mode == 'add':
+        return _prod_users_redirect(useradded=target)
+    return _prod_users_redirect(saved=target)
+
+
 @router.post("/settings/user/save")
 def save_user(
     request: Request,
@@ -1334,19 +1469,25 @@ def save_user(
     last_name: str = Form(default=""),
     email: str = Form(default=""),
     password: str = Form(default=""),
+    source: str = Form(default="this"),
     user: str = Depends(get_current_user),
 ):
     """The Add / Edit user popup on Settings > User Accounts.
     mode 'add' needs a password; mode 'edit' keeps the old one when it is
-    left blank. A changed password ends that user's open sessions."""
+    left blank. A changed password ends that user's open sessions.
+    source 'prod' (local and dev only) saves to prod's database instead."""
     if user != ADMIN_USERNAME:
         raise HTTPException(status_code=403)
+    to_prod = _writes_to_prod(source)
+    back = _prod_users_redirect if to_prod else (lambda **p: _user_redirect("users", **p))
     target = username.strip().lower() if mode == 'add' else username.strip()
     if not target:
-        return _user_redirect("users", pwderr="Username+cannot+be+empty")
+        return back(pwderr="Username+cannot+be+empty")
     if target == ADMIN_USERNAME:
-        return _user_redirect("users", pwderr="The+admin+account+is+set+in+code")
+        return back(pwderr="The+admin+account+is+set+in+code")
     details = {'first_name': first_name.strip(), 'last_name': last_name.strip(), 'email': email.strip()}
+    if to_prod:
+        return _save_prod_user(mode, target, details, password, user)
 
     if mode == 'add':
         if target in VALID_USERS:
@@ -1392,12 +1533,25 @@ def delete_user(
     request: Request,
     target_user: str = Form(...),
     redirect_to: str = Form("settings"),
+    source: str = Form(default="this"),
     user: str = Depends(get_current_user)
 ):
     if user != 'tdrayson':
         raise HTTPException(status_code=403)
     if target_user == 'tdrayson':
         raise HTTPException(status_code=400, detail="Cannot delete admin")
+    if _writes_to_prod(source):
+        with get_prod_activity_connection() as conn:
+            try:
+                if target_user not in read_user_details(conn):
+                    return _prod_users_redirect(pwderr="User+not+found+on+prod")
+                delete_user_and_access(conn, target_user)
+            except Exception:
+                conn.rollback()
+                raise
+            ended = _end_prod_sessions(conn, 'user_deleted', target_user)
+        logger.info("PROD user %s deleted by %s, %d sessions ended", target_user, user, ended)
+        return _prod_users_redirect(userdeleted=target_user)
     if target_user not in VALID_USERS:
         return _user_redirect(redirect_to, pwderr="User+not+found")
     # One transaction for the account and its page access — a separate clear

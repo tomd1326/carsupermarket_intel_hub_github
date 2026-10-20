@@ -20,6 +20,24 @@
 
         <div class="settings-content">
 
+        {% if can_view_prod %}
+        {# Local and dev: prod's accounts or this environment's own. #}
+        <div class="btn-group mb-3" role="group" aria-label="Which database">
+            <a href="{{ BASE_URL }}/settings/users?source=prod"
+               class="btn btn-sm {% if viewing_prod %}btn-dark{% else %}btn-outline-secondary{% endif %}">Prod</a>
+            <a href="{{ BASE_URL }}/settings/users?source=this"
+               class="btn btn-sm {% if not viewing_prod %}btn-dark{% else %}btn-outline-secondary{% endif %}">This Environment ({{ this_env }})</a>
+        </div>
+        {% if viewing_prod %}
+        <div class="form-text mt-n2 mb-3">Prod's accounts. Adding, editing and deleting users here changes the live prod sign-ins; prod's site picks the change up within about a minute. The sign in setting is under This Environment.</div>
+        {% endif %}
+        {% endif %}
+
+        {% if error %}
+        <div class="alert alert-danger py-2">Could not load prod's accounts: {{ error }}</div>
+        {% endif %}
+
+        {% if not viewing_prod %}
         <div class="card mb-4">
             <div class="card-header fw-semibold">Sign In</div>
             {% if request.query_params.get('loginok') %}
@@ -39,11 +57,16 @@
                 <div class="form-text">The admin account can always sign in by username. Users without an email below cannot sign in when set to Email Address Only.</div>
             </div>
         </div>
+        {% endif %}
 
         <div class="card">
             <div class="card-header fw-semibold d-flex align-items-center justify-content-between">
-                <span>Accounts</span>
-                <button type="button" class="btn btn-success btn-sm" id="add-user-btn">Add User</button>
+                <span>Accounts{% if viewing_prod %} <span class="text-muted fw-normal small">(prod)</span>{% endif %}</span>
+                <span class="d-flex gap-2">
+                    <button type="button" class="btn btn-outline-secondary btn-sm" id="copy-emails-btn">Copy Emails</button>
+                    <a href="{{ BASE_URL }}/settings/users/export?source={{ source }}" class="btn btn-outline-secondary btn-sm">Export CSV</a>
+                    <button type="button" class="btn btn-success btn-sm" id="add-user-btn">Add User</button>
+                </span>
             </div>
             {% if request.query_params.get('saved') %}
             <div class="alert alert-success mb-0 rounded-0 border-0 py-2 px-3">{{ request.query_params.get('saved') }} saved.</div>
@@ -61,6 +84,7 @@
                 <table class="table table-sm table-hover mb-0 align-middle">
                     <thead class="table-light">
                         <tr>
+                            <th>Name</th>
                             <th>Email</th>
                             <th class="text-nowrap">Last Login</th>
                             <th></th>
@@ -68,9 +92,10 @@
                     </thead>
                     <tbody>
                         {% for u in all_users %}
-                        {% set d = user_details.get(u, {}) %}
+                        {% set d = people.get(u, {}) %}
                         {% set ll = last_logins.get(u, {}) %}
                         <tr>
+                            <td class="text-nowrap">{{ ((d.first_name or '') ~ ' ' ~ (d.last_name or ''))|trim }}</td>
                             <td>
                                 {% if d.email %}{{ d.email }}{% else %}<span class="text-muted">{{ u }}</span>{% endif %}
                             </td>
@@ -108,6 +133,7 @@
                     </div>
                     <div class="modal-body">
                         <input type="hidden" name="mode" id="um-mode" value="add">
+                        <input type="hidden" name="source" value="{{ source }}">
                         <div class="mb-2">
                             <label for="um-username" class="form-label mb-1">Username</label>
                             <input type="text" class="form-control" id="um-username" name="username" required>
@@ -145,6 +171,7 @@
                 <form method="post" action="{{ BASE_URL }}/settings/delete-user" id="delete-form">
                     <input type="hidden" name="target_user" id="um-delete-user">
                     <input type="hidden" name="redirect_to" value="users">
+                    <input type="hidden" name="source" value="{{ source }}">
                 </form>
             </div>
         </div>
@@ -156,11 +183,13 @@
         const modal = new bootstrap.Modal(document.getElementById('userModal'));
         const $ = id => document.getElementById(id);
         const show = (el, on) => { el.style.display = on ? '' : 'none'; };
+        // Local and dev on the Prod view: saves and deletes change the live prod sign-ins.
+        const toProd = {{ 'true' if viewing_prod else 'false' }};
 
         function open(opts) {
             const isAdd = opts.mode === 'add';
             const isAdmin = !!opts.admin;
-            $('userModalTitle').textContent = isAdd ? 'Add User' : 'Edit ' + opts.username;
+            $('userModalTitle').textContent = (isAdd ? 'Add User' : 'Edit ' + opts.username) + (toProd ? ' (Prod)' : '');
             $('um-mode').value = opts.mode;
             $('um-username').value = opts.username || '';
             $('um-username').readOnly = !isAdd;
@@ -185,6 +214,11 @@
         }
 
         $('add-user-btn').addEventListener('click', () => open({ mode: 'add' }));
+        $('user-form').addEventListener('submit', e => {
+            if (toProd && !confirm('You are changing PROD users. Save ' + ($('um-username').value || 'this user') + ' on prod?')) {
+                e.preventDefault();
+            }
+        });
         document.querySelectorAll('.edit-user-btn').forEach(btn => {
             btn.addEventListener('click', () => open({
                 mode: 'edit',
@@ -197,9 +231,36 @@
                 admin: btn.dataset.admin === '1',
             }));
         });
+        // Every email in the list as one semicolon separated line, to paste into Outlook's To box.
+        $('copy-emails-btn').addEventListener('click', async () => {
+            const emails = [...new Set(
+                [...document.querySelectorAll('.edit-user-btn')]
+                    .map(b => (b.dataset.email || '').trim())
+                    .filter(Boolean)
+            )];
+            const text = emails.join('; ');
+            const btn = $('copy-emails-btn');
+            const done = msg => {
+                btn.textContent = msg;
+                setTimeout(() => { btn.textContent = 'Copy Emails'; }, 2000);
+            };
+            if (!emails.length) { done('No Emails'); return; }
+            try {
+                await navigator.clipboard.writeText(text);
+            } catch (e) {
+                const ta = document.createElement('textarea');
+                ta.value = text;
+                document.body.appendChild(ta);
+                ta.select();
+                document.execCommand('copy');
+                ta.remove();
+            }
+            done('Copied ' + emails.length);
+        });
         $('um-delete').addEventListener('click', () => {
             const u = $('um-delete-user').value;
-            if (u && confirm('Delete user ' + u + '? This cannot be undone.')) {
+            const where = toProd ? ' from PROD' : '';
+            if (u && confirm('Delete user ' + u + where + '? This cannot be undone.')) {
                 $('delete-form').submit();
             }
         });

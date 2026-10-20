@@ -603,12 +603,15 @@ def record_logout(conn, session_id: str, timeout_minutes: int) -> None:
 
 
 def close_sessions(conn, reason: str, timeout_minutes: int, username: str | None = None,
-                   session_id: str | None = None) -> int:
+                   session_id: str | None = None, ensure: bool = True) -> int:
     """End every open session (or one user's, or one session) with reason.
-    Returns how many were ended with that reason."""
+    Returns how many were ended with that reason. ensure=False is for another
+    environment's database, already checked with user_sessions_ready: the
+    table is not created or converted there."""
     if reason not in SESSION_END_REASONS:
         raise ValueError(f"Unknown session end reason: {reason}")
-    _ensure_user_sessions(conn)
+    if ensure:
+        _ensure_user_sessions(conn)
     with conn.cursor() as cur:
         _close_timed_out(cur, timeout_minutes, username=username, session_id=session_id)
         cur.execute(
@@ -724,17 +727,37 @@ def read_session_settings(conn) -> dict:
     return out
 
 
-def get_last_login_per_user(conn) -> dict:
+def get_last_login_per_user(conn, write: bool = True) -> dict:
     """{username: {'last_login', 'last_seen'}} as UK time strings. last_login
     is the latest session start of any kind, so a login cookie carried over
-    from before this tracking began still counts."""
-    _ensure_user_sessions(conn)
+    from before this tracking began still counts. write=False is for another
+    environment's database: nothing is created or changed there."""
+    uk_time = " AT TIME ZONE 'Europe/London'"
+    if write:
+        _ensure_user_sessions(conn)
+    else:
+        # Another environment's table may not have been converted yet. Before
+        # that, login_at and last_seen_at are plain timestamps already in UK
+        # time (last_seen_at can be an hour out where the database clock set
+        # it), so they are read as they are.
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT data_type FROM information_schema.columns "
+                "WHERE table_schema = current_schema() AND table_name = 'user_sessions' "
+                "AND column_name = 'login_at'"
+            )
+            found = cur.fetchone()
+        conn.commit()
+        if not found:
+            return {}
+        if found[0] == 'timestamp without time zone':
+            uk_time = ""
     with conn.cursor() as cur:
         cur.execute(
-            """
+            f"""
             SELECT username,
-                   MAX(login_at)     AT TIME ZONE 'Europe/London',
-                   MAX(last_seen_at) AT TIME ZONE 'Europe/London'
+                   MAX(login_at){uk_time},
+                   MAX(last_seen_at){uk_time}
             FROM user_sessions
             GROUP BY username
             """
@@ -1075,11 +1098,13 @@ def find_usernames_by_email(conn, email: str) -> list:
     return usernames
 
 
-def update_user_details(conn, details: dict) -> None:
+def update_user_details(conn, details: dict, ensure: bool = True) -> None:
     """Save name and email for several users in one transaction.
     details is {username: {'first_name', 'last_name', 'email'}}; empty strings
-    are stored as NULL."""
-    _ensure_user_detail_columns(conn)
+    are stored as NULL. ensure=False skips the ALTER TABLE, for another
+    environment's database that already has the columns."""
+    if ensure:
+        _ensure_user_detail_columns(conn)
     try:
         with conn.cursor() as cur:
             for username, d in details.items():
@@ -1188,13 +1213,15 @@ def delete_user_and_access(conn, username: str) -> None:
     try:
         with conn.cursor() as cur:
             cur.execute("DELETE FROM users WHERE username = %s", (username,))
+            # A failed statement cancels the whole transaction in Postgres, so
+            # the missing-table case steps back to this savepoint; otherwise
+            # the commit below would silently undo the user delete too.
+            cur.execute("SAVEPOINT clear_page_access")
             try:
                 cur.execute("DELETE FROM user_page_access WHERE username = %s", (username,))
             except psycopg2.errors.UndefinedTable:
                 # No access has ever been saved, so there is nothing to clear.
-                # The user delete above is still wanted, so swallow this one
-                # rather than losing the whole transaction.
-                pass
+                cur.execute("ROLLBACK TO SAVEPOINT clear_page_access")
         conn.commit()
     except Exception:
         conn.rollback()
