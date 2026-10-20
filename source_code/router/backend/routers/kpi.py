@@ -932,6 +932,8 @@ def _refresh_daily_summary_columns(token: str) -> None:
         # Settings > Data Sources tables too: their columns and names.
         _source_columns_cache.clear()
         _source_names_cache.clear()
+        # And the copy shared with other containers.
+        _clear_shared_columns()
 
 
 def _get_daily_summary_column_types() -> list:
@@ -943,14 +945,8 @@ def _get_daily_summary_column_types() -> list:
         if _ds_columns_cache is not None and time.time() - _ds_columns_cache_at < _DS_COLUMNS_TTL:
             return _ds_columns_cache
         try:
-            with SnowflakeClient() as sf:
-                rows, _ = sf.execute("""
-                    SELECT column_name, data_type
-                    FROM PROD_CARSUPERMARKET_DB.INFORMATION_SCHEMA.COLUMNS
-                    WHERE table_schema = 'PRODUCT_SLT_KPIS' AND table_name = 'DAILY_SUMMARY'
-                    ORDER BY ordinal_position
-                """)
-            _ds_columns_cache = [(str(r[0]).upper(), str(r[1]).upper()) for r in rows]
+            # Same lookup as any other table, so it shares the Aurora copy.
+            _ds_columns_cache = _vehicle_table_columns("PRODUCT_SLT_KPIS.DAILY_SUMMARY")
             _ds_columns_cache_at = time.time()
         except Exception as e:
             logger.warning("daily_summary column discovery failed: %s", e)
@@ -2198,8 +2194,12 @@ def _validate_stacked_row(row: dict) -> str | None:
     if len(series) > _KPI_SERIES_MAX:
         return f"At most {_KPI_SERIES_MAX} series in a chart"
     for s in series:
-        if not isinstance(s, dict) or set(s) - {"source", "metric", "label", "colour", "multiply_by"}:
+        if not isinstance(s, dict) or set(s) - {"source", "metric", "label", "colour", "multiply_by", "within_below", "axis"}:
             return "bad series"
+        if s.get("axis", "primary") not in ("primary", "secondary"):
+            return "bad series axis"
+        if not isinstance(s.get("within_below", False), bool):
+            return "bad within_below"
         error = _validate_layout_metric(s.get("source", "snowflake"), s.get("metric"))
         if error:
             return error
@@ -2221,6 +2221,8 @@ def _validate_stacked_row(row: dict) -> str | None:
     theme = row.get("theme")
     if theme is not None and (not isinstance(theme, str) or len(theme) > 40):
         return "bad theme"
+    if row.get("column_layout", "stacked") not in ("stacked", "side_by_side"):
+        return "bad column_layout"
     for flag in ("pct", "seg_labels"):
         if not isinstance(row.get(flag, False), bool):
             return f"bad {flag}"
@@ -2342,6 +2344,47 @@ def kpi_metric_names_save(request: Request, payload: dict, user: str = Depends(r
         logger.error(f"KPI column names save failed: {e}")
         return {"status": "error", "message": str(e)}
     return {"status": "ok", "names": names}
+
+
+# How each raw column's figure shows in the point popup's breakdown of a
+# calculated chart: {"source|column": {"fmt", "decimals"}}. Set in
+# Settings > Column Names. A column with no entry shows as a plain number.
+_METRIC_FORMATS = ("num", "pct", "pct100", "k", "km", "gbp", "gbpkm")
+
+
+def _validate_metric_formats(formats) -> str | None:
+    if not isinstance(formats, dict) or len(formats) > 500:
+        return "bad column formats"
+    for key, f in formats.items():
+        if not isinstance(key, str) or not re.fullmatch(_METRIC_NAME_KEY, key):
+            return f"bad column: {key}"
+        column = key.split("|", 1)[-1]
+        if not isinstance(f, dict) or set(f) - {"fmt", "decimals"}:
+            return f"{column}: bad format"
+        if f.get("fmt") not in _METRIC_FORMATS:
+            return f"{column}: bad format: {f.get('fmt')}"
+        decimals = f.get("decimals", 0)
+        if isinstance(decimals, bool) or not isinstance(decimals, int) or not 0 <= decimals <= 3:
+            return f"{column}: bad decimals: {decimals}"
+    return None
+
+
+@router.post("/kpi/metric-formats")
+def kpi_metric_formats_save(request: Request, payload: dict, user: str = Depends(require_page_api('kpi'))):
+    """The shared column formats. Admin only. Replaces the whole list."""
+    if not is_admin(user):
+        return {"status": "error", "message": "Only the admin can change column formats"}
+    formats = (payload or {}).get("formats")
+    err = _validate_metric_formats(formats)
+    if err:
+        return {"status": "error", "message": err}
+    formats = {k: {"fmt": f["fmt"], "decimals": f.get("decimals", 0)} for k, f in formats.items()}
+    try:
+        _write_kpi_layout_value('metric_formats', formats)
+    except Exception as e:
+        logger.error(f"KPI column formats save failed: {e}")
+        return {"status": "error", "message": str(e)}
+    return {"status": "ok", "formats": formats}
 
 
 # A calculated target (target_mode "calc", plain line charts only): two other
@@ -2610,6 +2653,7 @@ def kpi_layout_get(request: Request, user: str = Depends(require_page_api('kpi')
         metric_names = _read_kpi_layout_value('metric_names')
         if metric_names is None:
             metric_names = _seed_metric_names(layout)
+        metric_formats = _read_kpi_layout_value('metric_formats') or {}
     except Exception as e:
         # Report it rather than serving an empty layout: the page saves the
         # whole layout in one go, so a save made on an empty one would wipe
@@ -2629,7 +2673,7 @@ def kpi_layout_get(request: Request, user: str = Depends(require_page_api('kpi')
         at_periods, at_ppc_periods = [], []
     return {"status": "ok", "layout": layout, "sections": sections, "settings": settings,
             "setting_limits": KPI_SETTING_LIMITS, "notes": notes, "themes": themes,
-            "metric_names": metric_names, "at_periods": at_periods, "at_ppc_periods": at_ppc_periods,
+            "metric_names": metric_names, "metric_formats": metric_formats, "at_periods": at_periods, "at_ppc_periods": at_ppc_periods,
             "hidden_sections": [s for s in (_read_kpi_layout_value('hidden_sections') or []) if s in sections],
             "collapsed_rows": _user_row_list(_COLLAPSED_KEY, user),
             "rolling_rows": _user_row_list(_ROLLING_KEY, user),
@@ -3351,7 +3395,8 @@ def _vehicle_view_config(stored) -> dict:
         grey_rules = [{"column": column, "op": "=", "value": stored.get("grey_value", "STATUS_CANCELLED")}] if column else []
     return {"table": stored.get("table") or _VEHICLE_TABLE_DEFAULT,
             "columns": stored.get("columns") or [],
-            "grey_rules": grey_rules}
+            "grey_rules": grey_rules,
+            "filters": stored.get("filters") or []}
 
 
 def _vehicle_views(stored) -> list:
@@ -3378,7 +3423,7 @@ def _vehicle_view_for_table(stored, table: str) -> dict:
     for view in _vehicle_views(stored):
         if view["table"] == table:
             return view
-    return {"table": table, "columns": [], "grey_rules": []}
+    return {"table": table, "columns": [], "grey_rules": [], "filters": []}
 
 
 def _vehicle_tables() -> list:
@@ -3396,10 +3441,75 @@ def _vehicle_tables() -> list:
     return [f"{r[0]}.{r[1]}" for r in rows]
 
 
+# Column lists shared by every Lambda container through Aurora. Each container
+# runs one request at a time and keeps its own memory, so with several users a
+# per-process cache misses on most requests, and the INFORMATION_SCHEMA lookup
+# behind it takes 1-2.5 s (Logs page, 2026-10-20). Load Data clears it.
+_SHARED_COLUMNS_TTL = 600  # seconds
+_shared_columns_ready = False
+
+
+def _shared_columns_table(conn) -> None:
+    global _shared_columns_ready
+    if _shared_columns_ready:
+        return
+    with conn.cursor() as cur:
+        cur.execute("CREATE TABLE IF NOT EXISTS snowflake_column_cache ("
+                    " table_name VARCHAR(200) PRIMARY KEY,"
+                    " columns JSONB NOT NULL,"
+                    " read_at TIMESTAMPTZ NOT NULL DEFAULT NOW())")
+    conn.commit()
+    _shared_columns_ready = True
+
+
+def _read_shared_columns(table: str) -> list | None:
+    try:
+        with get_database_connection() as conn:
+            _shared_columns_table(conn)
+            with conn.cursor() as cur:
+                cur.execute("SELECT columns FROM snowflake_column_cache WHERE table_name = %s"
+                            " AND read_at > NOW() - make_interval(secs => %s)",
+                            (table, _SHARED_COLUMNS_TTL))
+                row = cur.fetchone()
+        return [tuple(c) for c in row[0]] if row else None
+    except Exception as e:
+        logger.warning("Shared column cache read failed for %s: %s", table, e)
+        return None
+
+
+def _write_shared_columns(table: str, columns: list) -> None:
+    try:
+        with get_database_connection() as conn:
+            _shared_columns_table(conn)
+            with conn.cursor() as cur:
+                cur.execute("INSERT INTO snowflake_column_cache (table_name, columns, read_at)"
+                            " VALUES (%s, %s, NOW()) ON CONFLICT (table_name)"
+                            " DO UPDATE SET columns = EXCLUDED.columns, read_at = NOW()",
+                            (table, json.dumps(columns)))
+            conn.commit()
+    except Exception as e:
+        logger.warning("Shared column cache write failed for %s: %s", table, e)
+
+
+def _clear_shared_columns() -> None:
+    try:
+        with get_database_connection() as conn:
+            _shared_columns_table(conn)
+            with conn.cursor() as cur:
+                cur.execute("DELETE FROM snowflake_column_cache")
+            conn.commit()
+    except Exception as e:
+        logger.warning("Shared column cache clear failed: %s", e)
+
+
 def _vehicle_table_columns(table: str) -> list:
-    """[(column, data_type)] of SCHEMA.TABLE in table order; [] if it does not exist."""
+    """[(column, data_type)] of SCHEMA.TABLE in table order; [] if it does not exist.
+    Read from the shared Aurora copy when it is under 10 minutes old."""
     if not isinstance(table, str) or not re.fullmatch(rf"{_IDENTIFIER}\.{_IDENTIFIER}", table):
         return []
+    shared = _read_shared_columns(table)
+    if shared is not None:
+        return shared
     schema, name = table.split(".")
     with SnowflakeClient() as sf:
         rows, _ = sf.execute(f"""
@@ -3408,15 +3518,35 @@ def _vehicle_table_columns(table: str) -> list:
             WHERE table_schema = %s AND table_name = %s
             ORDER BY ordinal_position
         """, [schema, name])
-    return [(str(r[0]).upper(), str(r[1]).upper()) for r in rows]
+    columns = [(str(r[0]).upper(), str(r[1]).upper()) for r in rows]
+    # An empty list (table missing) is not shared, so a table created later is
+    # picked up on the next request.
+    if columns:
+        _write_shared_columns(table, columns)
+    return columns
 
 
 def _validate_vehicle_view(view) -> str | None:
-    if not isinstance(view, dict) or set(view) - {"table", "columns", "grey_rules"}:
+    if not isinstance(view, dict) or set(view) - {"table", "columns", "grey_rules", "filters"}:
         return "bad vehicle view"
     error = _validate_filter_list(view.get("grey_rules", []), "grey-out rule")
     if error:
         return error
+    # Quick filters shown above the list: [{column, label}].
+    quick = view.get("filters", [])
+    if not isinstance(quick, list) or len(quick) > _VEHICLE_FILTERS_MAX:
+        return f"At most {_VEHICLE_FILTERS_MAX} quick filters"
+    quick_seen = set()
+    for q in quick:
+        if not isinstance(q, dict) or set(q) - {"column", "label"}:
+            return "bad quick filter"
+        name = q.get("column")
+        if not isinstance(name, str) or not re.fullmatch(_IDENTIFIER, name) or name in quick_seen:
+            return f"Choose a different column for each quick filter: {name}"
+        quick_seen.add(name)
+        label = q.get("label", "")
+        if not isinstance(label, str) or len(label) > 60:
+            return "Quick filter names must be 60 characters or fewer"
     table = view.get("table")
     if not isinstance(table, str) or not re.fullmatch(rf"{_IDENTIFIER}\.{_IDENTIFIER}", table):
         return "bad vehicle table"
@@ -3656,6 +3786,23 @@ def kpi_vehicles(request: Request, row_id: str, start: str, end: str,
             select_cols += f", COALESCE({' OR '.join(grey_parts)}, FALSE) AS GREY_ROW__"
             # The SELECT's placeholders come before the WHERE's.
             params = grey_params + params
+        # Quick filter columns not already shown are read as extra values after
+        # the grey flag. Each filter says which value in the row to use.
+        shown_index = {c["column"]: i for i, c in enumerate(shown)}
+        next_index = len(shown) + (1 if grey else 0)
+        quick_filters = []
+        for q in view["filters"]:
+            if q["column"] not in live:
+                continue
+            if q["column"] in shown_index:
+                index = shown_index[q["column"]]
+            else:
+                select_cols += f", {q['column']}"
+                index = next_index
+                shown_index[q["column"]] = index
+                next_index += 1
+            quick_filters.append({"column": q["column"], "label": q.get("label") or q["column"],
+                                  "type": live[q["column"]], "index": index})
         with SnowflakeClient() as sf:
             rows, _ = sf.execute(f"""
                 SELECT {select_cols}
@@ -3678,6 +3825,7 @@ def kpi_vehicles(request: Request, row_id: str, start: str, end: str,
         # true/false grey flag as one extra value at the end.
         "rows": [[_json_cell(v) for v in r] for r in rows[:_VEHICLE_ROW_LIMIT]],
         "grey_flag": grey,
+        "quick_filters": quick_filters,
         "truncated": len(rows) > _VEHICLE_ROW_LIMIT,
         "row_limit": _VEHICLE_ROW_LIMIT,
         "missing_columns": missing,

@@ -14,6 +14,7 @@
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
     <script src="{{ static_url('js/charts.js') }}"></script>
     <script src="{{ static_url('js/kpi_targets.js') }}"></script>
+    <script src="{{ static_url('js/searchable_select.js') }}"></script>
     <!-- Chart styles shared with other chart pages live in charts.css; only
          what exists on this page alone belongs here. -->
     <style>
@@ -36,6 +37,9 @@
             border-bottom: 1px solid #cbd5e1;
             position: sticky; top: var(--kpi-top-bar-h, 0px); z-index: 20;
             background: var(--c-page-bg); padding-top: 8px;
+            /* Fills the gap under the bar (its margin-bottom) with the page colour, so
+               charts scrolling underneath are hidden at the bar's edge, not just below it. */
+            box-shadow: 0 12px 0 var(--c-page-bg);
         }
         /* Same height as the .btn-edit buttons in the top bar (.btn-edit in
            charts.css: 0.9rem text at Bootstrap's 1.5 line height, 7px padding
@@ -100,23 +104,31 @@
         }
         /* Row title slightly bigger than the shared 0.86rem. */
         .chart-row-title.kpi-row-title { font-size: 0.95rem; }
-        /* Edit Chart: three columns (title and data | placement, display and axis | View Vehicles) so
-           it fits one screen; nearer the top than other popups (3vh, not 10vh)
-           and allowed the extra height. Fields sit a little closer together than
-           elsewhere; the font size is unchanged. Two columns, then one, on
-           narrower screens, where it scrolls instead. */
+        /* Edit Chart: tabs down the left, one pane showing at a time. The pane
+           area has a fixed height so switching tabs does not make the popup
+           jump; a long pane scrolls inside it. Nearer the top than other
+           popups (3vh, not 10vh). */
         #chartModal { padding-top: 3vh; }
-        .modal-box.chart-modal { width: 1800px; max-width: 97vw; max-height: 95vh; overflow-y: auto; }
-        .chart-modal-cols { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0 26px; }
-        .chart-modal-col { min-width: 0; }
+        .modal-box.chart-modal { width: 1100px; max-width: 97vw; max-height: 95vh; display: flex; flex-direction: column; }
+        .chart-modal-body { display: flex; gap: 22px; min-height: 0; flex: 1; }
+        .chart-tabs { display: flex; flex-direction: column; gap: 4px; width: 170px; flex: none; }
+        .chart-tabs button {
+            text-align: left; padding: 8px 12px; border: 1px solid transparent; border-radius: 8px;
+            background: none; font: inherit; font-size: 0.9rem; color: #334155; cursor: pointer;
+        }
+        .chart-tabs button:hover { background: #f1f5f9; }
+        .chart-tabs button.active { background: #e8ecf3; border-color: #0f172a; font-weight: 700; color: #0f172a; }
+        .chart-panes { flex: 1; min-width: 0; height: 66vh; overflow-y: auto; padding-right: 4px; }
+        .chart-pane { display: none; }
+        .chart-pane.active { display: block; }
         .chart-modal .modal-field { margin-bottom: 10px; }
         .chart-modal .modal-hint { margin-top: 3px; line-height: 1.35; }
         .chart-modal .modal-section-title { margin-top: 0; }
-        /* A second or third heading in a column needs space above it. */
-        .chart-modal-col .modal-section-title:not(:first-child) { margin-top: 14px; }
+        /* A second or third heading in a pane needs space above it. */
+        .chart-pane .modal-section-title:not(:first-child) { margin-top: 14px; }
         .chart-modal .modal-actions { margin-top: 8px; }
         .chart-modal .metric-desc:empty { display: none; }
-        @media (max-width: 1350px) { .chart-modal-cols { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+        @media (max-width: 700px) { .chart-modal-body { flex-direction: column; } .chart-tabs { flex-direction: row; flex-wrap: wrap; width: auto; } }
         .modal-box.notes-modal { width: 760px; max-width: 96vw; max-height: 92vh; overflow-y: auto; }
         .modal-box.target-modal { width: 620px; max-width: 96vw; max-height: 92vh; overflow-y: auto; }
         .notes-modal textarea { width: 100%; box-sizing: border-box; font: inherit; font-size: 0.85rem; padding: 6px 8px; border: 1px solid #cbd5e1; border-radius: 6px; resize: vertical; }
@@ -139,7 +151,6 @@
         .note-tip .note-tip-title { font-weight: 700; color: #0f172a; }
         .note-tip .note-tip-date { color: #7c3aed; font-weight: 600; margin-right: 5px; }
         .note-tip .note-tip-text { white-space: pre-wrap; margin-top: 2px; }
-        @media (max-width: 900px) { .chart-modal-cols { grid-template-columns: 1fr; } }
         .modal-section-title {
             font-size: 0.82rem; font-weight: 700; color: #64748b;
             border-bottom: 1px solid #e2e8f0;
@@ -281,11 +292,27 @@
         /* ── Point popup and View Vehicles ──────────────────────────────────── */
         .chart-wrap canvas { cursor: pointer; }
         /* Narrow until the vehicles load, then full width for the table. */
-        .modal-box.point-modal { width: 560px; max-width: 96vw; max-height: 86vh; display: flex; flex-direction: column; }
+        .modal-box.point-modal { width: fit-content; min-width: 560px; max-width: 96vw; max-height: 86vh; display: flex; flex-direction: column; }
         .modal-box.point-modal.has-vehicles { width: 1400px; }
         .modal-overlay#pointModal { padding-top: 6vh; }
         .point-figures { display: flex; gap: 22px; flex-wrap: wrap; font-size: 0.86rem; color: #334155; margin-bottom: 12px; }
         .point-figures b { color: #0f172a; }
+        .point-calc { font-size: 0.84rem; color: #334155; margin: -4px 0 12px; padding: 8px 10px; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 6px; display: none; }
+        .point-calc.show { display: block; overflow-x: auto; }
+        .point-calc table { border-collapse: collapse; width: 100%; }
+        .point-calc th { white-space: nowrap; }
+        .point-calc .calc-how { margin-bottom: 10px; padding-bottom: 8px; border-bottom: 1px solid #e2e8f0; line-height: 1.6; }
+        .point-calc .calc-how-title { font-weight: 700; color: #0f172a; margin-bottom: 2px; }
+        .point-calc .calc-how-label { color: #64748b; }
+        .point-calc .calc-how b { color: #0f172a; }
+        .point-calc tr.calc-groups th { text-align: center; color: #334155; font-size: 0.8rem; border-bottom: 2px solid #cbd5e1; }        .point-calc th { text-align: right; font-weight: 600; color: #64748b; font-size: 0.78rem; padding: 2px 10px 4px; border-bottom: 1px solid #e2e8f0; }
+        .point-calc td { text-align: right; padding: 3px 10px; font-variant-numeric: tabular-nums; }
+        .point-calc .calc-date { text-align: left; padding-left: 0; }
+        .point-calc .calc-start { border-left: 2px solid #cbd5e1; }
+        .point-calc .calc-tot { color: #64748b; }
+        .point-calc .calc-res { font-weight: 700; color: #0f172a; }
+        .point-calc .calc-foot td { border-top: 1px solid #e2e8f0; color: #334155; }
+        .point-calc .calc-foot td:first-child { text-align: right; }
         .point-actions { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
         .point-status { font-size: 0.82rem; color: #64748b; }
         .point-inspect { display: block; margin-top: 3px; color: #b45309; }
@@ -355,11 +382,38 @@
             width: 100%; min-width: 0; padding: 5px 8px; border: 1px solid #cbd5e1; border-radius: 6px; background: #fff; font-size: 0.82rem;
         }
         .veh-filter .btn { padding: 3px 9px; font-size: 0.78rem; }
+        /* Quick filters above the vehicle list (popup) and their setup rows (Settings). */
+        .veh-quick { display: none; flex-wrap: wrap; gap: 10px; align-items: flex-end; margin-top: 12px; }
+        .veh-quick.show { display: flex; }
+        .veh-quick label { display: flex; flex-direction: column; gap: 2px; font-size: 0.76rem; font-weight: 600; color: #475569; }
+        .veh-quick select, .veh-quick input {
+            padding: 4px 8px; border: 1px solid #cbd5e1; border-radius: 6px; background: #fff; font-size: 0.82rem; max-width: 190px;
+        }
+        .veh-quick input[type="number"] { width: 90px; }
+        .veh-multi-field { display: flex; flex-direction: column; gap: 2px; font-size: 0.76rem; font-weight: 600; color: #475569; }
+        .veh-multi { position: relative; font-weight: 400; }
+        .veh-multi summary {
+            padding: 4px 8px; border: 1px solid #cbd5e1; border-radius: 6px; background: #fff; font-size: 0.82rem;
+            cursor: pointer; min-width: 110px; max-width: 190px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #0f172a;
+        }
+        .veh-multi-list {
+            position: absolute; z-index: 20; top: 100%; left: 0; min-width: 100%; max-height: 260px; overflow: auto;
+            background: #fff; border: 1px solid #cbd5e1; border-radius: 6px; padding: 4px 8px; box-shadow: 0 4px 12px rgba(0,0,0,.12);
+        }
+        .veh-multi-list label { display: flex; flex-direction: row; gap: 6px; align-items: center; font-weight: 400; font-size: 0.82rem; color: #0f172a; white-space: nowrap; padding: 2px 0; }
+        .veh-multi-list a { display: block; font-size: 0.76rem; padding: 2px 0 4px; }
+        .veh-quick .veh-quick-range { display: flex; gap: 4px; align-items: center; }
+        .veh-quick .veh-quick-count { font-size: 0.78rem; color: #64748b; margin-left: auto; }
+        .veh-quick-row { display: grid; grid-template-columns: 1.4fr 1.4fr auto auto auto; gap: 6px; margin-bottom: 6px; align-items: center; }
+        .veh-quick-row select, .veh-quick-row input {
+            width: 100%; min-width: 0; padding: 5px 8px; border: 1px solid #cbd5e1; border-radius: 6px; background: #fff; font-size: 0.82rem;
+        }
+        .veh-quick-row .btn { padding: 3px 9px; font-size: 0.78rem; }
         /* Stacked chart series rows: metric, name, colour, order, remove. */
         /* Fixed widths for the colour and button columns: each row is its own
            grid, so "auto" columns sized to their content would make the
            heading row (empty there) split the space differently. */
-        .series-row { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(0, 1.2fr) minmax(0, 1fr) 34px 34px 34px 34px 34px; gap: 5px; margin-bottom: 6px; align-items: center; }
+        .series-row { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(0, 1.2fr) minmax(0, 1fr) 34px 34px 34px 34px 34px 34px 34px; gap: 5px; margin-bottom: 6px; align-items: center; }
         .series-row select, .series-row input[type="text"] {
             width: 100%; min-width: 0; padding: 5px 8px; border: 1px solid #cbd5e1; border-radius: 6px; background: #fff; font-size: 0.82rem;
         }
@@ -523,6 +577,7 @@
             </div>
             <p class="modal-sub" id="pointPeriod"></p>
             <div class="point-figures" id="pointFigures"></div>
+            <div class="point-calc" id="pointCalc"></div>
             <div class="point-actions">
                 <button type="button" class="btn btn-apply" id="viewVehiclesBtn" onclick="loadPointVehicles()">
                     <i class="fas fa-car"></i> View Vehicles
@@ -533,6 +588,7 @@
                     <i class="fas fa-download"></i> CSV
                 </button>
             </div>
+            <div class="veh-quick" id="vehiclesQuick"></div>
             <div class="vehicles-wrap" id="vehiclesWrap">
                 <table class="vehicles-table" id="vehiclesTable"></table>
             </div>
@@ -630,22 +686,21 @@
             </div>
             <div class="modal-error" id="chartModalError"></div>
 
-            <!-- Three columns side by side (data | title, display and axis | View
-                 Vehicles) so the whole popup fits on one screen without scrolling.
-                 The target is not here: it has its own Targets popup. -->
-            <div class="chart-modal-cols">
-            <div class="chart-modal-col">
-            <div class="modal-section-title">Title</div>
-            <div class="modal-grid">
-                <div class="modal-field span-2">
-                    <label for="titleInput">Title</label>
-                    <input type="text" id="titleInput" maxlength="100">
-                </div>
-                <div class="modal-field span-2">
-                    <label for="subtitleInput">Subtitle (Optional)</label>
-                    <input type="text" id="subtitleInput" maxlength="200">
-                </div>
-            </div>
+            <!-- Tabs down the left, grouped by what gets changed together: what
+                 is plotted | how stacked columns look | number format and axis
+                 (a format change usually needs the axis changing too) | title
+                 and placement | View Vehicles. The target is not here: it has
+                 its own Targets popup. -->
+            <div class="chart-modal-body">
+            <nav class="chart-tabs">
+                <button type="button" data-tab="data" onclick="showChartTab('data')">Data</button>
+                <button type="button" data-tab="columns" class="stacked-only" onclick="showChartTab('columns')">Columns</button>
+                <button type="button" data-tab="labels" onclick="showChartTab('labels')">Labels &amp; Axis</button>
+                <button type="button" data-tab="title" onclick="showChartTab('title')">Title &amp; Placement</button>
+                <button type="button" data-tab="vehicles" onclick="showChartTab('vehicles')">View Vehicles</button>
+            </nav>
+            <div class="chart-panes">
+            <div class="chart-pane" data-pane="data">
             <div class="modal-section-title">Data</div>
             <div class="modal-grid">
                 <div class="modal-field span-2">
@@ -720,7 +775,18 @@
             </div>
             </div>
 
-            <div class="chart-modal-col">
+            <div class="chart-pane" data-pane="title">
+            <div class="modal-section-title">Title</div>
+            <div class="modal-grid">
+                <div class="modal-field span-2">
+                    <label for="titleInput">Title</label>
+                    <input type="text" id="titleInput" maxlength="100">
+                </div>
+                <div class="modal-field span-2">
+                    <label for="subtitleInput">Subtitle (Optional)</label>
+                    <input type="text" id="subtitleInput" maxlength="200">
+                </div>
+            </div>
             <div class="modal-section-title">Placement</div>
             <div class="modal-grid">
                 <div class="modal-field">
@@ -732,7 +798,10 @@
                     <select id="positionSelect"></select>
                 </div>
             </div>
-            <div class="modal-section-title">Display</div>
+            </div>
+
+            <div class="chart-pane" data-pane="labels">
+            <div class="modal-section-title">Labels</div>
             <div class="modal-grid three">
                 <div class="modal-field">
                     <label for="invertSelect">Green When</label>
@@ -789,19 +858,6 @@
                     </select>
                 </div>
             </div>
-            <div class="modal-grid">
-                <div class="modal-field stacked-only">
-                    <label for="themeSelect">Colour Theme</label>
-                    <select id="themeSelect" onchange="renderSeriesList()"></select>
-                </div>
-                <div class="modal-field stacked-only">
-                    <label>Show</label>
-                    <div class="agg-options">
-                        <label><input type="checkbox" id="pctInput" onchange="onPctChange()"> Each Column As 100%</label>
-                        <label><input type="checkbox" id="segLabelsInput"> Values In Segments</label>
-                    </div>
-                </div>
-            </div>
             <div class="modal-section-title">Vertical Axis</div>
             <!-- Average charts share one scale, so they get one pair of boxes; Sum
                  charts get one per period because a month total dwarfs a day's. -->
@@ -853,7 +909,32 @@
             <div class="modal-hint">The chart's target is set with its Targets button, beside Edit Chart.</div>
             </div>
 
-            <div class="chart-modal-col">
+            <div class="chart-pane" data-pane="columns">
+            <div class="modal-section-title">Columns</div>
+            <div class="modal-grid">
+                <div class="modal-field">
+                    <label for="columnLayoutSelect">Columns</label>
+                    <select id="columnLayoutSelect" onchange="onPctChange()">
+                        <option value="stacked">Stacked</option>
+                        <option value="side_by_side">Side By Side</option>
+                    </select>
+                </div>
+                <div class="modal-field">
+                    <label for="themeSelect">Colour Theme</label>
+                    <select id="themeSelect" onchange="renderSeriesList()"></select>
+                </div>
+                <div class="modal-field span-2">
+                    <label>Show</label>
+                    <div class="agg-options">
+                        <label><input type="checkbox" id="pctInput" onchange="onPctChange()"> Each Column As 100%</label>
+                        <label><input type="checkbox" id="segLabelsInput"> Values In Segments</label>
+                    </div>
+                    <div class="modal-hint">Each series' own colour is set in its row on the Data tab.</div>
+                </div>
+            </div>
+            </div>
+
+            <div class="chart-pane" data-pane="vehicles">
             <div class="modal-section-title">View Vehicles</div>
             <div class="modal-field" id="vehCopyField">
                 <label for="vehCopySelect">Copy View Vehicles Setup From</label>
@@ -887,6 +968,7 @@
                 <div class="modal-hint">
                     "is one of" takes a comma-separated list.
                 </div>
+            </div>
             </div>
             </div>
             </div>
@@ -1214,6 +1296,9 @@
                 the metric lists in Edit Chart. A name typed for a series in Edit Chart is
                 saved here too, so every chart using that column picks it up. Remove a name
                 to go back to the raw column.
+                Format and Decimals set how the column's figure shows in the point popup of a
+                calculated chart (a % or ratio, or columns added together). A row may have a
+                format and no name.
             </div>
             </div>
             <!-- Snowflake tables whose figures can be charted, added on the page.
@@ -1318,6 +1403,14 @@
                 </button>
                 <div class="modal-hint">Checked on every row whether or not the column is shown, e.g. INVOICE_STATUS equals STATUS_CANCELLED.</div>
             </div>
+            <div class="modal-field">
+                <label>Quick Filters At The Top Of The List</label>
+                <div id="vehQuickList"></div>
+                <button type="button" class="btn btn-edit section-add-btn" onclick="addVehQuickFilter()">
+                    <i class="fas fa-plus"></i> Add Filter
+                </button>
+                <div class="modal-hint">Each filter appears above the vehicle list: a tick-list of the values in the list for a text column (tick several, none ticked shows all), or a from / to box for a number or date column. The column does not have to be shown in the list. The name is the label above the filter (blank uses the column name).</div>
+            </div>
             <div class="veh-cols">
                 <div>
                     <div class="veh-col-head" id="vehShownHead">Shown, In Order</div>
@@ -1413,6 +1506,9 @@
     // name }), from /kpi/layout. Set in a stacked chart's series list or in
     // Settings > Column Names.
     let metricNames = {};
+    // { 'source|column': { fmt, decimals } }: how each column's figure shows in
+    // the point popup's breakdown (Settings > Column Names).
+    let metricFormats = {};
     function metricName(source, column) {
         return metricNames[metricKey(source || 'snowflake', column)] || column;
     }
@@ -1531,6 +1627,7 @@
             atPeriods = layoutResp.at_periods || [];
             atPpcPeriods = layoutResp.at_ppc_periods || [];
             metricNames = layoutResp.metric_names || {};
+            metricFormats = layoutResp.metric_formats || {};
             metricsCatalogue = metricsResp.metrics || [];
             metricsByKey = Object.fromEntries(metricsCatalogue.map(m => [metricKey(m.source, m.column), m]));
         } catch (err) {
@@ -2133,7 +2230,14 @@
             fetchMetricData(p.source || 'snowflake', p.metric, row.agg,
                 inputs ? inputs[metricKey(p.source || 'snowflake', p.metric)] : 'none', cur).then(d =>
                 d.status === 'ok' || (parts === top && i === 0) ? d : { ...d, message: `${p.metric}: ${d.message}` })))
-            .then(d => combineData(d, plusOps(parts.slice(1))));
+            .then(d => {
+                const combined = combineData(d, plusOps(parts.slice(1)));
+                // Keep each metric's own series so the point popup can show
+                // the figures the result was worked out from.
+                return combined.status === 'ok'
+                    ? { ...combined, side_parts: parts.map((p, i) => ({ name: p.metric, source: p.source || 'snowflake', op: i ? (p.op || '+') : '', data: d[i] })) }
+                    : combined;
+            });
         const top = [{ source: rowSource(row), metric: row.metric }, ...rowPlus(row)];
         // Per Date: the chart's own pasted figures (kpi_targets.js).
         const ownDates = d => (row.target_mode === 'import' ? withRowDateTargets(row, d) : d);
@@ -2254,6 +2358,7 @@
         return {
             ...num,
             stale_date: num.stale_date || den.stale_date,
+            calc: { num, den, scale },
             values: divide(num.values, den.values),
             values_n1: hasN1 ? divide(num.values_n1, den.values_n1) : null,
             values_target: fromInputs ? divide(num.values_target, den.values_target) : target(num.dates),
@@ -2293,8 +2398,9 @@
         if (on) document.getElementById('statusText').textContent = '';
     }
 
-    // New on every load, so the server re-reads daily_summary's columns once
-    // instead of using a list from before the table was last rebuilt.
+    // New on each Load Data click (blank on a normal page load), so the server
+    // re-reads daily_summary's columns once then. A normal load uses the
+    // server's cached list (10 minutes), which saves two Snowflake lookups.
     let loadToken = '';
 
     // Shown at the top of any section with "Autotrader" in its name: the
@@ -2413,8 +2519,8 @@
     }
 
     function loadAll(fromButton = false) {
-        loadToken = String(Date.now());
-        spRefreshToken = fromButton ? loadToken : '';
+        loadToken = fromButton ? String(Date.now()) : '';
+        spRefreshToken = loadToken;
         loadAtAllowance();
         const btn    = document.getElementById('loadBtn');
         const icon   = document.getElementById('loadIcon');
@@ -2942,7 +3048,10 @@
         const start = meta.starts[index];
         if (!start) return;
         const end = meta.kind === 'd' ? start : meta.kind === 'w' ? addDaysIso(start, 6) : lastDayOfMonthIso(start);
-        pointState = { row, start, end, data: null, sort: null };
+        pointState = { row, start, end, data: null, sort: null, filterVals: {} };
+        const quickBar = document.getElementById('vehiclesQuick');
+        quickBar.classList.remove('show');
+        quickBar.innerHTML = '';
 
         const period = { d: 'daily', w: 'weekly', m: 'monthly' }[meta.kind];
         document.getElementById('pointTitle').textContent = `${rowTitle(row)} - ${period}`;
@@ -2974,6 +3083,8 @@
             .map(f => `<span>${escHtml(f.label)}: <b>${f.v === null || f.v === undefined || isNaN(f.v) ? '-' : escHtml(fmt(f.v))}</b></span>`)
             .join('');
 
+        renderPointCalc(row, meta.kind, index, figures);
+
         const button = document.getElementById('viewVehiclesBtn');
         button.style.display = row.vehicles ? '' : 'none';
         button.disabled = false;
@@ -2984,6 +3095,122 @@
         document.getElementById('vehiclesTable').innerHTML = '';
         document.getElementById('vehiclesCsvBtn').style.display = 'none';
         document.getElementById('pointModal').classList.add('open');
+    }
+
+    // For a calculated chart (added metrics and/or divided by another), lists
+    // every figure the point was worked out from, then the result: e.g.
+    // "Orders: 120", "Calls + Emails: 400", "120 / 400 = 30%".
+    function renderPointCalc(row, kind, index, figures) {
+        const box = document.getElementById('pointCalc');
+        box.innerHTML = '';
+        box.classList.remove('show');
+        const d = customRowData[row.id];
+        if (!d || isStacked(row) || (!d.calc && !d.side_parts)) return;
+        const key = { d: 'values', w: 'weekly_values', m: 'monthly_values' }[kind];
+        const blank = v => v === null || v === undefined || isNaN(v);
+        const plain = v => blank(v) ? '-' : withCommas(v, Number.isInteger(v) ? 0 : 2);
+        // A column's figure in its own format (Settings > Column Names), else plain.
+        const partFmt = (p, v) => {
+            const f = metricFormats[metricKey(p.source || 'snowflake', p.name)];
+            return blank(v) ? '-' : f ? rowFormatter({ fmt: f.fmt, decimals: f.decimals || 0 })(v) : plain(v);
+        };
+        const at = (data, i) => (data && data[key] ? data[key][i] : null);
+        const resultFmt = rowFormatter(row);
+        const result = figures.find(f => f.label === 'Value');
+        // One table: a column for each column used (a side of several columns
+        // also gets its total), then the result. One row per point, or one per
+        // day when the daily chart shows the 7-day average.
+        // [side, group heading, its total column's heading]
+        const sides = d.calc ? [[d.calc.num, 'Top', 'Top Total'], [d.calc.den, 'Divided By', 'Bottom Total']] : [[d, 'Total', 'Total']];
+        const cols = [];
+        // groups: one heading over each side's columns ("Top", "Divided By") and
+        // the result. start: the first column of a group after the first, which
+        // gets a line on its left so the groups read apart.
+        const groups = [];
+        sides.forEach(([sideData, label, totalHead], s) => {
+            const parts = sideData.side_parts || [];
+            const first = cols.length;
+            parts.forEach(p => cols.push({ head: (p.op ? p.op + ' ' : '') + metricName(p.source, p.name), title: p.name,
+                                           cell: i => partFmt(p, at(p.data, i)) }));
+            if (parts.length > 1) cols.push({ head: totalHead, total: true, cell: i => plain(at(sideData, i)) });
+            const span = parts.length + (parts.length > 1 ? 1 : 0);
+            if (span) {
+                groups.push({ label, span, start: s > 0 });
+                if (s > 0) cols[first].start = true;
+            }
+        });
+        const scale100 = d.calc && d.calc.scale === 100;
+        cols.push({ head: d.calc ? `Top / Bottom${scale100 ? ' x 100' : ''}` : 'Result', result: true, start: !!d.calc,
+                    cell: (i, v) => (blank(v) ? '-' : resultFmt(v)) });
+        groups.push({ label: 'Result', span: 1, start: true });
+        const rolling = kind === 'd' && rollingOn(row.id);
+        const rowsHtml = [];
+        const cellHtml = (i, v) => cols.map(c => `<td class="${c.result ? 'calc-res' : c.total ? 'calc-tot' : ''}${c.start ? ' calc-start' : ''}">${escHtml(c.cell(i, v))}</td>`).join('');
+        let footer = '';
+        if (rolling) {
+            // The chart point is the average of this day and the 6 before it.
+            const included = [];
+            for (let j = Math.max(0, index - 6); j <= index; j++) {
+                const v = d.values[j];
+                if (blank(v)) continue;
+                included.push(v);
+                rowsHtml.push(`<tr><td class="calc-date">${escHtml(ukDate(d.dates[j]))}</td>${cellHtml(j, v)}</tr>`);
+            }
+            const sum = included.reduce((a, b) => a + b, 0);
+            footer = `<tr class="calc-foot"><td colspan="${cols.length}">7-day average: ${escHtml(included.length ? resultFmt(sum) : '-')}`
+                + ` (sum of ${included.length} day${included.length === 1 ? '' : 's'}) / ${included.length}</td>`
+                + `<td class="calc-res">${escHtml(result && !blank(result.v) ? resultFmt(result.v) : '-')}</td></tr>`;
+        } else {
+            rowsHtml.push(`<tr>${cellHtml(index, result ? result.v : null)}</tr>`);
+        }
+        // The group row only helps when there are two sides (a divided chart).
+        const groupRow = d.calc
+            ? `<tr class="calc-groups">${rolling ? '<th></th>' : ''}`
+              + groups.map(g => `<th colspan="${g.span}"${g.start ? ' class="calc-start"' : ''}>${escHtml(g.label)}</th>`).join('') + '</tr>'
+            : '';
+        // The calculation written out: once with the column names, once with this
+        // point's numbers, so anyone can see how the figure (often a %) is made.
+        // A side of several columns is put in brackets.
+        const sideText = (sideData, val) => {
+            const parts = sideData.side_parts || [];
+            if (!parts.length) return { text: val ? plain(at(sideData, index)) : 'Value', many: false };
+            const text = parts.map((p, n) => (n ? ` ${p.op || '+'} ` : (p.op && p.op !== '+' ? p.op + ' ' : ''))
+                + (val ? partFmt(p, at(p.data, index)) : metricName(p.source, p.name))).join('');
+            return { text, many: parts.length > 1 };
+        };
+        const wrap = s => (s.many ? `(${s.text})` : s.text);
+        const resultText = result && !blank(result.v) ? resultFmt(result.v) : '-';
+        let words, numbers;
+        if (d.calc) {
+            const top = sideText(d.calc.num, false), bottom = sideText(d.calc.den, false);
+            const topN = sideText(d.calc.num, true), bottomN = sideText(d.calc.den, true);
+            const x100 = scale100 ? ' x 100' : '';
+            words = `${wrap(top)} / ${wrap(bottom)}${x100}`;
+            const sums = topN.many || bottomN.many
+                ? `${wrap(topN)} / ${wrap(bottomN)} = ${plain(at(d.calc.num, index))} / ${plain(at(d.calc.den, index))}`
+                : `${topN.text} / ${bottomN.text}`;
+            numbers = `${sums}${x100} = ${resultText}`;
+        } else {
+            words = sideText(d, false).text;
+            numbers = `${sideText(d, true).text} = ${resultText}`;
+        }
+        // No figure on either side (e.g. today, before the data is loaded): say so
+        // rather than a line of dashes.
+        const sideBlank = sideData => blank(at(sideData, index))
+            && (sideData.side_parts || []).every(p => blank(at(p.data, index)));
+        if (!rolling && (d.calc ? sideBlank(d.calc.num) && sideBlank(d.calc.den) : sideBlank(d))) {
+            numbers = 'No figures for this point yet';
+        }
+        const howHtml = `<div class="calc-how"><div class="calc-how-title">How This Is Worked Out</div>`
+            + `<div><span class="calc-how-label">Calculation:</span> ${escHtml(words)}</div>`
+            + (rolling
+                ? `<div>Worked out for each day below, then the chart shows the average of the last 7 days.</div>`
+                : `<div><span class="calc-how-label">For this point:</span> <b>${escHtml(numbers)}</b></div>`)
+            + `</div>`;
+        box.innerHTML = howHtml + `<table><thead>${groupRow}<tr>${rolling ? '<th class="calc-date">Date</th>' : ''}`
+            + cols.map(c => `<th${c.start ? ' class="calc-start"' : ''}${c.title ? ` title="${escHtml(c.title)}"` : ''}>${escHtml(c.head)}</th>`).join('')
+            + `</tr></thead><tbody>${rowsHtml.join('')}</tbody>${footer ? `<tfoot>${footer}</tfoot>` : ''}</table>`;
+        box.classList.add('show');
     }
 
     function closePointModal() {
@@ -3026,6 +3253,7 @@
             else if (snapshot && state.start !== state.end) inspect = `For inspection - a single-day snapshot (${ukDate(state.end)}), not every day in the period.`;
             status.innerHTML = escHtml(notes.join(' - '))
                 + (inspect ? `<span class="point-inspect">${escHtml(inspect)}</span>` : '');
+            renderQuickFilters();
             renderVehiclesTable();
             document.querySelector('#pointModal .point-modal').classList.add('has-vehicles');
             document.getElementById('vehiclesWrap').classList.add('show');
@@ -3103,11 +3331,111 @@
         renderVehiclesTable();
     }
 
+    // ── Quick filters above the list (set per table in Settings > View Vehicles) ──
+    // A text or true/false column gets a drop-down of the values found in the
+    // loaded list; a number or date column gets from / to boxes. They only narrow
+    // the rows already loaded, so the totals row and the CSV follow them.
+    function quickFilterKind(f) {
+        if (VEHICLE_NUMBER_TYPES.includes(f.type)) return 'num';
+        if (VEH_DATE_TYPES.includes(f.type)) return 'date';
+        return 'select';
+    }
+
+    function renderQuickFilters() {
+        const bar = document.getElementById('vehiclesQuick');
+        const filters = pointState.data.quick_filters || [];
+        if (!filters.length) { bar.classList.remove('show'); bar.innerHTML = ''; return; }
+        bar.innerHTML = filters.map((f, n) => {
+            const kind = quickFilterKind(f);
+            if (kind === 'select') {
+                const values = [...new Set(pointState.data.rows.map(r => r[f.index])
+                    .filter(v => v !== null && v !== undefined && v !== ''))]
+                    .map(v => typeof v === 'boolean' ? (v ? 'Yes' : 'No') : String(v))
+                    .sort((a, b) => a.localeCompare(b, 'en-GB', { numeric: true }));
+                return `<div class="veh-multi-field">${escHtml(f.label)}
+                    <details class="veh-multi"><summary id="vehMultiSum${n}">All</summary>
+                    <div class="veh-multi-list">
+                    <a href="#" onclick="clearQuickSelect(${n}); return false;">Clear</a>
+                    ${values.map(v => `<label><input type="checkbox" value="${escHtml(v)}"
+                        onchange="toggleQuickSelect(${n}, this)"> ${escHtml(v)}</label>`).join('')}
+                    </div></details></div>`;
+            }
+            const t = kind === 'num' ? 'number' : 'date';
+            const step = kind === 'num' ? ' step="any"' : '';
+            return `<label>${escHtml(f.label)}<span class="veh-quick-range">
+                <input type="${t}"${step} title="From" oninput="setQuickFilter(${n}, 'min', this.value)">
+                <input type="${t}"${step} title="To" oninput="setQuickFilter(${n}, 'max', this.value)"></span></label>`;
+        }).join('') + '<span class="veh-quick-count" id="vehQuickCount"></span>';
+        bar.classList.add('show');
+    }
+
+    // Tick-list filter: selected = the ticked values; none ticked means all.
+    function toggleQuickSelect(n, box) {
+        const f = pointState.data.quick_filters[n];
+        const cur = pointState.filterVals[f.column] || {};
+        const sel = new Set(cur.sel || []);
+        if (box.checked) sel.add(box.value); else sel.delete(box.value);
+        pointState.filterVals[f.column] = { ...cur, sel: [...sel] };
+        showQuickSelectSummary(n);
+        renderVehiclesTable();
+    }
+
+    function clearQuickSelect(n) {
+        const f = pointState.data.quick_filters[n];
+        pointState.filterVals[f.column] = { ...pointState.filterVals[f.column], sel: [] };
+        document.querySelectorAll(`#vehMultiSum${n}`).forEach(s =>
+            s.parentElement.querySelectorAll('input[type=checkbox]').forEach(b => { b.checked = false; }));
+        showQuickSelectSummary(n);
+        renderVehiclesTable();
+    }
+
+    function showQuickSelectSummary(n) {
+        const f = pointState.data.quick_filters[n];
+        const sel = (pointState.filterVals[f.column] || {}).sel || [];
+        document.getElementById(`vehMultiSum${n}`).textContent =
+            !sel.length ? 'All' : sel.length === 1 ? sel[0] : `${sel.length} selected`;
+    }
+
+    // Clicking elsewhere closes an open tick-list.
+    document.addEventListener('click', e => {
+        document.querySelectorAll('.veh-multi[open]').forEach(d => { if (!d.contains(e.target)) d.removeAttribute('open'); });
+    });
+
+    function setQuickFilter(n, key, value) {
+        const f = pointState.data.quick_filters[n];
+        pointState.filterVals[f.column] = { ...pointState.filterVals[f.column], [key]: value };
+        renderVehiclesTable();
+    }
+
+    // Rows that pass every quick filter that has a value.
+    function filteredVehicleRows() {
+        const { data, filterVals } = pointState;
+        const active = (data.quick_filters || []).filter(f => {
+            const v = filterVals[f.column];
+            return v && ((v.sel && v.sel.length) || v.min || v.max);
+        });
+        if (!active.length) return data.rows;
+        return data.rows.filter(r => active.every(f => {
+            const v = filterVals[f.column], cell = r[f.index], kind = quickFilterKind(f);
+            if (kind === 'select') {
+                const text = typeof cell === 'boolean' ? (cell ? 'Yes' : 'No') : String(cell === null || cell === undefined ? '' : cell);
+                return v.sel.includes(text);
+            }
+            if (cell === null || cell === undefined) return false;
+            if (kind === 'num') {
+                return (!v.min || cell >= parseFloat(v.min)) && (!v.max || cell <= parseFloat(v.max));
+            }
+            const day = String(cell).slice(0, 10);   // ISO date, so text order is date order
+            return (!v.min || day >= v.min) && (!v.max || day <= v.max);
+        }));
+    }
+
     // The loaded vehicles in the order the table shows them.
     function sortedVehicleRows() {
-        const { data, sort } = pointState;
-        if (!sort) return data.rows;
-        return [...data.rows].sort((p, q) => {
+        const { sort } = pointState;
+        const filtered = filteredVehicleRows();
+        if (!sort) return filtered;
+        return [...filtered].sort((p, q) => {
             const a = p[sort.index], b = q[sort.index];
             if (a === null || a === undefined) return 1;
             if (b === null || b === undefined) return -1;
@@ -3165,6 +3493,8 @@
         }).join('') + '</tr>').join('');
         document.getElementById('vehiclesTable').innerHTML =
             `<thead><tr>${head}</tr></thead><tbody>${body}</tbody>${vehiclesSummaryRow(data.columns, rows, isGrey)}`;
+        const count = document.getElementById('vehQuickCount');
+        if (count) count.textContent = `${rows.length.toLocaleString('en-GB')} of ${data.rows.length.toLocaleString('en-GB')} vehicles`;
     }
 
     // Row under the list with each column's Total or Average (set per column in
@@ -3392,38 +3722,49 @@
     }
 
     function renderStackedRow(row, d) {
-        const pct = !!row.pct;
+        const side = row.column_layout === 'side_by_side';
+        const pct = !!row.pct && !side;
         const decimals = row.decimals || 0;
+        // A series ticked "within the series below" shows only what is left
+        // after taking that series off, so the two stack to its full figure.
+        const taken = (arr, below) => arr.map((v, i) => v === null || v === undefined || below[i] === null || below[i] === undefined ? v : v - below[i]);
+        const adjusted = (key, pick) => row.series.map((s, i) =>
+            s.within_below && i > 0 ? taken(pick(d.stacked[i]), pick(d.stacked[i - 1])) : pick(d.stacked[i]));
         const fmt = pct ? (v => withCommas(v, decimals) + '%') : rowFormatter(row);
         const tickFmt = pct ? (v => v.toLocaleString('en-GB', { maximumFractionDigits: 1 }) + '%') : rowTickFormatter(row);
         // Days after today have no figures yet; their columns stay empty.
         const pastOnly = arr => (arr || []).map((v, i) => d.dates[i] <= d.today ? v : null);
         const periods = {
-            m: { labels: d.monthly_labels, series: d.stacked.map(s => s.m), starts: d.monthly_starts || [] },
-            w: { labels: d.weekly_labels, series: d.stacked.map(s => s.w), starts: d.weekly_starts || [] },
-            d: { labels: d.dates.map(dateLabel), series: d.stacked.map(s => pastOnly(s.d)), starts: d.dates },
+            m: { labels: d.monthly_labels, series: adjusted('m', s => s.m), starts: d.monthly_starts || [] },
+            w: { labels: d.weekly_labels, series: adjusted('w', s => s.w), starts: d.weekly_starts || [] },
+            d: { labels: d.dates.map(dateLabel), series: adjusted('d', s => s.d).map(pastOnly), starts: d.dates },
         };
+        // Series on the right-hand axis are lines: not in the columns, totals or 100%.
+        const onRight = row.series.map(s => s.axis === 'secondary');
         Object.values(periods).forEach(p => {
             p.totals = p.labels.map((_, i) => {
-                const known = p.series.map(s => s[i]).filter(v => v !== null && v !== undefined);
+                const known = p.series.filter((_s, j) => !onRight[j]).map(s => s[i]).filter(v => v !== null && v !== undefined);
                 return known.length ? known.reduce((a, b) => a + b, 0) : null;
             });
             // 100%: each segment becomes its share of the column.
-            if (pct) p.series = p.series.map(s => s.map((v, i) =>
+            if (pct) p.series = p.series.map((s, j) => onRight[j] ? s : s.map((v, i) =>
                 v === null || v === undefined || !p.totals[i] ? null : v / p.totals[i] * 100));
         });
+        const rightRanges = onRight.some(Boolean)
+            ? calcRowRanges(['m', 'w', 'd'].map(k => ({ series: periods[k].series.filter((_s, j) => onRight[j]) })), 'sum')
+            : null;
         const targets = stackedTargets(row, d, periods);
         const ranges = pct
             ? ['m', 'w', 'd'].map(() => ({ yMin: 0, yMax: 100, unit: 20 }))
-            : calcRowRanges(['m', 'w', 'd'].map(k => ({ series: [periods[k].totals], min: (row.y_min || {})[k], max: (row.y_max || {})[k] })),
+            : calcRowRanges(['m', 'w', 'd'].map(k => ({ series: side ? periods[k].series.filter((_s, j) => !onRight[j]) : [periods[k].totals], min: (row.y_min || {})[k], max: (row.y_max || {})[k] })),
                 row.agg, sharedAxisValue(row.y_min), sharedAxisValue(row.y_max));
         const existing = rowCharts[row.id] || [];
-        const opts = { fmt, fullFmt: rowFullFormatter(row, pct), tickFmt, pct, colours: seriesColours(row), names: row.series.map(seriesLabel),
+        const opts = { fmt, fullFmt: rowFullFormatter(row, pct), tickFmt, pct, side, colours: seriesColours(row), names: row.series.map(seriesLabel),
                        transparency: themeById(row.theme).transparency || 0,
                        // A 100% chart has no column totals, so its figures are the segment values.
                        segLabels: !!row.seg_labels || !!row.pct, dataLabels: dataLabelsOn(row) };
         rowCharts[row.id] = ['m', 'w', 'd'].map((k, i) => buildStackedChart(`cv-${row.id}-${k}`, periods[k], targets[k], existing[i],
-            { ...opts, range: ranges[i], day: k === 'd', notes: { rowId: row.id, kind: k, starts: periods[k].starts } }));
+            { ...opts, range: ranges[i], rightRange: rightRanges && rightRanges[i], onRight, day: k === 'd', notes: { rowId: row.id, kind: k, starts: periods[k].starts } }));
         updateDayTitles();
         DayWindow.updateScrollers();
     }
@@ -3464,42 +3805,74 @@
                 const TOTAL_FONT = 'bold 10px DM Sans, system-ui, sans-serif';
                 // A total may use the column's whole slot, gap included.
                 const slot = chart.scales.x.width / Math.max(1, chart.data.labels.length);
-                // Work out every label first: { text, x, y, font, colour, base, fits }.
+                // Work out every label first: { text, x, y, font, colour, base,
+                // align, rotate, fits }. A label too wide for its column turns
+                // on its side and runs up it instead (rotate).
                 const labels = [];
+                const plotTop = chart.chartArea.top;
                 ctx.save();
+                // Inside a segment: across it if it fits, else up it.
+                const inside = (text, el, colour) => {
+                    const w = ctx.measureText(text).width, h = Math.abs(el.base - el.y), bw = el.width || slot;
+                    const across = h >= 12 && w <= bw - 2;
+                    const up = !across && bw >= 11 && w <= h - 4;
+                    // A segment too small either way is just skipped.
+                    if (!across && !up) return;
+                    labels.push({ text, x: el.x, y: (el.y + el.base) / 2, font: ctx.font, base: 'middle', align: 'center',
+                                  rotate: up, colour, fits: across || up });
+                };
+                // Above a column (room up to the top of the plot): across if it
+                // fits the width given, else up from the column's top.
+                const above = (text, x, top, width) => {
+                    const w = ctx.measureText(text).width;
+                    const across = w <= width;
+                    labels.push({ text, x, y: top - 3, font: ctx.font, base: across ? 'bottom' : 'middle',
+                                  align: across ? 'center' : 'left', rotate: !across,
+                                  colour: '#0f172a', fits: across || top - 3 - w >= plotTop });
+                };
                 for (let i = 0; i < chart.data.labels.length; i++) {
                     if (opts.segLabels) {
                         ctx.font = SEG_FONT;
                         bars.forEach(b => {
                             const v = b.ds.data[i], el = b.meta.data[i];
-                            // Too short a segment is just skipped, whatever the chart.
-                            if (v === null || v === undefined || !el || Math.abs(el.base - el.y) < 12) return;
-                            const text = opts.fmt(v);
-                            labels.push({ text, x: el.x, y: (el.y + el.base) / 2, font: SEG_FONT, base: 'middle',
-                                          colour: textOn(b.ds.$hex, opts.transparency),
-                                          fits: !el.width || ctx.measureText(text).width <= el.width - 2 });
+                            if (v === null || v === undefined || !el) return;
+                            inside(opts.fmt(v), el, textOn(b.ds.$hex, opts.transparency));
                         });
                     }
                     if (opts.pct) continue;
+                    // Side by side: each column's own value above it, unless
+                    // Values In Segments already put it inside.
+                    if (opts.side) {
+                        if (opts.segLabels) continue;
+                        ctx.font = TOTAL_FONT;
+                        bars.forEach(b => {
+                            const v = b.ds.data[i], el = b.meta.data[i];
+                            if (v === null || v === undefined || !el) return;
+                            above(opts.fmt(v), el.x, Math.min(el.y, el.base), (el.width || slot) + 4);
+                        });
+                        continue;
+                    }
                     const known = bars.filter(b => b.ds.data[i] !== null && b.ds.data[i] !== undefined && b.meta.data[i]);
                     if (!known.length) continue;
                     const total = known.reduce((a, b) => a + b.ds.data[i], 0);
-                    const top = Math.min(...known.map(b => b.meta.data[i].y));
-                    const text = opts.fmt(total);
                     ctx.font = TOTAL_FONT;
-                    labels.push({ text, x: known[0].meta.data[i].x, y: top - 3, font: TOTAL_FONT, base: 'bottom',
-                                  colour: '#0f172a', fits: ctx.measureText(text).width <= slot - 2 });
+                    above(opts.fmt(total), known[0].meta.data[i].x, Math.min(...known.map(b => b.meta.data[i].y)), slot - 2);
                 }
-                // The daily chart shows all its labels or none: if any one is
-                // too wide for its column, none are drawn. The month and week
+                // The daily chart shows all its labels or none: if any one does
+                // not fit even on its side, none are drawn. The month and week
                 // charts just leave out the ones that do not fit.
                 const shown = opts.day && labels.some(l => !l.fits) ? [] : labels.filter(l => l.fits);
-                ctx.textAlign = 'center';
                 shown.forEach(l => {
                     ctx.font = l.font;
                     ctx.textBaseline = l.base;
+                    ctx.textAlign = l.align;
                     ctx.fillStyle = l.colour;
-                    ctx.fillText(l.text, l.x, l.y);
+                    if (!l.rotate) { ctx.fillText(l.text, l.x, l.y); return; }
+                    ctx.save();
+                    ctx.translate(l.x, l.y);
+                    ctx.rotate(-Math.PI / 2);
+                    ctx.fillText(l.text, 0, 0);
+                    ctx.restore();
                 });
                 ctx.restore();
             },
@@ -3512,7 +3885,21 @@
         const { yMin, yMax, unit } = opts.range;
         const ctx = document.getElementById(canvasId).getContext('2d');
         if (existingChart) existingChart.destroy();
-        const datasets = p.series.map((data, i) => ({
+        const datasets = p.series.map((data, i) => opts.onRight[i] ? {
+            type: 'line',
+            label: opts.names[i],
+            data,
+            yAxisID: 'y2',
+            borderColor: opts.colours[i],
+            backgroundColor: opts.colours[i],
+            $hex: opts.colours[i],
+            borderWidth: 2,
+            pointRadius: 2,
+            fill: false,
+            tension: 0,
+            spanGaps: true,
+            order: 1,
+        } : ({
             type: 'bar',
             label: opts.names[i],
             data,
@@ -3520,7 +3907,7 @@
             $hex: opts.colours[i],   // solid colour, for the segment text
             borderWidth: 0,
             borderSkipped: false,
-            stack: 'total',
+            stack: opts.side ? 'series' + i : 'total',
             order: 2,
             categoryPercentage: 0.85,
             barPercentage: 0.85,
@@ -3560,7 +3947,7 @@
                                 return v === null || isNaN(v) ? null : `${c.dataset.label}: ${opts.fullFmt(v)}`;
                             },
                             footer: items => {
-                                if (opts.pct) return '';
+                                if (opts.pct || opts.side) return '';
                                 const segs = items.filter(i => i.dataset.type === 'bar' && i.parsed.y !== null && !isNaN(i.parsed.y));
                                 return segs.length ? 'Total: ' + opts.fullFmt(segs.reduce((a, i) => a + i.parsed.y, 0)) : '';
                             },
@@ -3574,8 +3961,16 @@
                         grid: { display: false },
                         ticks: { font: { size: 10 }, maxRotation: 45, minRotation: 30 },
                     },
+                    ...(opts.rightRange ? { y2: {
+                        position: 'right',
+                        min: opts.rightRange.yMin,
+                        max: opts.rightRange.yMax,
+                        border: { display: false },
+                        grid: { drawOnChartArea: false },
+                        ticks: { font: { size: 10 }, stepSize: opts.rightRange.unit, callback: v => opts.fmt(v) },
+                    } } : {}),
                     y: {
-                        stacked: true,
+                        stacked: !opts.side,
                         min: yMin,
                         max: yMax,
                         border: { display: false },
@@ -3866,6 +4261,9 @@
         }
         openVehSetup(row);
         openChartTypeSetup(row);
+        // Reopens on the tab used last, for going through several charts
+        // changing the same thing. A new chart starts on Data.
+        showChartTab(row ? chartTab : 'data');
         document.getElementById('chartModal').classList.add('open');
     }
 
@@ -4319,6 +4717,17 @@
     // only on a stacked chart, against the column total) and View Vehicles.
     let seriesDraft = [];   // [{ source, metric, label, colour (null = theme) }]
 
+    // ── Edit Chart tabs ──
+    let chartTab = 'data';
+
+    function showChartTab(tab) {
+        // Columns is only there on a stacked chart.
+        if (tab === 'columns' && chartTypeValue() !== 'stacked') tab = 'data';
+        chartTab = tab;
+        document.querySelectorAll('#chartModal .chart-tabs button').forEach(b => b.classList.toggle('active', b.dataset.tab === tab));
+        document.querySelectorAll('#chartModal .chart-pane').forEach(p => p.classList.toggle('active', p.dataset.pane === tab));
+    }
+
     function chartTypeValue() {
         return document.getElementById('chartTypeSelect').value;
     }
@@ -4332,6 +4741,7 @@
         document.getElementById('themeSelect').innerHTML = themes.map(t =>
             `<option value="${escHtml(t.id)}">${escHtml(t.name)}</option>`).join('');
         document.getElementById('themeSelect').value = stacked && row.theme ? row.theme : (themes[0] ? themes[0].id : '');
+        document.getElementById('columnLayoutSelect').value = stacked && row.column_layout === 'side_by_side' ? 'side_by_side' : 'stacked';
         document.getElementById('pctInput').checked = stacked && !!row.pct;
         document.getElementById('segLabelsInput').checked = stacked && (!!row.seg_labels || !!row.pct);
         onPctChange();
@@ -4341,7 +4751,12 @@
     // A 100% chart always shows its segment values (it has no column totals),
     // so the box is ticked and fixed while 100% is on.
     function onPctChange() {
-        const pct = document.getElementById('pctInput').checked;
+        // 100% needs stacked columns: side by side switches it off.
+        const side = document.getElementById('columnLayoutSelect').value === 'side_by_side';
+        const pctBox = document.getElementById('pctInput');
+        if (side) pctBox.checked = false;
+        pctBox.disabled = side;
+        const pct = pctBox.checked;
         const seg = document.getElementById('segLabelsInput');
         if (pct) seg.checked = true;
         seg.disabled = pct;
@@ -4361,6 +4776,7 @@
         const stacked = chartTypeValue() === 'stacked';
         document.querySelectorAll('#chartModal .stacked-only').forEach(el => { el.style.display = stacked ? '' : 'none'; });
         document.querySelectorAll('#chartModal .line-only').forEach(el => { el.style.display = stacked ? 'none' : ''; });
+        if (!stacked && chartTab === 'columns') showChartTab('data');
         if (stacked) {
             ['ratioAsField', 'weightField'].forEach(id => { document.getElementById(id).style.display = 'none'; });
             renderSeriesList();
@@ -4395,7 +4811,7 @@
         // Headings over the boxes, so it is clear the second list multiplies the first.
         const head = seriesDraft.length ? `<div class="series-row series-head">
                 <span>Metric</span><span>Multiplied By</span><span>Legend Name</span>
-                <span></span><span></span><span></span><span></span><span></span></div>` : '';
+                <span></span><span></span><span></span><span></span><span></span><span></span><span></span></div>` : '';
         document.getElementById('seriesList').innerHTML = head + seriesDraft.map((s, i) => {
             const themeColour = theme.colours[i] || SERIES_SPARE_COLOUR;
             const colour = s.colour || themeColour;
@@ -4411,6 +4827,14 @@
                     <input type="color" value="${escHtml(colour)}" class="${s.colour ? 'series-own' : ''}"
                            title="${s.colour ? 'Own colour - Reset goes back to the theme' : 'Theme colour - pick one to override it'}"
                            onchange="seriesDraft[${i}].colour = this.value; renderSeriesList()">
+                    <button type="button" class="btn ${s.axis === 'secondary' ? 'btn-primary' : 'btn-edit'}"
+                            title="${s.axis === 'secondary' ? 'On the right-hand axis, drawn as a line - click to put it back in the columns' : 'Put on a second axis on the right, drawn as a line'}"
+                            onclick="seriesDraft[${i}].axis = seriesDraft[${i}].axis === 'secondary' ? 'primary' : 'secondary'; renderSeriesList()">
+                        <i class="fas fa-arrows-alt-h"></i></button>
+                    <button type="button" class="btn ${s.within_below ? 'btn-primary' : 'btn-edit'}"
+                            title="${i === 0 ? 'Nothing below to subtract' : 'Subtract the series below from this one, for when the series below is part of this one (this column then shows only the rest)'}"
+                            onclick="seriesDraft[${i}].within_below = !seriesDraft[${i}].within_below; renderSeriesList()"
+                            ${i === 0 ? 'disabled' : ''}><i class="fas fa-minus"></i></button>
                     <button type="button" class="btn btn-edit" title="Back to the theme colour" onclick="seriesDraft[${i}].colour = null; renderSeriesList()"
                             ${s.colour ? '' : 'disabled'}><i class="fas fa-undo"></i></button>
                     <button type="button" class="btn btn-edit" title="Move down the stack" onclick="moveSeries(${i}, -1)"
@@ -4455,6 +4879,8 @@
         const series = seriesDraft.filter(s => s.metric).map(s => ({
             source: s.source || 'snowflake', metric: s.metric, label: String(s.label || '').trim(), colour: s.colour || null,
             ...(s.multiply_by && s.multiply_by.metric ? { multiply_by: s.multiply_by } : {}),
+            ...(s.within_below ? { within_below: true } : {}),
+            ...(s.axis === 'secondary' ? { axis: 'secondary' } : {}),
         }));
         if (!series.length) { showChartError('Add at least one series.'); return; }
         if (series.length !== seriesDraft.length) { showChartError('Choose a metric for each series, or remove it.'); return; }
@@ -4494,6 +4920,7 @@
             metric: series[0].metric,
             series,
             theme: document.getElementById('themeSelect').value || null,
+            column_layout: document.getElementById('columnLayoutSelect').value,
             pct: document.getElementById('pctInput').checked,
             seg_labels: document.getElementById('segLabelsInput').checked,
             title,
@@ -4619,7 +5046,7 @@
         if (mode !== 'calc') delete updated.target_calc;
         delete updated.vehicles;
         if (vehicles) updated.vehicles = vehicles;
-        ['chart_type', 'series', 'theme', 'pct', 'seg_labels', 'stack_target'].forEach(k => delete updated[k]);
+        ['chart_type', 'series', 'theme', 'pct', 'seg_labels', 'column_layout', 'stack_target'].forEach(k => delete updated[k]);
         delete updated.weight_by;
         const weightBy = readWeightBy();
         if (weightBy) updated.weight_by = weightBy;
@@ -5669,9 +6096,28 @@
     // Edited as a list of { key ('source|column'), name }; Save sends it all.
     let namesDraft = [];
 
+    // Format of each column's figure in the point popup's breakdown, edited
+    // on the same rows as the names. Saved separately (kpi.py metric-formats).
+    const METRIC_FORMAT_OPTIONS = [['', 'Plain Number'], ['num', 'Number'], ['pct', '%'], ['pct100', '% (From Decimal)'],
+                                   ['k', 'Thousands (k)'], ['km', 'k / M'], ['gbp', '£'], ['gbpkm', '£ k / M']];
+
+    async function saveMetricFormats(formats) {
+        if (JSON.stringify(formats) === JSON.stringify(metricFormats)) return false;
+        const resp = await fetch(BASE_URL + '/kpi/metric-formats', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ formats }),
+        }).then(r => r.json());
+        if (resp.status !== 'ok') throw new Error(resp.message || 'Column formats save failed');
+        metricFormats = resp.formats;
+        return true;
+    }
+
     function loadNamesDraft() {
-        namesDraft = Object.entries(metricNames)
-            .map(([key, name]) => ({ key, name }))
+        const keys = [...new Set([...Object.keys(metricNames), ...Object.keys(metricFormats)])];
+        namesDraft = keys
+            .map(key => ({ key, name: metricNames[key] || '', fmt: (metricFormats[key] || {}).fmt || '',
+                           decimals: (metricFormats[key] || {}).decimals || 0 }))
             .sort((a, b) => a.key.split('|')[1].localeCompare(b.key.split('|')[1]));
         renderNamesDraft();
     }
@@ -5695,30 +6141,38 @@
                 <select onchange="namesDraft[${i}].key = this.value">${options(n.key)}</select>
                 <input type="text" maxlength="60" value="${escHtml(n.name)}" placeholder="Name shown on charts"
                        oninput="namesDraft[${i}].name = this.value">
+                <select title="How this column's figure shows in the point popup of a calculated chart"
+                        onchange="namesDraft[${i}].fmt = this.value">
+                    ${METRIC_FORMAT_OPTIONS.map(([v, l]) => `<option value="${v}"${v === (n.fmt || '') ? ' selected' : ''}>${escHtml(l)}</option>`).join('')}
+                </select>
+                <input type="number" min="0" max="3" step="1" style="width:60px;" value="${n.decimals || 0}"
+                       title="Decimals in the point popup" oninput="namesDraft[${i}].decimals = parseInt(this.value, 10) || 0">
                 <button type="button" class="btn btn-remove-chart" title="Remove name" onclick="namesDraft.splice(${i}, 1); renderNamesDraft()">
                     <i class="fas fa-trash"></i></button>
             </div>`).join('') || '<div class="point-status" style="padding:2px 0 6px;">No column names yet.</div>';
-        list.querySelectorAll('select').forEach((s, i) => { s.value = namesDraft[i].key; });
+        // Each row has two selects: the column (first) and the format (second, already set above).
+        list.querySelectorAll('.series-row').forEach((r, i) => { r.querySelector('select').value = namesDraft[i].key; });
     }
 
     function addNameDraft() {
-        namesDraft.push({ key: '', name: '' });
+        namesDraft.push({ key: '', name: '', fmt: '', decimals: 0 });
         renderNamesDraft();
     }
 
     // The draft as the object to save. Throws on a half-filled or repeated row.
     function namesDraftPayload() {
-        const names = {};
+        const names = {}, formats = {};
         namesDraft.forEach(n => {
             const name = String(n.name || '').trim();
-            if (!n.key && !name) return;   // an empty row added and left
-            if (!n.key) throw new Error(`Choose a column for "${name}", or remove it.`);
+            if (!n.key && !name && !n.fmt) return;   // an empty row added and left
+            if (!n.key) throw new Error(`Choose a column for "${name || 'this format'}", or remove it.`);
             const column = n.key.slice(n.key.indexOf('|') + 1);
-            if (!name) throw new Error(`Enter a name for ${column}, or remove it.`);
-            if (names[n.key]) throw new Error(`${column} is named twice.`);
-            names[n.key] = name;
+            if (!name && !n.fmt) throw new Error(`Enter a name or a format for ${column}, or remove it.`);
+            if (n.key in names || n.key in formats) throw new Error(`${column} is listed twice.`);
+            if (name) names[n.key] = name;
+            if (n.fmt) formats[n.key] = { fmt: n.fmt, decimals: Math.min(3, Math.max(0, n.decimals || 0)) };
         });
-        return names;
+        return { names, formats };
     }
 
     // ── Data sources (Settings > Data Sources) ───────────────────────────────
@@ -6064,7 +6518,8 @@
             blank_grey: !!c.blank_grey })),
             grey_rules: (draft.grey_rules || []).map(r => ({
                 column: r.column, op: r.op,
-                value: VEH_NO_VALUE_OPS.includes(r.op) ? '' : String(r.value || '').trim() })) };
+                value: VEH_NO_VALUE_OPS.includes(r.op) ? '' : String(r.value || '').trim() })),
+            filters: (draft.filters || []).filter(f => f.column).map(f => ({ column: f.column, label: (f.label || '').trim() })) };
     }
 
     // A saved column, with a format and decimals filled in where it has none
@@ -6091,12 +6546,15 @@
                 shown: shownBefore.map(c => vehColumnSetting(c, types[c.column])),
                 live: resp.columns,
                 grey_rules: JSON.parse(JSON.stringify(resp.view.grey_rules || [])),
+                filters: JSON.parse(JSON.stringify(resp.view.filters || [])),
                 saved: JSON.stringify(vehViewPayload({ table: resp.view.table,
+                    filters: resp.view.filters || [],
                     shown: resp.view.columns.map(c => ({ column: c.column, label: c.label || '',
                         format: c.format, decimals: c.decimals, summary: c.summary, blank_grey: c.blank_grey })),
                     grey_rules: resp.view.grey_rules || [] })),
             };
             renderGreyRules();
+            renderVehQuickFilters();
             const select = document.getElementById('vehTableSelect');
             const tables = resp.tables.includes(resp.table) ? resp.tables : [resp.table, ...resp.tables];
             select.innerHTML = tables.map(t => `<option value="${escHtml(t)}">${escHtml(t)}</option>`).join('');
@@ -6162,6 +6620,46 @@
         const ops = vehOpsFor(greyRuleKind(column)).map(([op]) => op);
         if (!ops.includes(r.op)) { r.op = ops[0]; r.value = ''; }
         renderGreyRules();
+    }
+
+    // ── Quick filters (Settings) ──
+    // The filters shown above the vehicle list for this table: a column and the
+    // label shown above it. Any column of the table can be used.
+    function renderVehQuickFilters() {
+        if (!vehViewDraft) return;
+        const columns = vehViewDraft.live.map(c => c.column);
+        const list = vehViewDraft.filters;
+        document.getElementById('vehQuickList').innerHTML = list.map((f, i) => {
+            const cols = (f.column && !columns.includes(f.column) ? [f.column] : []).concat(columns);
+            return `
+                <div class="veh-quick-row">
+                    <select onchange="vehViewDraft.filters[${i}].column = this.value; renderVehQuickFilters()">
+                        <option value="">(choose a column)</option>
+                        ${cols.map(c => `<option value="${escHtml(c)}" ${c === f.column ? 'selected' : ''}>${escHtml(c)}${columns.includes(c) ? '' : ' (not in the table)'}</option>`).join('')}
+                    </select>
+                    <input type="text" maxlength="60" value="${escHtml(f.label || '')}" placeholder="${escHtml(f.column || 'Name')}"
+                           title="Name shown above the filter" oninput="vehViewDraft.filters[${i}].label = this.value">
+                    <button type="button" class="btn btn-edit" title="Move up" onclick="moveVehQuickFilter(${i}, -1)"
+                            ${i === 0 ? 'disabled' : ''}><i class="fas fa-arrow-up"></i></button>
+                    <button type="button" class="btn btn-edit" title="Move down" onclick="moveVehQuickFilter(${i}, 1)"
+                            ${i === list.length - 1 ? 'disabled' : ''}><i class="fas fa-arrow-down"></i></button>
+                    <button type="button" class="btn btn-remove-chart" title="Remove filter"
+                            onclick="vehViewDraft.filters.splice(${i}, 1); renderVehQuickFilters()"><i class="fas fa-trash"></i></button>
+                </div>`;
+        }).join('') || '<div class="point-status" style="padding:2px 0 6px;">No quick filters.</div>';
+    }
+
+    function addVehQuickFilter() {
+        if (!vehViewDraft) return;
+        vehViewDraft.filters.push({ column: '', label: '' });
+        renderVehQuickFilters();
+    }
+
+    function moveVehQuickFilter(i, step) {
+        const list = vehViewDraft.filters, j = i + step;
+        if (j < 0 || j >= list.length) return;
+        [list[i], list[j]] = [list[j], list[i]];
+        renderVehQuickFilters();
     }
 
     // Each table's columns are saved separately. Switching loads the other
@@ -6505,8 +7003,8 @@
             errorBox.classList.add('show');
             return;
         }
-        let names;
-        try { names = namesDraftPayload(); } catch (err) {
+        let names, formats;
+        try { ({ names, formats } = namesDraftPayload()); } catch (err) {
             errorBox.textContent = err.message;
             errorBox.classList.add('show');
             return;
@@ -6519,6 +7017,7 @@
             await saveVehColumnDraft();
             await saveThemeDraft();
             await saveMetricNames(names);
+            await saveMetricFormats(formats);
             const atChanged = await saveAtPeriods();
             const resp = await fetch(BASE_URL + '/kpi/settings', {
                 method: 'POST',

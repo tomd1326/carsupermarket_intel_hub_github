@@ -1,4 +1,5 @@
 import datetime
+import hashlib
 import json
 import logging
 import os
@@ -149,6 +150,7 @@ SETTINGS_DEFAULTS = {
     # Logs page (routers/logs.py): days kept, and rows per page.
     'logs_retention_days':              30,
     'logs_page_size':                   100,
+    'logs_slow_request_ms':             1000,
     'number_to_buy':                    200,
     'max_days_sales':                   90,
     'max_dts':                          45,
@@ -215,6 +217,10 @@ SETTINGS_DEFAULTS = {
     'ap_menu_opacity':                  100,
     'ap_radius':                        8,
     'ap_header_shadow':                 6,
+    # Settings > User Activity: a session with no request for this long ends as Timed Out.
+    'session_timeout_minutes':          30,
+    # Force Re-login: whole epoch seconds. Logins before this are signed out on every server.
+    'sessions_invalidated_at':          0,
 }
 
 BOOL_SETTINGS = {'calc_buying_reqs', 'get_stock', 'enable_cars_bought', 'kpi_ai_summary', 'cap_override_enabled'}
@@ -456,26 +462,235 @@ def delete_user_preference(conn, username: str, pref_key: str) -> None:
 
 # ── User activity analytics ───────────────────────────────────────────────────
 
-def record_login(conn, session_id: str, username: str, environment: str, login_at) -> None:
+# One row per session. A session starts at a sign-in ('password'), when a
+# login cookie with no row is first seen ('cookie': signed in before this
+# tracking began, or the sign-in insert failed), or when someone comes back
+# on the same cookie after the timeout ('returned'). It ends once, with one of
+# SESSION_END_REASONS, and an ended row is never changed again: every update
+# below is guarded by "ended_at IS NULL", and anything that ends sessions
+# first closes the ones already past the timeout, so a session left hours
+# ago is never relabelled Forced or Logout. db/18_user_session_end.sql is
+# the same change for running by hand.
+#
+# All times are TIMESTAMPTZ written with the database's NOW(); pages convert
+# to UK time with AT TIME ZONE 'Europe/London'.
+
+SESSION_END_REASONS = ('logout', 'timeout', 'forced', 'password_changed', 'user_deleted')
+
+_user_sessions_ready = False
+_SESSIONS_MIGRATION_LOCK = 724180001   # any fixed number, used only here
+
+
+def _ensure_user_sessions(conn) -> None:
+    """Runs once per process. Looks at information_schema first so the
+    ALTERs (which lock the table) only run when something is missing. The
+    advisory lock stops two containers starting together from converting
+    the time columns twice."""
+    global _user_sessions_ready
+    if _user_sessions_ready:
+        return
     with conn.cursor() as cur:
         cur.execute(
             """
-            INSERT INTO user_sessions (session_id, username, environment, login_at, last_seen_at)
-            VALUES (%s, %s, %s, %s, %s)
-            ON CONFLICT (session_id) DO NOTHING
-            """,
-            (session_id, username, environment, login_at, login_at),
+            CREATE TABLE IF NOT EXISTS user_sessions (
+                session_id   VARCHAR(64)  PRIMARY KEY,
+                username     VARCHAR(100) NOT NULL,
+                environment  VARCHAR(10)  NOT NULL,
+                login_at     TIMESTAMPTZ  NOT NULL,
+                last_seen_at TIMESTAMPTZ  NOT NULL,
+                logout_at    TIMESTAMPTZ  NULL
+            )
+            """
         )
+        cur.execute(
+            "SELECT column_name, data_type FROM information_schema.columns "
+            "WHERE table_schema = current_schema() AND table_name = 'user_sessions'"
+        )
+        columns = dict(cur.fetchall())
+        if 'end_reason' not in columns or columns.get('login_at') == 'timestamp without time zone':
+            cur.execute("SELECT pg_advisory_xact_lock(%s)", (_SESSIONS_MIGRATION_LOCK,))
+            # Read again under the lock: another container may have just done it.
+            cur.execute(
+                "SELECT column_name, data_type FROM information_schema.columns "
+                "WHERE table_schema = current_schema() AND table_name = 'user_sessions'"
+            )
+            columns = dict(cur.fetchall())
+            if columns.get('login_at') == 'timestamp without time zone':
+                # login_at and logout_at were written in UK time. last_seen_at was
+                # UK time where it was only set at login or logout, and database
+                # time where record_event moved it on.
+                cur.execute(
+                    """
+                    ALTER TABLE user_sessions
+                        ALTER COLUMN last_seen_at TYPE TIMESTAMPTZ USING
+                            CASE WHEN last_seen_at = login_at OR last_seen_at = logout_at
+                                 THEN last_seen_at AT TIME ZONE 'Europe/London'
+                                 ELSE last_seen_at AT TIME ZONE current_setting('TimeZone') END,
+                        ALTER COLUMN login_at  TYPE TIMESTAMPTZ USING login_at  AT TIME ZONE 'Europe/London',
+                        ALTER COLUMN logout_at TYPE TIMESTAMPTZ USING logout_at AT TIME ZONE 'Europe/London'
+                    """
+                )
+                cur.execute("UPDATE user_sessions SET last_seen_at = login_at WHERE last_seen_at < login_at")
+            if 'end_reason' not in columns:
+                cur.execute(
+                    "ALTER TABLE user_sessions "
+                    "ADD COLUMN IF NOT EXISTS started_by VARCHAR(20) NOT NULL DEFAULT 'password', "
+                    "ADD COLUMN IF NOT EXISTS ended_at   TIMESTAMPTZ NULL, "
+                    "ADD COLUMN IF NOT EXISTS end_reason VARCHAR(20) NULL"
+                )
+                cur.execute("CREATE INDEX IF NOT EXISTS idx_user_sessions_last_seen ON user_sessions (last_seen_at)")
+                cur.execute(
+                    "UPDATE user_sessions SET ended_at = logout_at, end_reason = 'logout' "
+                    "WHERE logout_at IS NOT NULL AND ended_at IS NULL"
+                )
     conn.commit()
+    _user_sessions_ready = True
 
 
-def record_logout(conn, session_id: str, last_seen_at) -> None:
+def new_session_id() -> str:
+    return hashlib.sha256(os.urandom(16)).hexdigest()
+
+
+def next_session_id(session_id: str) -> str:
+    """The session that follows this one after a timeout. Fixed rather than
+    random, so two requests crossing the timeout together both land on the
+    same new row instead of making one each."""
+    return hashlib.sha256(f"{session_id}:next".encode()).hexdigest()
+
+
+def _close_timed_out(cur, timeout_minutes: int, username: str | None = None,
+                     session_id: str | None = None) -> None:
+    """End open sessions with no request for timeout_minutes. They end when
+    the timeout ran out, not at the moment this happens to run."""
+    cur.execute(
+        """
+        UPDATE user_sessions
+        SET ended_at = last_seen_at + INTERVAL '1 minute' * %s, end_reason = 'timeout'
+        WHERE ended_at IS NULL
+          AND last_seen_at < NOW() - INTERVAL '1 minute' * %s
+          AND (%s::text IS NULL OR username = %s)
+          AND (%s::text IS NULL OR session_id = %s)
+        """,
+        (timeout_minutes, timeout_minutes, username, username, session_id, session_id),
+    )
+
+
+def record_login(conn, session_id: str, username: str, environment: str) -> None:
+    _ensure_user_sessions(conn)
     with conn.cursor() as cur:
         cur.execute(
-            "UPDATE user_sessions SET logout_at = %s, last_seen_at = %s WHERE session_id = %s AND logout_at IS NULL",
-            (last_seen_at, last_seen_at, session_id),
+            """
+            INSERT INTO user_sessions (session_id, username, environment, login_at, last_seen_at, started_by)
+            VALUES (%s, %s, %s, NOW(), NOW(), 'password')
+            ON CONFLICT (session_id) DO NOTHING
+            """,
+            (session_id, username, environment),
         )
     conn.commit()
+
+
+def record_logout(conn, session_id: str, timeout_minutes: int) -> None:
+    """A logout after the timeout has already run out leaves it as Timed Out."""
+    _ensure_user_sessions(conn)
+    with conn.cursor() as cur:
+        _close_timed_out(cur, timeout_minutes, session_id=session_id)
+        cur.execute(
+            "UPDATE user_sessions SET ended_at = NOW(), logout_at = NOW(), last_seen_at = NOW(), "
+            "end_reason = 'logout' WHERE session_id = %s AND ended_at IS NULL",
+            (session_id,),
+        )
+    conn.commit()
+
+
+def close_sessions(conn, reason: str, timeout_minutes: int, username: str | None = None,
+                   session_id: str | None = None, ensure: bool = True) -> int:
+    """End every open session (or one user's, or one session) with reason.
+    Returns how many were ended with that reason. ensure=False is for another
+    environment's database, already checked with user_sessions_ready: the
+    table is not created or converted there."""
+    if reason not in SESSION_END_REASONS:
+        raise ValueError(f"Unknown session end reason: {reason}")
+    if ensure:
+        _ensure_user_sessions(conn)
+    with conn.cursor() as cur:
+        _close_timed_out(cur, timeout_minutes, username=username, session_id=session_id)
+        cur.execute(
+            """
+            UPDATE user_sessions SET ended_at = NOW(), end_reason = %s
+            WHERE ended_at IS NULL
+              AND (%s::text IS NULL OR username = %s)
+              AND (%s::text IS NULL OR session_id = %s)
+            """,
+            (reason, username, username, session_id, session_id),
+        )
+        count = cur.rowcount
+    conn.commit()
+    return count
+
+
+def touch_session(conn, session_id: str, username: str, environment: str, timeout_minutes: int) -> str | None:
+    """Record that this login is still in use. Returns the session id the
+    cookie should hold from now on, or None when the login has ended
+    (logout, forced, password changed, user deleted) and must be signed out.
+
+    - open and within the timeout: last_seen_at moves on, same id
+    - no row (old cookie, or a failed sign-in insert): a 'cookie' row is made
+    - past the timeout: closed as 'timeout', and the next id in the chain is
+      used ('returned'). A cookie carrying an older id (a late response can
+      put one back) follows the chain to the open row."""
+    _ensure_user_sessions(conn)
+    current = session_id
+    via_timeout = False
+    try:
+        with conn.cursor() as cur:
+            for _ in range(20):
+                cur.execute(
+                    """
+                    UPDATE user_sessions SET last_seen_at = NOW()
+                    WHERE session_id = %s AND username = %s AND ended_at IS NULL
+                      AND last_seen_at >= NOW() - INTERVAL '1 minute' * %s
+                    RETURNING 1
+                    """,
+                    (current, username, timeout_minutes),
+                )
+                if cur.fetchone():
+                    conn.commit()
+                    return current
+                cur.execute(
+                    "SELECT username, ended_at IS NULL, end_reason FROM user_sessions WHERE session_id = %s",
+                    (current,),
+                )
+                row = cur.fetchone()
+                if row is None:
+                    cur.execute(
+                        """
+                        INSERT INTO user_sessions (session_id, username, environment, login_at, last_seen_at, started_by)
+                        VALUES (%s, %s, %s, NOW(), NOW(), %s)
+                        ON CONFLICT (session_id) DO NOTHING
+                        RETURNING 1
+                        """,
+                        (current, username, environment, 'returned' if via_timeout else 'cookie'),
+                    )
+                    if cur.fetchone():
+                        conn.commit()
+                        return current
+                    continue   # another request inserted it a moment ago: go round and use it
+                owner, is_open, reason = row
+                if owner != username:
+                    conn.commit()
+                    return None
+                if is_open:
+                    _close_timed_out(cur, timeout_minutes, session_id=current)
+                elif reason != 'timeout':
+                    conn.commit()
+                    return None
+                current = next_session_id(current)
+                via_timeout = True
+        conn.commit()
+        raise RuntimeError(f"Session chain too long from {session_id}")
+    except Exception:
+        conn.rollback()
+        raise
 
 
 def record_event(conn, session_id: str, username: str, environment: str,
@@ -490,55 +705,195 @@ def record_event(conn, session_id: str, username: str, environment: str,
             (session_id, username, environment, event_type, page,
              json.dumps(metadata) if metadata else None, session_id),
         )
-        # Debounce last_seen_at: only write if >60s since last update to reduce churn
-        cur.execute(
-            """
-            UPDATE user_sessions
-            SET last_seen_at = NOW()
-            WHERE session_id = %s AND last_seen_at < NOW() - INTERVAL '60 seconds'
-            """,
-            (session_id,),
-        )
+        # last_seen_at is kept up to date by touch_session on every request.
     conn.commit()
 
 
-def get_last_login_per_user(conn) -> dict:
-    """Returns {username: last_login_at_str} across all environments."""
+def read_session_settings(conn) -> dict:
+    """session_timeout_minutes and sessions_invalidated_at, straight from the
+    settings table. Unlike get_settings this RAISES on a failed read, so the
+    caller can keep the last value it had: falling back to the default 0
+    would undo a Force Re-login during a database blip."""
+    keys = ('session_timeout_minutes', 'sessions_invalidated_at')
+    with conn.cursor() as cur:
+        cur.execute("SELECT key, value FROM settings WHERE key IN %s", (keys,))
+        stored = dict(cur.fetchall())
+    out = {}
+    for key in keys:
+        try:
+            out[key] = int(stored.get(key, SETTINGS_DEFAULTS[key]))
+        except (TypeError, ValueError):
+            out[key] = SETTINGS_DEFAULTS[key]
+    return out
+
+
+def get_last_login_per_user(conn, write: bool = True) -> dict:
+    """{username: {'last_login', 'last_seen'}} as UK time strings. last_login
+    is the latest session start of any kind, so a login cookie carried over
+    from before this tracking began still counts. write=False is for another
+    environment's database: nothing is created or changed there."""
+    uk_time = " AT TIME ZONE 'Europe/London'"
+    if write:
+        _ensure_user_sessions(conn)
+    else:
+        # Another environment's table may not have been converted yet. Before
+        # that, login_at and last_seen_at are plain timestamps already in UK
+        # time (last_seen_at can be an hour out where the database clock set
+        # it), so they are read as they are.
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT data_type FROM information_schema.columns "
+                "WHERE table_schema = current_schema() AND table_name = 'user_sessions' "
+                "AND column_name = 'login_at'"
+            )
+            found = cur.fetchone()
+        conn.commit()
+        if not found:
+            return {}
+        if found[0] == 'timestamp without time zone':
+            uk_time = ""
     with conn.cursor() as cur:
         cur.execute(
-            """
-            SELECT DISTINCT ON (username)
-                username,
-                login_at
+            f"""
+            SELECT username,
+                   MAX(login_at){uk_time},
+                   MAX(last_seen_at){uk_time}
             FROM user_sessions
-            ORDER BY username, login_at DESC
+            GROUP BY username
             """
         )
-        return {row[0]: row[1].strftime('%Y-%m-%d %H:%M') for row in cur.fetchall()}
+        return {
+            row[0]: {'last_login': row[1].strftime('%Y-%m-%d %H:%M'),
+                     'last_seen': row[2].strftime('%Y-%m-%d %H:%M')}
+            for row in cur.fetchall()
+        }
 
 
-def get_active_sessions_all_envs(conn, inactivity_minutes: int = 30) -> list:
-    """Returns sessions active within the inactivity window, across all environments."""
+def user_sessions_ready(conn) -> bool:
+    """True when this database's user_sessions has the session-end columns and
+    TIMESTAMPTZ times, i.e. code with this change has run against it. Used
+    before reading another environment's sessions, where nothing may be changed."""
     with conn.cursor() as cur:
         cur.execute(
-            """
-            SELECT username, environment, login_at, last_seen_at
-            FROM user_sessions
-            WHERE logout_at IS NULL
-              AND last_seen_at >= NOW() - (INTERVAL '1 minute' * %s)
+            "SELECT column_name, data_type FROM information_schema.columns "
+            "WHERE table_schema = current_schema() AND table_name = 'user_sessions'"
+        )
+        columns = dict(cur.fetchall())
+    conn.commit()
+    return 'end_reason' in columns and columns.get('login_at') == 'timestamp with time zone'
+
+
+# Sessions past the timeout that nothing has closed yet count as Timed Out at
+# last_seen_at + timeout. The same as _close_timed_out would store, so a
+# read-only view (another environment's database) shows what it will become.
+_EFFECTIVE_SESSIONS_SQL = """
+    SELECT session_id, username, environment, login_at, last_seen_at, started_by,
+           CASE WHEN ended_at IS NULL AND last_seen_at < NOW() - INTERVAL '1 minute' * %(timeout)s
+                THEN last_seen_at + INTERVAL '1 minute' * %(timeout)s ELSE ended_at END AS ended_at,
+           CASE WHEN ended_at IS NULL AND last_seen_at < NOW() - INTERVAL '1 minute' * %(timeout)s
+                THEN 'timeout' ELSE end_reason END AS end_reason
+    FROM user_sessions
+"""
+
+
+def get_active_sessions(conn, timeout_minutes: int, write: bool = True) -> list:
+    """Open sessions, most recent first. write=False reads without changing
+    anything (for another environment's database)."""
+    if write:
+        _ensure_user_sessions(conn)
+    with conn.cursor() as cur:
+        if write:
+            _close_timed_out(cur, timeout_minutes)
+        cur.execute(
+            f"""
+            WITH s AS ({_EFFECTIVE_SESSIONS_SQL})
+            SELECT username, environment, login_at AT TIME ZONE 'Europe/London',
+                   last_seen_at AT TIME ZONE 'Europe/London', started_by
+            FROM s
+            WHERE ended_at IS NULL
             ORDER BY last_seen_at DESC
             """,
-            (inactivity_minutes,),
+            {'timeout': timeout_minutes},
         )
-        return [
-            {
-                'user': row[0],
-                'environment': row[1],
-                'login_time': row[2].strftime('%Y-%m-%d %H:%M'),
-                'last_seen': row[3].strftime('%Y-%m-%d %H:%M'),
-            }
-            for row in cur.fetchall()
-        ]
+        rows = cur.fetchall()
+    conn.commit()
+    return [
+        {'user': r[0], 'environment': r[1], 'login_time': r[2].strftime('%Y-%m-%d %H:%M'),
+         'last_seen': r[3].strftime('%Y-%m-%d %H:%M'), 'started_by': r[4]}
+        for r in rows
+    ]
+
+
+SESSION_LIST_LIMIT = 5000
+
+
+def get_sessions(conn, timeout_minutes: int, date_from: datetime.date, date_to: datetime.date,
+                 username: str | None = None, environment: str | None = None,
+                 ended_by: str | None = None, write: bool = True,
+                 limit: int = SESSION_LIST_LIMIT) -> list:
+    """Sessions started between date_from and date_to inclusive (UK dates),
+    newest first, at most SESSION_LIST_LIMIT. ended_by is one of
+    SESSION_END_REASONS, or 'active' for sessions still open. With write,
+    closes timed-out sessions first so what is shown is stored history;
+    write=False changes nothing (for another environment's database)."""
+    if write:
+        _ensure_user_sessions(conn)
+    with conn.cursor() as cur:
+        if write:
+            _close_timed_out(cur, timeout_minutes)
+        cur.execute(
+            f"""
+            WITH s AS ({_EFFECTIVE_SESSIONS_SQL})
+            SELECT session_id, username, environment,
+                   login_at     AT TIME ZONE 'Europe/London',
+                   last_seen_at AT TIME ZONE 'Europe/London',
+                   ended_at     AT TIME ZONE 'Europe/London',
+                   end_reason, started_by,
+                   EXTRACT(EPOCH FROM last_seen_at - login_at)::BIGINT
+            FROM s
+            WHERE login_at >= (%(date_from)s::date::timestamp AT TIME ZONE 'Europe/London')
+              AND login_at <  ((%(date_to)s::date + 1)::timestamp AT TIME ZONE 'Europe/London')
+              AND (%(username)s::text IS NULL OR username = %(username)s)
+              AND (%(environment)s::text IS NULL OR environment = %(environment)s)
+              AND (%(ended_by)s::text IS NULL
+                   OR (%(ended_by)s = 'active' AND ended_at IS NULL)
+                   OR end_reason = %(ended_by)s)
+            ORDER BY login_at DESC
+            LIMIT %(limit)s
+            """,
+            {'timeout': timeout_minutes, 'date_from': date_from, 'date_to': date_to,
+             'username': username, 'environment': environment, 'ended_by': ended_by,
+             'limit': limit},
+        )
+        rows = cur.fetchall()
+    conn.commit()
+    fmt = '%Y-%m-%d %H:%M'
+    return [
+        {
+            'session_id': r[0], 'user': r[1], 'environment': r[2],
+            'started': r[3].strftime(fmt), 'last_activity': r[4].strftime(fmt),
+            'ended': r[5].strftime(fmt) if r[5] else '',
+            'end_reason': r[6] or 'active', 'started_by': r[7] or 'password',
+            'duration_seconds': max(0, r[8] or 0),
+        }
+        for r in rows
+    ]
+
+
+def get_session_environments(conn) -> list:
+    with conn.cursor() as cur:
+        cur.execute("SELECT DISTINCT environment FROM user_sessions ORDER BY environment")
+        out = [r[0] for r in cur.fetchall()]
+    conn.commit()
+    return out
+
+
+def get_session_usernames(conn) -> list:
+    with conn.cursor() as cur:
+        cur.execute("SELECT DISTINCT username FROM user_sessions ORDER BY username")
+        out = [r[0] for r in cur.fetchall()]
+    conn.commit()
+    return out
 
 
 # ── Live users on a page ─────────────────────────────────────────────────────
@@ -743,11 +1098,13 @@ def find_usernames_by_email(conn, email: str) -> list:
     return usernames
 
 
-def update_user_details(conn, details: dict) -> None:
+def update_user_details(conn, details: dict, ensure: bool = True) -> None:
     """Save name and email for several users in one transaction.
     details is {username: {'first_name', 'last_name', 'email'}}; empty strings
-    are stored as NULL."""
-    _ensure_user_detail_columns(conn)
+    are stored as NULL. ensure=False skips the ALTER TABLE, for another
+    environment's database that already has the columns."""
+    if ensure:
+        _ensure_user_detail_columns(conn)
     try:
         with conn.cursor() as cur:
             for username, d in details.items():
@@ -856,13 +1213,15 @@ def delete_user_and_access(conn, username: str) -> None:
     try:
         with conn.cursor() as cur:
             cur.execute("DELETE FROM users WHERE username = %s", (username,))
+            # A failed statement cancels the whole transaction in Postgres, so
+            # the missing-table case steps back to this savepoint; otherwise
+            # the commit below would silently undo the user delete too.
+            cur.execute("SAVEPOINT clear_page_access")
             try:
                 cur.execute("DELETE FROM user_page_access WHERE username = %s", (username,))
             except psycopg2.errors.UndefinedTable:
                 # No access has ever been saved, so there is nothing to clear.
-                # The user delete above is still wanted, so swallow this one
-                # rather than losing the whole transaction.
-                pass
+                cur.execute("ROLLBACK TO SAVEPOINT clear_page_access")
         conn.commit()
     except Exception:
         conn.rollback()
@@ -930,6 +1289,48 @@ def get_prod_pricer_connection():
         msg = next((l.strip() for l in str(e).splitlines() if l.strip()), str(e).strip())
         raise HTTPException(status_code=503, detail=f"Aurora connection failed — check VPN is connected. Detail: {msg}") from e
     connection = _pool_getconn_or_raise(pool, "prod_pricer")
+    try:
+        yield connection
+    finally:
+        pool.putconn(connection)
+
+
+_prod_activity_pool: psycopg2.pool.ThreadedConnectionPool | None = None
+
+
+def _get_prod_activity_pool() -> psycopg2.pool.ThreadedConnectionPool:
+    """The prod pricer DB from every environment, for Settings > User Activity
+    only. Unlike _get_prod_pricer_pool this reaches prod from the deployed dev
+    Lambda too (it can connect to the prod cluster), without moving the KPI
+    layout and page names off the dev DB there. Small and with a short connect
+    timeout, so an unreachable prod fails the page quickly instead of hanging."""
+    if _is_prod_lambda():
+        return _get_pool()
+    if not os.getenv('AWS_LAMBDA_FUNCTION_NAME'):
+        return _get_prod_pricer_pool()     # local: already points at prod
+    global _prod_activity_pool
+    if _prod_activity_pool is None:
+        data = get_secret('prod/aramis_group/data_platform/rds/aurora_pg_core_cluster_admin_credentials')
+        _prod_activity_pool = psycopg2.pool.ThreadedConnectionPool(
+            minconn=0, maxconn=2,
+            host=data['endpoint'], user=data['username'], password=data['password'],
+            database='carsupermarket_pricer', port=int(data.get('port', 5432)),
+            connect_timeout=5, **_KEEPALIVE_KWARGS,
+        )
+    return _prod_activity_pool
+
+
+@contextmanager
+def get_prod_activity_connection():
+    """Read prod's user sessions from any environment. Callers must not write."""
+    try:
+        pool = _get_prod_activity_pool()
+    except UnauthorizedSSOTokenError:
+        raise HTTPException(status_code=503, detail="AWS credentials expired — run: aws sso login --profile <your-profile>")
+    except psycopg2.OperationalError as e:
+        msg = next((l.strip() for l in str(e).splitlines() if l.strip()), str(e).strip())
+        raise HTTPException(status_code=503, detail=f"Could not reach the prod database. Detail: {msg}") from e
+    connection = _pool_getconn_or_raise(pool, "prod_activity")
     try:
         yield connection
     finally:

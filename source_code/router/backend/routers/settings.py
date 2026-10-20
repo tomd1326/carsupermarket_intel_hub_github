@@ -1,8 +1,10 @@
 """Settings page, user management and app settings (admin only)."""
 
 from fastapi import APIRouter, Request, Form, Depends, HTTPException
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
+import csv
 import datetime
+import io
 import time
 import hashlib
 import logging
@@ -14,16 +16,19 @@ import zoneinfo
 
 from utils.db_utils import (get_database_connection, get_settings, save_settings,
                             save_settings_partial, get_last_login_per_user,
-                            get_active_sessions_all_envs, upsert_user,
+                            get_active_sessions, get_sessions, get_session_environments,
+                            get_session_usernames, get_prod_activity_connection,
+                            user_sessions_ready, read_session_settings, read_user_details,
+                            close_sessions, SESSION_LIST_LIMIT, upsert_user,
                             load_user_details, update_user_details,
                             load_all_page_access, set_page_access_many,
-                            delete_user_and_access, ALWAYS_ENABLED_USERS, ADMIN_DETAILS,
+                            delete_user_and_access, ALWAYS_ENABLED_USERS,
                             APPEARANCE_COLOUR_SETTINGS,
                             get_prod_pricer_connection, load_page_names, save_page_names)
 
 from . import core
-from .core import (BASE_URL, templates, VALID_USERS, _active_sessions, get_current_user,
-                   ADMIN_USERNAME)
+from .core import (BASE_URL, templates, VALID_USERS, get_current_user, session_config,
+                   ADMIN_USERNAME, _uk_now)
 from .page_registry import (PAGES, ALL_PAGE_KEYS, CONFIGURED_MARKER, DEFAULT_PAGE_KEYS)
 
 logger = logging.getLogger(__name__)
@@ -876,32 +881,287 @@ def _run_prod_to_dev(job_id: str) -> None:
     _job_finish(job_id, "done", message)
 
 
+def _users_source(q) -> tuple:
+    """(can_view_prod, source) for the Users page and its CSV export. Local
+    and dev open on prod's accounts (the real users) unless ?source=this;
+    prod itself only has its own."""
+    can_view_prod = core._ENV != 'prod'
+    source = 'this' if not can_view_prod or q.get('source') == 'this' else 'prod'
+    return can_view_prod, source
+
+
+def _read_prod_users() -> tuple:
+    """(people, last_logins) from prod's database. Read only: nothing is
+    created or changed there."""
+    with get_prod_activity_connection() as conn:
+        try:
+            people = read_user_details(conn)
+            last_logins = get_last_login_per_user(conn, write=False)
+        except Exception:
+            conn.rollback()
+            raise
+    return people, last_logins
+
+
 @router.get("/settings/users", response_class=HTMLResponse)
 def users_page(request: Request, user: str = Depends(get_current_user)):
-    if user != 'tdrayson':
+    if user != ADMIN_USERNAME:
         return RedirectResponse(url=BASE_URL + "/home", status_code=303)
-    sessions = sorted(_active_sessions.values(), key=lambda s: s['login_time'], reverse=True)
-    non_admin_users = sorted(u for u in VALID_USERS if u != 'tdrayson')
+    can_view_prod, source = _users_source(request.query_params)
+    viewing_prod = can_view_prod and source == 'prod'
     last_logins = {}
-    db_active_sessions = []
-    user_details = {}
+    people = {}
+    all_users = []
     login_mode = 'both'
-    try:
-        with get_database_connection() as conn:
-            last_logins = get_last_login_per_user(conn)
-            db_active_sessions = get_active_sessions_all_envs(conn)
-            user_details = load_user_details(conn)
-            login_mode = get_settings(conn).get('login_mode', 'both')
-    except Exception as e:
-        logger.warning("Failed to load user activity data: %s", e)
+    error = None
+    if viewing_prod:
+        # Never falls back to this environment's users under a Prod heading.
+        try:
+            people, last_logins = _read_prod_users()
+            all_users = sorted(people)
+        except Exception as e:
+            logger.warning("Failed to load prod user accounts: %s", e)
+            error = str(getattr(e, 'detail', None) or e)[:300]
+    else:
+        try:
+            with get_database_connection() as conn:
+                last_logins = get_last_login_per_user(conn)
+                people = load_user_details(conn)
+                login_mode = get_settings(conn).get('login_mode', 'both')
+        except Exception as e:
+            logger.warning("Failed to load user accounts data: %s", e)
+        all_users = sorted(VALID_USERS)
     return templates.TemplateResponse("users.html", {
         "request": request, "user": user, "BASE_URL": BASE_URL,
-        "login_mode": login_mode,
-        "active_sessions": sessions, "non_admin_users": non_admin_users,
-        "all_users": sorted(VALID_USERS), "user_details": user_details,
-        "last_logins": last_logins, "db_active_sessions": db_active_sessions,
+        "login_mode": login_mode, "admin_username": ADMIN_USERNAME,
+        "all_users": all_users, "people": people,
+        "last_logins": last_logins, "error": error,
+        "can_view_prod": can_view_prod, "source": source, "viewing_prod": viewing_prod,
+        "this_env": core._ENV,
         "sections": SETTINGS_SECTIONS, "active_section": "users",
     })
+
+
+@router.get("/settings/users/export")
+def users_export(request: Request, user: str = Depends(get_current_user)):
+    """CSV of the accounts the Users page shows: prod (read only) or this
+    environment, chosen by ?source=. No passwords or hashes."""
+    if user != ADMIN_USERNAME:
+        raise HTTPException(status_code=403, detail="Forbidden")
+    can_view_prod, source = _users_source(request.query_params)
+    try:
+        if can_view_prod and source == 'prod':
+            people, last_logins = _read_prod_users()
+            usernames = sorted(people)
+        else:
+            with get_database_connection() as conn:
+                last_logins = get_last_login_per_user(conn)
+                people = load_user_details(conn)
+            usernames = sorted(VALID_USERS)
+    except Exception as e:
+        logger.warning("Users export failed (%s): %s", source, e)
+        raise HTTPException(status_code=500, detail="Could not load users for the export")
+
+    out = io.StringIO()
+    writer = csv.writer(out)
+    writer.writerow(['Username', 'First Name', 'Last Name', 'Email', 'Last Login', 'Last Seen'])
+    for u in usernames:
+        d = people.get(u, {})
+        ll = last_logins.get(u, {})
+        writer.writerow([_csv_cell(v) for v in (
+            u, d.get('first_name') or '', d.get('last_name') or '', d.get('email') or '',
+            ll.get('last_login') or 'Never', ll.get('last_seen') or 'Never',
+        )])
+    filename = f"users_{source}_{_uk_now().date().isoformat()}.csv"
+    # The BOM makes Excel read the file as UTF-8.
+    return Response(
+        content='﻿' + out.getvalue(),
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+_ENDED_BY_LABELS = {
+    'active':           'Still Active',
+    'logout':           'Logout',
+    'timeout':          'Timed Out',
+    'forced':           'Forced',
+    'password_changed': 'Password Changed',
+    'user_deleted':     'User Deleted',
+}
+_STARTED_BY_LABELS = {
+    'password': 'Sign In',
+    'cookie':   'Carried Over',
+    'returned': 'Came Back After Timeout',
+}
+_ACTIVITY_DEFAULT_DAYS = 30
+_EXPORT_LIMIT = 100000
+
+
+def _parse_date(value: str | None, fallback: datetime.date) -> datetime.date:
+    try:
+        return datetime.date.fromisoformat((value or '').strip())
+    except ValueError:
+        return fallback
+
+
+def _activity_filters(q) -> dict:
+    """The filters and database choice from the query string, shared by the
+    User Activity page and its CSV export so both always show the same rows."""
+    today = _uk_now().date()
+    date_to = _parse_date(q.get('date_to'), today)
+    date_from = _parse_date(q.get('date_from'), date_to - datetime.timedelta(days=_ACTIVITY_DEFAULT_DAYS))
+    if date_from > date_to:
+        date_from, date_to = date_to, date_from
+    f_ended = q.get('ended_by') or None
+    if f_ended not in _ENDED_BY_LABELS:
+        f_ended = None
+    # Local and dev can show prod's sessions (the real users) or their own.
+    # Prod's are read only: nothing is changed in the prod database from here.
+    can_view_prod = core._ENV != 'prod'
+    source = 'this' if not can_view_prod or q.get('source') == 'this' else 'prod'
+    return {
+        'date_from': date_from, 'date_to': date_to,
+        'f_user': q.get('user') or None, 'f_env': q.get('env') or None, 'f_ended': f_ended,
+        'can_view_prod': can_view_prod, 'source': source,
+        'viewing_prod': can_view_prod and source == 'prod',
+    }
+
+
+@router.get("/settings/user-activity", response_class=HTMLResponse)
+def user_activity_page(request: Request, user: str = Depends(get_current_user)):
+    if user != ADMIN_USERNAME:
+        return RedirectResponse(url=BASE_URL + "/home", status_code=303)
+    flt = _activity_filters(request.query_params)
+    date_from, date_to = flt['date_from'], flt['date_to']
+    f_user, f_env, f_ended = flt['f_user'], flt['f_env'], flt['f_ended']
+    can_view_prod, source, viewing_prod = flt['can_view_prod'], flt['source'], flt['viewing_prod']
+    timeout = session_config()['session_timeout_minutes']
+    sessions, active, environments, usernames, people = [], [], [], [], {}
+    error = None
+    not_ready = False
+    try:
+        if viewing_prod:
+            with get_prod_activity_connection() as conn:
+                try:
+                    if not user_sessions_ready(conn):
+                        not_ready = True
+                    else:
+                        timeout = read_session_settings(conn)['session_timeout_minutes']
+                        active = get_active_sessions(conn, timeout, write=False)
+                        sessions = get_sessions(conn, timeout, date_from, date_to, f_user, f_env, f_ended,
+                                                write=False)
+                        environments = get_session_environments(conn)
+                        usernames = get_session_usernames(conn)
+                        people = read_user_details(conn)
+                except Exception:
+                    conn.rollback()
+                    raise
+        else:
+            with get_database_connection() as conn:
+                active = get_active_sessions(conn, timeout)
+                sessions = get_sessions(conn, timeout, date_from, date_to, f_user, f_env, f_ended)
+                environments = get_session_environments(conn)
+                usernames = sorted(set(VALID_USERS) | set(get_session_usernames(conn)))
+                people = read_user_details(conn)
+    except Exception as e:
+        logger.warning("Failed to load user activity (%s): %s", source, e)
+        error = str(getattr(e, 'detail', None) or e)[:300]
+    return templates.TemplateResponse("user_activity.html", {
+        "request": request, "user": user, "BASE_URL": BASE_URL,
+        "sessions": sessions, "active_sessions": active, "error": error,
+        "truncated": len(sessions) >= SESSION_LIST_LIMIT, "limit": SESSION_LIST_LIMIT,
+        "usernames": usernames, "people": people, "environments": environments,
+        "ended_by_labels": _ENDED_BY_LABELS, "started_by_labels": _STARTED_BY_LABELS,
+        "f_user": f_user or '', "f_env": f_env or '', "f_ended": f_ended or '',
+        "date_from": date_from.isoformat(), "date_to": date_to.isoformat(),
+        "timeout_minutes": timeout,
+        "can_view_prod": can_view_prod, "source": source, "viewing_prod": viewing_prod,
+        "not_ready": not_ready, "this_env": core._ENV,
+        "sections": SETTINGS_SECTIONS, "active_section": "user_activity",
+    })
+
+
+_CSV_FORMULA_STARTS = ('=', '+', '-', '@', '\t', '\r')
+
+
+def _csv_cell(value):
+    """Text starting with = + - @ is read as a formula by Excel; a leading
+    apostrophe-style space keeps names and emails as plain text."""
+    if isinstance(value, str) and value.startswith(_CSV_FORMULA_STARTS):
+        return ' ' + value
+    return value
+
+
+@router.get("/settings/user-activity/export")
+def user_activity_export(request: Request, user: str = Depends(get_current_user)):
+    """CSV of every session the User Activity page's filters match, with no
+    row limit beyond _EXPORT_LIMIT. Same database as the page: prod (read
+    only) or this environment, chosen by ?source=."""
+    if user != ADMIN_USERNAME:
+        raise HTTPException(status_code=403, detail="Forbidden")
+    flt = _activity_filters(request.query_params)
+    timeout = session_config()['session_timeout_minutes']
+    try:
+        if flt['viewing_prod']:
+            with get_prod_activity_connection() as conn:
+                try:
+                    if not user_sessions_ready(conn):
+                        raise HTTPException(status_code=409, detail="Prod has no session data yet - this change is not deployed there")
+                    timeout = read_session_settings(conn)['session_timeout_minutes']
+                    sessions = get_sessions(conn, timeout, flt['date_from'], flt['date_to'], flt['f_user'],
+                                            flt['f_env'], flt['f_ended'], write=False, limit=_EXPORT_LIMIT)
+                    people = read_user_details(conn)
+                except Exception:
+                    conn.rollback()
+                    raise
+        else:
+            with get_database_connection() as conn:
+                sessions = get_sessions(conn, timeout, flt['date_from'], flt['date_to'], flt['f_user'],
+                                        flt['f_env'], flt['f_ended'], limit=_EXPORT_LIMIT)
+                people = read_user_details(conn)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.warning("User activity export failed (%s): %s", flt['source'], e)
+        raise HTTPException(status_code=500, detail="Could not load sessions for the export")
+
+    out = io.StringIO()
+    writer = csv.writer(out)
+    writer.writerow(['User', 'Name', 'Email', 'Env', 'Started', 'Last Activity', 'Ended',
+                     'Duration (Minutes)', 'Ended By', 'Started By'])
+    for s in sessions:
+        d = people.get(s['user'], {})
+        name = f"{d.get('first_name') or ''} {d.get('last_name') or ''}".strip()
+        writer.writerow([_csv_cell(v) for v in (
+            s['user'], name, d.get('email') or '', s['environment'], s['started'], s['last_activity'],
+            s['ended'], round(s['duration_seconds'] / 60, 1),
+            _ENDED_BY_LABELS.get(s['end_reason'], s['end_reason']),
+            _STARTED_BY_LABELS.get(s['started_by'], s['started_by']),
+        )])
+    filename = f"user_activity_{flt['source']}_{flt['date_from']}_{flt['date_to']}.csv"
+    # The BOM makes Excel read the file as UTF-8.
+    return Response(
+        content='﻿' + out.getvalue(),
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@router.post("/settings/user-activity/timeout")
+def save_session_timeout(
+    request: Request,
+    session_timeout_minutes: int = Form(...),
+    user: str = Depends(get_current_user),
+):
+    if user != ADMIN_USERNAME:
+        raise HTTPException(status_code=403, detail="Forbidden")
+    minutes = max(1, min(24 * 60, session_timeout_minutes))
+    with get_database_connection() as conn:
+        save_settings_partial(conn, {'session_timeout_minutes': minutes})
+    core.reload_session_config()
+    logger.info("Settings [User Activity] session_timeout_minutes=%s set by %s", minutes, user)
+    return _user_redirect("user_activity", source="this", timeoutok=1)
 
 
 @router.post("/settings/login-mode")
@@ -920,16 +1180,21 @@ def save_login_mode(
 
 @router.post("/settings/force-relogin")
 def force_relogin(request: Request, user: str = Depends(get_current_user)):
-    if user != 'tdrayson':
+    if user != ADMIN_USERNAME:
         return RedirectResponse(url=BASE_URL + "/home", status_code=303)
-    # Rebind on the core module so get_current_user (which reads core's global) sees it
-    core._sessions_invalidated_at = time.time()
-    _active_sessions.clear()
-    return RedirectResponse(url=BASE_URL + "/settings-page?relogin=1", status_code=303)
+    # Stored in the settings table so every container signs people out, not
+    # just this one. Whole seconds: get_settings reads it with int().
+    with get_database_connection() as conn:
+        save_settings_partial(conn, {'sessions_invalidated_at': int(time.time())})
+        ended = close_sessions(conn, 'forced', session_config()['session_timeout_minutes'])
+    core.reload_session_config()
+    logger.info("Force re-login by %s: %d sessions ended", user, ended)
+    return _user_redirect("user_activity", source="this", relogin=1)
 
 
 _REDIRECT_TARGETS = {
     "users":       "/settings/users",
+    "user_activity": "/settings/user-activity",
     "page_access": "/settings/page-access",
     "page_names":  "/settings/page-names",
 }
@@ -1038,7 +1303,10 @@ async def save_page_names_route(request: Request, user: str = Depends(get_curren
 
 def _user_redirect(redirect_to: str, **params):
     base = BASE_URL + _REDIRECT_TARGETS.get(redirect_to, "/settings-page")
-    qs = "&".join(f"{k}={v}" for k, v in params.items())
+    if redirect_to == "users":
+        # Users page opens on prod; changes are made here, so show this environment.
+        params = {"source": "this", **params}
+    qs ="&".join(f"{k}={v}" for k, v in params.items())
     return RedirectResponse(url=f"{base}?{qs}", status_code=303)
 
 
@@ -1134,27 +1402,130 @@ def save_page_access(
     return _user_redirect("page_access", accessok=len(changed))
 
 
-@router.post("/settings/user-details")
-async def save_user_details(request: Request, user: str = Depends(get_current_user)):
-    """Save first name, last name and email for every user on the page at once.
-    Fields arrive as first_name__<username>, last_name__<username>, email__<username>."""
+_MIN_PASSWORD_LENGTH = 6
+
+
+def _writes_to_prod(source: str) -> bool:
+    """True when local or dev is changing prod's users (the Users page's Prod
+    view). On prod itself its own database already is prod."""
+    return source == 'prod' and core._ENV != 'prod'
+
+
+def _prod_users_redirect(**params):
+    return _user_redirect("users", source="prod", **params)
+
+
+def _end_prod_sessions(conn, reason: str, target: str) -> int:
+    """End a prod user's open sessions after a password change or delete. Only
+    when prod's session table is in the current format, so nothing on prod is
+    created or converted from here; prod's own sign-in check covers the rest."""
+    try:
+        if not user_sessions_ready(conn):
+            return 0
+        timeout = read_session_settings(conn)['session_timeout_minutes']
+        return close_sessions(conn, reason, timeout, username=target, ensure=False)
+    except Exception as e:
+        conn.rollback()
+        logger.warning("Could not end prod sessions for %s (%s): %s", target, reason, e)
+        return 0
+
+
+def _save_prod_user(mode: str, target: str, details: dict, password: str, user: str):
+    """save_user against prod's database. Prod's containers pick the change up
+    when their user cache next reloads (within about a minute)."""
+    if mode not in ('add', 'edit'):
+        raise HTTPException(status_code=400, detail="Unknown mode")
+    if (mode == 'add' or password) and len(password) < _MIN_PASSWORD_LENGTH:
+        return _prod_users_redirect(pwderr="Password+must+be+at+least+6+characters")
+    ended = 0
+    with get_prod_activity_connection() as conn:
+        try:
+            exists = target in read_user_details(conn)
+            if mode == 'add' and exists:
+                return _prod_users_redirect(pwderr="User+already+exists+on+prod")
+            if mode == 'edit' and not exists:
+                return _prod_users_redirect(pwderr="User+not+found+on+prod")
+            if password:
+                upsert_user(conn, target, hashlib.sha256(password.encode()).hexdigest())
+            update_user_details(conn, {target: details}, ensure=False)
+        except Exception:
+            conn.rollback()
+            raise
+        if mode == 'edit' and password:
+            ended = _end_prod_sessions(conn, 'password_changed', target)
+    logger.info("PROD user %s %s by %s%s", target, 'created' if mode == 'add' else 'saved', user,
+                f" (password changed, {ended} sessions ended)" if mode == 'edit' and password else "")
+    if mode == 'add':
+        return _prod_users_redirect(useradded=target)
+    return _prod_users_redirect(saved=target)
+
+
+@router.post("/settings/user/save")
+def save_user(
+    request: Request,
+    mode: str = Form(...),
+    username: str = Form(...),
+    first_name: str = Form(default=""),
+    last_name: str = Form(default=""),
+    email: str = Form(default=""),
+    password: str = Form(default=""),
+    source: str = Form(default="this"),
+    user: str = Depends(get_current_user),
+):
+    """The Add / Edit user popup on Settings > User Accounts.
+    mode 'add' needs a password; mode 'edit' keeps the old one when it is
+    left blank. A changed password ends that user's open sessions.
+    source 'prod' (local and dev only) saves to prod's database instead."""
     if user != ADMIN_USERNAME:
         raise HTTPException(status_code=403)
-    form = await request.form()
-    details = {}
-    for u in VALID_USERS:
-        if f"email__{u}" not in form or u in ADMIN_DETAILS:   # admin's are fixed in code
-            continue
-        details[u] = {
-            'first_name': str(form.get(f"first_name__{u}", "")).strip(),
-            'last_name':  str(form.get(f"last_name__{u}", "")).strip(),
-            'email':      str(form.get(f"email__{u}", "")).strip(),
-        }
+    to_prod = _writes_to_prod(source)
+    back = _prod_users_redirect if to_prod else (lambda **p: _user_redirect("users", **p))
+    target = username.strip().lower() if mode == 'add' else username.strip()
+    if not target:
+        return back(pwderr="Username+cannot+be+empty")
+    if target == ADMIN_USERNAME:
+        return back(pwderr="The+admin+account+is+set+in+code")
+    details = {'first_name': first_name.strip(), 'last_name': last_name.strip(), 'email': email.strip()}
+    if to_prod:
+        return _save_prod_user(mode, target, details, password, user)
+
+    if mode == 'add':
+        if target in VALID_USERS:
+            return _user_redirect("users", pwderr="User+already+exists")
+        if len(password) < _MIN_PASSWORD_LENGTH:
+            return _user_redirect("users", pwderr="Password+must+be+at+least+6+characters")
+        pwd_hash = hashlib.sha256(password.encode()).hexdigest()
+        with get_database_connection() as conn:
+            upsert_user(conn, target, pwd_hash)
+            update_user_details(conn, {target: details})
+        VALID_USERS[target] = pwd_hash
+        core.reload_user_details()
+        logger.info("User %s created by %s", target, user)
+        return _user_redirect("users", useradded=target)
+
+    if mode != 'edit':
+        raise HTTPException(status_code=400, detail="Unknown mode")
+    if target not in VALID_USERS:
+        return _user_redirect("users", pwderr="User+not+found")
+    if password and len(password) < _MIN_PASSWORD_LENGTH:
+        return _user_redirect("users", pwderr="Password+must+be+at+least+6+characters")
+    ended = 0
     with get_database_connection() as conn:
-        update_user_details(conn, details)
+        update_user_details(conn, {target: details})
+        if password:
+            pwd_hash = hashlib.sha256(password.encode()).hexdigest()
+            upsert_user(conn, target, pwd_hash)
+            VALID_USERS[target] = pwd_hash
+            try:
+                ended = close_sessions(conn, 'password_changed', session_config()['session_timeout_minutes'],
+                                       username=target)
+            except Exception as e:
+                # The new password is saved; get_current_user ends each old session when it is next used.
+                logger.warning("Could not end sessions for %s after password change: %s", target, e)
     core.reload_user_details()   # this container's account menu; others within a minute
-    logger.info("User details saved for %d users by %s", len(details), user)
-    return _user_redirect("users", detailsok=1)
+    logger.info("User %s saved by %s%s", target, user,
+                f" (password changed, {ended} sessions ended)" if password else "")
+    return _user_redirect("users", saved=target)
 
 
 @router.post("/settings/delete-user")
@@ -1162,81 +1533,43 @@ def delete_user(
     request: Request,
     target_user: str = Form(...),
     redirect_to: str = Form("settings"),
+    source: str = Form(default="this"),
     user: str = Depends(get_current_user)
 ):
     if user != 'tdrayson':
         raise HTTPException(status_code=403)
     if target_user == 'tdrayson':
         raise HTTPException(status_code=400, detail="Cannot delete admin")
+    if _writes_to_prod(source):
+        with get_prod_activity_connection() as conn:
+            try:
+                if target_user not in read_user_details(conn):
+                    return _prod_users_redirect(pwderr="User+not+found+on+prod")
+                delete_user_and_access(conn, target_user)
+            except Exception:
+                conn.rollback()
+                raise
+            ended = _end_prod_sessions(conn, 'user_deleted', target_user)
+        logger.info("PROD user %s deleted by %s, %d sessions ended", target_user, user, ended)
+        return _prod_users_redirect(userdeleted=target_user)
     if target_user not in VALID_USERS:
         return _user_redirect(redirect_to, pwderr="User+not+found")
     # One transaction for the account and its page access — a separate clear
     # could fail after the account was gone, leaving grants for a recreated
     # username to inherit.
+    ended = 0
     with get_database_connection() as conn:
         delete_user_and_access(conn, target_user)
+        try:
+            ended = close_sessions(conn, 'user_deleted', session_config()['session_timeout_minutes'],
+                                   username=target_user)
+        except Exception as e:
+            # The account is gone either way; get_current_user signs them out.
+            logger.warning("Could not end sessions for deleted user %s: %s", target_user, e)
     del VALID_USERS[target_user]
     core.USER_PAGE_ACCESS.pop(target_user, None)
-    logger.info("User %s deleted by admin", target_user)
+    logger.info("User %s deleted by %s, %d sessions ended", target_user, user, ended)
     return _user_redirect(redirect_to, userdeleted=target_user)
-
-
-@router.post("/settings/add-user")
-def add_user(
-    request: Request,
-    new_username: str = Form(...),
-    new_password: str = Form(...),
-    new_first_name: str = Form(default=""),
-    new_last_name: str = Form(default=""),
-    new_email: str = Form(default=""),
-    redirect_to: str = Form("settings"),
-    user: str = Depends(get_current_user)
-):
-    if user != 'tdrayson':
-        raise HTTPException(status_code=403)
-    username = new_username.strip().lower()
-    if not username:
-        return _user_redirect(redirect_to, pwderr="Username+cannot+be+empty")
-    if username in VALID_USERS:
-        return _user_redirect(redirect_to, pwderr="User+already+exists")
-    if not new_password or len(new_password) < 6:
-        return _user_redirect(redirect_to, pwderr="Password+must+be+at+least+6+characters")
-    pwd_hash = hashlib.sha256(new_password.encode()).hexdigest()
-    VALID_USERS[username] = pwd_hash
-    with get_database_connection() as conn:
-        upsert_user(conn, username, pwd_hash)
-        update_user_details(conn, {username: {
-            'first_name': new_first_name.strip(),
-            'last_name':  new_last_name.strip(),
-            'email':      new_email.strip(),
-        }})
-    core.reload_user_details()
-    logger.info("User %s created by admin", username)
-    return _user_redirect(redirect_to, useradded=username)
-
-
-@router.post("/settings/set-password")
-def set_password(
-    request: Request,
-    target_user: str = Form(...),
-    new_password: str = Form(...),
-    redirect_to: str = Form("settings"),
-    user: str = Depends(get_current_user)
-):
-    if user != 'tdrayson':
-        raise HTTPException(status_code=403)
-    if target_user == 'tdrayson':
-        raise HTTPException(status_code=400, detail="Cannot change admin password here")
-    if target_user not in VALID_USERS:
-        raise HTTPException(status_code=404, detail="User not found")
-    if not new_password or len(new_password) < 6:
-        return _user_redirect(redirect_to, pwderr="Password+must+be+at+least+6+characters")
-    pwd_hash = hashlib.sha256(new_password.encode()).hexdigest()
-    VALID_USERS[target_user] = pwd_hash
-    with get_database_connection() as conn:
-        upsert_user(conn, target_user, pwd_hash)
-    logger.info("Password updated for %s by admin", target_user)
-    return _user_redirect(redirect_to, pwdok=target_user)
 
 
 @router.post("/settings")

@@ -10,21 +10,34 @@
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css" rel="stylesheet">
     <link href="{{ static_url('css/theme.css') }}" rel="stylesheet">
     {% include '_settings_head.html' %}
-    <style>
-        /* Wider than the shared .settings-card: the name, email and password
-           boxes need about 1040px beside the 210px nav. Scoped to this page only. */
-        .settings-card.users-card { max-width: 1360px; }
-    </style>
 </head>
 <body>
     {{ page_header('Settings', user) }}
-    <div class="settings-card users-card">
+    <div class="settings-card">
 
         <div class="settings-layout">
         {% include '_settings_nav.html' %}
 
         <div class="settings-content">
 
+        {% if can_view_prod %}
+        {# Local and dev: prod's accounts or this environment's own. #}
+        <div class="btn-group mb-3" role="group" aria-label="Which database">
+            <a href="{{ BASE_URL }}/settings/users?source=prod"
+               class="btn btn-sm {% if viewing_prod %}btn-dark{% else %}btn-outline-secondary{% endif %}">Prod</a>
+            <a href="{{ BASE_URL }}/settings/users?source=this"
+               class="btn btn-sm {% if not viewing_prod %}btn-dark{% else %}btn-outline-secondary{% endif %}">This Environment ({{ this_env }})</a>
+        </div>
+        {% if viewing_prod %}
+        <div class="form-text mt-n2 mb-3">Prod's accounts. Adding, editing and deleting users here changes the live prod sign-ins; prod's site picks the change up within about a minute. The sign in setting is under This Environment.</div>
+        {% endif %}
+        {% endif %}
+
+        {% if error %}
+        <div class="alert alert-danger py-2">Could not load prod's accounts: {{ error }}</div>
+        {% endif %}
+
+        {% if not viewing_prod %}
         <div class="card mb-4">
             <div class="card-header fw-semibold">Sign In</div>
             {% if request.query_params.get('loginok') %}
@@ -44,11 +57,19 @@
                 <div class="form-text">The admin account can always sign in by username. Users without an email below cannot sign in when set to Email Address Only.</div>
             </div>
         </div>
+        {% endif %}
 
-        <div class="card mb-4">
-            <div class="card-header fw-semibold">Accounts</div>
-            {% if request.query_params.get('pwdok') %}
-            <div class="alert alert-success mb-0 rounded-0 border-0 py-2 px-3">Password updated for {{ request.query_params.get('pwdok') }}.</div>
+        <div class="card">
+            <div class="card-header fw-semibold d-flex align-items-center justify-content-between">
+                <span>Accounts{% if viewing_prod %} <span class="text-muted fw-normal small">(prod)</span>{% endif %}</span>
+                <span class="d-flex gap-2">
+                    <button type="button" class="btn btn-outline-secondary btn-sm" id="copy-emails-btn">Copy Emails</button>
+                    <a href="{{ BASE_URL }}/settings/users/export?source={{ source }}" class="btn btn-outline-secondary btn-sm">Export CSV</a>
+                    <button type="button" class="btn btn-success btn-sm" id="add-user-btn">Add User</button>
+                </span>
+            </div>
+            {% if request.query_params.get('saved') %}
+            <div class="alert alert-success mb-0 rounded-0 border-0 py-2 px-3">{{ request.query_params.get('saved') }} saved.</div>
             {% endif %}
             {% if request.query_params.get('useradded') %}
             <div class="alert alert-success mb-0 rounded-0 border-0 py-2 px-3">User {{ request.query_params.get('useradded') }} created.</div>
@@ -59,120 +80,37 @@
             {% if request.query_params.get('pwderr') %}
             <div class="alert alert-danger mb-0 rounded-0 border-0 py-2 px-3">{{ request.query_params.get('pwderr') }}</div>
             {% endif %}
-            {% if request.query_params.get('detailsok') %}
-            <div class="alert alert-success mb-0 rounded-0 border-0 py-2 px-3">Names and emails saved.</div>
-            {% endif %}
-            {# The name and email boxes on every row belong to this one form via
-               their form attribute — a <form> cannot wrap table rows, and each
-               row already holds its own password and delete forms. #}
-            <form id="details-form" method="post" action="{{ BASE_URL }}/settings/user-details"></form>
             <div class="card-body p-0 table-responsive">
-                <table class="table table-sm mb-0">
+                <table class="table table-sm table-hover mb-0 align-middle">
                     <thead class="table-light">
                         <tr>
-                            <th>Username</th>
-                            <th>First Name</th>
-                            <th>Last Name</th>
+                            <th>Name</th>
                             <th>Email</th>
                             <th class="text-nowrap">Last Login</th>
-                            <th>New Password</th>
                             <th></th>
                         </tr>
                     </thead>
                     <tbody>
-                        <tr class="table-light">
-                            <td colspan="7">
-                                <form method="post" action="{{ BASE_URL }}/settings/add-user" class="d-flex gap-2 align-items-center flex-wrap">
-                                    <input type="hidden" name="redirect_to" value="users">
-                                    <input type="text" name="new_username" class="form-control form-control-sm" placeholder="Username" style="width:140px;" autocomplete="off">
-                                    <input type="text" name="new_first_name" class="form-control form-control-sm" placeholder="First name" style="width:120px;" autocomplete="off">
-                                    <input type="text" name="new_last_name" class="form-control form-control-sm" placeholder="Last name" style="width:120px;" autocomplete="off">
-                                    <input type="email" name="new_email" class="form-control form-control-sm" placeholder="Email" style="width:220px;" autocomplete="off">
-                                    <input type="password" name="new_password" class="form-control form-control-sm" placeholder="Password" style="width:160px;">
-                                    <button type="submit" class="btn btn-sm btn-success">Add User</button>
-                                </form>
-                            </td>
-                        </tr>
                         {% for u in all_users %}
-                        {% set d = user_details.get(u, {}) %}
+                        {% set d = people.get(u, {}) %}
+                        {% set ll = last_logins.get(u, {}) %}
                         <tr>
-                            <td class="align-middle text-nowrap">{{ u }}{% if u == 'tdrayson' %} <span class="text-muted small">(admin, details set in code)</span>{% endif %}</td>
-                            {% if u == 'tdrayson' %}
-                            {# Fixed in code (db_utils.ADMIN_DETAILS): the admin login may have
-                               no users-table row to save into. No name attributes, so not sent. #}
-                            <td><input type="text" value="{{ d.first_name or '' }}" class="form-control form-control-sm" style="width:120px;" readonly disabled title="Set in code"></td>
-                            <td><input type="text" value="{{ d.last_name or '' }}" class="form-control form-control-sm" style="width:120px;" readonly disabled title="Set in code"></td>
-                            <td><input type="email" value="{{ d.email or '' }}" class="form-control form-control-sm" style="width:220px;" readonly disabled title="Set in code"></td>
-                            {% else %}
-                            <td><input type="text" form="details-form" name="first_name__{{ u }}" value="{{ d.first_name or '' }}" class="form-control form-control-sm" style="width:120px;" autocomplete="off"></td>
-                            <td><input type="text" form="details-form" name="last_name__{{ u }}" value="{{ d.last_name or '' }}" class="form-control form-control-sm" style="width:120px;" autocomplete="off"></td>
-                            <td><input type="email" form="details-form" name="email__{{ u }}" value="{{ d.email or '' }}" class="form-control form-control-sm" style="width:220px;" autocomplete="off"></td>
-                            {% endif %}
-                            <td class="align-middle text-muted small text-nowrap">
-                                {{ last_logins[u] if last_logins.get(u) else 'Never' }}
-                            </td>
-                            {% if u == 'tdrayson' %}
-                            <td></td>
-                            <td></td>
-                            {% else %}
+                            <td class="text-nowrap">{{ ((d.first_name or '') ~ ' ' ~ (d.last_name or ''))|trim }}</td>
                             <td>
-                                <form method="post" action="{{ BASE_URL }}/settings/set-password" class="d-flex gap-2">
-                                    <input type="hidden" name="target_user" value="{{ u }}">
-                                    <input type="hidden" name="redirect_to" value="users">
-                                    <input type="password" name="new_password" class="form-control form-control-sm" placeholder="New password" style="width:160px;">
-                                    <button type="submit" class="btn btn-sm btn-outline-primary">Set</button>
-                                </form>
+                                {% if d.email %}{{ d.email }}{% else %}<span class="text-muted">{{ u }}</span>{% endif %}
                             </td>
-                            <td class="align-middle">
-                                <form method="post" action="{{ BASE_URL }}/settings/delete-user" onsubmit="return confirm('Delete user {{ u }}? This cannot be undone.')">
-                                    <input type="hidden" name="target_user" value="{{ u }}">
-                                    <input type="hidden" name="redirect_to" value="users">
-                                    <button type="submit" class="btn btn-sm btn-outline-danger">Delete</button>
-                                </form>
-                            </td>
-                            {% endif %}
-                        </tr>
-                        {% endfor %}
-                        <tr>
-                            <td colspan="7" class="text-end">
-                                <button type="submit" form="details-form" class="btn btn-sm btn-primary">Save Names &amp; Emails</button>
+                            <td class="text-muted small text-nowrap">{{ ll.last_login or 'Never' }}</td>
+                            <td class="text-end">
+                                <button type="button" class="btn btn-sm btn-outline-primary edit-user-btn"
+                                        data-username="{{ u }}"
+                                        data-first="{{ d.first_name or '' }}"
+                                        data-last="{{ d.last_name or '' }}"
+                                        data-email="{{ d.email or '' }}"
+                                        data-last-login="{{ ll.last_login or 'Never' }}"
+                                        data-last-seen="{{ ll.last_seen or 'Never' }}"
+                                        data-admin="{{ '1' if u == admin_username else '0' }}">Edit</button>
                             </td>
                         </tr>
-                    </tbody>
-                </table>
-            </div>
-        </div>
-
-        <div class="card">
-            <div class="card-header fw-semibold d-flex align-items-center justify-content-between">
-                <span>Active Sessions <span class="text-muted fw-normal small">(all environments, last 30 min)</span></span>
-                <form method="post" action="{{ BASE_URL }}/settings/force-relogin" onsubmit="return confirm('Force all users to re-login?')">
-                    <button type="submit" class="btn btn-danger btn-sm">Force Re-login All</button>
-                </form>
-            </div>
-            {% if request.query_params.get('relogin') == '1' %}
-            <div class="alert alert-success mb-0 rounded-0 border-0 py-2 px-3">All sessions invalidated — users will be required to log in again.</div>
-            {% endif %}
-            <div class="card-body p-0">
-                <table class="table table-sm mb-0">
-                    <thead class="table-light">
-                        <tr>
-                            <th>User</th>
-                            <th>Env</th>
-                            <th>Logged in</th>
-                            <th>Last seen</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        {% for s in db_active_sessions %}
-                        <tr>
-                            <td>{{ s.user }}</td>
-                            <td><span class="badge {% if s.environment == 'prod' %}bg-danger{% elif s.environment == 'dev' %}bg-warning text-dark{% else %}bg-secondary{% endif %}">{{ s.environment }}</span></td>
-                            <td>{{ s.login_time }}</td>
-                            <td>{{ s.last_seen }}</td>
-                        </tr>
-                        {% else %}
-                        <tr><td colspan="4" class="text-muted">No active sessions in the last 30 minutes</td></tr>
                         {% endfor %}
                     </tbody>
                 </table>
@@ -182,5 +120,151 @@
         </div><!-- /.settings-content -->
         </div><!-- /.settings-layout -->
     </div>
+
+    {# One popup for Add User and Edit. Edit fills it from the row's data-
+       attributes; the username cannot be changed once created. #}
+    <div class="modal fade" id="userModal" tabindex="-1" aria-labelledby="userModalTitle" aria-hidden="true">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <form method="post" action="{{ BASE_URL }}/settings/user/save" id="user-form" autocomplete="off">
+                    <div class="modal-header">
+                        <h5 class="modal-title" id="userModalTitle">Add User</h5>
+                        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                    </div>
+                    <div class="modal-body">
+                        <input type="hidden" name="mode" id="um-mode" value="add">
+                        <input type="hidden" name="source" value="{{ source }}">
+                        <div class="mb-2">
+                            <label for="um-username" class="form-label mb-1">Username</label>
+                            <input type="text" class="form-control" id="um-username" name="username" required>
+                        </div>
+                        <div class="row g-2 mb-2">
+                            <div class="col">
+                                <label for="um-first" class="form-label mb-1">First Name</label>
+                                <input type="text" class="form-control" id="um-first" name="first_name">
+                            </div>
+                            <div class="col">
+                                <label for="um-last" class="form-label mb-1">Last Name</label>
+                                <input type="text" class="form-control" id="um-last" name="last_name">
+                            </div>
+                        </div>
+                        <div class="mb-2">
+                            <label for="um-email" class="form-label mb-1">Email</label>
+                            <input type="email" class="form-control" id="um-email" name="email">
+                        </div>
+                        <div class="mb-2" id="um-password-row">
+                            <label for="um-password" class="form-label mb-1">Password</label>
+                            <input type="password" class="form-control" id="um-password" name="password" autocomplete="new-password">
+                            <div class="form-text" id="um-password-help">At least 6 characters.</div>
+                        </div>
+                        <div class="small text-muted" id="um-activity">
+                            Last Login: <span id="um-last-login"></span> &middot; Last Seen: <span id="um-last-seen"></span>
+                        </div>
+                        <div class="small text-muted mt-2" id="um-admin-note">The admin account's details are set in code.</div>
+                    </div>
+                    <div class="modal-footer">
+                        <button type="button" class="btn btn-outline-danger me-auto" id="um-delete">Delete</button>
+                        <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+                        <button type="submit" class="btn btn-primary" id="um-save">Save</button>
+                    </div>
+                </form>
+                <form method="post" action="{{ BASE_URL }}/settings/delete-user" id="delete-form">
+                    <input type="hidden" name="target_user" id="um-delete-user">
+                    <input type="hidden" name="redirect_to" value="users">
+                    <input type="hidden" name="source" value="{{ source }}">
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
+    <script>
+    (function () {
+        const modal = new bootstrap.Modal(document.getElementById('userModal'));
+        const $ = id => document.getElementById(id);
+        const show = (el, on) => { el.style.display = on ? '' : 'none'; };
+        // Local and dev on the Prod view: saves and deletes change the live prod sign-ins.
+        const toProd = {{ 'true' if viewing_prod else 'false' }};
+
+        function open(opts) {
+            const isAdd = opts.mode === 'add';
+            const isAdmin = !!opts.admin;
+            $('userModalTitle').textContent = (isAdd ? 'Add User' : 'Edit ' + opts.username) + (toProd ? ' (Prod)' : '');
+            $('um-mode').value = opts.mode;
+            $('um-username').value = opts.username || '';
+            $('um-username').readOnly = !isAdd;
+            $('um-first').value = opts.first || '';
+            $('um-last').value = opts.last || '';
+            $('um-email').value = opts.email || '';
+            $('um-password').value = '';
+            $('um-password').required = isAdd;
+            $('um-password-help').textContent = isAdd
+                ? 'At least 6 characters.'
+                : 'Leave blank to keep the current password. Changing it signs the user out.';
+            ['um-first', 'um-last', 'um-email'].forEach(id => { $(id).readOnly = isAdmin; });
+            show($('um-password-row'), !isAdmin);
+            show($('um-activity'), !isAdd);
+            $('um-last-login').textContent = opts.lastLogin || '';
+            $('um-last-seen').textContent = opts.lastSeen || '';
+            show($('um-admin-note'), isAdmin);
+            show($('um-delete'), !isAdd && !isAdmin);
+            show($('um-save'), !isAdmin);
+            $('um-delete-user').value = opts.username || '';
+            modal.show();
+        }
+
+        $('add-user-btn').addEventListener('click', () => open({ mode: 'add' }));
+        $('user-form').addEventListener('submit', e => {
+            if (toProd && !confirm('You are changing PROD users. Save ' + ($('um-username').value || 'this user') + ' on prod?')) {
+                e.preventDefault();
+            }
+        });
+        document.querySelectorAll('.edit-user-btn').forEach(btn => {
+            btn.addEventListener('click', () => open({
+                mode: 'edit',
+                username: btn.dataset.username,
+                first: btn.dataset.first,
+                last: btn.dataset.last,
+                email: btn.dataset.email,
+                lastLogin: btn.dataset.lastLogin,
+                lastSeen: btn.dataset.lastSeen,
+                admin: btn.dataset.admin === '1',
+            }));
+        });
+        // Every email in the list as one semicolon separated line, to paste into Outlook's To box.
+        $('copy-emails-btn').addEventListener('click', async () => {
+            const emails = [...new Set(
+                [...document.querySelectorAll('.edit-user-btn')]
+                    .map(b => (b.dataset.email || '').trim())
+                    .filter(Boolean)
+            )];
+            const text = emails.join('; ');
+            const btn = $('copy-emails-btn');
+            const done = msg => {
+                btn.textContent = msg;
+                setTimeout(() => { btn.textContent = 'Copy Emails'; }, 2000);
+            };
+            if (!emails.length) { done('No Emails'); return; }
+            try {
+                await navigator.clipboard.writeText(text);
+            } catch (e) {
+                const ta = document.createElement('textarea');
+                ta.value = text;
+                document.body.appendChild(ta);
+                ta.select();
+                document.execCommand('copy');
+                ta.remove();
+            }
+            done('Copied ' + emails.length);
+        });
+        $('um-delete').addEventListener('click', () => {
+            const u = $('um-delete-user').value;
+            const where = toProd ? ' from PROD' : '';
+            if (u && confirm('Delete user ' + u + where + '? This cannot be undone.')) {
+                $('delete-form').submit();
+            }
+        });
+    })();
+    </script>
 </body>
 </html>

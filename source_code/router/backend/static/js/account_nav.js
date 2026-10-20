@@ -42,6 +42,11 @@
         if (!btn || !panel) return;
         const close = panel.querySelector('.side-menu-close');
         const setOpen = (open, refocus) => {
+            if (open) {
+                // Start the panel just below the header so the burger stays visible.
+                const head = document.querySelector('.page-head');
+                panel.style.top = (head ? Math.max(0, head.getBoundingClientRect().bottom) : 0) + 'px';
+            }
             panel.hidden = !open;
             btn.setAttribute('aria-expanded', open ? 'true' : 'false');
             if (open) {
