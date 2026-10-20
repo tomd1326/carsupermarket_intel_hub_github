@@ -20,12 +20,20 @@ import logging
 import os
 import re
 import threading
+import time
 
 logger = logging.getLogger(__name__)
 
 SOURCE_SNOWFLAKE = 'snowflake'
 SOURCE_SHAREPOINT = 'sharepoint'
 SOURCE_APP = 'app'
+SOURCE_REQUEST = 'request'
+
+# Web requests slower than the Settings value (Logs page > Log Settings) are
+# stored with their total time, so time not spent in Snowflake shows up too.
+# The setting is re-read at most once a minute per container.
+DEFAULT_SLOW_REQUEST_MS = 1000
+_slow_ms_cache = {'value': DEFAULT_SLOW_REQUEST_MS, 'read_at': 0.0}
 
 # Log text is cut to these lengths so one huge statement or traceback cannot
 # bloat the table.
@@ -86,11 +94,6 @@ def current_context() -> dict:
     return _request_ctx.get() or {'page': None, 'task': None, 'user': None}
 
 
-def query_tag() -> str:
-    """Label sent to Snowflake as QUERY_TAG, so the same page and task show in
-    Snowflake's own query history."""
-    ctx = current_context()
-    return f"vle|{ctx['page'] or '-'}|{ctx['task'] or '-'}"[:200]
 
 
 def extract_tables(sql: str) -> str:
@@ -129,6 +132,7 @@ def _ensure_table(conn) -> None:
         )
         # Added after the table first shipped.
         cur.execute("ALTER TABLE app_logs ADD COLUMN IF NOT EXISTS tables VARCHAR(300)")
+        cur.execute("ALTER TABLE app_logs ADD COLUMN IF NOT EXISTS connect_ms INTEGER")
         cur.execute("CREATE INDEX IF NOT EXISTS app_logs_logged_at_idx ON app_logs (logged_at DESC)")
         cur.execute("CREATE INDEX IF NOT EXISTS app_logs_source_idx ON app_logs (source, logged_at DESC)")
     conn.commit()
@@ -159,7 +163,7 @@ def cleanup(conn) -> None:
 def _write(source: str, level: str, message: str, logger_name: str | None = None,
            query_id: str | None = None, duration_ms: int | None = None,
            rows_returned: int | None = None, success: bool | None = None,
-           tables: str | None = None) -> None:
+           tables: str | None = None, connect_ms: int | None = None) -> None:
     """Insert one row. Never raises, never logs."""
     global _insert_count
     if getattr(_in_write, 'active', False):
@@ -175,11 +179,12 @@ def _write(source: str, level: str, message: str, logger_name: str | None = None
                     cur.execute("SET LOCAL statement_timeout = 3000")
                     cur.execute(
                         "INSERT INTO app_logs (environment, source, level, page, task, username,"
-                        " logger_name, message, query_id, duration_ms, rows_returned, success, tables)"
-                        " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+                        " logger_name, message, query_id, duration_ms, rows_returned, success, tables,"
+                        " connect_ms)"
+                        " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
                         (_ENV, source, level, ctx['page'], ctx['task'], ctx['user'], logger_name,
                          (message or '')[:_MAX_MESSAGE_CHARS], query_id, duration_ms, rows_returned, success,
-                         tables),
+                         tables, connect_ms),
                     )
                 conn.commit()
                 with _count_lock:
@@ -198,9 +203,10 @@ def _write(source: str, level: str, message: str, logger_name: str | None = None
 
 
 def record_snowflake(sql: str, query_id: str | None, duration_ms: int, rows_returned: int | None,
-                     error: BaseException | None) -> None:
+                     error: BaseException | None, connect_ms: int | None = None) -> None:
     """One Snowflake statement. The SQL text is cut short and its bound
-    parameters are not stored."""
+    parameters are not stored. connect_ms is the secret fetch + login time,
+    set only on the first statement of each connection."""
     text = re.sub(r'\s+', ' ', sql or '').strip()[:_MAX_SQL_CHARS]
     if error is not None:
         message = f"{text} -- ERROR: {error}"
@@ -208,7 +214,37 @@ def record_snowflake(sql: str, query_id: str | None, duration_ms: int, rows_retu
         message = text
     _write(SOURCE_SNOWFLAKE, 'ERROR' if error is not None else 'INFO', message, 'snowflake_client',
            query_id=query_id, duration_ms=duration_ms, rows_returned=rows_returned,
-           success=error is None, tables=extract_tables(sql))
+           success=error is None, tables=extract_tables(sql), connect_ms=connect_ms)
+
+
+def _slow_request_ms() -> int:
+    now = time.time()
+    if now - _slow_ms_cache['read_at'] < 60:
+        return _slow_ms_cache['value']
+    _slow_ms_cache['read_at'] = now
+    try:
+        from utils.db_utils import get_database_connection
+        with get_database_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT value FROM settings WHERE key = 'logs_slow_request_ms'")
+                row = cur.fetchone()
+        if row:
+            _slow_ms_cache['value'] = max(100, int(row[0]))
+    except Exception:
+        pass
+    return _slow_ms_cache['value']
+
+
+def record_request(method: str, path: str, status: int, duration_ms: int) -> None:
+    """One web request, stored only if slower than the setting. Never raises."""
+    try:
+        if duration_ms < _slow_request_ms():
+            return
+        _write(SOURCE_REQUEST, 'WARNING' if status >= 500 else 'INFO',
+               f"{method} {path} -> {status}", 'request', duration_ms=duration_ms,
+               success=status < 500)
+    except Exception:
+        pass
 
 
 class AppLogHandler(logging.Handler):

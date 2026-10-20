@@ -220,7 +220,8 @@ body { background-color: var(--c-page-bg); color: var(--c-text); }
     text-align: left;
 }
 .side-menu-top {
-    display: flex;
+    /* The panel opens below the header, whose burger closes it, so this row is not needed. */
+    display: none;
     align-items: center;
     gap: var(--page-head-gap, 14px);
     /* Same padding and button size as .page-head, so the burger in the panel

@@ -2,17 +2,17 @@
 
 from fastapi import APIRouter, Request, Form, Depends
 from fastapi.responses import HTMLResponse, RedirectResponse
-import os
 import time
 import hashlib
 import logging
 
 
 from utils.db_utils import (get_database_connection, record_login, record_logout,
-                            find_usernames_by_email, get_settings, remove_session_presence)
+                            find_usernames_by_email, get_settings, remove_session_presence,
+                            new_session_id)
 
-from .core import (BASE_URL, _ENV, templates, VALID_USERS, _active_sessions, _reload_users_from_aurora,
-                   get_current_user, _uk_now, ADMIN_USERNAME)
+from .core import (BASE_URL, _ENV, templates, VALID_USERS, _reload_users_from_aurora,
+                   get_current_user, session_config, ADMIN_USERNAME)
 
 logger = logging.getLogger(__name__)
 
@@ -55,17 +55,19 @@ def login(request: Request, username: str = Form(...), password: str = Form(...)
     if username is None and (login_mode != 'email' or entered == ADMIN_USERNAME):
         username = entered
     if username and pwd_hash == VALID_USERS.get(username):
-        session_id = hashlib.sha256(os.urandom(16)).hexdigest()
+        session_id = new_session_id()
         login_epoch = time.time()
+        request.session.clear()   # nothing carried over from an earlier login's cookie
         request.session['user'] = username
         request.session['pwd_hash'] = pwd_hash
         request.session['session_id'] = session_id
         request.session['login_time_epoch'] = login_epoch
-        _active_sessions[session_id] = {'user': username, 'login_time': _uk_now().strftime('%Y-%m-%d %H:%M:%S')}
         try:
             with get_database_connection() as conn:
-                record_login(conn, session_id, username, _ENV, _uk_now())
+                record_login(conn, session_id, username, _ENV)
+            request.session['seen_epoch'] = login_epoch
         except Exception as e:
+            # No seen_epoch, so the next request makes the row instead.
             logger.warning("Failed to record login for %s: %s", username, e)
         return RedirectResponse(url=BASE_URL + "/home", status_code=303)  # CHANGED: was /tasks
     return templates.TemplateResponse(
@@ -81,11 +83,10 @@ def login(request: Request, username: str = Form(...), password: str = Form(...)
 @router.get("/logout")
 def logout(request: Request):
     session_id = request.session.get('session_id')
-    _active_sessions.pop(session_id, None)
     if session_id:
         try:
             with get_database_connection() as conn:
-                record_logout(conn, session_id, _uk_now())
+                record_logout(conn, session_id, session_config()['session_timeout_minutes'])
                 remove_session_presence(conn, session_id)
         except Exception as e:
             logger.warning("Failed to record logout for session %s: %s", session_id, e)

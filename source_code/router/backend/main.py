@@ -1,6 +1,7 @@
 import logging
 import os
 import re
+import time
 
 from fastapi import FastAPI, Request, Form, Depends, HTTPException
 from fastapi.templating import Jinja2Templates
@@ -18,6 +19,7 @@ from exceptions import unhandled_exception_handler, http_exception_handler
 from utils.secrets_manager_client import get_secret
 from utils.lambda_http import LambdaRequestsManager
 from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.concurrency import run_in_threadpool
 from starlette.responses import Response
 import routers
 from routers.core import PageRedirect
@@ -58,7 +60,13 @@ class BasePathMiddleware(BaseHTTPMiddleware):
         # Page and endpoint for the Logs page; read by anything logged while
         # this request runs.
         app_log.begin_request(new_path)
+        started = time.monotonic()
         response = await call_next(request)
+        # Slow requests go on the Logs page with their total time. Run in a
+        # worker thread so the Aurora write does not hold up the event loop.
+        if not new_path.startswith('/static'):
+            await run_in_threadpool(app_log.record_request, request.method, new_path,
+                                    response.status_code, int((time.monotonic() - started) * 1000))
         return response
 
 
