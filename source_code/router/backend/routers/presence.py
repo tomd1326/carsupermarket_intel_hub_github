@@ -76,6 +76,8 @@ def _page_label(path: str) -> str:
         return 'Home'
     if path.startswith('/settings'):
         return 'Settings'
+    if path == '/my-account':
+        return 'My Account'
     matches = [p for p in PAGES if path == p.path or path.startswith(p.path + '/')]
     if matches:
         return page_name(max(matches, key=lambda p: len(p.path)).key)

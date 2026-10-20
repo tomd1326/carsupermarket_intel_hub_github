@@ -1,4 +1,4 @@
-{% from '_navigation.html' import account_nav with context %}
+{% from '_navigation.html' import page_header with context %}
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -19,11 +19,12 @@
         .error-icon { font-size: 2.5rem; }
         details summary { cursor: pointer; user-select: none; }
         pre { font-size: 0.78rem; white-space: pre-wrap; word-break: break-word; }
-        /* Shared Back / Home / nav button size across all pages */
     </style>
 </head>
-<body class="bg-light">
-    {{ account_nav(user|default(none)) }}
+<body>
+    {# Without core's helpers (exceptions.py could not import them) the header
+       cannot draw, and the error itself matters more. #}
+    {% if presence_config is defined %}{{ page_header('Error', user|default(none)) }}{% endif %}
     <div class="error-card card shadow-sm p-4">
         <div class="d-flex align-items-center gap-3 mb-3">
             <span class="error-icon">

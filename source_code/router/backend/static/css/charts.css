@@ -16,7 +16,7 @@
 @font-face { font-family: 'DM Sans'; src: url('../fonts/DMSans-Regular.ttf'); font-weight: 400; }
 @font-face { font-family: 'DM Sans'; src: url('../fonts/DMSans-Bold.ttf');    font-weight: 700; }
 body, button, input, select, textarea { font-family: 'DM Sans', system-ui, sans-serif; font-size: 14px; }
-body { background: #f1f5f9; }
+body { background: var(--c-page-bg); }
 
 /* ── Page frame ───────────────────────────────────────────────────────────── */
 .top-bar {
@@ -30,7 +30,6 @@ body { background: #f1f5f9; }
     top: 0;
     z-index: 100;
 }
-.top-bar h1 { font-size: 1.1rem; font-weight: 700; margin: 0; color: #0f172a; }
 .page-content { padding: 24px 32px; }
 .status-text { font-size: 0.82rem; color: #64748b; }
 

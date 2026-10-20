@@ -8,7 +8,7 @@ from fastapi import APIRouter, Request, Depends, HTTPException
 
 from utils import sharepoint_sources as sps
 
-from .core import get_current_user, is_admin, check_worker_secret
+from .core import get_current_user, is_admin, check_worker_secret, require_page_api
 
 logger = logging.getLogger(__name__)
 
@@ -34,12 +34,11 @@ def sharepoint_refresh_run(data: dict):
 
 
 @router.get("/api/sharepoint/status")
-def sharepoint_status(keys: str = "", check: bool = False, user: str = Depends(get_current_user)):
+def sharepoint_status(keys: str = "", check: bool = False, user: str = Depends(require_page_api('kpi'))):
     """Status of the given files (comma separated keys) for an open page.
     check=true first runs the normal check for any that are due, which starts
-    a download when a file has been saved since its copy."""
-    if not user:
-        raise HTTPException(status_code=401, detail="Not logged in")
+    a download when a file has been saved since its copy. The KPI page is the
+    only caller, so only people who can open it may ask."""
     wanted = [k for k in (keys or "").split(",") if k]
     try:
         if check and wanted:

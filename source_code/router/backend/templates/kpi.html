@@ -1,4 +1,4 @@
-{% from '_navigation.html' import account_nav with context %}
+{% from '_navigation.html' import page_header with context %}
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -10,6 +10,7 @@
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css" rel="stylesheet">
     <link href="{{ static_url('css/theme.css') }}" rel="stylesheet">
     <link href="{{ static_url('css/charts.css') }}" rel="stylesheet">
+    <script src="{{ static_url('js/aws_login.js') }}"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
     <script src="{{ static_url('js/charts.js') }}"></script>
     <script src="{{ static_url('js/kpi_targets.js') }}"></script>
@@ -34,11 +35,16 @@
             display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 12px;
             border-bottom: 1px solid #cbd5e1;
             position: sticky; top: var(--kpi-top-bar-h, 0px); z-index: 20;
-            background: #f1f5f9; padding-top: 8px;
+            background: var(--c-page-bg); padding-top: 8px;
         }
+        /* Same height as the .btn-edit buttons in the top bar (.btn-edit in
+           charts.css: 0.9rem text at Bootstrap's 1.5 line height, 7px padding
+           and 1px border top and bottom), whatever the section font size. The
+           text is centred in that height rather than padded. */
         .kpi-tab {
             display: flex; align-items: center; gap: 8px;
-            padding: 8px 16px; margin-bottom: -1px; cursor: pointer;
+            height: calc(0.9rem * 1.5 + 16px);
+            padding: 0 16px; margin-bottom: -1px; cursor: pointer;
             background: #e2e8f0; border: 1px solid #cbd5e1; border-radius: 8px 8px 0 0;
             font-size: var(--kpi-section-font, 0.82rem); font-weight: 700; color: #475569;
         }
@@ -94,7 +100,7 @@
         }
         /* Row title slightly bigger than the shared 0.86rem. */
         .chart-row-title.kpi-row-title { font-size: 0.95rem; }
-        /* Edit Chart: three columns (data | title, display and axis | View Vehicles) so
+        /* Edit Chart: three columns (title and data | placement, display and axis | View Vehicles) so
            it fits one screen; nearer the top than other popups (3vh, not 10vh)
            and allowed the extra height. Fields sit a little closer together than
            elsewhere; the font size is unchanged. Two columns, then one, on
@@ -143,6 +149,23 @@
         .modal-grid.three { grid-template-columns: 1fr 1fr 1fr; }
         .modal-grid .span-2 { grid-column: span 2; }
         .metric-desc { font-size: 0.8rem; color: #64748b; margin-top: 5px; min-height: 18px; }
+        .metric-search { width: 100%; box-sizing: border-box; margin-bottom: 5px; padding: 5px 8px; border: 1px solid #cbd5e1; border-radius: 6px; font-size: 0.82rem; }
+        .ds-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.6fr) auto auto; gap: 8px; align-items: center; margin-bottom: 6px; font-size: 0.85rem; }
+        .ds-row .ds-detail { color: #64748b; font-size: 0.8rem; }
+        .ds-section { border: 1px solid #e2e8f0; border-radius: 8px; padding: 10px 14px 6px; margin-bottom: 12px; }
+        .ds-section-head { display: flex; justify-content: space-between; align-items: center; gap: 10px;
+                           font-weight: 600; color: #0d3d6e; font-size: 0.95rem; margin-bottom: 2px; }
+        .ds-section-head i { margin-right: 4px; }
+        .ds-section-sub { font-size: 0.8rem; color: #64748b; margin-bottom: 8px; }
+        .ds-form { border: 1px solid #cbd5e1; border-radius: 8px; padding: 12px 14px; margin: 4px 0 10px; background: #f8fafc; }
+        .ds-form .modal-section-title { margin-top: 0; }
+        .ds-form-buttons { display: flex; gap: 8px; margin-top: 6px; }
+        .ds-status { font-size: 0.82rem; color: #1c5cab; min-height: 18px; margin-bottom: 4px; }
+        .ds-files { margin: -2px 0 8px 14px; font-size: 0.8rem; color: #334155; }
+        .ds-file { margin-bottom: 2px; }
+        .ds-tag { display: inline-block; padding: 0 6px; border-radius: 8px; font-size: 0.72rem; }
+        .ds-tag.on { background: #dcfce7; color: #166534; }
+        .ds-tag.off { background: #f1f5f9; color: #64748b; }
         .agg-options { display: flex; gap: 18px; flex-wrap: wrap; font-size: 0.85rem; color: #334155; min-height: 34px; align-items: center; }
         .agg-options label { display: flex; align-items: center; gap: 5px; font-weight: 400; margin: 0; }
         .settings-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0 14px; }
@@ -401,21 +424,15 @@
         .vehicles-table tbody tr.grey-row td { background: #e5e7eb; }
         .vehicles-table tbody tr.grey-row:hover td { background: #d9dce1; }
         /* Admin View / User View switch: shared style in theme.css. */
-        /* Top bar: three columns so the page's buttons sit in the centre. The
-           account strip is normally placed absolutely at the top right of the
-           page; here it sits in the bar so it stays on screen with it. */
-        .kpi-top-bar { display: grid; grid-template-columns: 1fr auto 1fr; gap: 16px; }
-        .top-bar-left { display: flex; align-items: center; gap: 16px; min-width: 0; }
-        .top-bar-actions { display: flex; align-items: center; gap: 10px; }
-        .kpi-top-bar .account-nav { position: static; justify-self: end; }
-        /* One size for every button and label in the bar (Settings > Appearance,
-           "Top bar size"). Padding is in em so it grows with the text. */
-        .kpi-top-bar .btn, .kpi-top-bar .account-nav .nav-btn {
-            font-size: var(--kpi-toolbar-font, 0.88rem); line-height: 1.3; padding: 0.45em 1em;
-        }
+        /* The shared header row (page_header) stays at the top while the charts
+           scroll under it; the section tabs pin just beneath it. Below the
+           popups (z-index) so a popup covers it. One size for every button and
+           label in it (Settings > Appearance, "Top bar size"); padding is in
+           em so it grows with the text. */
+        .kpi-top-bar { position: sticky; top: 0; z-index: 100; }
+        .kpi-top-bar .btn { font-size: var(--kpi-toolbar-font, 0.88rem); line-height: 1.3; padding: 0.45em 1em; }
         .kpi-top-bar .view-toggle button { font-size: var(--kpi-toolbar-font, 0.88rem); line-height: 1.3; padding: 0.3em 0.9em; }
-        .kpi-top-bar .status-text, .kpi-top-bar .account-nav { font-size: var(--kpi-toolbar-font, 0.88rem); }
-        /* Data Labels On / Off on each chart row: the same switch, sized to the
+        .kpi-top-bar .status-text, .kpi-top-bar .account-nav { font-size: var(--kpi-toolbar-font, 0.88rem); }        /* Data Labels On / Off on each chart row: the same switch, sized to the
            row's other buttons. Its own class, since setPageView() resets every
            .view-toggle button. */
         .labels-toggle { display: inline-flex; align-items: center; background: #e2e8f0; border-radius: 6px; padding: 2px; gap: 2px; }
@@ -462,14 +479,9 @@
     </style>
 </head>
 <body>
-    <!-- Title and status on the left, the page's buttons in the centre, Home /
-         user / Logout on the right. The whole bar stays at the top when scrolling. -->
-    <div class="top-bar kpi-top-bar" id="kpiTopBar">
-        <div class="top-bar-left">
-            <h1>{{ page_name('kpi') }}</h1>
-            <span class="status-text" id="statusText"></span>
-        </div>
-        <div class="top-bar-actions">
+    <!-- The shared header row, kept at the top when scrolling: the page's
+         buttons and status sit beside the title. -->
+    {% call page_header(page_name('kpi'), user, 'kpi-top-bar') %}
         <button class="btn btn-load" id="loadBtn" onclick="loadAll(true)">
             <i class="fas fa-sync-alt" id="loadIcon"></i> Load Data
         </button>
@@ -485,10 +497,13 @@
         </button>
         <button class="btn btn-edit admin-only" onclick="openNotesModal()">
             <i class="fas fa-sticky-note"></i> Notes
-        </button>        {% endif %}
-        </div>
-        {{ account_nav(user) }}
-    </div>
+        </button>
+        <button class="btn btn-edit admin-only" onclick="openChartModal(null)">
+            <i class="fas fa-plus"></i> Add Chart
+        </button>
+        {% endif %}
+        <span class="status-text" id="statusText"></span>
+    {% endcall %}
 
     <div class="page-content page-is-loading" id="pageContent">
         <div class="page-loading"><i class="fas fa-sync-alt spin"></i> <span>Loading<span class="loading-dots"></span></span></div>
@@ -620,6 +635,17 @@
                  The target is not here: it has its own Targets popup. -->
             <div class="chart-modal-cols">
             <div class="chart-modal-col">
+            <div class="modal-section-title">Title</div>
+            <div class="modal-grid">
+                <div class="modal-field span-2">
+                    <label for="titleInput">Title</label>
+                    <input type="text" id="titleInput" maxlength="100">
+                </div>
+                <div class="modal-field span-2">
+                    <label for="subtitleInput">Subtitle (Optional)</label>
+                    <input type="text" id="subtitleInput" maxlength="200">
+                </div>
+            </div>
             <div class="modal-section-title">Data</div>
             <div class="modal-grid">
                 <div class="modal-field span-2">
@@ -639,6 +665,8 @@
                 <!-- Line charts only -->
                 <div class="modal-field span-2 line-only">
                     <label for="metricSelect">Metric</label>
+                    <input type="text" id="metricSearch" class="metric-search" placeholder="Search Metrics"
+                           oninput="filterMetricSelect(this.value)" autocomplete="off">
                     <select id="metricSelect" onchange="onMetricChange()"></select>
                     <div class="metric-desc" id="metricDesc"></div>
                     <div id="metricPlusList"></div>
@@ -693,16 +721,8 @@
             </div>
 
             <div class="chart-modal-col">
-            <div class="modal-section-title">Title And Placement</div>
+            <div class="modal-section-title">Placement</div>
             <div class="modal-grid">
-                <div class="modal-field span-2">
-                    <label for="titleInput">Title</label>
-                    <input type="text" id="titleInput" maxlength="100">
-                </div>
-                <div class="modal-field span-2">
-                    <label for="subtitleInput">Subtitle (Optional)</label>
-                    <input type="text" id="subtitleInput" maxlength="200">
-                </div>
                 <div class="modal-field">
                     <label for="sectionSelect">Section</label>
                     <select id="sectionSelect" onchange="fillPositionOptions()"></select>
@@ -965,6 +985,7 @@
                 </div>
                 <button type="button" data-tab="setGroupSections" onclick="showSettingsTab(this.dataset.tab)">Sections</button>
                 <button type="button" data-tab="setGroupNames" onclick="showSettingsTab(this.dataset.tab)">Column Names</button>
+                <button type="button" data-tab="setGroupDataSources" onclick="showSettingsTab(this.dataset.tab)">Data Sources</button>
                 <button type="button" data-tab="setGroupTargets" onclick="showSettingsTab(this.dataset.tab)">Targets</button>
                 <button type="button" data-tab="setGroupVehicles" onclick="showSettingsTab(this.dataset.tab)">View Vehicles</button>
                 <button type="button" data-tab="setGroupAutotrader" onclick="showSettingsTab(this.dataset.tab)">Autotrader Costs</button>
@@ -1195,6 +1216,73 @@
                 to go back to the raw column.
             </div>
             </div>
+            <!-- Snowflake tables whose figures can be charted, added on the page.
+                 Each change saves straight away (not with Save). -->
+            <div class="settings-pane" id="setGroupDataSources">
+            <!-- One box per kind of source. -->
+            <div class="ds-section">
+            <div class="ds-section-head">
+                <span><i class="fas fa-snowflake"></i> Snowflake Tables</span>
+                <button type="button" class="btn btn-edit btn-sm" id="dataSourceOpenBtn" onclick="openDataSourceForm()">
+                    <i class="fas fa-plus"></i> Add Data Source</button>
+            </div>
+            <div class="ds-section-sub">COMPUTE_ and PRODUCT_ tables in PROD_CARSUPERMARKET_DB. Daily Summary is built in; the rest are added here.</div>
+            <div id="dataSourceList"></div>
+            <!-- Opened by Add Data Source or a table's edit button. -->
+            <div class="ds-form" id="dataSourceForm" style="display:none;">
+            <div class="modal-section-title" id="dataSourceFormTitle">Add Data Source</div>
+            <div class="ds-status" id="dataSourceStatus"></div>
+            <div class="settings-grid">
+                <div class="modal-field">
+                    <label for="dsName">Name</label>
+                    <input type="text" id="dsName" maxlength="60" placeholder="e.g. GA4 Events">
+                </div>
+                <div class="modal-field">
+                    <label for="dsTable">Table</label>
+                    <select id="dsTable" onchange="loadDataSourceColumns(this.value)"></select>
+                </div>
+                <div class="modal-field">
+                    <label for="dsShape">Table Layout</label>
+                    <select id="dsShape" onchange="renderDataSourceColumns()">
+                        <option value="wide">One Row Per Date (Each Number Column Is A Metric)</option>
+                        <option value="long">One Row Per Date Per Name (e.g. Per Event)</option>
+                    </select>
+                </div>
+                <div class="modal-field">
+                    <label for="dsDate">Date Column</label>
+                    <select id="dsDate"></select>
+                </div>
+                <div class="modal-field ds-long-only">
+                    <label for="dsSplit">Name Column</label>
+                    <select id="dsSplit"></select>
+                </div>
+                <div class="modal-field ds-long-only">
+                    <label for="dsValue">Value Column</label>
+                    <select id="dsValue"></select>
+                </div>
+            </div>
+            <div class="modal-error" id="dataSourceError"></div>
+            <div class="ds-form-buttons">
+                <button type="button" class="btn btn-apply" id="dataSourceSaveBtn" onclick="saveDataSource()">
+                    <i class="fas fa-plus"></i> Add</button>
+                <button type="button" class="btn btn-edit" onclick="closeDataSourceForm()">Cancel</button>
+            </div>
+            </div>
+            </div>
+            <!-- SharePoint and Autotrader Costs boxes, filled in by renderDataSourceBuiltIn. -->
+            <div id="dataSourceBuiltIn"></div>
+            <div class="modal-hint">
+                Adds a COMPUTE_ or PRODUCT_ table from PROD_CARSUPERMARKET_DB. Its metrics then show in Edit Chart under
+                the name given here. One Row Per Date: each number column is a metric. One Row Per Date Per Name: each
+                name in the Name Column is a metric (e.g. every event in COMPUTE_UX_TRACKING.GA4_DAILY_EVENTS), and a
+                date the table has but a name has no row for counts as 0. N-1 and fixed or per-date targets work as on
+                every chart; Weight By and target columns are for daily_summary only. A source used by a chart cannot
+                be removed. Renaming keeps every chart and target using it. These save straight away.<br>
+                Daily Summary, the SharePoint spreadsheets and Autotrader Costs are built in and always there. The SharePoint spreadsheets are added, changed and switched on or
+                off in Settings > SharePoint; charts read them as one source, so the counts are for all of them
+                together. Daily Summary stays fixed because target columns and Weight By depend on its layout.
+            </div>
+            </div>
             <div class="settings-pane" id="setGroupTargets">
             <div class="settings-grid">
                 <div class="modal-field">
@@ -1386,7 +1474,9 @@
     }
     // The operators of a row's added metrics, in order.
     function plusOps(list) { return list.map(p => p.op || '+'); }
-    const PLUS_OPS = [['+', '+ Plus'], ['-', '- Minus'], ['*', '* Times'], ['/', '/ Divided By']];
+    // The symbol only, so the operator box stays narrow and the metric beside
+    // it has room to show its name. Its tooltip says what each one does.
+    const PLUS_OPS = [['+', '+'], ['-', '-'], ['*', '*'], ['/', '/']];
 
     function sectionDomId(name) {
         return 'sec-' + name.toLowerCase().replace(/[^a-z0-9]+/g, '-');
@@ -1430,6 +1520,7 @@
             if (layoutResp.sections) SECTIONS = layoutResp.sections;
             hiddenSections = new Set(layoutResp.hidden_sections || []);
             loadCollapsedRows(layoutResp.collapsed_rows || []);
+            loadRollingRows(layoutResp.rolling_rows || []);
             myCharts = layoutResp.my_charts || [];
             layout = layoutResp.layout || { rows: [] };
             if (layoutResp.settings) settings = layoutResp.settings;
@@ -1464,8 +1555,10 @@
         layoutLoadFailed = true;
         setPageLoading(false);
         document.getElementById('loadIcon').classList.remove('spin');
-        document.getElementById('statusText').textContent =
+        const status = document.getElementById('statusText');
+        status.textContent =
             what + ' - saving is turned off so the saved charts are not overwritten. ' + err.message;
+        awsLoginIfExpired(status, err.message);
         console.error(err);
         fetch(BASE_URL + '/kpi/client-error', {
             method: 'POST',
@@ -1507,17 +1600,7 @@
                 header.onclick = () => toggleSection(name);
                 const body = document.createElement('div');
                 body.className = 'category-body open';
-                // Add Chart at the top of the section (admin only); the new
-                // chart goes into this section. Created before any chart is
-                // added, so it stays first.
-                if (IS_ADMIN) {
-                    const tools = document.createElement('div');
-                    tools.className = 'section-tools admin-only';
-                    tools.innerHTML = '<button type="button" class="btn btn-edit"><i class="fas fa-plus"></i> Add Chart</button>';
-                    tools.querySelector('button').onclick = () => openChartModal(null);
-                    body.appendChild(tools);
-                }
-                // Autotrader advert figures above the first chart, likewise.
+                // Autotrader advert figures above the first chart.
                 if (/autotrader/i.test(name)) {
                     const strip = document.createElement('div');
                     strip.className = 'at-strip';
@@ -1747,19 +1830,37 @@
     }
 
     // Daily charts showing the 7-day average instead of each day's figure.
-    // Each person's own choice, kept in their browser, like collapsed rows.
+    // Each person's own choice, saved against their login on the server like
+    // collapsed rows, so it follows them to any browser.
     const ROLLING_KEY = 'kpiRolling7';
-    function rollingRows() {
-        try { return new Set(JSON.parse(localStorage.getItem(ROLLING_KEY) || '[]')); }
-        catch (e) { return new Set(); }
+    let rollingSet = new Set();
+    function loadRollingRows(rows) {
+        rollingSet = new Set(rows);
+        // Choices made before this was saved on the server were kept in the
+        // browser; carry them over once.
+        let local = [];
+        try { local = JSON.parse(localStorage.getItem(ROLLING_KEY) || '[]'); } catch (e) {}
+        if (local.length) {
+            local.forEach(id => rollingSet.add(id));
+            try { localStorage.removeItem(ROLLING_KEY); } catch (e) {}
+            saveRollingRows();
+        }
     }
-    function rollingOn(id) { return rollingRows().has(id); }
+    function rollingOn(id) { return rollingSet.has(id); }
+    function saveRollingRows() {
+        fetch(BASE_URL + '/kpi/rolling-rows', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ rows: [...rollingSet] }),
+        }).then(r => r.json()).then(j => {
+            if (j.status !== 'ok') console.error('7-day average save failed: ' + j.message);
+        }).catch(err => console.error('7-day average save failed', err));
+    }
 
     function setRolling(id, on) {
         if (rollingOn(id) === on) return;
-        const set = rollingRows();
-        if (on) set.add(id); else set.delete(id);
-        try { localStorage.setItem(ROLLING_KEY, JSON.stringify([...set])); } catch (e) {}
+        if (on) rollingSet.add(id); else rollingSet.delete(id);
+        saveRollingRows();
         const row = findRow(id);
         if (row) rebuildCustomRow(row, false);
     }
@@ -3539,9 +3640,44 @@
         if (!items.length) return '';
         const options = items.map(m =>
             `<option value="${escHtml(metricKey(m.source, m.column))}">${escHtml(metricOptionText(m.source, m.column))}</option>`).join('');
-        const label = { snowflake: 'Snowflake - daily_summary', sharepoint: 'SharePoint - Daily Spend and Enquiries',
-                        autotrader: 'Autotrader Costs' }[source] || source;
-        return `<optgroup label="${label}">${options}</optgroup>`;
+        return `<optgroup label="${escHtml(sourceLabel(source))}">${options}</optgroup>`;
+    }
+
+    // Every source in the metric lists, in order: the built-in ones, then
+    // each Settings > Data Sources table in the order added.
+    function metricSources() {
+        const sources = ['snowflake', 'sharepoint', 'autotrader'];
+        metricsCatalogue.forEach(m => { if (!sources.includes(m.source)) sources.push(m.source); });
+        return sources;
+    }
+
+    function sourceLabel(source) {
+        const builtIn = { snowflake: 'Snowflake - daily_summary', sharepoint: 'SharePoint - Daily Spend and Enquiries',
+                          autotrader: 'Autotrader Costs' }[source];
+        if (builtIn) return builtIn;
+        const m = metricsCatalogue.find(c => c.source === source);
+        return m && m.source_name ? m.source_name : source;
+    }
+
+    // Every source's group of options, built by group(source).
+    function allMetricGroups(group = metricGroupHtml) {
+        return metricSources().map(group).join('');
+    }
+
+    // Edit Chart's metric search: hides the options that do not contain the
+    // typed text (in the name or the raw column), and empty groups with them.
+    function filterMetricSelect(text) {
+        const needle = String(text || '').trim().toLowerCase();
+        const select = document.getElementById('metricSelect');
+        select.querySelectorAll('optgroup').forEach(g => {
+            let shown = 0;
+            g.querySelectorAll('option').forEach(o => {
+                const hit = !needle || o.textContent.toLowerCase().includes(needle) || o.selected;
+                o.hidden = !hit;
+                if (hit) shown++;
+            });
+            g.hidden = !shown;
+        });
     }
 
     function rowFormula(row) {
@@ -3589,9 +3725,9 @@
                 const opOptions = PLUS_OPS.map(([v, label]) =>
                     `<option value="${v}" ${(ops[i] || '+') === v ? 'selected' : ''}>${escHtml(label)}</option>`).join('');
                 return `<div class="plus-row">
-                    <select class="plus-op" title="How this metric joins the ones before it" onchange="setPlusOp('${side}', ${i}, this.value)">${opOptions}</select>
+                    <select class="plus-op" title="How this metric joins the ones before it: + plus, - minus, * times, / divided by" onchange="setPlusOp('${side}', ${i}, this.value)">${opOptions}</select>
                     <select onchange="setPlus('${side}', ${i}, this.value)">
-                        <option value="">(choose a metric)</option>${missing}${metricGroupHtml('snowflake')}${metricGroupHtml('sharepoint')}${metricGroupHtml('autotrader')}
+                        <option value="">(choose a metric)</option>${missing}${allMetricGroups()}
                     </select>
                     <button type="button" class="btn btn-sm" title="Remove" onclick="removePlus('${side}', ${i})"><i class="fas fa-times"></i></button>
                 </div>`;
@@ -3645,8 +3781,8 @@
         // Metric list. Can be changed on an existing chart (e.g. a copy pointed
         // at another metric); the chart then uses the new metric's targets.
         const metricSelect = document.getElementById('metricSelect');
-        const group = metricGroupHtml;
-        metricSelect.innerHTML = group('snowflake') + group('sharepoint') + group('autotrader');
+        metricSelect.innerHTML = allMetricGroups();
+        document.getElementById('metricSearch').value = '';
         if (row && !metricsByKey[metricKey(rowSource(row), row.metric)]) {
             // The column has gone from the list; keep it showing for this chart.
             metricSelect.insertAdjacentHTML('afterbegin',
@@ -3657,8 +3793,7 @@
         // Unlike the metric it can change later — a ratio chart's target is
         // stored on the chart, not on either metric.
         const divideSelect = document.getElementById('divideSelect');
-        divideSelect.innerHTML = '<option value="">(nothing - plain chart)</option>'
-            + group('snowflake') + group('sharepoint') + group('autotrader');
+        divideSelect.innerHTML = '<option value="">(nothing - plain chart)</option>' + allMetricGroups();
         const divideKey = row && row.divide_by
             ? metricKey(row.divide_by.source || 'snowflake', row.divide_by.metric) : '';
         if (divideKey && !metricsByKey[divideKey]) {
@@ -3669,8 +3804,7 @@
 
         // Multiplied-by list: the same metrics, plus "nothing".
         const multiplySelect = document.getElementById('multiplySelect');
-        multiplySelect.innerHTML = '<option value="">(nothing)</option>'
-            + group('snowflake') + group('sharepoint') + group('autotrader');
+        multiplySelect.innerHTML = '<option value="">(nothing)</option>' + allMetricGroups();
         const multiplyKey = row && row.multiply_by
             ? metricKey(row.multiply_by.source || 'snowflake', row.multiply_by.metric) : '';
         if (multiplyKey && !metricsByKey[multiplyKey]) {
@@ -4245,14 +4379,14 @@
         const group = source => {
             const items = metricsCatalogue.filter(m => m.source === source);
             if (!items.length) return '';
-            return `<optgroup label="${source === 'snowflake' ? 'Snowflake - daily_summary' : 'SharePoint'}">`
+            return `<optgroup label="${escHtml(sourceLabel(source))}">`
                 + items.map(m => {
                     const k = metricKey(m.source, m.column);
                     return `<option value="${escHtml(k)}" ${k === key ? 'selected' : ''}>${escHtml(metricOptionText(m.source, m.column))}</option>`;
                 }).join('') + '</optgroup>';
         };
         const missing = key && !metricsByKey[key] ? `<option value="${escHtml(key)}" selected>${escHtml(s.metric)}</option>` : '';
-        return `<option value="">${blank}</option>` + missing + group('snowflake') + group('sharepoint') + group('autotrader');
+        return `<option value="">${blank}</option>` + missing + allMetricGroups(group);
     }
 
     function renderSeriesList() {
@@ -4712,7 +4846,7 @@
     // Watched rather than read once: the Top Bar Size setting and window
     // width both change it.
     (function trackTopBarHeight() {
-        const bar = document.getElementById('kpiTopBar');
+        const bar = document.querySelector('.kpi-top-bar');
         const set = () => document.documentElement.style.setProperty(
             '--kpi-top-bar-h', bar.getBoundingClientRect().height + 'px');
         new ResizeObserver(set).observe(bar);
@@ -5549,11 +5683,11 @@
             const group = source => {
                 const items = metricsCatalogue.filter(m => m.source === source);
                 if (!items.length) return '';
-                return `<optgroup label="${source === 'snowflake' ? 'Snowflake - daily_summary' : 'SharePoint'}">`
+                return `<optgroup label="${escHtml(sourceLabel(source))}">`
                     + items.map(m => `<option value="${escHtml(metricKey(m.source, m.column))}">${escHtml(m.column)}</option>`).join('')
                     + '</optgroup>';
             };
-            return '<option value="">(choose a column)</option>' + missing + group('snowflake') + group('sharepoint') + group('autotrader');
+            return '<option value="">(choose a column)</option>' + missing + allMetricGroups(group);
         };
         const list = document.getElementById('namesList');
         list.innerHTML = namesDraft.map((n, i) => `
@@ -5587,6 +5721,301 @@
         return names;
     }
 
+    // ── Data sources (Settings > Data Sources) ───────────────────────────────
+    // Snowflake tables whose metrics can be charted (kpi.py _data_sources).
+    // Each add, change or removal saves straight away, not with Save, and the
+    // metric lists are read again so the new metrics show in Edit Chart.
+    const DS_DATE_TYPES = ['DATE', 'TIMESTAMP_NTZ', 'TIMESTAMP_LTZ', 'TIMESTAMP_TZ', 'TIMESTAMP'];
+    const DS_NUMBER_TYPES = ['NUMBER', 'FLOAT', 'DECIMAL', 'NUMERIC', 'INT', 'INTEGER', 'BIGINT', 'DOUBLE', 'REAL'];
+    // tables: null until first read (only when the form opens, as listing
+    // every table takes a few seconds), then kept for the visit.
+    const dsState = { builtIn: [], sources: [], uses: {}, tables: null, columns: [], editId: null, busy: 0 };
+    const DS_SPINNER = '<i class="fas fa-spinner fa-spin"></i> ';
+
+    async function loadDataSourcesTab() {
+        const list = document.getElementById('dataSourceList');
+        list.innerHTML = `<div class="point-status" style="padding:2px 0 6px;">${DS_SPINNER}Loading data sources...</div>`;
+        document.getElementById('dataSourceBuiltIn').innerHTML = '';
+        try {
+            const resp = await fetch(BASE_URL + '/kpi/data-sources').then(r => r.json());
+            if (resp.status !== 'ok') throw new Error(resp.message || 'The data sources could not be read');
+            dsState.builtIn = resp.built_in || [];
+            dsState.sources = resp.sources || [];
+            dsState.uses = resp.uses || {};
+        } catch (err) {
+            list.innerHTML = `<div class="point-status" style="padding:2px 0 6px;">${escHtml(err.message)}</div>`;
+            return;
+        }
+        renderDataSourceList();
+    }
+
+    // What the form is waiting for, shown above it with a spinner. While
+    // anything is loading the boxes and the Add button are disabled, so the
+    // form never looks ready when it is not.
+    function setDataSourceBusy(message) {
+        dsState.busy += message ? 1 : -1;
+        const status = document.getElementById('dataSourceStatus');
+        if (message) status.innerHTML = DS_SPINNER + escHtml(message);
+        else if (dsState.busy <= 0) { dsState.busy = 0; status.innerHTML = ''; }
+        const busy = dsState.busy > 0;
+        document.querySelectorAll('#dataSourceForm select, #dataSourceForm input').forEach(el => { el.disabled = busy; });
+        document.getElementById('dataSourceSaveBtn').disabled = busy;
+    }
+
+    async function loadDataSourceTables() {
+        if (dsState.tables) return;
+        fillDsSelect('dsTable', [], '', 'Loading tables...');
+        setDataSourceBusy('Loading the table list from Snowflake...');
+        try {
+            const resp = await fetch(BASE_URL + '/kpi/data-sources/tables').then(r => r.json());
+            if (resp.status !== 'ok') throw new Error(resp.message || 'The table list could not be read');
+            dsState.tables = resp.tables || [];
+        } catch (err) {
+            showDataSourceError(err.message);
+        } finally {
+            setDataSourceBusy('');
+        }
+    }
+
+    function openDataSourceForm() {
+        document.getElementById('dataSourceForm').style.display = '';
+        document.getElementById('dataSourceOpenBtn').style.display = 'none';
+        resetDataSourceForm();
+        document.getElementById('dsName').focus();
+    }
+
+    function closeDataSourceForm() {
+        dsState.editId = null;
+        document.getElementById('dataSourceForm').style.display = 'none';
+        document.getElementById('dataSourceOpenBtn').style.display = '';
+        showDataSourceError('');
+    }
+
+    // "12 metrics, used in 3 places"
+    function dsCounts(metrics, uses) {
+        const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
+        return `${plural(metrics, 'metric')}, ${uses ? `used in ${plural(uses, 'place')}` : 'not used yet'}`;
+    }
+
+    // One built-in source (read only). SharePoint is one source made of every
+    // KPI spreadsheet, so its files are listed under it with no counts of
+    // their own.
+    function builtInRowHtml(s) {
+        const files = (s.files || []).map(f =>
+            `<div class="ds-file">${escHtml(f.name)} <span class="ds-tag ${f.enabled ? 'on' : 'off'}">${f.enabled ? 'On' : 'Off'}</span></div>`).join('');
+        const manage = s.id === 'sharepoint'
+            ? `<a class="btn btn-sm" href="${BASE_URL}/settings/section/sharepoint" target="_blank" rel="noopener"
+                  title="Add, change or switch spreadsheets on and off"><i class="fas fa-external-link-alt"></i> SharePoint Settings</a>`
+            : '<span class="ds-tag off" title="Built into the page: cannot be changed or removed">Built In</span>';
+        return `<div class="ds-row">
+            <strong>${escHtml(s.name)}</strong>
+            <span class="ds-detail">${escHtml(s.detail)} - ${escHtml(dsCounts(s.metrics, s.uses))}</span>
+            ${manage}<span></span>
+        </div>${files ? `<div class="ds-files">${files}</div>` : ''}`;
+    }
+
+    // Daily Summary heads the Snowflake box; SharePoint and Autotrader Costs
+    // each get a box of their own.
+    function renderDataSourceBuiltIn() {
+        const find = id => dsState.builtIn.find(s => s.id === id);
+        const sp = find('sharepoint'), at = find('autotrader');
+        if (!sp && !at) {
+            document.getElementById('dataSourceBuiltIn').innerHTML =
+                '<div class="point-status" style="padding:2px 0 6px;">The built-in sources could not be read. The server may need restarting to pick up the latest code.</div>';
+            return;
+        }
+        const spFiles = sp ? (sp.files || []).map(f => `<div class="ds-row">
+                <strong>${escHtml(f.name)}</strong>
+                <span class="ds-detail">KPI spreadsheet</span>
+                <span class="ds-tag ${f.enabled ? 'on' : 'off'}">${f.enabled ? 'On' : 'Off'}</span><span></span>
+            </div>`).join('') || '<div class="point-status" style="padding:2px 0 6px;">No KPI spreadsheets set up.</div>' : '';
+        const spBox = sp ? `<div class="ds-section">
+            <div class="ds-section-head">
+                <span><i class="fas fa-file-excel"></i> SharePoint Spreadsheets</span>
+                <a class="btn btn-edit btn-sm" href="${BASE_URL}/settings/section/sharepoint" target="_blank" rel="noopener"
+                   title="Add, change or switch spreadsheets on and off"><i class="fas fa-external-link-alt"></i> SharePoint Settings</a>
+            </div>
+            <div class="ds-section-sub">Added and switched on or off in Settings > SharePoint. Charts read them as one source:
+                ${escHtml(dsCounts(sp.metrics, sp.uses))} across all of them.</div>
+            ${spFiles}
+        </div>` : '';
+        const atBox = at ? `<div class="ds-section">
+            <div class="ds-section-head">
+                <span><i class="fas fa-car"></i> Autotrader Costs</span>
+                <span class="ds-tag off" title="Built into the page: cannot be changed or removed">Built In</span>
+            </div>
+            <div class="ds-section-sub">${escHtml(at.detail)}: ${escHtml(dsCounts(at.metrics, at.uses))}.</div>
+        </div>` : '';
+        document.getElementById('dataSourceBuiltIn').innerHTML = spBox + atBox;
+    }
+
+    function renderDataSourceList() {
+        renderDataSourceBuiltIn();
+        const dailySummary = dsState.builtIn.find(s => s.id === 'snowflake');
+        document.getElementById('dataSourceList').innerHTML = (dailySummary ? builtInRowHtml(dailySummary) : '') + dsState.sources.map(s => {
+            const uses = dsState.uses[s.id] || 0;
+            const detail = s.shape === 'long'
+                ? `${s.table} - one row per date per ${s.split_column}, figures from ${s.value_column}`
+                : `${s.table} - one row per date`;
+            const used = uses ? ` - used in ${uses} place${uses === 1 ? '' : 's'}` : '';
+            return `<div class="ds-row">
+                <strong>${escHtml(s.name)}</strong>
+                <span class="ds-detail">${escHtml(detail + used)}</span>
+                <button type="button" class="btn btn-sm" title="Edit or rename" onclick="editDataSource('${escHtml(s.id)}')"><i class="fas fa-pen"></i></button>
+                <button type="button" class="btn btn-remove-chart" ${uses ? 'disabled' : ''}
+                        title="${uses ? 'Used by a chart: change or remove those charts first' : 'Remove'}"
+                        onclick="deleteDataSource('${escHtml(s.id)}')"><i class="fas fa-trash"></i></button>
+            </div>`;
+        }).join('') + (dsState.sources.length ? ''
+            : '<div class="point-status" style="padding:2px 0 6px;">No tables added yet.</div>');
+    }
+
+    function showDataSourceError(message) {
+        const el = document.getElementById('dataSourceError');
+        el.textContent = message || '';
+        el.classList.toggle('show', !!message);
+    }
+
+    function fillDsSelect(id, values, value, blank) {
+        const select = document.getElementById(id);
+        select.innerHTML = `<option value="">${escHtml(blank)}</option>`
+            + values.map(v => `<option value="${escHtml(v)}">${escHtml(v)}</option>`).join('');
+        select.value = values.includes(value) ? value : '';
+    }
+
+    async function resetDataSourceForm() {
+        dsState.editId = null;
+        dsState.columns = [];
+        showDataSourceError('');
+        document.getElementById('dataSourceFormTitle').textContent = 'Add Data Source';
+        document.getElementById('dataSourceSaveBtn').innerHTML = '<i class="fas fa-plus"></i> Add';
+        document.getElementById('dsName').value = '';
+        document.getElementById('dsShape').value = 'wide';
+        renderDataSourceColumns();
+        await loadDataSourceTables();
+        if (dsState.editId) return;   // an edit was opened while the list loaded
+        fillDsSelect('dsTable', dsState.tables || [], '', '(choose a table)');
+    }
+
+    async function editDataSource(id) {
+        const s = dsState.sources.find(x => x.id === id);
+        if (!s) return;
+        document.getElementById('dataSourceForm').style.display = '';
+        document.getElementById('dataSourceOpenBtn').style.display = 'none';
+        dsState.editId = id;
+        showDataSourceError('');
+        document.getElementById('dataSourceFormTitle').textContent = `Edit ${s.name}`;
+        document.getElementById('dataSourceSaveBtn').innerHTML = '<i class="fas fa-save"></i> Save';
+        document.getElementById('dsName').value = s.name;
+        document.getElementById('dsShape').value = s.shape;
+        await loadDataSourceTables();
+        const all = dsState.tables || [];
+        fillDsSelect('dsTable', all.includes(s.table) ? all : [s.table, ...all], s.table, '(choose a table)');
+        loadDataSourceColumns(s.table, s);
+    }
+
+    // The chosen table's columns, read live so new columns show straight away.
+    async function loadDataSourceColumns(table, keep = null) {
+        dsState.columns = [];
+        showDataSourceError('');
+        if (table) {
+            ['dsDate', 'dsSplit', 'dsValue'].forEach(id => fillDsSelect(id, [], '', 'Loading columns...'));
+            setDataSourceBusy(`Loading the columns of ${table}...`);
+            try {
+                const resp = await fetch(BASE_URL + '/kpi/data-sources/columns?table=' + encodeURIComponent(table)).then(r => r.json());
+                if (resp.status !== 'ok') throw new Error(resp.message || 'The columns could not be read');
+                dsState.columns = resp.columns || [];
+            } catch (err) {
+                showDataSourceError(err.message);
+            } finally {
+                setDataSourceBusy('');
+            }
+        }
+        renderDataSourceColumns(keep);
+    }
+
+    // Date, name and value column lists for the chosen table and layout.
+    // keep: the entry being edited, whose columns are chosen; otherwise the
+    // usual names (DT / DATE, EVENT_NAME) are picked where the table has them.
+    function renderDataSourceColumns(keep = null) {
+        const long = document.getElementById('dsShape').value === 'long';
+        document.querySelectorAll('#setGroupDataSources .ds-long-only').forEach(el => { el.style.display = long ? '' : 'none'; });
+        const cols = dsState.columns;
+        const dates = cols.filter(c => DS_DATE_TYPES.includes(c.type)).map(c => c.column);
+        const numbers = cols.filter(c => DS_NUMBER_TYPES.includes(c.type)).map(c => c.column);
+        const all = cols.map(c => c.column);
+        const current = id => document.getElementById(id).value;
+        const pick = (id, list, field, guesses) => {
+            const wanted = keep ? keep[field] : (list.includes(current(id)) ? current(id) : guesses.find(g => list.includes(g)) || list[0]);
+            return wanted || '';
+        };
+        fillDsSelect('dsDate', dates, pick('dsDate', dates, 'date_column', ['DT', 'DATE']), '(choose the date column)');
+        const date = current('dsDate');
+        const names = all.filter(c => c !== date);
+        fillDsSelect('dsSplit', names, pick('dsSplit', names, 'split_column', ['EVENT_NAME']), '(choose the name column)');
+        const values = numbers.filter(c => c !== date && c !== current('dsSplit'));
+        fillDsSelect('dsValue', values, pick('dsValue', values, 'value_column', ['EVENT_VOLUME']), '(choose the value column)');
+    }
+
+    // Reads the metric lists again, e.g. after a data source is added.
+    async function reloadMetricsCatalogue() {
+        const resp = await fetch(BASE_URL + '/kpi/metrics').then(r => r.json());
+        if (resp.status !== 'ok') return;
+        metricsCatalogue = resp.metrics || [];
+        metricsByKey = Object.fromEntries(metricsCatalogue.map(m => [metricKey(m.source, m.column), m]));
+        renderNamesDraft();
+    }
+
+    async function saveDataSource() {
+        const long = document.getElementById('dsShape').value === 'long';
+        const entry = {
+            name: document.getElementById('dsName').value.trim(),
+            table: document.getElementById('dsTable').value,
+            shape: long ? 'long' : 'wide',
+            date_column: document.getElementById('dsDate').value,
+        };
+        if (long) {
+            entry.split_column = document.getElementById('dsSplit').value;
+            entry.value_column = document.getElementById('dsValue').value;
+        }
+        if (dsState.editId) entry.id = dsState.editId;
+        showDataSourceError('');
+        setDataSourceBusy(`Checking ${entry.table || 'the table'} and saving...`);
+        let saved = false;
+        try {
+            const resp = await fetch(BASE_URL + '/kpi/data-sources', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ source: entry }),
+            }).then(r => r.json());
+            if (resp.status !== 'ok') throw new Error(resp.message || 'The data source could not be saved');
+            saved = true;
+        } catch (err) {
+            showDataSourceError(err.message);
+        } finally {
+            setDataSourceBusy('');
+        }
+        if (!saved) return;
+        closeDataSourceForm();
+        await loadDataSourcesTab();
+        await reloadMetricsCatalogue();
+    }
+
+    async function deleteDataSource(id) {
+        const s = dsState.sources.find(x => x.id === id);
+        if (!s || !confirm(`Remove the data source ${s.name}?`)) return;
+        try {
+            const resp = await fetch(BASE_URL + '/kpi/data-sources?id=' + encodeURIComponent(id), { method: 'DELETE' })
+                .then(r => r.json());
+            if (resp.status !== 'ok') throw new Error(resp.message || 'The data source could not be removed');
+            if (dsState.editId === id) closeDataSourceForm();
+            await loadDataSourcesTab();
+            await reloadMetricsCatalogue();
+        } catch (err) {
+            showDataSourceError(err.message);
+        }
+    }
+
     // Settings tabs. The popup reopens on the tab last used this visit.
     let settingsTab = 'setGroupCharts';
 
@@ -5595,6 +6024,7 @@
         // Picks up section names typed on the Sections tab.
         if (id === 'setGroupCharts') renderChartDraft();
         if (id === 'setGroupTargets') loadTargetsTab();
+        if (id === 'setGroupDataSources') loadDataSourcesTab();
         document.querySelectorAll('#settingsModal .settings-pane').forEach(p => p.classList.toggle('active', p.id === id));
         document.querySelectorAll('#settingsModal .settings-tabs > button').forEach(b => b.classList.toggle('active', b.dataset.tab === id));
         // A tab with sub-sections opens them out under it in the menu.

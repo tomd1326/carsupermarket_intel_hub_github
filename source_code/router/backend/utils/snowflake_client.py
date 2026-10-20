@@ -33,7 +33,10 @@ from __future__ import annotations
 from typing import Optional, Sequence, Any, Tuple, List
 
 import logging
+import time
 import snowflake.connector
+
+from utils import app_log
 
 # Re-using the existing Secrets Manager utility already in this project.
 # NOTE: V1's get_secret() only accepts a single argument (secret_name).
@@ -117,6 +120,8 @@ class SnowflakeClient:
         cfg = {k: v for k, v in self._cfg.items() if v is not None}
         self._conn = snowflake.connector.connect(
             client_session_keep_alive=True,  # Prevents Lambda idle timeouts dropping the connection mid-run
+            # Shows the page and endpoint in Snowflake's own query history too.
+            session_parameters={"QUERY_TAG": app_log.query_tag()},
             **cfg
         )
         logger.debug("Snowflake connection opened")
@@ -132,7 +137,8 @@ class SnowflakeClient:
     # Query execution
     # ------------------------------------------------------------------
 
-    def execute(self, sql: str, params: Optional[Sequence[Any]] = None) -> Tuple[List[tuple], List[str]]:
+    def execute(self, sql: str, params: Optional[Sequence[Any]] = None,
+                log: bool = True) -> Tuple[List[tuple], List[str]]:
         """
         Execute a SQL query and return raw results.
 
@@ -140,6 +146,9 @@ class SnowflakeClient:
             sql:    SQL string. Use %s as the placeholder for parameters.
             params: Optional list/tuple of values bound to the %s placeholders.
                     Always use this instead of f-strings to avoid SQL injection.
+            log:    Record the statement on the Logs page (utils/app_log.py).
+                    Only the start of the SQL is stored, never the params.
+                    The Logs page turns it off for its own lookups.
 
         Returns:
             rows: list of tuples, one per result row.
@@ -157,13 +166,27 @@ class SnowflakeClient:
                 "or call snowflake_client.connect() first."
             )
         cur = self._conn.cursor()
+        started = time.monotonic()
+        rows = None
+        error: Optional[BaseException] = None
         try:
             cur.execute(sql, params or [])
             rows = cur.fetchall()
             # cur.description is None for non-SELECT statements (INSERT, UPDATE etc.)
             cols = [d[0] for d in cur.description] if cur.description else []
             return rows, cols
+        except BaseException as e:
+            error = e
+            raise
         finally:
+            if log:
+                try:
+                    app_log.record_snowflake(
+                        sql, getattr(cur, "sfqid", None),
+                        int((time.monotonic() - started) * 1000),
+                        len(rows) if rows is not None else None, error)
+                except Exception:
+                    pass  # logging must never change the query's outcome
             cur.close()  # Always release the cursor
 
     def execute_df(self, sql: str, params: Optional[Sequence[Any]] = None):

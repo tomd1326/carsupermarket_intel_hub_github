@@ -1,4 +1,4 @@
-{% from '_navigation.html' import account_nav with context %}
+{% from '_navigation.html' import page_header with context %}
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -15,19 +15,17 @@
         @font-face { font-family: 'DM Sans'; src: url('{{ BASE_URL }}/static/fonts/DMSans-SemiBold.ttf'); font-weight: 600; }
         @font-face { font-family: 'DM Sans'; src: url('{{ BASE_URL }}/static/fonts/DMSans-Bold.ttf');     font-weight: 700; }
         body, button, input, select, textarea { font-family: 'DM Sans', system-ui, sans-serif; }
-        body { background-color: #003c57; min-height: 100vh; }
+        body { background-color: var(--c-page-bg); color: var(--c-text); min-height: 100vh; }
 
-        .page-wrap { min-height: 100vh; padding: 48px 32px 64px; }
-        .brand-logo { width: 48px; height: 48px; border-radius: 10px; }
-        .page-title { color: #ffffff; font-weight: 600; font-size: 1.5rem; letter-spacing: -0.2px; }
-        .card { border: none; border-radius: 12px; box-shadow: 0 4px 24px rgba(0,0,0,0.18); }
+        .page-wrap { padding: 24px 32px 64px; }
+        .card { border: 1px solid var(--c-border); border-radius: var(--radius-lg); box-shadow: none; }
         .card-body { padding: 24px 28px; }
 
         textarea { resize: vertical; font-size: 0.68rem; font-family: 'DM Sans', monospace; }
         .btn-process {
-            background-color: #7ed321;
+            background-color: var(--c-primary);
             border: none;
-            color: #0d3d5f;
+            color: var(--c-surface);
             font-weight: 700;
             font-size: 1rem;
             padding: 11px 0;
@@ -35,11 +33,11 @@
             width: 100%;
             transition: background 0.15s;
         }
-        .btn-process:hover { background-color: #6cba18; color: #0d3d5f; }
+        .btn-process:hover { background-color: var(--c-primary-hover); color: var(--c-surface); }
         .btn-process:disabled { opacity: 0.6; cursor: not-allowed; }
 
         .progress { height: 8px; border-radius: 6px; }
-        .progress-bar { background-color: #7ed321; }
+        .progress-bar { background-color: var(--c-primary); }
 
         .history-empty { color: #adb5bd; font-size: 0.88rem; }
         .history-loading { color: #adb5bd; font-size: 0.88rem; }
@@ -93,16 +91,9 @@
     </style>
 </head>
 <body>
-    {{ account_nav(user) }}
+    {{ page_header(page_name('keeper_change'), user) }}
 
     <div class="page-wrap">
-        <div class="d-flex align-items-center gap-3 mb-4">
-            <img src="{{ BASE_URL }}/static/icon.png" alt="" class="brand-logo">
-            <h1 class="page-title mb-0">{{ page_name('keeper_change') }}</h1>
-            <a href="javascript:history.back()" class="btn btn-outline-secondary nav-btn">
-                <i class="fas fa-arrow-left me-1"></i>Back
-            </a>
-        </div>
 
         <div class="row g-4 align-items-stretch">
 

@@ -21,6 +21,7 @@ from utils.db_utils import (get_database_connection, get_prod_pricer_connection,
 from utils.snowflake_client import SnowflakeClient
 from utils import sharepoint_sources
 from utils import at_invoices
+from utils import kpi_data_sources as kds
 
 from .core import (BASE_URL, templates, _track, get_current_user, is_admin,
                    require_page, require_page_api, _uk_now,
@@ -897,6 +898,8 @@ def kpi_ga4_campaign_conversion(
 
 #   autotrader - allowance and cost figures worked out from Settings > Autotrader
 #                (see _AT_METRICS)
+#   ds_...     - a Snowflake table added in Settings > Data Sources, by its id
+#                (see _data_sources and utils/kpi_data_sources.py)
 KPI_SOURCES = ("snowflake", "sharepoint", "autotrader")
 
 # daily_summary columns that are not metrics: the date itself, its text
@@ -915,35 +918,47 @@ _DS_COLUMNS_TTL = 600  # seconds
 # is picked up without a restart. Later requests with the same token reuse it.
 _ds_columns_refresh_token: str = ""
 
+# The page sends /kpi/metrics, /kpi/custom-data-batch and others at the same
+# moment. Without this lock each one finds a cache empty and runs the same
+# Snowflake lookup; with it the first one reads and the rest reuse the result.
+_meta_lock = threading.RLock()
+
 
 def _refresh_daily_summary_columns(token: str) -> None:
     global _ds_columns_cache, _ds_columns_refresh_token
     if token and token != _ds_columns_refresh_token:
         _ds_columns_refresh_token = token
         _ds_columns_cache = None
+        # Settings > Data Sources tables too: their columns and names.
+        _source_columns_cache.clear()
+        _source_names_cache.clear()
 
 
 def _get_daily_summary_column_types() -> list:
     global _ds_columns_cache, _ds_columns_cache_at
     if _ds_columns_cache is not None and time.time() - _ds_columns_cache_at < _DS_COLUMNS_TTL:
         return _ds_columns_cache
-    try:
-        with SnowflakeClient() as sf:
-            rows, _ = sf.execute("""
-                SELECT column_name, data_type
-                FROM PROD_CARSUPERMARKET_DB.INFORMATION_SCHEMA.COLUMNS
-                WHERE table_schema = 'PRODUCT_SLT_KPIS' AND table_name = 'DAILY_SUMMARY'
-                ORDER BY ordinal_position
-            """)
-        _ds_columns_cache = [(str(r[0]).upper(), str(r[1]).upper()) for r in rows]
-        _ds_columns_cache_at = time.time()
-    except Exception as e:
-        logger.warning("daily_summary column discovery failed: %s", e)
-        if _ds_columns_cache is None:
-            # No list yet: return none rather than a guessed one. The read
-            # time stays 0, so the next request tries again.
-            return []
-    return _ds_columns_cache
+    with _meta_lock:
+        # Another request may have read it while this one waited.
+        if _ds_columns_cache is not None and time.time() - _ds_columns_cache_at < _DS_COLUMNS_TTL:
+            return _ds_columns_cache
+        try:
+            with SnowflakeClient() as sf:
+                rows, _ = sf.execute("""
+                    SELECT column_name, data_type
+                    FROM PROD_CARSUPERMARKET_DB.INFORMATION_SCHEMA.COLUMNS
+                    WHERE table_schema = 'PRODUCT_SLT_KPIS' AND table_name = 'DAILY_SUMMARY'
+                    ORDER BY ordinal_position
+                """)
+            _ds_columns_cache = [(str(r[0]).upper(), str(r[1]).upper()) for r in rows]
+            _ds_columns_cache_at = time.time()
+        except Exception as e:
+            logger.warning("daily_summary column discovery failed: %s", e)
+            if _ds_columns_cache is None:
+                # No list yet: return none rather than a guessed one. The read
+                # time stays 0, so the next request tries again.
+                return []
+        return _ds_columns_cache
 
 
 def _get_daily_summary_columns() -> set:
@@ -988,10 +1003,21 @@ def _sharepoint_metric_columns() -> list:
 
 def _validate_metric(source: str, metric: str) -> str | None:
     """Returns an error message, or None when the source/metric pair is valid."""
-    if source not in KPI_SOURCES:
+    entry = _data_source(source)
+    if entry is None and source not in KPI_SOURCES:
         return f"Unknown source: {source}"
     if not isinstance(metric, str) or not metric.strip():
         return "Missing metric"
+    if entry is not None:
+        # A wide table's metric is a column name that goes into the SQL, so it
+        # is always checked against the live list.
+        try:
+            names = _data_source_metrics(entry)
+        except Exception as e:
+            return f"{entry['name']}: {e}"
+        if metric not in names:
+            return f"Unknown metric in {entry['name']}: {metric}"
+        return None
     if source == "snowflake":
         if metric not in _snowflake_metric_columns():
             return f"Unknown metric: {metric}"
@@ -1008,6 +1034,267 @@ def _validate_metric(source: str, metric: str) -> str | None:
         if len(metric) > 200:
             return "Metric name is too long"
     return None
+
+
+# ── KPI data sources (Settings > Data Sources) ───────────────────────────────
+# Snowflake tables added on the page, admin only. The list is stored in
+# kpi_layout under 'data_sources'; a chart names one by its id as its source.
+# See utils/kpi_data_sources.py for the two table shapes.
+#
+# Targets: fixed and per-date targets and N-1 work on these as on every other
+# source. A <METRIC>_TARGET column and Weight By stay daily_summary only.
+
+_DATA_SOURCES_KEY = 'data_sources'
+_DATA_SOURCES_TTL = 60       # seconds; a save clears it straight away
+_SOURCE_META_TTL = 600       # columns and names; Load Data clears them too
+_data_sources_cache: list | None = None
+_data_sources_cache_at: float = 0.0
+_source_columns_cache: dict = {}   # table -> (read at, {COLUMN: type})
+_source_names_cache: dict = {}     # source id -> (read at, [metric names])
+
+
+def _clear_data_source_caches() -> None:
+    global _data_sources_cache
+    _data_sources_cache = None
+    _source_columns_cache.clear()
+    _source_names_cache.clear()
+
+
+def _stored_data_sources() -> list:
+    stored = _read_kpi_layout_value(_DATA_SOURCES_KEY)
+    if not isinstance(stored, list):
+        return []
+    return [s for s in stored if isinstance(s, dict) and kds.is_source_id(s.get("id"))]
+
+
+def _data_sources() -> list:
+    """Every Settings > Data Sources entry, in the order added."""
+    global _data_sources_cache, _data_sources_cache_at
+    if _data_sources_cache is not None and time.time() - _data_sources_cache_at < _DATA_SOURCES_TTL:
+        return _data_sources_cache
+    try:
+        _data_sources_cache = _stored_data_sources()
+        _data_sources_cache_at = time.time()
+    except Exception as e:
+        logger.warning("KPI data sources read failed: %s", e)
+        return _data_sources_cache or []
+    return _data_sources_cache
+
+
+def _data_source(source) -> dict | None:
+    """The entry for a ds_... source id, or None for any other source."""
+    if not kds.is_source_id(source):
+        return None
+    return next((s for s in _data_sources() if s["id"] == source), None)
+
+
+def _allowed_source_table(table) -> bool:
+    return (isinstance(table, str) and re.fullmatch(rf"{kds.IDENTIFIER}\.{kds.IDENTIFIER}", table) is not None
+            and table.split(".")[0].startswith(("COMPUTE_", "PRODUCT_")))
+
+
+def _source_columns(table: str) -> dict:
+    """{COLUMN: data_type} of a COMPUTE_ or PRODUCT_ table; {} if not found."""
+    if not _allowed_source_table(table):
+        return {}
+    cached = _source_columns_cache.get(table)
+    if cached and time.time() - cached[0] < _SOURCE_META_TTL:
+        return cached[1]
+    with _meta_lock:
+        cached = _source_columns_cache.get(table)
+        if cached and time.time() - cached[0] < _SOURCE_META_TTL:
+            return cached[1]
+        columns = dict(_vehicle_table_columns(table))
+        _source_columns_cache[table] = (time.time(), columns)
+        return columns
+
+
+def _checked_data_source(entry: dict) -> dict:
+    """The entry, once its table and columns are checked against the live
+    table (they go into the SQL). Raises with the reason when they are not."""
+    error = kds.validate_entry(entry, _source_columns(entry.get("table")), [])
+    if error:
+        raise ValueError(error)
+    return entry
+
+
+def _data_source_metrics(entry: dict) -> list:
+    """The metric names a data source offers: a wide table's number columns,
+    or every name in a long table's name column, as stored (case kept)."""
+    _checked_data_source(entry)
+    if entry["shape"] == "wide":
+        return kds.wide_metric_columns(entry, _source_columns(entry["table"]))
+    cached = _source_names_cache.get(entry["id"])
+    if cached and time.time() - cached[0] < _SOURCE_META_TTL:
+        return cached[1]
+    with _meta_lock:
+        cached = _source_names_cache.get(entry["id"])
+        if cached and time.time() - cached[0] < _SOURCE_META_TTL:
+            return cached[1]
+        split = entry["split_column"]
+        with SnowflakeClient() as sf:
+            rows, _ = sf.execute(f"""
+                SELECT DISTINCT {split}::VARCHAR
+                FROM {_VEHICLE_DB}.{entry['table']}
+                WHERE {split} IS NOT NULL
+                ORDER BY 1
+            """)
+        names = [str(r[0]) for r in rows]
+        _source_names_cache[entry["id"]] = (time.time(), names)
+        return names
+
+
+def _fetch_data_source(entry: dict, metrics: list, fetch_start, fetch_end) -> dict:
+    """{date: {metric: value}} for the given metrics of one data source, in
+    one query. Metrics not in its live list are left out."""
+    live = set(_data_source_metrics(entry))
+    metrics = [m for m in dict.fromkeys(metrics) if m in live]
+    if not metrics:
+        return {}
+    sql, params = kds.fetch_sql({**entry, "table": f"{_VEHICLE_DB}.{entry['table']}"},
+                                metrics, fetch_start, fetch_end)
+    with SnowflakeClient() as sf:
+        rows, names = sf.execute(sql, params)
+    return kds.rows_to_by_date(entry, metrics, rows, names)
+
+
+def _source_tables() -> list:
+    """Every table and view in the COMPUTE_ and PRODUCT_ schemas, as SCHEMA.TABLE."""
+    with SnowflakeClient() as sf:
+        rows, _ = sf.execute(f"""
+            SELECT table_schema, table_name
+            FROM {_VEHICLE_DB}.INFORMATION_SCHEMA.TABLES
+            WHERE table_schema LIKE %s ESCAPE '!' OR table_schema LIKE %s ESCAPE '!'
+            ORDER BY table_schema, table_name
+        """, list(kds.SCHEMA_PATTERNS))
+    return [f"{r[0]}.{r[1]}" for r in rows]
+
+
+def _data_source_uses(source_id: str) -> int:
+    """How many places in the saved layout use the source."""
+    return kds.references(_read_kpi_layout_value('layout') or {}, source_id)
+
+
+@router.get("/kpi/data-sources/tables")
+def kpi_data_source_tables(request: Request, user: str = Depends(require_page_api('kpi'))):
+    """The tables that can be added. Read only when the Add or edit form
+    opens, as listing every table takes a few seconds. Admin only."""
+    if not is_admin(user):
+        return {"status": "error", "message": "Only the admin can change the data sources"}
+    try:
+        return {"status": "ok", "tables": _source_tables()}
+    except Exception as e:
+        logger.error(f"KPI data source tables read failed: {e}")
+        return {"status": "error", "message": str(e)}
+
+
+@router.get("/kpi/data-sources/columns")
+def kpi_data_source_columns(request: Request, table: str, user: str = Depends(require_page_api('kpi'))):
+    """One table's columns, read live so new columns show straight away. Admin only."""
+    if not is_admin(user):
+        return {"status": "error", "message": "Only the admin can change the data sources"}
+    try:
+        _source_columns_cache.pop(table, None)
+        return {"status": "ok", "columns": [{"column": c, "type": t} for c, t in _source_columns(table).items()]}
+    except Exception as e:
+        logger.error(f"KPI data source columns read failed: {e}")
+        return {"status": "error", "message": str(e)}
+
+
+@router.get("/kpi/data-sources")
+def kpi_data_sources_get(request: Request, user: str = Depends(require_page_api('kpi'))):
+    """The built-in sources and the saved data sources, with how many places
+    use each. Admin only."""
+    if not is_admin(user):
+        return {"status": "error", "message": "Only the admin can change the data sources"}
+    try:
+        layout = _read_kpi_layout_value('layout') or {}
+        sources = _stored_data_sources()
+        uses = {s["id"]: kds.references(layout, s["id"]) for s in sources}
+        built_in = kds.built_in_sources(
+            {"snowflake": len(_snowflake_metric_columns()),
+             "sharepoint": len(_sharepoint_metric_columns()),
+             "autotrader": len([c for c in _AT_METRICS if c not in _AT_HIDDEN_METRICS])},
+            {s: kds.references(layout, s) for s in KPI_SOURCES},
+            sharepoint_sources.sources_of_type(sharepoint_sources.KPI_FILE_TYPE, enabled_only=False))
+    except Exception as e:
+        logger.error(f"KPI data sources read failed: {e}")
+        return {"status": "error", "message": str(e)}
+    return {"status": "ok", "built_in": built_in, "sources": sources, "uses": uses}
+
+
+@router.post("/kpi/data-sources")
+def kpi_data_source_save(request: Request, payload: dict, user: str = Depends(require_page_api('kpi'))):
+    """Adds a data source, or saves changes to one (by its id). Admin only."""
+    if not is_admin(user):
+        return {"status": "error", "message": "Only the admin can change the data sources"}
+    entry = (payload or {}).get("source")
+    if not isinstance(entry, dict):
+        return {"status": "error", "message": "bad data source"}
+    entry = dict(entry)
+    try:
+        sources = _stored_data_sources()
+        source_id = entry.get("id")
+        if source_id:
+            if not any(s["id"] == source_id for s in sources):
+                return {"status": "error", "message": "That data source no longer exists"}
+        else:
+            if len(sources) >= kds.SOURCES_MAX:
+                return {"status": "error", "message": f"At most {kds.SOURCES_MAX} data sources"}
+            entry["id"] = kds.new_id(str(entry.get("name") or ""), {s["id"] for s in sources})
+        table = entry.get("table")
+        if not _allowed_source_table(table):
+            return {"status": "error", "message": "Choose a COMPUTE_ or PRODUCT_ table"}
+        _source_columns_cache.pop(table, None)
+        columns = _source_columns(table)
+        others = [s for s in sources if s["id"] != entry["id"]]
+        error = kds.validate_entry(entry, columns, others)
+        if error:
+            return {"status": "error", "message": error}
+        if entry["shape"] == "wide":
+            # Each date must be one row, or a day's figure would be one of
+            # several rows picked at random.
+            d = entry["date_column"]
+            with SnowflakeClient() as sf:
+                rows, _ = sf.execute(f"SELECT COUNT(*) - COUNT(DISTINCT {d}::DATE) FROM {_VEHICLE_DB}.{table}")
+            if rows and rows[0][0]:
+                return {"status": "error", "message":
+                        f"{table} has more than one row for some dates. Choose One Row Per Date Per Name, "
+                        "or a table with one row per date"}
+        entry = kds.clean_entry(entry)
+        saved = [entry if s["id"] == entry["id"] else s for s in sources]
+        if entry not in saved:
+            saved.append(entry)
+        _write_kpi_layout_value(_DATA_SOURCES_KEY, saved)
+        _clear_data_source_caches()
+    except Exception as e:
+        logger.error(f"KPI data source save failed: {e}")
+        return {"status": "error", "message": str(e)}
+    return {"status": "ok", "source": entry, "sources": saved}
+
+
+@router.delete("/kpi/data-sources")
+def kpi_data_source_delete(request: Request, id: str, user: str = Depends(require_page_api('kpi'))):
+    """Removes a data source no chart uses. Admin only."""
+    if not is_admin(user):
+        return {"status": "error", "message": "Only the admin can change the data sources"}
+    try:
+        sources = _stored_data_sources()
+        entry = next((s for s in sources if s["id"] == id), None)
+        if entry is None:
+            return {"status": "error", "message": "That data source no longer exists"}
+        uses = _data_source_uses(id)
+        if uses:
+            return {"status": "error", "message":
+                    f"{entry['name']} is used in {uses} place{'s' if uses != 1 else ''} on the charts. "
+                    "Change or remove those charts first"}
+        saved = [s for s in sources if s["id"] != id]
+        _write_kpi_layout_value(_DATA_SOURCES_KEY, saved)
+        _clear_data_source_caches()
+    except Exception as e:
+        logger.error(f"KPI data source delete failed: {e}")
+        return {"status": "error", "message": str(e)}
+    return {"status": "ok", "sources": saved}
 
 
 # Sections are added, removed, renamed and reordered in the page's Settings
@@ -1053,6 +1340,22 @@ def kpi_metrics(request: Request, user: str = Depends(require_page_api('kpi'))):
             "has_n1": True,
             "has_target": False,
         })
+    for entry in _data_sources():
+        try:
+            names = _data_source_metrics(entry)
+        except Exception as e:
+            logger.warning("KPI data source %s metric list failed: %s", entry["id"], e)
+            continue
+        for col in names:
+            metrics.append({
+                "source": entry["id"],
+                "source_name": entry["name"],
+                "column": col,
+                "description": f"From {entry['table']}",
+                "suggested_agg": _guess_agg(col),
+                "has_n1": True,
+                "has_target": False,
+            })
     return {"status": "ok", "metrics": metrics}
 
 
@@ -1306,7 +1609,8 @@ def _custom_data(metric: str, agg: str, source: str, target_mode: str, months: i
                  sp_refresh: str = "", weight_by: str = "",
                  prefetched: dict | None = None, stored_targets: dict | None = None,
                  after: tuple | None = None, multiply_source: str = "", multiply_metric: str = "",
-                 at_values=None, sp_data: dict | None = None) -> dict:
+                 at_values=None, sp_data: dict | None = None,
+                 source_data: dict | None = None) -> dict:
     """Daily/weekly/monthly series for one metric, plus its N-1 and target.
     current_month / current_week / current_day: also fill the current
     (part-elapsed) month, week or day. Today only has stock figures in
@@ -1328,7 +1632,10 @@ def _custom_data(metric: str, agg: str, source: str, target_mode: str, months: i
     slots x cost per slot per day, as a Sum, gives the right cost for any
     week or month.
     at_values: _at_setting_values() already built for the whole load.
-    sp_data: _get_sharepoint_data() already built for the whole load."""
+    sp_data: _get_sharepoint_data() already built for the whole load.
+    source_data: {data source id: {date: {metric: value}}} already read for
+    the whole load (Settings > Data Sources); a source missing from it is
+    read here."""
     if source == "snowflake":
         metric = metric.upper()
         weight_by = weight_by.upper()
@@ -1396,6 +1703,13 @@ def _custom_data(metric: str, agg: str, source: str, target_mode: str, months: i
             sp_by_date = sp.get("by_date", {})
         if "autotrader" in sources and at_values is None:
             at_values = _at_setting_values()
+        source_data = dict(source_data or {})
+        for src_id in sources:
+            entry = _data_source(src_id)
+            if entry is not None and src_id not in source_data:
+                fetch_start, fetch_end = _ds_fetch_range(today, months, weeks, days, after)
+                wanted = [m for s, m in ((source, metric), (multiply_source, multiply_metric)) if s == src_id and m]
+                source_data[src_id] = _fetch_data_source(entry, wanted, fetch_start, fetch_end)
 
         # One metric's figure for one day, from whichever source it is in.
         # N-1 is looked up from the metric's own history (below), the same way
@@ -1405,6 +1719,9 @@ def _custom_data(metric: str, agg: str, source: str, target_mode: str, months: i
                 return lambda d: _num((prefetched.get(d) or {}).get(met))
             if src == "autotrader":
                 return lambda d: _num(at_values(d, met))
+            if src in source_data:
+                src_rows = source_data[src]
+                return lambda d: _num((src_rows.get(d) or {}).get(met))
             return lambda d: _num(sp_by_date.get(d.isoformat(), {}).get(met))
 
         base_at = lookup(source, metric)
@@ -1601,6 +1918,23 @@ def kpi_custom_data_batch(request: Request, payload: dict, user: str = Depends(r
         sp = _get_sharepoint_data(sp_refresh) if "sharepoint" in used else None
         # Autotrader settings and allowance history read once for every item.
         at_values = _at_setting_values() if "autotrader" in used else None
+
+        # Each Settings > Data Sources table read once, for every metric of it
+        # any item needs. One that fails only fails the charts using it.
+        wanted = {}
+        for i in items:
+            for src_id, met in ((i["source"], i["metric"]), (i["multiply_source"], i["multiply_metric"])):
+                if met and _data_source(src_id) is not None:
+                    wanted.setdefault(src_id, []).append(met)
+        source_data, source_errors = {}, {}
+        if wanted:
+            fetch_start, fetch_end = _ds_fetch_range(today, months, weeks, days, after)
+            for src_id, mets in wanted.items():
+                try:
+                    source_data[src_id] = _fetch_data_source(_data_source(src_id), mets, fetch_start, fetch_end)
+                except Exception as e:
+                    logger.error("KPI data source %s read failed: %s", src_id, e)
+                    source_errors[src_id] = f"{_data_source(src_id)['name']}: {e}"
     except Exception as e:
         logger.error(f"KPI batch data failed: {e}")
         return {"status": "error", "message": str(e)}
@@ -1610,13 +1944,16 @@ def kpi_custom_data_batch(request: Request, payload: dict, user: str = Depends(r
     results = []
     for i in items:
         key = json.dumps(i, sort_keys=True)
+        failed = source_errors.get(i["source"]) or (source_errors.get(i["multiply_source"]) if i["multiply_metric"] else None)
+        if failed:
+            built[key] = {"status": "error", "message": failed}
         if key not in built:
             built[key] = _custom_data(
                 i["metric"], i["agg"], i["source"], i["target_mode"], months, weeks, days,
                 i["current_month"], i["current_week"], i["current_day"], "", i["weight_by"],
                 prefetched=prefetched if prefetched is not None else {}, stored_targets=stored, after=after,
                 multiply_source=i["multiply_source"], multiply_metric=i["multiply_metric"],
-                at_values=at_values, sp_data=sp)
+                at_values=at_values, sp_data=sp, source_data=source_data)
         results.append(built[key])
     out = {"status": "ok", "results": results}
     if sp and sp.get("status") == "ok":
@@ -1827,6 +2164,14 @@ def _validate_layout_metric(source: str, metric) -> str | None:
         if not isinstance(metric, str) or not re.fullmatch(r"[A-Z][A-Z0-9_]*", metric):
             return f"Bad metric: {metric}"
         return None
+    # A data source's metric likewise only has to look right: an event that
+    # stops being sent should not block every layout save.
+    if kds.is_source_id(source):
+        if _data_source(source) is None:
+            return f"Unknown data source: {source}"
+        if not isinstance(metric, str) or not metric.strip() or len(metric) > 200:
+            return f"Bad metric: {metric}"
+        return None
     return _validate_metric(source, metric)
 
 
@@ -1957,7 +2302,7 @@ def kpi_themes_save(request: Request, payload: dict, user: str = Depends(require
 # series list or in Settings > Column Names. Until first saved, it is built
 # from the names already typed on stacked chart series.
 # SharePoint columns are spreadsheet headers, so any printable text.
-_METRIC_NAME_KEY = r"(snowflake|sharepoint|autotrader)\|[^\x00-\x1f]{1,150}"
+_METRIC_NAME_KEY = rf"(snowflake|sharepoint|autotrader|{kds.SOURCE_ID})\|[^\x00-\x1f]{{1,150}}"
 
 
 def _seed_metric_names(layout: dict) -> dict:
@@ -2287,14 +2632,17 @@ def kpi_layout_get(request: Request, user: str = Depends(require_page_api('kpi')
             "metric_names": metric_names, "at_periods": at_periods, "at_ppc_periods": at_ppc_periods,
             "hidden_sections": [s for s in (_read_kpi_layout_value('hidden_sections') or []) if s in sections],
             "collapsed_rows": _user_row_list(_COLLAPSED_KEY, user),
+            "rolling_rows": _user_row_list(_ROLLING_KEY, user),
             "my_charts": _user_row_list(_MY_CHARTS_KEY, user)}
 
 
 # ── Per-user chart row lists ─────────────────────────────────────────────────
-# Each user's own collapsed rows and My Charts, stored as {user: [row ids]}
-# so they follow the person to any browser. The section row order stays the
-# admin's; My Charts keeps the order the user set.
+# Each user's own collapsed rows, rows showing the 7-day average, and My
+# Charts, stored as {user: [row ids]} so they follow the person to any
+# browser. The section row order stays the admin's; My Charts keeps the order
+# the user set.
 _COLLAPSED_KEY = 'collapsed_rows'
+_ROLLING_KEY = 'rolling_rows'
 _MY_CHARTS_KEY = 'my_charts'
 
 
@@ -2323,6 +2671,11 @@ def _save_user_row_list(key: str, user: str, payload: dict, keep_order: bool) ->
 @router.post("/kpi/collapsed-rows")
 def kpi_collapsed_rows_save(request: Request, payload: dict, user: str = Depends(require_page_api('kpi'))):
     return _save_user_row_list(_COLLAPSED_KEY, user, payload, keep_order=False)
+
+
+@router.post("/kpi/rolling-rows")
+def kpi_rolling_rows_save(request: Request, payload: dict, user: str = Depends(require_page_api('kpi'))):
+    return _save_user_row_list(_ROLLING_KEY, user, payload, keep_order=False)
 
 
 @router.post("/kpi/my-charts")

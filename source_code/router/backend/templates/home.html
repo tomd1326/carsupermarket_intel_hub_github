@@ -1,4 +1,4 @@
-{% from '_navigation.html' import account_nav with context %}
+{% from '_navigation.html' import page_header with context %}
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -15,11 +15,9 @@
         @font-face { font-family: 'DM Sans'; src: url('{{ BASE_URL }}/static/fonts/DMSans-SemiBold.ttf'); font-weight: 600; }
         @font-face { font-family: 'DM Sans'; src: url('{{ BASE_URL }}/static/fonts/DMSans-Bold.ttf');     font-weight: 700; }
         body, button, input, select, textarea { font-family: 'DM Sans', system-ui, sans-serif; }
-        body {
-            background-color: #003c57;
-        }
+        body { background-color: #003c57; color: var(--c-text); }
         .home-container {
-            min-height: 100vh;
+            min-height: 80vh;
             display: flex;
             flex-direction: column;
             align-items: center;
@@ -50,7 +48,7 @@
             height: 80px;
             font-size: 1.1rem;
             font-weight: 600;
-            border-radius: 8px;
+            border-radius: var(--radius-lg);
             display: flex;
             align-items: center;
             justify-content: center;
@@ -66,7 +64,7 @@
     </style>
 </head>
 <body>
-    {{ account_nav(user, show_home=False, dark=True) }}
+    {{ page_header('Home', user) }}
     <div class="home-container">
         <img src="{{ BASE_URL }}/static/icon.png" alt="CarSupermarket" class="brand-logo">
         <h2 class="home-title mb-5">CarSupermarket.com<br>{{ site_name() }}</h2>

@@ -1,4 +1,4 @@
-{% from '_navigation.html' import account_nav with context %}
+{% from '_navigation.html' import page_header with context %}
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -73,18 +73,10 @@
         #errorLogModal .table tbody td,
         #errorLogModal .table thead th { overflow: visible; text-overflow: clip; white-space: nowrap; }
         #errorLogModal .table tbody td { font-size: 0.8rem; }
-        /* Shared Back / Home / nav button size across all pages */
     </style>
 </head>
 <body>
-    {{ account_nav(user) }}
-    <div class="container mt-4">
-        <div class="page-header">
-            <h2>{{ page_name('tasks') }}</h2>
-            <a href="javascript:history.back()" class="btn btn-outline-secondary nav-btn">
-                <i class="fas fa-arrow-left me-1"></i>Back
-            </a>
-            <a href="{{ BASE_URL }}/buying-requirements" class="btn btn-primary btn-sm">Go to Buying Requirements</a>
+    {% call page_header(page_name('tasks'), user) %}
             {% if is_admin %}
             <!-- Admin View shows the admin-only columns and buttons; User View
                  hides them to see the page as everyone else does. -->
@@ -93,7 +85,8 @@
                 <button type="button" data-view="user" onclick="setPageView('user')">User View</button>
             </div>
             {% endif %}
-        </div>
+    {% endcall %}
+    <div class="container mt-4">
         <p class="mb-1 fw-bold">Upload File</p>
         <form id="uploadForm" action="{{ BASE_URL }}/upload-task" method="post">
             <div class="upload-row d-flex align-items-center gap-3 mb-3 flex-wrap">

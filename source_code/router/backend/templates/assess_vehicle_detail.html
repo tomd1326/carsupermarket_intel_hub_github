@@ -1,4 +1,4 @@
-{% from '_navigation.html' import account_nav with context %}
+{% from '_navigation.html' import page_header with context %}
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -20,9 +20,7 @@
         body, button, input, select, textarea { font-family: 'DM Sans', system-ui, sans-serif; }
         body { background-color: var(--c-page-bg); color: var(--c-text); min-height: 100vh; }
 
-        .page-wrap { min-height: 100vh; padding: 40px 32px 64px; max-width: 1500px; margin: 0 auto; }
-        .brand-logo { width: 48px; height: 48px; border-radius: var(--radius-lg); }
-        .page-title { color: var(--c-text-heading); font-weight: 600; font-size: 1.5rem; letter-spacing: -0.2px; }
+        .page-wrap { padding: 24px 32px 64px; max-width: 1500px; margin: 0 auto; }
         .card { border: 1px solid var(--c-border); border-radius: var(--radius-lg); box-shadow: none; }
         .card-body { padding: 22px 26px; }
         .plate {
@@ -52,7 +50,7 @@
     </style>
 </head>
 <body>
-    {{ account_nav(user) }}
+    {{ page_header(page_name('assess_vehicle'), user) }}
 
     <!-- Full-size CAP image -->
     <div id="imgLightbox" class="img-lightbox" style="display:none;" onclick="closeImage()">
@@ -110,14 +108,12 @@
     </div>
 
     <div class="page-wrap">
-        <div class="d-flex align-items-center gap-3 mb-4">
-            <img src="{{ BASE_URL }}/static/icon.png" alt="" class="brand-logo">
-            <h1 class="page-title mb-0">{{ page_name('assess_vehicle') }}</h1>
+        <div class="mb-3">
             <!-- Explicit link rather than history.back(): arriving here after a
                  search means the previous entry is the list page in a pre-search
                  state, and going "back" to a stale list is confusing. -->
             <a href="{{ BASE_URL }}/assess-vehicle" class="btn btn-outline-secondary nav-btn">
-                <i class="fas fa-arrow-left me-1"></i>Back
+                <i class="fas fa-search me-1"></i>New Search
             </a>
         </div>
 
