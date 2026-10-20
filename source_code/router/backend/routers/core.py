@@ -1,6 +1,6 @@
 """Shared state and helpers used by all domain routers.
 
-Holds auth/session state (VALID_USERS, _active_sessions, _sessions_invalidated_at),
+Holds auth/session state (VALID_USERS, session_config, session tracking),
 the Jinja2 templates instance, environment constants and event tracking.
 Importing this module loads users from Aurora (same behaviour as the old
 monolithic router.py import).
@@ -17,7 +17,8 @@ from fastapi.templating import Jinja2Templates
 from utils.db_utils import (get_database_connection, get_prod_pricer_connection,
                             load_all_users, load_all_page_access, load_page_names,
                             record_event, get_settings, read_user_details,
-                            SETTINGS_DEFAULTS)
+                            touch_session, close_sessions, read_session_settings,
+                            new_session_id, SETTINGS_DEFAULTS)
 from utils import app_log
 from .page_registry import ALL_PAGE_KEYS, CONFIGURED_MARKER, DEFAULT_PAGE_KEYS, PAGES, PAGES_BY_KEY
 
@@ -489,9 +490,67 @@ def require_page_api(page_key: str):
 
 _reload_users_from_aurora()
 
-# session_id -> {user, login_time} — tracks active sessions server-side
-_active_sessions: dict = {}
-_sessions_invalidated_at: float = 0.0  # epoch — sessions logged in before this are force-logged out
+
+# Session timeout and Force Re-login time, from the settings table so every
+# container agrees. Cached for SESSION_CONFIG_TTL_SECONDS; a failed read keeps
+# the last values loaded (never the defaults, which would undo a Force Re-login).
+_SESSION_CONFIG: dict = {k: SETTINGS_DEFAULTS[k] for k in ('session_timeout_minutes', 'sessions_invalidated_at')}
+_SESSION_CONFIG_LOADED_AT: float = 0.0
+SESSION_CONFIG_TTL_SECONDS = 30
+# A session's last_seen_at is written at most this often per login.
+SESSION_TOUCH_SECONDS = 60
+
+
+def reload_session_config() -> None:
+    global _SESSION_CONFIG_LOADED_AT
+    _SESSION_CONFIG_LOADED_AT = time.time()
+    try:
+        with get_database_connection() as conn:
+            _SESSION_CONFIG.update(read_session_settings(conn))
+    except Exception as e:
+        logger.warning("Could not load session settings - using the last known values: %s", e)
+
+
+def session_config() -> dict:
+    if time.time() - _SESSION_CONFIG_LOADED_AT >= SESSION_CONFIG_TTL_SECONDS:
+        reload_session_config()
+    return dict(_SESSION_CONFIG)
+
+
+def _track_session(request: Request, user: str, timeout_minutes: int) -> bool:
+    """Keep this login's user_sessions row up to date (see db_utils.touch_session).
+    Returns False when the login has ended and must be signed out.
+
+    The cookie's seen_epoch means most requests skip the database. The cookie
+    is only changed after the write succeeds; on a database error the page
+    still loads and the next request tries again."""
+    now = time.time()
+    session_id = request.session.get('session_id')
+    seen = request.session.get('seen_epoch')
+    if session_id and seen and now - seen < SESSION_TOUCH_SECONDS:
+        return True
+    try:
+        with get_database_connection() as conn:
+            current = touch_session(conn, session_id or new_session_id(), user, _ENV, timeout_minutes)
+    except Exception as e:
+        logger.warning("Could not record session activity for %s: %s", user, e)
+        return True
+    if current is None:
+        return False
+    request.session['session_id'] = current
+    request.session['seen_epoch'] = now
+    return True
+
+
+def _end_this_session(request: Request, reason: str) -> None:
+    session_id = request.session.get('session_id')
+    if not session_id:
+        return
+    try:
+        with get_database_connection() as conn:
+            close_sessions(conn, reason, session_config()['session_timeout_minutes'], session_id=session_id)
+    except Exception as e:
+        logger.warning("Could not close session %s: %s", session_id, e)
 
 
 def _track(request: Request, event_type: str, page: str, metadata: dict | None = None) -> None:
@@ -510,14 +569,22 @@ def get_current_user(request: Request):
     user = request.session.get('user')
     if not user:
         return None
-    # Invalidate session if password has changed since login
+    # Other containers change passwords and delete users: re-read on the same
+    # TTL as page access, so this check is never more than a minute behind.
+    if not _permissions_are_fresh():
+        _reload_users_from_aurora()
+    # Password changed or account deleted since login. The save already ended
+    # the user's sessions; this ends this one in case it was missed.
     if request.session.get('pwd_hash') != VALID_USERS.get(user):
-        _active_sessions.pop(request.session.get('session_id'), None)
+        _end_this_session(request, 'password_changed')
         request.session.clear()
         return None
-    # Invalidate session if admin triggered a force re-login after this session logged in
-    if request.session.get('login_time_epoch', 0) < _sessions_invalidated_at:
-        _active_sessions.pop(request.session.get('session_id'), None)
+    config = session_config()
+    # Force Re-login after this login. Its sessions were ended at the click.
+    if request.session.get('login_time_epoch', 0) < config['sessions_invalidated_at']:
+        request.session.clear()
+        return None
+    if not _track_session(request, user, config['session_timeout_minutes']):
         request.session.clear()
         return None
     app_log.note_user(user)

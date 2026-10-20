@@ -39,6 +39,7 @@
                     <option value="snowflake">Snowflake</option>
                     <option value="sharepoint">SharePoint</option>
                     <option value="app">Warnings And Errors</option>
+                    <option value="request">Slow Requests</option>
                 </select>
             </div>
             <div>
@@ -97,10 +98,6 @@
         </div>
 
         <div class="d-flex align-items-center gap-2 flex-wrap mb-2">
-            <button id="impact-btn" class="btn btn-outline-primary btn-sm" onclick="loadImpact()">
-                <i class="fas fa-snowflake me-1"></i>Load Snowflake Impact For These Rows
-            </button>
-            <span id="impact-note" class="small text-muted"></span>
             <span class="flex-grow-1"></span>
             <span id="count-label" class="small text-muted"></span>
             <button class="btn btn-outline-secondary btn-sm" onclick="pageBy(-1)">Previous</button>
@@ -120,6 +117,10 @@
                     <label class="form-label small mb-0" for="s-size">Rows Per Page</label>
                     <input type="number" id="s-size" class="form-control form-control-sm" min="10" max="500" value="{{ page_size }}" style="width:100px">
                 </div>
+                <div>
+                    <label class="form-label small mb-0" for="s-slow">Slow Request (Ms)</label>
+                    <input type="number" id="s-slow" class="form-control form-control-sm" min="100" max="60000" step="100" value="{{ slow_request_ms }}" style="width:110px">
+                </div>
                 <button class="btn btn-primary btn-sm" onclick="saveLogSettings()">Save</button>
                 <span id="s-msg" class="small"></span>
             </div>
@@ -132,8 +133,7 @@
                 <thead>
                     <tr>
                         <th>Time</th><th>Source</th><th>Level</th><th>Page</th><th>Task</th><th>User</th>
-                        <th>Snowflake Table</th><th>Message</th><th class="logs-num">Duration (Ms)</th><th class="logs-num">Rows</th>
-                        <th class="logs-num">Bytes Scanned</th><th class="logs-num">Cache %</th>
+                        <th>Snowflake Table</th><th>Message</th><th class="logs-num">Connect (Ms)</th><th class="logs-num">Duration (Ms)</th><th class="logs-num">Rows</th>
                         <th>Query Id</th>
                     </tr>
                 </thead>
@@ -141,8 +141,9 @@
             </table>
         </div>
         <div class="small text-muted mt-2">
-            Bytes Scanned and Cache % come from Snowflake's recent query history for the app's own user: the last 7 days only.
-            Older rows show a dash. Partition counts and credits cannot be read with the app's Snowflake role.
+            Connect is the time to fetch the Snowflake login and sign in, shown on the first query of each connection.
+            Duration is the query itself. Slow Requests are whole web requests slower than the Log Settings value,
+            so time spent outside Snowflake (SharePoint, Aurora, Python) shows up there.
         </div>
     </div>
 
@@ -151,7 +152,6 @@
         const BASE_URL = "{{ BASE_URL }}";
         const FILTER_IDS = ['source', 'level', 'page', 'task', 'table', 'from', 'to', 'min', 'q', 'sort'];
         let offset = 0, total = 0, pageSize = {{ page_size }};
-        let impactCache = {};
 
         function el(id) { return document.getElementById(id); }
 
@@ -159,14 +159,6 @@
             const box = el('logs-error');
             box.textContent = msg || '';
             box.classList.toggle('d-none', !msg);
-        }
-
-        function fmtBytes(n) {
-            if (n === null || n === undefined) return '-';
-            const units = ['B', 'KB', 'MB', 'GB', 'TB'];
-            let i = 0, v = Number(n);
-            while (v >= 1024 && i < units.length - 1) { v /= 1024; i++; }
-            return (i === 0 ? v : v.toFixed(1)) + ' ' + units[i];
         }
 
         function buildQuery() {
@@ -199,7 +191,7 @@
             if (!rows.length) {
                 const tr = document.createElement('tr');
                 const td = cell('No log entries match these filters.');
-                td.colSpan = 13;
+                td.colSpan = 12;
                 td.className = 'text-muted p-2';
                 tr.appendChild(td);
                 body.appendChild(tr);
@@ -209,7 +201,6 @@
                 const tr = document.createElement('tr');
                 const lvl = (r.level || '').toLowerCase();
                 if (lvl === 'warning' || lvl === 'error') tr.className = 'logs-row-' + lvl;
-                tr.dataset.queryId = r.query_id || '';
                 tr.appendChild(cell(r.time, 'logs-nowrap'));
                 tr.appendChild(cell(r.source));
                 tr.appendChild(cell(r.level));
@@ -218,28 +209,11 @@
                 tr.appendChild(cell(r.user));
                 tr.appendChild(cell(r.tables));
                 tr.appendChild(cell(r.message, 'logs-msg'));
+                tr.appendChild(cell(r.connect_ms === null || r.connect_ms === undefined ? '' : r.connect_ms.toLocaleString(), 'logs-num'));
                 tr.appendChild(cell(r.duration_ms === null ? '' : r.duration_ms.toLocaleString(), 'logs-num'));
                 tr.appendChild(cell(r.rows_returned === null ? '' : r.rows_returned.toLocaleString(), 'logs-num'));
-                const bytes = cell('', 'logs-num'); bytes.dataset.col = 'bytes';
-                const cache = cell('', 'logs-num'); cache.dataset.col = 'cache';
-                tr.appendChild(bytes);
-                tr.appendChild(cache);
                 tr.appendChild(cell(r.query_id, 'logs-nowrap'));
                 body.appendChild(tr);
-            });
-            applyImpact();
-        }
-
-        function applyImpact() {
-            document.querySelectorAll('#logs-body tr').forEach(tr => {
-                const qid = tr.dataset.queryId;
-                if (!qid || !(qid in impactCache)) return;
-                const i = impactCache[qid];
-                const bytes = tr.querySelector('[data-col="bytes"]');
-                const cache = tr.querySelector('[data-col="cache"]');
-                if (!i) { bytes.textContent = '-'; cache.textContent = '-'; return; }
-                bytes.textContent = fmtBytes(i.bytes_scanned);
-                cache.textContent = (i.cache_percent === null || i.cache_percent === undefined) ? '-' : i.cache_percent + '%';
             });
         }
 
@@ -271,8 +245,7 @@
         }
 
         // Reloads the rows and the Page and Task lists, keeping every filter,
-        // the sort and the current page. Snowflake impact is not re-fetched;
-        // what was already loaded stays on screen.
+        // the sort and the current page.
         function refreshLogs() {
             const btn = el('refresh-btn');
             btn.disabled = true;
@@ -293,32 +266,12 @@
             }).catch(() => {});
         }
 
-        function loadImpact() {
-            const ids = Array.from(document.querySelectorAll('#logs-body tr'))
-                .map(tr => tr.dataset.queryId).filter(Boolean);
-            if (!ids.length) { el('impact-note').textContent = 'No Snowflake queries on this page.'; return; }
-            const btn = el('impact-btn');
-            btn.disabled = true;
-            el('impact-note').textContent = 'Loading...';
-            fetch(BASE_URL + '/logs/impact', {
-                method: 'POST', headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({query_ids: ids})
-            }).then(r => r.json()).then(resp => {
-                if (resp.status !== 'ok') { el('impact-note').textContent = resp.message || 'Failed.'; return; }
-                ids.forEach(id => { impactCache[id] = resp.impact[id] || null; });
-                applyImpact();
-                const found = ids.filter(id => impactCache[id]).length;
-                el('impact-note').textContent = found + ' of ' + ids.length + ' found in Snowflake history.';
-            }).catch(err => { el('impact-note').textContent = 'Failed: ' + err.message; })
-              .finally(() => { btn.disabled = false; });
-        }
-
         function saveLogSettings() {
             const msg = el('s-msg');
             fetch(BASE_URL + '/logs/settings', {
                 method: 'POST', headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({retention_days: parseInt(el('s-days').value, 10), page_size: parseInt(el('s-size').value, 10)})
-            }).then(r => { if (!r.ok) throw new Error('Days kept must be 1 to 365 and rows per page 10 to 500.'); return r.json(); })
+                body: JSON.stringify({retention_days: parseInt(el('s-days').value, 10), page_size: parseInt(el('s-size').value, 10), slow_request_ms: parseInt(el('s-slow').value, 10)})
+            }).then(r => { if (!r.ok) throw new Error('Days kept must be 1 to 365, rows per page 10 to 500 and slow request 100 to 60000 ms.'); return r.json(); })
               .then(() => { msg.className = 'small text-success'; msg.textContent = 'Saved.'; loadLogs(0); })
               .catch(err => { msg.className = 'small text-danger'; msg.textContent = err.message; });
         }
