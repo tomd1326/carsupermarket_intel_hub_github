@@ -1,0 +1,181 @@
+{% from '_navigation.html' import page_header with context %}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ page_name('apex_missing_finance') }}</title>
+    <link rel="icon" type="image/png" href="{{ BASE_URL }}/static/icon.png">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css" rel="stylesheet">
+    <link href="{{ static_url('css/theme.css') }}" rel="stylesheet">
+    <style>
+        @font-face { font-family: 'DM Sans'; src: url('{{ BASE_URL }}/static/fonts/DMSans-Regular.ttf');  font-weight: 400; }
+        @font-face { font-family: 'DM Sans'; src: url('{{ BASE_URL }}/static/fonts/DMSans-Medium.ttf');   font-weight: 500; }
+        @font-face { font-family: 'DM Sans'; src: url('{{ BASE_URL }}/static/fonts/DMSans-SemiBold.ttf'); font-weight: 600; }
+        @font-face { font-family: 'DM Sans'; src: url('{{ BASE_URL }}/static/fonts/DMSans-Bold.ttf');     font-weight: 700; }
+        body, button, input, select, textarea { font-family: 'DM Sans', system-ui, sans-serif; font-size: 13px; }
+
+        .controls { padding: 16px 32px 0 32px; }
+        .filter-bar { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 6px 0; margin-bottom: 10px; }
+        .filter-group { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; border-left: 1.5px solid #94a3b8; padding-left: 10px; margin-left: 10px; }
+        .filter-bar > .filter-group:first-child { border-left: none; padding-left: 0; margin-left: 0; }
+        .filter-group.titled { flex-direction: column; align-items: flex-start; gap: 3px; }
+        .filter-title { font-size: 0.875em; font-weight: 600; line-height: 1.2; }
+        .filter-buttons { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
+        .filter-buttons select { width: auto; max-width: 220px; }
+        .filter-btn { border-radius: 20px; padding: 2px 10px; font-size: 13px; }
+
+        .settings-section { font-weight: 700; color: #334155; border-bottom: 1px solid #e2e8f0; padding-bottom: 4px; }
+        .filter-edit-row { display: flex; align-items: center; gap: 6px; padding: 3px 0; font-size: 0.8rem; }
+        .filter-edit-row select, .filter-edit-row input { padding: 3px 7px; border: 1px solid #cbd5e1; border-radius: 5px; font-size: 0.78rem; }
+        .filter-edit-row select { width: 300px; }
+        .filter-edit-row .f-label { width: 170px; }
+        .filter-edit-row .f-desc { flex: 1; min-width: 200px; }
+        .filter-edit-row input[type=color] { width: 44px; padding: 1px; height: 26px; }
+        .filter-edit-row .btn { padding: 2px 7px; font-size: 0.72rem; }
+
+        .table-wrap { overflow: auto; max-height: 78vh; padding: 0 32px; margin-bottom: 32px; }
+        #amf-table { border-collapse: separate; border-spacing: 0; table-layout: fixed; font-size: 12px; width: max-content; min-width: 100%; }
+        #amf-table thead th {
+            position: sticky; top: 0; z-index: 2; background: #dbeafe;
+            border-top: 1px solid #b0b0b0; border-bottom: 2px solid #b0b0b0; border-right: 1px solid #b0b0b0;
+            padding: 5px 6px; white-space: normal; line-height: 1.2; height: calc(2 * 1.2em + 10px);
+            overflow: hidden; vertical-align: bottom; font-weight: 600; cursor: pointer; user-select: none; text-align: left;
+        }
+        #amf-table thead th:first-child { border-left: 1px solid #b0b0b0; }
+        #amf-table td {
+            padding: 4px 6px; white-space: nowrap; border-bottom: 1px solid #b0b0b0; border-right: 1px solid #b0b0b0;
+            overflow: hidden; text-overflow: ellipsis; text-align: left;
+        }
+        #amf-table td:first-child { border-left: 1px solid #b0b0b0; }
+        #amf-table td.col-right  { text-align: right; }
+        #amf-table td.col-center { text-align: center; padding-left: 2px; padding-right: 2px; text-overflow: clip; }
+        .apex-link { font-size: 11px; padding: 1px 6px; border: 1px solid #0d6efd; border-radius: 3px; color: #0d6efd; text-decoration: none; display: inline-block; }
+        .apex-link:hover { background: #0d6efd; color: #fff; }
+        .sort-arrow { opacity: 0.35; font-size: 0.65em; margin-left: 2px; }
+        #row-count { white-space: nowrap; }
+    </style>
+</head>
+<body>
+    {% call page_header(page_name('apex_missing_finance'), user) %}
+            <button id="fetchBtn" class="btn btn-primary btn-sm" onclick="fetchData(true)">
+                <i class="fas fa-sync-alt me-1"></i>Refresh Data
+            </button>
+            {% if is_admin %}
+            <button class="btn btn-outline-primary btn-sm" onclick="openLiveUpdate()"
+                    title="Pull the latest from Apex and rebuild the tables behind this report">
+                <i class="fas fa-bolt me-1"></i>Live Update
+            </button>
+            <button class="btn btn-outline-secondary btn-sm" onclick="openSettings()">
+                <i class="fas fa-cog me-1"></i>Settings
+            </button>
+            {% endif %}
+            <span id="sf-status" class="toolbar-text"><i class="fas fa-snowflake me-1 text-info"></i>Snowflake</span>
+            <span id="apex-updated" class="toolbar-text" style="display:none">Apex data as of: <strong id="apex-updated-val"></strong></span>
+    {% endcall %}
+
+    <div class="controls">
+        <div class="page-loading"><i class="fas fa-sync-alt spin"></i> <span>Loading<span class="loading-dots"></span></span></div>
+        <div id="data-section" style="display:none">
+            <div class="filter-bar">
+                <!-- Filters added in Settings, built by apex_missing_finance.js. -->
+                <div id="custom-filters" style="display:contents"></div>
+                <div class="filter-group titled">
+                    <span class="filter-title">Search</span>
+                    <div class="filter-buttons">
+                    <input type="text" id="searchInput" class="form-control form-control-sm" style="width:160px" placeholder="Search Any Column">
+                    <button class="btn btn-sm btn-outline-secondary" onclick="applyFilters()">Search</button>
+                    </div>
+                </div>
+                <div class="filter-group" style="border-left:none;margin-left:16px;gap:8px">
+                    <span id="row-count" class="toolbar-text"></span>
+                    <button class="btn btn-sm btn-outline-secondary" onclick="clearAllFilters()">Clear Filters</button>
+                </div>
+                <button class="btn btn-csv" style="margin-left:auto" onclick="downloadCsv()"><i class="fas fa-download"></i> CSV</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="table-error" class="alert alert-danger d-none mx-4 mt-2"></div>
+    <div class="table-wrap d-none mt-3" id="table-wrap">
+        <table id="amf-table">
+            <colgroup id="amf-cols"></colgroup>
+            <thead><tr id="amf-head"></tr></thead>
+            <tbody id="amf-tbody"></tbody>
+        </table>
+    </div>
+
+    <div class="modal fade" id="settingsModal" tabindex="-1" aria-hidden="true">
+        <div class="modal-dialog modal-xl" style="max-width:min(1500px, 95vw)">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">Apex Missing Finance Settings</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body">
+                    <div id="settings-error" class="alert alert-danger d-none py-1 small"></div>
+                    <div id="settings-loading" class="section-loading" role="status" aria-live="polite">
+                        <i class="fas fa-sync-alt spin" aria-hidden="true"></i> Loading settings...
+                    </div>
+                    <div id="settings-content" class="d-none">
+                    <h6 class="settings-section">Columns</h6>
+                    <p class="text-muted small mb-2">Columns of <strong>PRODUCT_SALES_PERFORMANCE.MISSING_FINANCE_AMOUNTS</strong>.
+                        The heading box sets the name shown on the page; a link column's heading is also its button text.</p>
+                    <div id="colEditor"></div>
+
+                    <h6 class="settings-section mt-4">Filters</h6>
+                    <p class="text-muted small mb-2">Each filter is a row of buttons on the page, one for every value found in its column (a dropdown when there are more than 15).</p>
+                    <div id="filterEditor"></div>
+                    <button type="button" class="btn btn-sm btn-outline-primary mt-2" onclick="addFilterDraft()">
+                        <i class="fas fa-plus"></i> Add Filter</button>
+
+                    <h6 class="settings-section mt-4">Hard Filters</h6>
+                    <p class="text-muted small mb-2">These rules apply to the Snowflake data for everyone, including the CSV export. All rules must match. Dates are written as 2026-01-01.</p>
+                    <div id="hardFilterEditor"></div>
+                    <button type="button" class="btn btn-sm btn-outline-primary mt-2" onclick="addHardFilterDraft()">
+                        <i class="fas fa-plus"></i> Add Hard Filter</button>
+
+                    <h6 class="settings-section mt-4">Cell Colours</h6>
+                    <p class="text-muted small mb-2">A cell is filled with the colour when its value matches. Values are compared as stored in Snowflake (e.g. STATUS_PAID). The first matching rule for a cell wins.</p>
+                    <div id="cellRuleEditor"></div>
+                    <button type="button" class="btn btn-sm btn-outline-primary mt-2" onclick="addCellRuleDraft()">
+                        <i class="fas fa-plus"></i> Add Colour Rule</button>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <button type="button" class="btn btn-primary" id="settingsSaveBtn" onclick="saveSettings()" disabled>Save</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    {% if is_admin %}
+    <div class="modal fade" id="liveUpdateModal" tabindex="-1" aria-hidden="true">
+        <div class="modal-dialog modal-xl" style="max-width:min(1300px, 95vw)">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">Live Update</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body">
+                    <div id="live-update-box"></div>
+                    <div class="form-text mt-2">Closing this popup does not stop the run. Leaving the page pauses it
+                        until you open Live Update here or in Settings again.</div>
+                </div>
+            </div>
+        </div>
+    </div>
+    {% endif %}
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
+    <script>window.BASE_URL = "{{ BASE_URL }}";</script>
+    <script src="{{ static_url('js/column_editor.js') }}"></script>
+    {% if is_admin %}
+    <script src="{{ static_url('js/api_requests.js') }}"></script>
+    <script src="{{ static_url('js/live_update.js') }}"></script>
+    {% endif %}
+    <script src="{{ static_url('js/apex_missing_finance.js') }}"></script>
+</body>
+</html>

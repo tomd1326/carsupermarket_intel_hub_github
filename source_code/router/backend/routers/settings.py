@@ -55,9 +55,11 @@ SETTINGS_SECTIONS = [
     ("appearance",          "Appearance",          "Appearance"),
     ("sharepoint",          "SharePoint",          "SharePoint Files"),
     ("prod-to-dev",         "Prod To Dev",         "Copy Prod To Dev"),
-    ("api-requests",        "API Requests",        "API Requests"),
-    ("dbt",                 "Run dbt",             "Run dbt"),
+    ("live-update",         "Live Update",         "Live Update"),
 ]
+
+# Sections merged into another; old links land on the new one.
+_MOVED_SECTIONS = {"api-requests": "live-update", "dbt": "live-update"}
 
 # The settings 'user' scope used by this admin page. The buying requirements
 # page reads its own per-user values, but the admin page has always edited the
@@ -92,6 +94,8 @@ def settings_page(request: Request, user: str = Depends(get_current_user)):
 def settings_section(slug: str, request: Request, user: str = Depends(get_current_user)):
     if user != 'tdrayson':
         return RedirectResponse(url=BASE_URL + "/home", status_code=303)
+    if slug in _MOVED_SECTIONS:
+        return RedirectResponse(url=f"{BASE_URL}/settings/section/{_MOVED_SECTIONS[slug]}", status_code=303)
     return _render_section(request, user, slug)
 
 
@@ -289,7 +293,7 @@ def save_live_users(
 # core.appearance_css turns these into the tokens in theme.css.
 _APPEARANCE_INTS = {
     # key: (lowest, highest)
-    'account_menu_font_size': (10, 24), 'side_menu_font_size': (10, 24), 'side_menu_width': (180, 480),
+    'account_menu_font_size': (10, 24), 'side_menu_font_size': (10, 24), 'settings_font_size': (10, 20), 'side_menu_width': (180, 480),
     'page_title_size': (14, 40), 'page_menu_btn_size': (24, 64), 'page_head_pad_y': (0, 40),
     'page_head_pad_x': (0, 60), 'page_head_gap': (0, 40),
     'ap_surface_opacity': (0, 100), 'ap_header_opacity': (0, 100), 'ap_menu_opacity': (0, 100),

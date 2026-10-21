@@ -2168,6 +2168,12 @@ def _validate_layout_metric(source: str, metric) -> str | None:
         if not isinstance(metric, str) or not metric.strip() or len(metric) > 200:
             return f"Bad metric: {metric}"
         return None
+    # A SharePoint column too: one chart on a column that left the file would
+    # otherwise block the save that moves it to another source.
+    if source == "sharepoint":
+        if not isinstance(metric, str) or not metric.strip() or len(metric) > 200:
+            return f"Bad metric: {metric}"
+        return None
     return _validate_metric(source, metric)
 
 

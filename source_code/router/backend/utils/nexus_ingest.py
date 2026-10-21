@@ -69,20 +69,23 @@ def fetch_page(host: str, route: str, headers: dict, params: dict, page: int, no
         else:
             status = resp.status_code
             if status == 200:
+                # A bad answer fails the endpoint rather than counting as "no
+                # rows", so a broken pull is never mistaken for nothing changed.
                 if not (resp.text or '').strip():
-                    return [], 0
+                    raise FetchFailed(f"empty response on page {page}")
                 try:
                     data = resp.json()
                 except json.decoder.JSONDecodeError:
-                    logger.warning("Invalid JSON from %s page %s: %s", endpoint, page, _short(resp.text))
-                    return [], 0
+                    raise FetchFailed(f"invalid JSON on page {page}: {_short(resp.text)}")
                 if not isinstance(data, dict):
-                    return [], 0
+                    raise FetchFailed(f"unexpected response on page {page}: {_short(resp.text)}")
                 pagination = (data.get('meta') or {}).get('pagination') or {}
                 total_pages = (pagination.get('total_pages') or 0) if isinstance(pagination, dict) else 0
-                rows = data.get('data') or []
-                if not isinstance(rows, list):
+                rows = data.get('data')
+                if rows is None:
                     rows = []
+                if not isinstance(rows, list):
+                    raise FetchFailed(f"unexpected 'data' on page {page}: {_short(resp.text)}")
                 log_id = data.get('log_id')
                 if log_id:
                     for row in rows:
@@ -101,7 +104,7 @@ def fetch_page(host: str, route: str, headers: dict, params: dict, page: int, no
         if note:
             note(f"  page {page}: {problem} - retrying in {delay}s ({attempt}/{MAX_RETRIES})")
         time.sleep(delay)
-    return [], 0
+    raise FetchFailed(f"page {page} gave no answer")
 
 
 def fetch_route(host: str, route: str, per_page: int, workers: int, updated_at: str = None,

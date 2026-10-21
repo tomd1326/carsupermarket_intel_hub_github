@@ -216,6 +216,8 @@ SETTINGS_DEFAULTS = {
     'account_menu_font_size':           14,
     # The page menu opened from the burger at the top left. Pixels.
     'side_menu_font_size':              15,
+    # Text on the Settings and Users pages. Pixels.
+    'settings_font_size':               14,
     'side_menu_width':                  260,
     # The header row at the top of every page (page_header). Pixels.
     'page_title_size':                  22,
