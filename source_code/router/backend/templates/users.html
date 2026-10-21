@@ -57,6 +57,59 @@
                 <div class="form-text">The admin account can always sign in by username. Users without an email below cannot sign in when set to Email Address Only.</div>
             </div>
         </div>
+
+        <div class="card mb-4">
+            <div class="card-header fw-semibold">Password Links</div>
+            {% if request.query_params.get('linkok') %}
+            <div class="alert alert-success mb-0 rounded-0 border-0 py-2 px-3">Password link settings saved.</div>
+            {% endif %}
+            {% if request.query_params.get('linkerr') %}
+            <div class="alert alert-danger mb-0 rounded-0 border-0 py-2 px-3">{{ request.query_params.get('linkerr') }}</div>
+            {% endif %}
+            <div class="card-body">
+                <form method="post" action="{{ BASE_URL }}/settings/password-links" class="row g-2 align-items-end">
+                    <div class="col-auto">
+                        <label for="password_link_hours" class="form-label mb-1">Link Lasts (Hours)</label>
+                        <input type="number" class="form-control" id="password_link_hours" name="password_link_hours"
+                               min="1" max="720" value="{{ link_settings.password_link_hours }}" style="width: 130px;" required>
+                    </div>
+                    <div class="col-md">
+                        <label for="password_link_base_prod" class="form-label mb-1">Prod Address</label>
+                        <input type="url" class="form-control" id="password_link_base_prod" name="password_link_base_prod"
+                               value="{{ link_settings.password_link_base_prod }}" required>
+                    </div>
+                    <div class="col-md">
+                        <label for="password_link_base_dev" class="form-label mb-1">Dev Address</label>
+                        <input type="url" class="form-control" id="password_link_base_dev" name="password_link_base_dev"
+                               value="{{ link_settings.password_link_base_dev }}" required>
+                    </div>
+                    <div class="col-auto">
+                        <button type="submit" class="btn btn-primary">Save</button>
+                    </div>
+                    <div class="col-12">
+                        <details>
+                            <summary class="small">Email Wording (Opens In Outlook From The Edit Popup)</summary>
+                            <div class="form-text mb-2">Use {first_name}, {link} and {expires}. Your own signature is added by Outlook. Leave a box empty to use the built-in wording.</div>
+                            <div class="row g-2">
+                                <div class="col-md-6">
+                                    <label for="password_email_subject_activate" class="form-label mb-1">Activation Email Subject</label>
+                                    <input type="text" class="form-control mb-2" id="password_email_subject_activate" name="password_email_subject_activate" value="{{ link_settings.password_email_subject_activate }}">
+                                    <label for="password_email_body_activate" class="form-label mb-1">Activation Email Text</label>
+                                    <textarea class="form-control" rows="9" id="password_email_body_activate" name="password_email_body_activate">{{ link_settings.password_email_body_activate }}</textarea>
+                                </div>
+                                <div class="col-md-6">
+                                    <label for="password_email_subject_reset" class="form-label mb-1">Reset Email Subject</label>
+                                    <input type="text" class="form-control mb-2" id="password_email_subject_reset" name="password_email_subject_reset" value="{{ link_settings.password_email_subject_reset }}">
+                                    <label for="password_email_body_reset" class="form-label mb-1">Reset Email Text</label>
+                                    <textarea class="form-control" rows="9" id="password_email_body_reset" name="password_email_body_reset">{{ link_settings.password_email_body_reset }}</textarea>
+                                </div>
+                            </div>
+                        </details>
+                    </div>
+                </form>
+                <div class="form-text">Open a user with Edit to make an activation link (no password yet) or a reset link. Each link works once and stops working after this many hours. Passwords need {{ password_rules_text }}.</div>
+            </div>
+        </div>
         {% endif %}
 
         <div class="card">
@@ -73,6 +126,9 @@
             {% endif %}
             {% if request.query_params.get('useradded') %}
             <div class="alert alert-success mb-0 rounded-0 border-0 py-2 px-3">User {{ request.query_params.get('useradded') }} created.</div>
+            {% endif %}
+            {% if request.query_params.get('userpending') %}
+            <div class="alert alert-success mb-0 rounded-0 border-0 py-2 px-3">User {{ request.query_params.get('userpending') }} created and waiting for activation. Open Edit to make their activation link.</div>
             {% endif %}
             {% if request.query_params.get('userdeleted') %}
             <div class="alert alert-warning mb-0 rounded-0 border-0 py-2 px-3">User {{ request.query_params.get('userdeleted') }} deleted.</div>
@@ -95,7 +151,9 @@
                         {% set d = people.get(u, {}) %}
                         {% set ll = last_logins.get(u, {}) %}
                         <tr>
-                            <td class="text-nowrap">{{ ((d.first_name or '') ~ ' ' ~ (d.last_name or ''))|trim }}</td>
+                            <td class="text-nowrap">{{ ((d.first_name or '') ~ ' ' ~ (d.last_name or ''))|trim }}
+                                {% if u in inactive %}<span class="badge bg-warning text-dark ms-1">Not Activated</span>{% endif %}
+                            </td>
                             <td>
                                 {% if d.email %}{{ d.email }}{% else %}<span class="text-muted">{{ u }}</span>{% endif %}
                             </td>
@@ -108,6 +166,7 @@
                                         data-email="{{ d.email or '' }}"
                                         data-last-login="{{ ll.last_login or 'Never' }}"
                                         data-last-seen="{{ ll.last_seen or 'Never' }}"
+                                        data-pending="{{ '1' if u in inactive else '0' }}"
                                         data-admin="{{ '1' if u == admin_username else '0' }}">Edit</button>
                             </td>
                         </tr>
@@ -155,7 +214,16 @@
                         <div class="mb-2" id="um-password-row">
                             <label for="um-password" class="form-label mb-1">Password</label>
                             <input type="password" class="form-control" id="um-password" name="password" autocomplete="new-password">
-                            <div class="form-text" id="um-password-help">At least 6 characters.</div>
+                            <div class="form-text" id="um-password-help"></div>
+                        </div>
+                        <div class="mb-2" id="um-link-row">
+                            <button type="button" class="btn btn-outline-primary btn-sm" id="um-link-btn">Make Link</button>
+                            <div id="um-link-result" class="mt-2" style="display: none;">
+                                <input type="text" class="form-control form-control-sm" id="um-link-url" readonly>
+                                <button type="button" class="btn btn-outline-secondary btn-sm mt-2" id="um-email-btn">Create Email In Outlook</button>
+                                <div class="form-text" id="um-link-note"></div>
+                            </div>
+                            <div class="form-text text-danger" id="um-link-error"></div>
                         </div>
                         <div class="small text-muted" id="um-activity">
                             Last Login: <span id="um-last-login"></span> &middot; Last Seen: <span id="um-last-seen"></span>
@@ -197,10 +265,15 @@
             $('um-last').value = opts.last || '';
             $('um-email').value = opts.email || '';
             $('um-password').value = '';
-            $('um-password').required = isAdd;
+            const rules = 'Needs {{ password_rules_text }}.';
             $('um-password-help').textContent = isAdd
-                ? 'At least 6 characters.'
-                : 'Leave blank to keep the current password. Changing it signs the user out.';
+                ? 'Leave blank to send an activation link instead. ' + rules
+                : 'Leave blank to keep the current password. Changing it signs the user out. ' + rules;
+            $('um-link-row').dataset.username = opts.username || '';
+            $('um-link-btn').textContent = opts.pending ? 'Make Activation Link' : 'Make Password Reset Link';
+            $('um-link-result').style.display = 'none';
+            $('um-link-error').textContent = '';
+            show($('um-link-row'), !isAdd && !isAdmin);
             ['um-first', 'um-last', 'um-email'].forEach(id => { $(id).readOnly = isAdmin; });
             show($('um-password-row'), !isAdmin);
             show($('um-activity'), !isAdd);
@@ -229,6 +302,7 @@
                 lastLogin: btn.dataset.lastLogin,
                 lastSeen: btn.dataset.lastSeen,
                 admin: btn.dataset.admin === '1',
+                pending: btn.dataset.pending === '1',
             }));
         });
         // Every email in the list as one semicolon separated line, to paste into Outlook's To box.
@@ -256,6 +330,43 @@
                 ta.remove();
             }
             done('Copied ' + emails.length);
+        });
+        // The last link made, so the email button can build the message from it.
+        let emailDraft = null;
+        // A new message to the user in whichever mail program is the computer's default (Outlook), with the link in it.
+        $('um-email-btn').addEventListener('click', () => {
+            if (!emailDraft || !emailDraft.email) return;
+            window.location.href = 'mailto:' + encodeURIComponent(emailDraft.email)
+                + '?subject=' + encodeURIComponent(emailDraft.subject)
+                + '&body=' + encodeURIComponent(emailDraft.body);
+        });
+        // Makes a link and shows it for copying. The link is shown once: only a hash of it is stored.
+        $('um-link-btn').addEventListener('click', async () => {
+            const username = $('um-link-row').dataset.username;
+            const where = toProd ? ' on PROD' : '';
+            if (!username || !confirm('Make a new link for ' + username + where + '? Any earlier unused link for them stops working.')) return;
+            const btn = $('um-link-btn');
+            btn.disabled = true;
+            $('um-link-error').textContent = '';
+            try {
+                const body = new URLSearchParams({ username: username, source: '{{ source }}' });
+                const resp = await fetch('{{ BASE_URL }}/settings/user/password-link', { method: 'POST', body: body });
+                const data = await resp.json();
+                if (!resp.ok) throw new Error(data.error || 'Could not make the link');
+                $('um-link-url').value = data.url;
+                $('um-link-note').textContent = (data.purpose === 'activate' ? 'Activation link' : 'Password reset link')
+                    + ' for ' + username + '. Works once, until ' + data.expires + '. Copy it now: it cannot be shown again.';
+                emailDraft = data;
+                $('um-email-btn').disabled = !data.email;
+                $('um-email-btn').title = data.email ? '' : 'This user has no email address';
+                $('um-link-result').style.display = '';
+                $('um-link-url').select();
+                try { await navigator.clipboard.writeText(data.url); $('um-link-note').textContent += ' Copied.'; } catch (e) { /* copy by hand */ }
+            } catch (e) {
+                $('um-link-error').textContent = e.message;
+            } finally {
+                btn.disabled = false;
+            }
         });
         $('um-delete').addEventListener('click', () => {
             const u = $('um-delete-user').value;

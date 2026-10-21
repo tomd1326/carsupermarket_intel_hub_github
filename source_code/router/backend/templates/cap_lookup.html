@@ -63,7 +63,39 @@
 
             <!-- Left: input + progress -->
             <div class="col-12 col-lg-5 col-xl-4">
-                <div class="card mb-3">
+                <div class="btn-group w-100 mb-3" role="group">
+                    <button type="button" class="btn btn-outline-secondary mode-btn active" id="modeLookupBtn" onclick="setMode('lookup')">CAP ID Lookup</button>
+                    <button type="button" class="btn btn-outline-secondary mode-btn" id="modeValuationBtn" onclick="setMode('valuation')">CAP Valuation</button>
+                </div>
+
+                <div class="card mb-3" id="valuationCard" style="display:none;">
+                    <div class="card-body">
+                        <div class="btn-group w-100 mb-3" role="group">
+                            <button type="button" class="btn btn-sm btn-outline-secondary sub-btn active" id="subVrmBtn" onclick="setSubMode('vrm')">By VRM</button>
+                            <button type="button" class="btn btn-sm btn-outline-secondary sub-btn" id="subCapidBtn" onclick="setSubMode('capid')">By CAP ID</button>
+                            <button type="button" class="btn btn-sm btn-outline-secondary sub-btn" id="subHistoricBtn" onclick="setSubMode('historic')">Historic (CAP ID)</button>
+                        </div>
+                        <div id="valVrmFields">
+                            <label class="form-label fw-bold small text-muted mb-1">VRM</label>
+                            <input type="text" id="valVrm" class="form-control mb-2" autocomplete="off">
+                        </div>
+                        <div id="valCapidFields" style="display:none;">
+                            <label class="form-label fw-bold small text-muted mb-1">CAP ID</label>
+                            <input type="number" id="valCapid" class="form-control mb-2">
+                            <label class="form-label fw-bold small text-muted mb-1">Registration Date (dd/mm/yyyy)</label>
+                            <input type="text" id="valRegDate" class="form-control mb-2" placeholder="dd/mm/yyyy" autocomplete="off">
+                        </div>
+                        <div id="valHistoricFields" style="display:none;">
+                            <label class="form-label fw-bold small text-muted mb-1">Months Back</label>
+                            <input type="number" id="valMonthsBack" class="form-control mb-2" value="12" min="0" max="60">
+                        </div>
+                        <label class="form-label fw-bold small text-muted mb-1">Mileage</label>
+                        <input type="number" id="valMileage" class="form-control mb-3" min="1">
+                        <button class="btn btn-process" id="valuationBtn" onclick="runValuation()">Run CAP Valuation</button>
+                    </div>
+                </div>
+
+                <div class="card mb-3" id="lookupCard">
                     <div class="card-body">
                         <label class="form-label fw-bold small text-muted mb-1">VRMs (one per line)</label>
                         <textarea id="vrmInput" class="form-control mb-2" rows="14"></textarea>
@@ -79,7 +111,7 @@
                 <div class="card" id="progressCard" style="display:none;">
                     <div class="card-body">
                         <div class="d-flex justify-content-between mb-1">
-                            <span class="small text-muted">Processing...</span>
+                            <span class="small text-muted" id="progressText">Processing...</span>
                             <span class="small text-muted" id="progressLabel">0%</span>
                         </div>
                         <div class="progress mb-2">
@@ -158,6 +190,95 @@
                 .filter(v => v.length > 0);
         }
 
+        let _subMode = 'vrm';
+
+        function setMode(mode) {
+            const isVal = mode === 'valuation';
+            document.getElementById('lookupCard').style.display = isVal ? 'none' : '';
+            document.getElementById('valuationCard').style.display = isVal ? '' : 'none';
+            if (isVal) document.getElementById('progressCard').style.display = 'none';
+            document.getElementById('modeLookupBtn').classList.toggle('active', !isVal);
+            document.getElementById('modeValuationBtn').classList.toggle('active', isVal);
+        }
+
+        function setSubMode(sub) {
+            _subMode = sub;
+            document.getElementById('valVrmFields').style.display = sub === 'vrm' ? '' : 'none';
+            document.getElementById('valCapidFields').style.display = sub === 'vrm' ? 'none' : '';
+            document.getElementById('valHistoricFields').style.display = sub === 'historic' ? '' : 'none';
+            document.getElementById('subVrmBtn').classList.toggle('active', sub === 'vrm');
+            document.getElementById('subCapidBtn').classList.toggle('active', sub === 'capid');
+            document.getElementById('subHistoricBtn').classList.toggle('active', sub === 'historic');
+        }
+
+        function runValuation() {
+            const body = {mode: _subMode, mileage: document.getElementById('valMileage').value};
+            if (_subMode === 'vrm') {
+                body.vrm = document.getElementById('valVrm').value.trim().replace(/\s+/g, '').toUpperCase();
+                if (!body.vrm) { alert('Enter a VRM.'); return; }
+            } else {
+                body.capid = document.getElementById('valCapid').value;
+                body.registration_date = document.getElementById('valRegDate').value.trim();
+                if (!body.capid) { alert('Enter a CAP ID.'); return; }
+                if (!body.registration_date) { alert('Enter the registration date.'); return; }
+                if (_subMode === 'historic') {
+                    body.months_back = document.getElementById('valMonthsBack').value;                }
+            }
+            if (!body.mileage) { alert('Enter the mileage.'); return; }
+
+            const btn = document.getElementById('valuationBtn');
+            btn.disabled = true;
+
+            const isHistoric = _subMode === 'historic';
+            const progressText = document.getElementById('progressText');
+            let pollInterval = null;
+            if (isHistoric) {
+                document.getElementById('progressCard').style.display = '';
+                progressText.textContent = 'Starting...';
+                setProgress(0, 0, 1, null);
+                pollInterval = setInterval(() => {
+                    fetch(BASE_URL + '/cap-lookup/progress')
+                        .then(r => r.json())
+                        .then(p => {
+                            if (p.total > 0) {
+                                setProgress(p.pct, p.done, p.total, p.eta_s);
+                                if (p.label) progressText.textContent = p.label;
+                            }
+                        })
+                        .catch(() => {});
+                }, 700);
+            } else {
+                progressText.textContent = 'Processing...';
+            }
+            const stopProgress = () => {
+                if (pollInterval) clearInterval(pollInterval);
+                if (isHistoric) progressText.textContent = 'Done';
+            };
+
+            fetch(BASE_URL + '/cap-lookup/valuation', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify(body)
+            })
+            .then(r => {
+                if (!r.ok) return r.json().then(e => { throw new Error(e.detail || 'Valuation failed'); });
+                return r.json();
+            })
+            .then(data => {
+                stopProgress();
+                if (isHistoric) setProgress(100, data.rows.length, data.rows.length, null);
+                _currentFilename = data.filename;
+                renderResults(data.columns, data.rows, nowTimestamp());
+                loadHistory();
+            })
+            .catch(err => {
+                if (pollInterval) clearInterval(pollInterval);
+                if (isHistoric) progressText.textContent = 'Failed';
+                alert('Error: ' + err.message);
+            })
+            .finally(() => { btn.disabled = false; });
+        }
+
         function nowTimestamp() {
             const d = new Date();
             const pad = n => String(n).padStart(2, '0');
@@ -170,6 +291,7 @@
 
             document.getElementById('processBtn').disabled = true;
             document.getElementById('progressCard').style.display = '';
+            document.getElementById('progressText').textContent = 'Processing...';
             setProgress(0, 0, vrms.length, null);
 
             let pollInterval = setInterval(() => {

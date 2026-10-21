@@ -9,7 +9,8 @@ import logging
 
 from utils.db_utils import (get_database_connection, record_login, record_logout,
                             find_usernames_by_email, get_settings, remove_session_presence,
-                            new_session_id)
+                            new_session_id, close_sessions, peek_password_link, redeem_password_link)
+from utils.password_rules import PASSWORD_RULES, PASSWORD_MIN_LENGTH, password_error
 
 from .core import (BASE_URL, _ENV, templates, VALID_USERS, _reload_users_from_aurora,
                    get_current_user, session_config, ADMIN_USERNAME)
@@ -30,7 +31,8 @@ def root(request: Request, user: str = Depends(get_current_user)):
 
 @router.get("/login", response_class=HTMLResponse)
 def login(request: Request):
-    return templates.TemplateResponse("login.html", {"request": request, 'BASE_URL': BASE_URL})
+    notice = "Your password is set. You can sign in now." if request.query_params.get('pwset') else None
+    return templates.TemplateResponse("login.html", {"request": request, 'BASE_URL': BASE_URL, 'notice': notice})
 
 
 @router.post("/login")
@@ -78,6 +80,77 @@ def login(request: Request, username: str = Form(...), password: str = Form(...)
             'BASE_URL': BASE_URL
         }
     )
+
+
+def _set_password_page(request: Request, **context):
+    """The set-password page. Never cached and never sends the address on to
+    another site, because the address holds the link's token."""
+    response = templates.TemplateResponse("set_password.html", {
+        "request": request, "BASE_URL": BASE_URL, "rules": PASSWORD_RULES,
+        "min_length": PASSWORD_MIN_LENGTH, **context})
+    response.headers["Cache-Control"] = "no-store"
+    response.headers["Referrer-Policy"] = "no-referrer"
+    return response
+
+
+def _peek_link(token: str):
+    try:
+        with get_database_connection() as conn:
+            return peek_password_link(conn, token)
+    except Exception as e:
+        logger.warning("Could not check a password link: %s", e)
+        return None
+
+
+@router.get("/set-password", response_class=HTMLResponse)
+def set_password_form(request: Request, token: str = ""):
+    """Opened from an activation or reset link. Only looks at the link; it is
+    used up when the new password is saved."""
+    link = _peek_link(token)
+    if link is None:
+        return _set_password_page(request, invalid=True)
+    return _set_password_page(request, token=token, username=link[0], purpose=link[1])
+
+
+@router.post("/set-password", response_class=HTMLResponse)
+def set_password_save(
+    request: Request,
+    token: str = Form(default=""),
+    password: str = Form(default=""),
+    confirm: str = Form(default=""),
+):
+    link = _peek_link(token)
+    if link is None:
+        return _set_password_page(request, invalid=True)
+    username, purpose = link
+    error = None
+    if password != confirm:
+        error = "The two passwords do not match"
+    else:
+        error = password_error(password)
+    if error:
+        return _set_password_page(request, token=token, username=username, purpose=purpose, error=error)
+    pwd_hash = hashlib.sha256(password.encode()).hexdigest()
+    try:
+        with get_database_connection() as conn:
+            redeemed = redeem_password_link(conn, token, pwd_hash)
+            if redeemed is not None:
+                # The password is saved. Ending old sessions is a second step: if it
+                # fails, get_current_user signs the old session out when it is next used.
+                try:
+                    close_sessions(conn, 'password_changed', session_config()['session_timeout_minutes'],
+                                   username=username)
+                except Exception as e:
+                    logger.warning("Could not end sessions for %s after a password link: %s", username, e)
+    except Exception as e:
+        logger.warning("Could not save a password from a link: %s", e)
+        return _set_password_page(request, token=token, username=username, purpose=purpose,
+                                  error="The password could not be saved. Please try again")
+    if redeemed is None:
+        return _set_password_page(request, invalid=True)
+    VALID_USERS[username] = pwd_hash
+    logger.info("User %s set a password from a %s link", username, purpose)
+    return RedirectResponse(url=BASE_URL + "/login?pwset=1", status_code=303)
 
 
 @router.get("/logout")
