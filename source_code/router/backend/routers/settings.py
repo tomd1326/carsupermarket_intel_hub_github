@@ -7,6 +7,7 @@ import datetime
 import io
 import time
 import hashlib
+import urllib.parse
 import logging
 import os
 import re
@@ -14,7 +15,7 @@ import subprocess
 import zoneinfo
 
 
-from utils.db_utils import (get_database_connection, get_settings, save_settings,
+from utils.db_utils import (get_database_connection, get_settings, save_settings, SETTINGS_DEFAULTS,
                             save_settings_partial, get_last_login_per_user,
                             get_active_sessions, get_sessions, get_session_environments,
                             get_session_usernames, get_prod_activity_connection,
@@ -24,7 +25,10 @@ from utils.db_utils import (get_database_connection, get_settings, save_settings
                             load_all_page_access, set_page_access_many,
                             delete_user_and_access, ALWAYS_ENABLED_USERS,
                             APPEARANCE_COLOUR_SETTINGS,
-                            get_prod_pricer_connection, load_page_names, save_page_names)
+                            get_prod_pricer_connection, load_page_names, save_page_names,
+                            add_pending_user, mark_user_activated, cancel_password_links,
+                            create_password_link, read_inactive_users, widen_settings_values)
+from utils.password_rules import password_error, PASSWORD_RULES_TEXT
 
 from . import core
 from .core import (BASE_URL, templates, VALID_USERS, get_current_user, session_config,
@@ -891,16 +895,18 @@ def _users_source(q) -> tuple:
 
 
 def _read_prod_users() -> tuple:
-    """(people, last_logins) from prod's database. Read only: nothing is
-    created or changed there."""
+    """(people, last_logins, inactive) from prod's database. Read only: nothing
+    is created or changed there. inactive is the usernames that have not set a
+    password yet."""
     with get_prod_activity_connection() as conn:
         try:
             people = read_user_details(conn)
             last_logins = get_last_login_per_user(conn, write=False)
+            inactive = read_inactive_users(conn)
         except Exception:
             conn.rollback()
             raise
-    return people, last_logins
+    return people, last_logins, inactive
 
 
 @router.get("/settings/users", response_class=HTMLResponse)
@@ -912,12 +918,14 @@ def users_page(request: Request, user: str = Depends(get_current_user)):
     last_logins = {}
     people = {}
     all_users = []
+    inactive = set()
     login_mode = 'both'
+    link_settings = {}
     error = None
     if viewing_prod:
         # Never falls back to this environment's users under a Prod heading.
         try:
-            people, last_logins = _read_prod_users()
+            people, last_logins, inactive = _read_prod_users()
             all_users = sorted(people)
         except Exception as e:
             logger.warning("Failed to load prod user accounts: %s", e)
@@ -927,13 +935,22 @@ def users_page(request: Request, user: str = Depends(get_current_user)):
             with get_database_connection() as conn:
                 last_logins = get_last_login_per_user(conn)
                 people = load_user_details(conn)
-                login_mode = get_settings(conn).get('login_mode', 'both')
+                inactive = read_inactive_users(conn)
         except Exception as e:
             logger.warning("Failed to load user accounts data: %s", e)
         all_users = sorted(VALID_USERS)
+    try:
+        with get_database_connection() as conn:
+            link_settings = get_settings(conn)
+    except Exception as e:
+        logger.warning("Failed to load sign in settings: %s", e)
+        link_settings = dict(SETTINGS_DEFAULTS)
+    login_mode = link_settings.get('login_mode', 'both')
     return templates.TemplateResponse("users.html", {
         "request": request, "user": user, "BASE_URL": BASE_URL,
         "login_mode": login_mode, "admin_username": ADMIN_USERNAME,
+        "inactive": inactive, "link_settings": link_settings,
+        "password_rules_text": PASSWORD_RULES_TEXT,
         "all_users": all_users, "people": people,
         "last_logins": last_logins, "error": error,
         "can_view_prod": can_view_prod, "source": source, "viewing_prod": viewing_prod,
@@ -951,7 +968,7 @@ def users_export(request: Request, user: str = Depends(get_current_user)):
     can_view_prod, source = _users_source(request.query_params)
     try:
         if can_view_prod and source == 'prod':
-            people, last_logins = _read_prod_users()
+            people, last_logins, _inactive = _read_prod_users()
             usernames = sorted(people)
         else:
             with get_database_connection() as conn:
@@ -1402,7 +1419,19 @@ def save_page_access(
     return _user_redirect("page_access", accessok=len(changed))
 
 
-_MIN_PASSWORD_LENGTH = 6
+def _password_problem_redirect(back, problem: str):
+    return back(pwderr=urllib.parse.quote_plus(problem))
+
+
+def _after_manual_password(conn, target: str) -> None:
+    """A password typed in the Users popup also activates the account, and
+    cancels any set-password link not used yet so it cannot overwrite it."""
+    try:
+        mark_user_activated(conn, target)
+        cancel_password_links(conn, target)
+    except Exception as e:
+        conn.rollback()
+        logger.warning("Could not activate %s or cancel their links after a password change: %s", target, e)
 
 
 def _writes_to_prod(source: str) -> bool:
@@ -1435,8 +1464,9 @@ def _save_prod_user(mode: str, target: str, details: dict, password: str, user: 
     when their user cache next reloads (within about a minute)."""
     if mode not in ('add', 'edit'):
         raise HTTPException(status_code=400, detail="Unknown mode")
-    if (mode == 'add' or password) and len(password) < _MIN_PASSWORD_LENGTH:
-        return _prod_users_redirect(pwderr="Password+must+be+at+least+6+characters")
+    problem = password_error(password) if password else None
+    if problem:
+        return _password_problem_redirect(_prod_users_redirect, problem)
     ended = 0
     with get_prod_activity_connection() as conn:
         try:
@@ -1447,10 +1477,14 @@ def _save_prod_user(mode: str, target: str, details: dict, password: str, user: 
                 return _prod_users_redirect(pwderr="User+not+found+on+prod")
             if password:
                 upsert_user(conn, target, hashlib.sha256(password.encode()).hexdigest())
+            elif mode == 'add':
+                add_pending_user(conn, target)
             update_user_details(conn, {target: details}, ensure=False)
         except Exception:
             conn.rollback()
             raise
+        if password:
+            _after_manual_password(conn, target)
         if mode == 'edit' and password:
             ended = _end_prod_sessions(conn, 'password_changed', target)
     logger.info("PROD user %s %s by %s%s", target, 'created' if mode == 'add' else 'saved', user,
@@ -1492,23 +1526,29 @@ def save_user(
     if mode == 'add':
         if target in VALID_USERS:
             return _user_redirect("users", pwderr="User+already+exists")
-        if len(password) < _MIN_PASSWORD_LENGTH:
-            return _user_redirect("users", pwderr="Password+must+be+at+least+6+characters")
-        pwd_hash = hashlib.sha256(password.encode()).hexdigest()
+        problem = password_error(password) if password else None
+        if problem:
+            return _password_problem_redirect(back, problem)
         with get_database_connection() as conn:
-            upsert_user(conn, target, pwd_hash)
+            if password:
+                pwd_hash = hashlib.sha256(password.encode()).hexdigest()
+                upsert_user(conn, target, pwd_hash)
+            else:
+                # No password yet: the user is activated with a link from the Edit popup.
+                pwd_hash = add_pending_user(conn, target)
             update_user_details(conn, {target: details})
         VALID_USERS[target] = pwd_hash
         core.reload_user_details()
-        logger.info("User %s created by %s", target, user)
-        return _user_redirect("users", useradded=target)
+        logger.info("User %s created by %s%s", target, user, "" if password else " (waiting for activation)")
+        return _user_redirect("users", **{'useradded' if password else 'userpending': target})
 
     if mode != 'edit':
         raise HTTPException(status_code=400, detail="Unknown mode")
     if target not in VALID_USERS:
         return _user_redirect("users", pwderr="User+not+found")
-    if password and len(password) < _MIN_PASSWORD_LENGTH:
-        return _user_redirect("users", pwderr="Password+must+be+at+least+6+characters")
+    problem = password_error(password) if password else None
+    if problem:
+        return _password_problem_redirect(back, problem)
     ended = 0
     with get_database_connection() as conn:
         update_user_details(conn, {target: details})
@@ -1516,6 +1556,7 @@ def save_user(
             pwd_hash = hashlib.sha256(password.encode()).hexdigest()
             upsert_user(conn, target, pwd_hash)
             VALID_USERS[target] = pwd_hash
+            _after_manual_password(conn, target)
             try:
                 ended = close_sessions(conn, 'password_changed', session_config()['session_timeout_minutes'],
                                        username=target)
@@ -1526,6 +1567,98 @@ def save_user(
     logger.info("User %s saved by %s%s", target, user,
                 f" (password changed, {ended} sessions ended)" if password else "")
     return _user_redirect("users", saved=target)
+
+
+@router.post("/settings/user/password-link")
+def make_password_link(
+    request: Request,
+    username: str = Form(...),
+    source: str = Form(default="this"),
+    user: str = Depends(get_current_user),
+):
+    """Make an activation link (user has no password yet) or a reset link and
+    return its address, for the admin to send by email. Shown once: only a hash
+    of the token is stored. Any earlier unused link for the user stops working.
+    The address and the database match: a link for prod is saved to prod's
+    database and starts with prod's address."""
+    if user != ADMIN_USERNAME:
+        raise HTTPException(status_code=403)
+    target = username.strip()
+    if not target or target == ADMIN_USERNAME:
+        return JSONResponse({"error": "The admin account is set in code"}, status_code=400)
+    to_prod = _writes_to_prod(source)
+    try:
+        with get_database_connection() as local:
+            cfg = get_settings(local)
+        with (get_prod_activity_connection() if to_prod else get_database_connection()) as conn:
+            people = read_user_details(conn)
+            if target not in people:
+                return JSONResponse({"error": "User not found"}, status_code=404)
+            purpose = 'activate' if target in read_inactive_users(conn) else 'reset'
+            hours = max(1, int(cfg['password_link_hours']))
+            token, expires_at = create_password_link(conn, target, purpose, hours, user)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.warning("Could not make a password link for %s: %s", target, e)
+        return JSONResponse({"error": "Could not make the link - see the log"}, status_code=500)
+    base_key = 'password_link_base_prod' if (to_prod or core._ENV == 'prod') else 'password_link_base_dev'
+    url = f"{cfg[base_key].rstrip('/')}/set-password?token={token}"
+    expires = expires_at.astimezone(zoneinfo.ZoneInfo("Europe/London")).strftime("%d %b %Y %H:%M")
+    logger.info("%s link made for %s%s by %s", purpose, target, " on prod" if to_prod else "", user)
+    person = people.get(target, {})
+    fill = {'{first_name}': person.get('first_name') or 'there', '{link}': url, '{expires}': expires}
+
+    def filled(text: str) -> str:
+        for placeholder, value in fill.items():
+            text = text.replace(placeholder, value)
+        return text.replace("\r\n", "\n").replace("\n", "\r\n")   # Outlook wants Windows line breaks
+
+    return JSONResponse({
+        "url": url, "purpose": purpose, "expires": expires,
+        "email": person.get('email') or '',
+        "subject": filled(cfg[f'password_email_subject_{purpose}']),
+        "body": filled(cfg[f'password_email_body_{purpose}']),
+    })
+
+
+@router.post("/settings/password-links")
+def save_password_links(
+    request: Request,
+    password_link_hours: int = Form(...),
+    password_link_base_prod: str = Form(...),
+    password_link_base_dev: str = Form(...),
+    password_email_subject_activate: str = Form(default=""),
+    password_email_body_activate: str = Form(default=""),
+    password_email_subject_reset: str = Form(default=""),
+    password_email_body_reset: str = Form(default=""),
+    user: str = Depends(get_current_user),
+):
+    """Hours a link works for, and the address each environment's links start with."""
+    if user != ADMIN_USERNAME:
+        raise HTTPException(status_code=403)
+    prod_base = password_link_base_prod.strip().rstrip('/')
+    dev_base = password_link_base_dev.strip().rstrip('/')
+    if not (prod_base.startswith('https://') and dev_base.startswith('https://')):
+        return _user_redirect("users", linkerr="Addresses+must+start+with+https%3A%2F%2F")
+    emails = {
+        'password_email_subject_activate': password_email_subject_activate,
+        'password_email_body_activate': password_email_body_activate,
+        'password_email_subject_reset': password_email_subject_reset,
+        'password_email_body_reset': password_email_body_reset,
+    }
+    # A blank box goes back to the built-in wording (get_settings falls back to it).
+    emails = {k: v.replace(chr(13) + chr(10), chr(10)).strip() for k, v in emails.items()}
+    with get_database_connection() as conn:
+        widen_settings_values(conn)
+        save_settings_partial(conn, {
+            'password_link_hours': max(1, min(password_link_hours, 720)),
+            'password_link_base_prod': prod_base,
+            'password_link_base_dev': dev_base,
+            **emails,
+        })
+    logger.info("Settings [Password Links] hours=%s set by %s", password_link_hours, user)
+    return _user_redirect("users", linkok=1)
 
 
 @router.post("/settings/delete-user")

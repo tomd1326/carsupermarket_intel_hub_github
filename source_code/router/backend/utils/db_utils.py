@@ -6,6 +6,7 @@ import os
 import psycopg2
 import psycopg2.extras
 import psycopg2.pool
+import secrets
 from contextlib import contextmanager
 from botocore.exceptions import UnauthorizedSSOTokenError
 from fastapi import HTTPException
@@ -177,6 +178,31 @@ SETTINGS_DEFAULTS = {
     'presence_interval_seconds':        20,
     'presence_drop_off_seconds':        60,
     'presence_circle_size':             26,
+    # Set-password links (Settings > User Accounts > Password Links): hours a
+    # link works for, and the address each environment's links start with.
+    'password_link_hours':              48,
+    'password_link_base_prod':          'https://uk-vle.aramis-group.eu/dev',
+    'password_link_base_dev':           'https://ceywu383w7.execute-api.us-east-2.amazonaws.com/dev',
+    # The email the Users page opens in Outlook. Placeholders: {first_name}, {link}, {expires}.
+    # The sign-off name is Outlook's own default signature, added when the email opens.
+    'password_email_subject_activate':  'Your Vehicle List Evaluator Account',
+    'password_email_body_activate': (
+        'Hi {first_name},\n\n'
+        'Your Vehicle List Evaluator account has been created. Please use the link below to set your password:\n\n'
+        '{link}\n\n'
+        'The link works once and expires on {expires}.\n\n'
+        'If the link does not work, reply to this email and I will send you a new one.\n\n'
+        'Kind regards,\n'
+    ),
+    'password_email_subject_reset':     'Reset Your Vehicle List Evaluator Password',
+    'password_email_body_reset': (
+        'Hi {first_name},\n\n'
+        'Please use the link below to set a new password:\n\n'
+        '{link}\n\n'
+        'The link works once and expires on {expires}.\n\n'
+        'If the link does not work, reply to this email and I will send you a new one.\n\n'
+        'Kind regards,\n'
+    ),
     'presence_max_circles':             5,
     'presence_border_width':            2,
     'presence_gap':                     4,
@@ -249,6 +275,24 @@ ADMIN_DETAILS = {
 }
 
 
+PASSWORD_EMAIL_KEYS = ('password_email_subject_activate', 'password_email_body_activate',
+                       'password_email_subject_reset', 'password_email_body_reset')
+
+
+def widen_settings_values(conn) -> None:
+    """settings.value starts as VARCHAR(250), too short for an email body.
+    Changed to TEXT once; does nothing when it already is."""
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT data_type FROM information_schema.columns WHERE table_schema = current_schema() "
+            "AND table_name = 'settings' AND column_name = 'value'"
+        )
+        row = cur.fetchone()
+        if row is not None and row[0] != 'text':
+            cur.execute("ALTER TABLE settings ALTER COLUMN value TYPE TEXT")
+    conn.commit()
+
+
 def get_settings(conn, user: str = None) -> dict:
     try:
         with conn.cursor() as cur:
@@ -257,7 +301,8 @@ def get_settings(conn, user: str = None) -> dict:
         row_map = dict(rows)
         result = dict(SETTINGS_DEFAULTS)
         STRING_SETTINGS = {'cap_override_subscriber_id', 'cap_override_password',
-                           'email_sender', 'email_test_recipient', 'login_mode'} | PRESENCE_COLOUR_SETTINGS | APPEARANCE_COLOUR_SETTINGS
+                           'email_sender', 'email_test_recipient', 'login_mode',
+                           'password_link_base_prod', 'password_link_base_dev'} | set(PASSWORD_EMAIL_KEYS) | PRESENCE_COLOUR_SETTINGS | APPEARANCE_COLOUR_SETTINGS
         for key, value in rows:
             if key in BOOL_SETTINGS or key in STRING_SETTINGS or '__' in key:
                 continue
@@ -280,6 +325,8 @@ def get_settings(conn, user: str = None) -> dict:
         result['email_test_recipient'] = row_map.get('email_test_recipient', '')
         # 'both' = username or email address at login, 'email' = email address only.
         result['login_mode'] = row_map.get('login_mode', 'both')
+        for key in ('password_link_base_prod', 'password_link_base_dev') + PASSWORD_EMAIL_KEYS:
+            result[key] = row_map.get(key) or SETTINGS_DEFAULTS[key]
         for key in PRESENCE_COLOUR_SETTINGS | APPEARANCE_COLOUR_SETTINGS:
             result[key] = row_map.get(key, SETTINGS_DEFAULTS[key])
         # valuation_cache_hours: integer, global.
@@ -1083,6 +1130,191 @@ def read_user_details(conn) -> dict:
     for username, fixed in ADMIN_DETAILS.items():
         details[username] = dict(fixed)
     return details
+
+
+# ── Set-password links (account activation and password reset) ──────────────
+# One table for both kinds of link: purpose 'activate' (new account with no
+# password yet) or 'reset'. Only a hash of the token is stored, so a copy of the
+# database cannot be used to open a link. db/19_password_links.sql is the same
+# change for running by hand.
+
+PASSWORD_LINK_PURPOSES = ('activate', 'reset')
+
+
+def _password_links_present(conn) -> bool:
+    """True when both the password_links table and users.activated exist.
+    A plain read, so it never locks the users table."""
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT (SELECT COUNT(*) FROM information_schema.tables "
+            "        WHERE table_schema = current_schema() AND table_name = 'password_links'), "
+            "       (SELECT COUNT(*) FROM information_schema.columns "
+            "        WHERE table_schema = current_schema() AND table_name = 'users' "
+            "          AND column_name = 'activated')"
+        )
+        tables, columns = cur.fetchone()
+    return tables > 0 and columns > 0
+
+
+def _ensure_password_links(conn) -> None:
+    """Create the table and the users.activated column on first use. Every
+    existing user stays activated (the column defaults to TRUE). The ALTER only
+    runs when the column is missing, because it locks the users table."""
+    if _password_links_present(conn):
+        return
+    with conn.cursor() as cur:
+        cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS activated BOOLEAN NOT NULL DEFAULT TRUE")
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS password_links (
+                token_hash   CHAR(64) PRIMARY KEY,
+                username     VARCHAR(100) NOT NULL REFERENCES users (username) ON DELETE CASCADE,
+                purpose      VARCHAR(10) NOT NULL,
+                created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                expires_at   TIMESTAMPTZ NOT NULL,
+                used_at      TIMESTAMPTZ NULL,
+                cancelled_at TIMESTAMPTZ NULL,
+                created_by   VARCHAR(100)
+            )
+            """
+        )
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_password_links_username ON password_links (username)")
+    conn.commit()
+
+
+def _hash_link_token(token: str) -> str:
+    return hashlib.sha256(token.encode()).hexdigest()
+
+
+def read_inactive_users(conn) -> set:
+    """Usernames that have not set a password yet. Empty when the activated
+    column does not exist (every user counts as activated)."""
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT 1 FROM information_schema.columns WHERE table_schema = current_schema() "
+            "AND table_name = 'users' AND column_name = 'activated'"
+        )
+        if cur.fetchone() is None:
+            return set()
+        cur.execute("SELECT username FROM users WHERE NOT activated")
+        return {row[0] for row in cur.fetchall()}
+
+
+def add_pending_user(conn, username: str) -> str:
+    """A new user with no password. The stored hash is not a hex digest, so no
+    password can ever match it; the activation link replaces it. Returns that
+    stored value."""
+    _ensure_password_links(conn)
+    pwd_hash = '!' + secrets.token_hex(16)
+    with conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO users (username, pwd_hash, activated) VALUES (%s, %s, FALSE)",
+            (username, pwd_hash),
+        )
+    conn.commit()
+    return pwd_hash
+
+
+def mark_user_activated(conn, username: str) -> None:
+    """A password set by hand also activates the account. Nothing to do when
+    the column does not exist yet (everyone is already activated)."""
+    if not _password_links_present(conn):
+        return
+    with conn.cursor() as cur:
+        cur.execute("UPDATE users SET activated = TRUE WHERE username = %s", (username,))
+    conn.commit()
+
+
+def cancel_password_links(conn, username: str) -> int:
+    """Cancel this user's unused links, so an old link cannot overwrite a
+    password that was just set another way. Returns how many were cancelled."""
+    if not _password_links_present(conn):
+        return 0
+    with conn.cursor() as cur:
+        cur.execute(
+            "UPDATE password_links SET cancelled_at = NOW() "
+            "WHERE username = %s AND used_at IS NULL AND cancelled_at IS NULL",
+            (username,),
+        )
+        count = cur.rowcount
+    conn.commit()
+    return count
+
+
+def create_password_link(conn, username: str, purpose: str, hours: int, created_by: str) -> tuple:
+    """New link for an existing user; any earlier unused link for them is
+    cancelled in the same step. Returns (token, expires_at). The token is shown
+    once and never stored."""
+    if purpose not in PASSWORD_LINK_PURPOSES:
+        raise ValueError(f"Unknown password link purpose: {purpose}")
+    _ensure_password_links(conn)
+    token = secrets.token_urlsafe(32)
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE password_links SET cancelled_at = NOW() "
+                "WHERE username = %s AND used_at IS NULL AND cancelled_at IS NULL",
+                (username,),
+            )
+            cur.execute(
+                "INSERT INTO password_links (token_hash, username, purpose, expires_at, created_by) "
+                "VALUES (%s, %s, %s, NOW() + INTERVAL '1 hour' * %s, %s) RETURNING expires_at",
+                (_hash_link_token(token), username, purpose, hours, created_by),
+            )
+            expires_at = cur.fetchone()[0]
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    return token, expires_at
+
+
+def peek_password_link(conn, token: str) -> tuple | None:
+    """(username, purpose) when the link is unused, not cancelled and not
+    expired, else None. Read only: opening the page must not use the link up,
+    because email and chat programs open links to make a preview."""
+    if not token or not _password_links_present(conn):
+        return None
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT username, purpose FROM password_links WHERE token_hash = %s "
+            "AND used_at IS NULL AND cancelled_at IS NULL AND expires_at > NOW()",
+            (_hash_link_token(token),),
+        )
+        row = cur.fetchone()
+    return (row[0], row[1]) if row else None
+
+
+def redeem_password_link(conn, token: str, pwd_hash: str) -> tuple | None:
+    """Use the link and save the password as one step. Returns (username,
+    purpose), or None when the link is not valid (nothing is changed). If the
+    password cannot be saved the link is left usable."""
+    if not token or not _password_links_present(conn):
+        return None
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE password_links SET used_at = NOW() WHERE token_hash = %s "
+                "AND used_at IS NULL AND cancelled_at IS NULL AND expires_at > NOW() "
+                "RETURNING username, purpose",
+                (_hash_link_token(token),),
+            )
+            row = cur.fetchone()
+            if row is None:
+                conn.rollback()
+                return None
+            cur.execute(
+                "UPDATE users SET pwd_hash = %s, activated = TRUE WHERE username = %s",
+                (pwd_hash, row[0]),
+            )
+            if cur.rowcount != 1:
+                conn.rollback()
+                return None
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    return row[0], row[1]
 
 
 def find_usernames_by_email(conn, email: str) -> list:
