@@ -362,6 +362,30 @@ class CAPClient(metaclass=Singleton):
         monthly_valuation_data = self.fetch_and_parse_data(self.monthly_valuation_url, old_payload, vrm=vehicle.vrm)
         return monthly_valuation_data
 
+    def live_valuation_on(self, capid: int, registration_date: datetime.date, mileage: int,
+                          valuation_date: datetime.date, round_to: int = 25) -> Tuple[int, int]:
+        """
+        Live valuation endpoint with a chosen valuation date instead of today,
+        used to read the value CAP held on the 1st of a past (or future) month.
+        Returns (retail, clean) at the mileage rounded to the nearest 1,000.
+        Raises RuntimeError with a plain message when CAP returns no values.
+        """
+        payload = {
+            'subscriberId': self.subscriber_id,
+            'password': self.cap_password,
+            'database': self.database,
+            'capid': capid,
+            'valuationDate': valuation_date.strftime('%Y-%m-%d'),
+            'regDate': registration_date.strftime('%Y-%m-%d'),
+        }
+        with self._counter_lock:
+            self._live_requests += 1
+        bands = self.fetch_and_parse_data(self.live_valuation_url, payload, vrm=f"capid {capid}")
+        if not bands:
+            raise RuntimeError("CAP returned no values for this CAP ID, registration date and valuation date")
+        retail, clean = self.get_valuations(self.round_to_nearest_thousand(mileage), bands)
+        return round(retail / round_to) * round_to, round(clean / round_to) * round_to
+
     def extract_vrm_values(self, response):
         root = ET.fromstring(response)
         namespaces = {'ns': 'https://soap.cap.co.uk/vrm'}
