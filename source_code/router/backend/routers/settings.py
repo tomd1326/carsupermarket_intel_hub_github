@@ -48,7 +48,7 @@ SETTINGS_SECTIONS = [
     ("buying-requirements", "Buying Requirements", "Buying Requirements"),
     ("supplier-evaluator",  "Supplier Evaluator",  "Supplier Stock Evaluator"),
     ("mot-check",           "MOT Check",           "MOT Check"),
-    ("kpi",                 "KPI Dashboard",       "KPI Dashboard"),
+    ("ai",                  "AI",                  "AI"),
     ("cap-credentials",     "CAP Credentials",     "CAP Credential Override"),
     ("email",               "Email",               "Email"),
     ("live-users",          "Live Users",          "Live Users"),
@@ -59,7 +59,7 @@ SETTINGS_SECTIONS = [
 ]
 
 # Sections merged into another; old links land on the new one.
-_MOVED_SECTIONS = {"api-requests": "live-update", "dbt": "live-update"}
+_MOVED_SECTIONS = {"api-requests": "live-update", "dbt": "live-update", "kpi": "ai"}
 
 # The settings 'user' scope used by this admin page. The buying requirements
 # page reads its own per-user values, but the admin page has always edited the
@@ -183,18 +183,55 @@ def save_mot_check(
     return _section_redirect("mot-check")
 
 
-@router.post("/settings/section/kpi")
-def save_kpi(
+@router.post("/settings/ai/refresh-models")
+def refresh_ai_models(request: Request, user: str = Depends(get_current_user)):
+    """Ask Snowflake which Cortex models it serves and store the list for the
+    Settings > AI dropdown. The chosen model is kept in the list either way."""
+    if user != 'tdrayson':
+        raise HTTPException(status_code=403, detail="Forbidden")
+    try:
+        from utils.snowflake_client import SnowflakeClient
+        with SnowflakeClient() as client:
+            client.execute("CALL SNOWFLAKE.MODELS.CORTEX_BASE_MODELS_REFRESH()")
+            rows, columns = client.execute("SHOW MODELS IN SNOWFLAKE.MODELS")
+        names = [c.lower() for c in columns]
+        name_at = names.index("name")
+        type_at = names.index("model_type") if "model_type" in names else None
+        found = sorted({str(r[name_at]).lower() for r in rows
+                        if type_at is None or str(r[type_at]).upper() == "CORTEX_BASE"})
+    except Exception as e:
+        logger.error("Settings [AI] model refresh failed: %s", e)
+        return JSONResponse({"error": f"Could not read the model list from Snowflake: {e}"}, status_code=500)
+    if not found:
+        return JSONResponse({"error": "Snowflake returned no models"}, status_code=500)
+    with get_database_connection() as conn:
+        widen_settings_values(conn)
+        current = get_settings(conn).get('cortex_model')
+        if current and current not in found:
+            found.append(current)
+        save_settings_partial(conn, {'cortex_models': ",".join(found)})
+    logger.info("Settings [AI] model list refreshed by %s: %s models", user, len(found))
+    return {"models": found}
+
+
+@router.post("/settings/section/ai")
+def save_ai(
     request: Request,
     kpi_ai_summary: str = Form(default=""),
+    orders_deliveries_ai: str = Form(default=""),
+    cortex_model: str = Form(...),
     user: str = Depends(get_current_user),
 ):
     if user != 'tdrayson':
         raise HTTPException(status_code=403, detail="Forbidden")
     with get_database_connection() as conn:
-        save_settings_partial(conn, {'kpi_ai_summary': '1' if kpi_ai_summary == "on" else '0'})
-    logger.info("Settings [KPI Dashboard] updated by %s", user)
-    return _section_redirect("kpi")
+        save_settings_partial(conn, {
+            'kpi_ai_summary':       '1' if kpi_ai_summary == "on" else '0',
+            'orders_deliveries_ai': '1' if orders_deliveries_ai == "on" else '0',
+            'cortex_model':         cortex_model.strip() or SETTINGS_DEFAULTS['cortex_model'],
+        })
+    logger.info("Settings [AI] updated by %s", user)
+    return _section_redirect("ai")
 
 
 @router.post("/settings/section/cap-credentials")

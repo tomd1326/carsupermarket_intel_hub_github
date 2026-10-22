@@ -17,8 +17,9 @@ from utils.db_utils import (get_database_connection, get_prod_pricer_connection,
                             delete_chart_target, replace_chart_target_dates,
                             get_chart_target_overview,
                             get_chart_target_summary, get_ga4_campaign_ids,
-                            add_ga4_campaign, remove_ga4_campaign)
+                            add_ga4_campaign, remove_ga4_campaign, get_settings)
 from utils.snowflake_client import SnowflakeClient
+from utils.cortex import cortex_complete
 from utils import sharepoint_sources
 from utils import at_invoices
 from utils import kpi_data_sources as kds
@@ -1785,11 +1786,17 @@ def _custom_data(metric: str, agg: str, source: str, target_mode: str, months: i
                   for d in dates]
         values_n1 = [_round(daily_n1_at(d)) for d in dates]
 
+        # The current month and week count only the days up to today: the
+        # Autotrader figures come from the Settings rows, so they have a value
+        # for future days too, and the period would otherwise show the whole
+        # predicted cost instead of the cost so far.
+        so_far = lambda period_dates: [d for d in period_dates if d <= today]
+
         # ── Monthly (current month left empty — it is part elapsed — unless
         # the chart asks for it; next month always empty) ────────────────────
         first_of_this_month = today.replace(day=1)
         monthly_values = [None if f > first_of_this_month or (f == first_of_this_month and not current_month)
-                          else _period(_month_dates(f))
+                          else _period(so_far(_month_dates(f)))
                           for f in month_firsts]
         monthly_labels = [month_abbrs[f.month - 1] + ' ' + str(f.year)[2:] for f in month_firsts]
 
@@ -1801,7 +1808,7 @@ def _custom_data(metric: str, agg: str, source: str, target_mode: str, months: i
         weekly_labels = [f"W{m.isocalendar()[1]} ({m.day}-{month_abbrs[m.month-1]})" for m in week_mondays]
         weekly_n1_labels = [f"W{pm.isocalendar()[1]} ({pm.day}-{month_abbrs[pm.month-1]})" for pm in prev_week_mondays]
         weekly_values = [None if m > current_week_monday or (m == current_week_monday and not current_week)
-                         else _period(_week_dates(m))
+                         else _period(so_far(_week_dates(m)))
                          for m in week_mondays]
         weekly_values_n1 = [_period(_week_dates(pm)) for pm in prev_week_mondays]
 
@@ -2994,6 +3001,8 @@ _AT_PERIOD_FIELDS = ("from", "base", "flex_pct", "tactical", "me_cost", "finance
                      "tactical_cost", "connect_cost", "to", "source")
 _AT_ROW_SOURCES = ("invoice", "email")
 _AT_PPC_FIELDS = ("from", "ppc_view_cost")
+# Autotrader's own limit on tactical slots, as a % of the base slots.
+_AT_TACTICAL_MAX_PCT = 10
 
 # The chart metrics worked out from those settings: name -> description.
 # Fixed in code because each is a calculation, not a column. PPC is never in
@@ -3130,6 +3139,14 @@ def kpi_at_periods_save(request: Request, payload: dict, user: str = Depends(req
         no_to = next((p for p in periods if p.get("source") == "invoice" and not p.get("to")), None)
         if no_to:
             err = f"Autotrader row {no_to['from']}: invoice rows need a To date (their costs are for From to To)"
+    if not err:
+        # Autotrader allows tactical slots up to 10% of the base slots. Only
+        # estimate rows are checked: invoice rows are what was actually charged.
+        over = next((p for p in periods if p.get("source") != "invoice"
+                     and (p.get("tactical") or 0) > (p.get("base") or 0) * _AT_TACTICAL_MAX_PCT / 100), None)
+        if over:
+            err = (f"Autotrader row {over['from']}: {over['tactical']} tactical slots is more than "
+                   f"{_AT_TACTICAL_MAX_PCT}% of {over.get('base') or 0} base slots")
     if err:
         return {"status": "error", "message": err}
     periods = sorted(periods, key=lambda p: p["from"])
@@ -3902,42 +3919,22 @@ def kpi_vehicles(request: Request, row_id: str, start: str, end: str,
     }
 
 
-# Model run through Snowflake Cortex (SNOWFLAKE.CORTEX.COMPLETE) rather than a
-# third-party API — this account has no Anthropic API key, only a Cortex
-# entitlement, so the model has to be one Cortex serves. claude-sonnet-5 is
-# confirmed working on this account (2026-08-24) despite eu-west-1 normally
-# being outside Anthropic's own regional availability for Claude.
-_CORTEX_MODEL = "claude-sonnet-5"
-
-
-def _cortex_complete(messages: list[dict], max_tokens: int, temperature: float) -> dict:
-    """Run a chat completion through Snowflake Cortex and return the parsed
-    response object (the same shape COMPLETE() returns: choices/usage)."""
-    with SnowflakeClient() as client:
-        rows, _ = client.execute(
-            "SELECT SNOWFLAKE.CORTEX.COMPLETE(%s, PARSE_JSON(%s), PARSE_JSON(%s))",
-            [_CORTEX_MODEL, json.dumps(messages),
-             json.dumps({"temperature": temperature, "max_tokens": max_tokens})],
-        )
-    result = rows[0][0]
-    return json.loads(result) if isinstance(result, str) else result
-
-
 @router.post("/kpi/ai-summary")
 def kpi_ai_summary(request: Request, payload: dict, user: str = Depends(require_page_api('kpi'))):
+    # Admin only, and only while Settings > KPI Dashboard > Enable Ask AI is on.
+    if not is_admin(user):
+        raise HTTPException(status_code=403, detail="Forbidden")
+    with get_database_connection() as conn:
+        if not get_settings(conn).get('kpi_ai_summary'):
+            return {"status": "error", "message": "Ask AI is turned off in Settings > KPI Dashboard"}
 
     prompt = (payload or {}).get("prompt")
     if not isinstance(prompt, str) or not prompt.strip():
         return {"status": "error", "message": "Missing prompt"}
 
     try:
-        data = _cortex_complete([{"role": "user", "content": prompt}],
-                                 max_tokens=4096, temperature=0.3)
-        usage = data.get("usage", {})
-        logger.info(
-            "Cortex AI summary: model=%s tokens_in=%s tokens_out=%s",
-            _CORTEX_MODEL, usage.get("prompt_tokens"), usage.get("completion_tokens"),
-        )
+        data = cortex_complete([{"role": "user", "content": prompt}],
+                               max_tokens=4096, temperature=0.3)
         summary = data["choices"][0]["messages"].strip()
         return {"status": "ok", "summary": summary}
     except Exception as e:

@@ -27,11 +27,11 @@ import boto3
 from fastapi import APIRouter, Request, Depends, HTTPException
 from fastapi.responses import HTMLResponse, RedirectResponse
 
-from utils.db_utils import get_database_connection, get_user_preference
+from utils.db_utils import get_database_connection, get_user_preference, get_settings
 from utils.snowflake_client import SnowflakeClient
 from .core import (BASE_URL, templates, _track, get_current_user, s3_bucketname,
                    s3_bucket_region, _S3_ENV, is_admin, require_page, require_page_api)
-from .kpi import _cortex_complete, _CORTEX_MODEL
+from utils.cortex import cortex_complete
 
 logger = logging.getLogger(__name__)
 
@@ -354,11 +354,13 @@ def _saved_font(conn, user: str, pref_key: str, default: int = _FONT_DEFAULT) ->
 @router.get("/reports/orders-deliveries", response_class=HTMLResponse)
 def orders_deliveries_page(request: Request, user: str = Depends(require_page('orders_deliveries'))):
     _track(request, 'page_view', '/reports/orders-deliveries')
+    ai_enabled = False
     try:
         with get_database_connection() as conn:
             font_summary = _saved_font(conn, user, 'orders_deliveries_font_summary')
             font_vehicle = _saved_font(conn, user, 'orders_deliveries_font_vehicle',
                                        _FONT_DEFAULT_VEHICLE)
+            ai_enabled = bool(get_settings(conn).get('orders_deliveries_ai'))
     except Exception as e:
         logger.warning("Orders & Deliveries: could not load saved font sizes: %s", e)
         font_summary = _FONT_DEFAULT
@@ -366,6 +368,7 @@ def orders_deliveries_page(request: Request, user: str = Depends(require_page('o
     return templates.TemplateResponse("orders_deliveries.html", {
         "request": request, "user": user, "BASE_URL": BASE_URL,
         "font_summary": font_summary, "font_vehicle": font_vehicle,
+        "ai_enabled": ai_enabled,
     })
 
 
@@ -495,8 +498,11 @@ def orders_deliveries_ask_ai(request: Request, payload: dict,
     data table is already in the first user turn."""
     if user != 'tdrayson':
         raise HTTPException(status_code=403)
+    with get_database_connection() as conn:
+        if not get_settings(conn).get('orders_deliveries_ai'):
+            return {"status": "error", "message": "Ask AI is turned off in Settings > AI"}
 
-    question = (payload or {}).get("question")
+    question =(payload or {}).get("question")
     context = (payload or {}).get("context")
     history = (payload or {}).get("history") or []
     if not isinstance(question, str) or not question.strip():
@@ -533,12 +539,8 @@ def orders_deliveries_ask_ai(request: Request, payload: dict,
                 len(messages), prompt_chars, bool(history))
 
     try:
-        data = _cortex_complete(messages, max_tokens=16384, temperature=0.2)
+        data = cortex_complete(messages, max_tokens=16384, temperature=0.2)
         usage = data.get("usage", {})
-        logger.info(
-            "Orders & Deliveries Ask AI: model=%s tokens_in=%s tokens_out=%s",
-            _CORTEX_MODEL, usage.get("prompt_tokens"), usage.get("completion_tokens"),
-        )
         answer = data["choices"][0]["messages"].strip()
         if not answer:
             return {"status": "error", "message": "Cortex returned an empty answer"}
