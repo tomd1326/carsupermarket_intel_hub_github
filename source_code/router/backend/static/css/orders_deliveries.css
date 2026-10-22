@@ -257,6 +257,21 @@
             text-align: center; font-weight: 700;
             font-size: 0.95em; color: var(--c-text-muted);
         }
+        /* Collapsing: the heading cell is the click target and the table keeps
+           only its header row. The header then has no body below it, so its
+           bottom corners are rounded here to close the frame. */
+        .summary-table-wrap { position: relative; }
+        /* In the summary card's 18px left padding (the wrap itself is inset 1px),
+           beside the header row. Height is set in JS to match that row. */
+        .collapse-btn {
+            position: absolute; left: -17px; top: 0; width: 16px; padding: 0;
+            background: none; border: none; cursor: pointer;
+            font-weight: 700; font-size: 0.95em; line-height: 1; color: var(--c-text-muted);
+        }
+        .collapse-btn:hover { color: var(--c-dark); }
+        table.summary.is-collapsed thead tr:first-child th { border-bottom: none; }
+        table.summary.is-collapsed thead tr:first-child th:first-child { border-bottom-left-radius: var(--radius-md); }
+        table.summary.is-collapsed thead tr:first-child th:last-child { border-bottom-right-radius: var(--radius-md); }
         /* Only the label cell marks an open row — a background across the whole
            row would sit under the shaded figures and dull them. */
         table.summary tr.is-expanded td.dim-label {
@@ -500,3 +515,47 @@
         .ai-meta {
             margin-top: 10px; font-size: 0.85em; color: var(--c-text-muted);
         }
+
+        /* Settings popup (admin only). Same layout as the KPI page's Settings:
+           tabs down the left, the chosen tab on the right, one height whichever
+           tab is open so the box does not jump. Fixed font size, so the page
+           font resizer does not change the popup. */
+        .od-modal-overlay {
+            position: fixed; inset: 0; background: rgba(15, 23, 42, 0.45);
+            display: none; align-items: flex-start; justify-content: center;
+            padding-top: 6vh; z-index: 1050; font-size: 14px;
+        }
+        .od-modal-overlay.open { display: flex; }
+        .od-modal-box {
+            background: var(--c-surface); border-radius: 12px; padding: 22px 24px;
+            width: 980px; max-width: 96vw; max-height: 88vh; overflow-y: auto;
+            box-shadow: 0 10px 40px rgba(0, 0, 0, 0.25);
+        }
+        .od-modal-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+        .od-modal-head h2 { font-size: 1rem; font-weight: 700; margin-bottom: 4px; }
+        .od-modal-close { background: none; border: none; font-size: 1.5rem; line-height: 1; color: var(--c-text-muted); cursor: pointer; }
+        .od-modal-close:hover { color: var(--c-dark); }
+        .od-modal-sub { font-size: 0.78rem; color: var(--c-text-muted); margin: 0 0 14px; }
+        .od-modal-error { font-size: 0.82rem; color: var(--c-text-danger); margin-bottom: 10px; display: none; }
+        .od-modal-error.show { display: block; }
+        .od-settings-body { display: grid; grid-template-columns: 160px minmax(0, 1fr); gap: 22px; min-height: 56vh; }
+        .od-settings-tabs { display: flex; flex-direction: column; gap: 4px; border-right: 1px solid var(--c-border); padding-right: 12px; }
+        .od-settings-tabs button {
+            text-align: left; background: none; border: none; border-radius: 6px; padding: 8px 10px;
+            font-size: 0.88rem; font-weight: 600; color: var(--c-text-muted); cursor: pointer;
+        }
+        .od-settings-tabs button:hover { background: var(--c-disabled-bg); color: var(--c-dark); }
+        .od-settings-tabs button.active { background: var(--c-table-header-bg); color: var(--c-table-header-text); }
+        .od-settings-pane { display: none; }
+        .od-settings-pane.active { display: block; }
+        .od-section-title { font-weight: 700; font-size: 0.9rem; margin: 6px 0 8px; }
+        .od-label { display: block; font-size: 0.8rem; font-weight: 700; margin-bottom: 4px; }
+        .od-hint { font-size: 0.75rem; color: var(--c-text-muted); margin-top: 4px; line-height: 1.45; }
+        .od-band-labels { margin-top: 6px; display: flex; flex-wrap: wrap; gap: 4px; }
+        .od-band-labels span {
+            border: 1px solid var(--c-border); border-radius: 4px; padding: 1px 8px; font-size: 0.78rem;
+        }
+        .od-swatch { width: 180px; height: 24px; border-radius: 4px; border: 1px solid var(--c-border); }
+        .od-shade-cols { width: auto; }
+        .od-shade-cols td, .od-shade-cols th { padding-right: 24px; }
+        .od-modal-actions { display: flex; align-items: center; gap: 10px; margin-top: 18px; }

@@ -30,7 +30,8 @@ from fastapi.responses import HTMLResponse
 from utils.db_utils import get_database_connection, get_user_preference, get_settings
 from utils.snowflake_client import SnowflakeClient
 from .core import (BASE_URL, templates, _track, s3_bucketname,
-                   s3_bucket_region, require_page, require_page_api)
+                   s3_bucket_region, require_page, require_page_api, is_admin)
+from utils import od_bands, od_shading
 from utils.cortex import cortex_complete
 from utils import ai_knowledge
 
@@ -63,7 +64,10 @@ _COLUMNS = [
     # it matches daily_summary__p, which builds its own price position from
     # this column. Sell stays before discount with Discount beside it.
     ("SALE_PRICE_AFTER_DISCOUNT_INC_ADMIN_FEE", "sell_price_after_disc_incl_fee"),
-    ("PRICE_BAND", "price_band"),
+    # Raw prices the price band is worked out from (see utils/od_bands.py). The
+    # band itself is no longer read from the model, so the admin can edit it.
+    ("VEHICLE_SELLING_PRICE_INC_VAT", "vehicle_selling_price"),
+    ("SALE_PRICE_AFTER_DISCOUNT", "sale_price_after_discount"),
     ("FINANCE_SUBSIDY", "finance_subsidy"),
     ("CHASSIS_MARGIN_AFTER_SUBSIDY", "chassis_mgn_aft_subs"),
     ("VEHICLE_COSTS", "vehicle_costs"),
@@ -83,9 +87,7 @@ _COLUMNS = [
     ("FUEL_TYPE_CATEGORY", "fuel"),
     ("COLOUR", "colour"),
     ("MILEAGE", "mileage"),
-    ("MILEAGE_BAND", "mileage_band"),
     ("DATE_FIRST_REGISTERED", "dfr"),
-    ("AGE_BAND", "age_band"),
     ("DEAL_SITE_CLEAN", "site"),
     ("SALES_TYPE", "sales_type"),
     # Rate/Cash vs 0% split, bucketed in the model so the browser does not
@@ -158,7 +160,7 @@ def _fetch_start() -> datetime.date:
 #
 # Version the S3 key: bump _CACHE_VERSION whenever _COLUMNS changes, otherwise
 # an old cached payload (missing the new columns) is served until it expires.
-_CACHE_VERSION = 12
+_CACHE_VERSION = 13
 _S3_KEY = (f"applications/pricing/uk-vehicle-list-evaluator/shared/cache/"
            f"orders_deliveries_v{_CACHE_VERSION}.json")
 
@@ -366,10 +368,12 @@ def orders_deliveries_page(request: Request, user: str = Depends(require_page('o
         logger.warning("Orders & Deliveries: could not load saved font sizes: %s", e)
         font_summary = _FONT_DEFAULT
         font_vehicle = _FONT_DEFAULT_VEHICLE
+    # Rendered into the page so the first paint uses the saved highlighting.
+    shading = od_shading.load()
     return templates.TemplateResponse("orders_deliveries.html", {
         "request": request, "user": user, "BASE_URL": BASE_URL,
         "font_summary": font_summary, "font_vehicle": font_vehicle,
-        "ai_enabled": ai_enabled,
+        "ai_enabled": ai_enabled, "shading": shading, "is_admin": is_admin(user),
     })
 
 
@@ -379,10 +383,60 @@ def orders_deliveries_data(request: Request, refresh: int = 0,
     """Cached deal rows. `refresh=1` forces a rebuild from Snowflake (the
     page's manual Refresh button)."""
     try:
-        return _get_data(force_refresh=bool(refresh))
+        data = _get_data(force_refresh=bool(refresh))
+        if data.get("status") == "ok":
+            # Bands are worked out at serve time from the saved limits, so an
+            # edit in Settings shows on the next page load with no cache rebuild.
+            data = {**data, "band_orders": od_bands.apply(data["rows"], od_bands.load_limits())}
+        return data
     except Exception as e:
         logger.error(f"Orders & Deliveries data failed: {e}")
         return {"status": "error", "message": str(e)}
+
+
+# ── Page Settings popup (admin only) ────────────────────────────────────────
+# Bands tab: utils/od_bands.py. Highlighting tab: utils/od_shading.py. Both are
+# saved in kpi_layout, so they apply to every user and every environment.
+@router.get("/reports/orders-deliveries/settings")
+def orders_deliveries_settings(request: Request, user: str = Depends(require_page_api('orders_deliveries'))):
+    limits = od_bands.load_limits()
+    return {"status": "ok",
+            "bands": {"limits": limits, "defaults": od_bands.DEFAULT_LIMITS,
+                      "titles": od_bands.BAND_TITLES,
+                      "labels": {k: od_bands.labels(k, v) for k, v in limits.items()}},
+            "shading": {"saved": od_shading.load(), "defaults": od_shading.DEFAULTS}}
+
+
+@router.post("/reports/orders-deliveries/settings")
+def orders_deliveries_settings_save(request: Request, payload: dict,
+                                    user: str = Depends(require_page_api('orders_deliveries'))):
+    """Bands and highlighting, both checked before either is written."""
+    if not is_admin(user):
+        return {"status": "error", "message": "Only the admin can change the Orders & Deliveries settings"}
+    payload = payload or {}
+    bands, shading = payload.get("bands"), payload.get("shading")
+    err = od_bands.validate(bands) or od_shading.validate(shading)
+    if err:
+        return {"status": "error", "message": err}
+    try:
+        from routers import kpi
+        kpi._write_kpi_layout_values({od_bands.KPI_KEY: od_bands.clean(bands),
+                                      od_shading.KPI_KEY: od_shading.clean(shading)})
+    except Exception as e:
+        logger.error(f"Orders & Deliveries settings save failed: {e}")
+        return {"status": "error", "message": str(e)}
+    return {"status": "ok", "shading": od_shading.clean(shading)}
+
+
+@router.post("/reports/orders-deliveries/bands/preview")
+def orders_deliveries_bands_preview(request: Request, payload: dict,
+                                    user: str = Depends(require_page_api('orders_deliveries'))):
+    """The labels a set of limits would produce, without saving."""
+    err = od_bands.validate(payload)
+    if err:
+        return {"status": "error", "message": err}
+    limits = od_bands.clean(payload)
+    return {"status": "ok", "labels": {k: od_bands.labels(k, v) for k, v in limits.items()}}
 
 
 # ── Ask AI ──────────────────────────────────────────────────────────────────

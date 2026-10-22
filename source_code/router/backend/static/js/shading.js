@@ -104,7 +104,10 @@ function shadeScale(rows, getValue, options) {
     const variance = vals.reduce((a, b) => a + (b - mean) ** 2, 0) / vals.length;
     const sd = Math.sqrt(variance);
     if (!sd) return () => '';
-    const SPREAD_SDS = 1.5;
+    // options.spreadSds and options.colour (ratio -> css colour) let a page
+    // use its own saved strength and colours; other pages get the defaults.
+    const SPREAD_SDS = (options && options.spreadSds) || 1.5;
+    const colourOf = (options && options.colour) || shadeColour;
 
     return (value, direction) => {
         if (value === null || value === undefined || value === '' || Number.isNaN(Number(value))) return '';
@@ -112,7 +115,7 @@ function shadeScale(rows, getValue, options) {
         if (inScale && !inScale(Number(value))) return '';
         // 0.5 = mean (amber), 0 = SPREAD_SDS below, 1 = SPREAD_SDS above.
         const ratio = 0.5 + (Number(value) - mean) / (sd * SPREAD_SDS * 2);
-        return shadeColour(direction === 'high-bad' ? 1 - ratio : ratio);
+        return colourOf(direction === 'high-bad' ? 1 - ratio : ratio);
     };
 }
 

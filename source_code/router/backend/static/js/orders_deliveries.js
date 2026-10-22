@@ -471,12 +471,53 @@ const BASE_URL = window.BASE_URL;
         // 'green' = higher is better; 'red' = higher is worse (DIS — longer in
         // stock is bad). Finance/product-related columns (Fin Pen %, Fin Comm,
         // Fin Comm/unit, Prod mgn) and Costs are deliberately NOT shaded.
-        const SHADE_DIRECTION = {
-            ack_dis: 'red', dts: 'red',
-            chassis_mgn_aft_subs: 'green', gpu_m: 'green', gpu_ms: 'green',
-            at_rating: 'green',
-        };
-        const SHADE_COLS = new Set(Object.keys(SHADE_DIRECTION));
+        // Which columns, which way round, and the colours are all set in the
+        // page's Settings popup (Highlighting tab) and rendered into the page as
+        // window.OD_SHADING. applyShadingSettings() sets the values below from it.
+        let SHADE_DIRECTION = {};
+        let SHADE_COLS = new Set();
+        let shadeOpts = {};
+
+        function hexRgb(hex) {
+            const n = parseInt(String(hex).slice(1), 16);
+            return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+        }
+        // Position on the scale (0 = worst, 1 = best) to a colour.
+        function makeColourFn(s) {
+            const lerp = (a, b, f) => Math.round(a + (b - a) * f);
+            const mix = (from, to, f) => `rgb(${[0, 1, 2].map(i => lerp(from[i], to[i], f)).join(',')})`;
+            if (s.scheme === 'single') {
+                // Pale for the worst values, strong for the best. Never quite
+                // full strength, so dark text stays readable.
+                const white = [255, 255, 255], c = hexRgb(s.single_colour);
+                return ratio => {
+                    if (ratio == null || Number.isNaN(ratio)) return '';
+                    const r = Math.min(1, Math.max(0, ratio));
+                    return mix(white, c, 0.06 + 0.64 * r);
+                };
+            }
+            const low = hexRgb(s.rag_low), mid = hexRgb(s.rag_mid), high = hexRgb(s.rag_high);
+            return ratio => {
+                if (ratio == null || Number.isNaN(ratio)) return '';
+                const r = Math.min(1, Math.max(0, ratio));
+                return r < 0.5 ? mix(low, mid, r * 2) : mix(mid, high, (r - 0.5) * 2);
+            };
+        }
+        function applyShadingSettings(s) {
+            shadeOpts = s;
+            SHADE_DIRECTION = {};
+            // A column on 'default' uses the page's default scheme; one with its
+            // own scheme gets a colour function built from its own colours.
+            const defaultFn = makeColourFn(s);
+            shadeOpts.colourFns = {};
+            Object.keys(s.columns || {}).forEach(k => {
+                const c = s.columns[k];
+                SHADE_DIRECTION[k] = c.direction === 'high-bad' ? 'red' : 'green';
+                shadeOpts.colourFns[k] = c.scheme === 'default' ? defaultFn : makeColourFn(c);
+            });
+            SHADE_COLS = new Set(Object.keys(SHADE_DIRECTION));
+            DAY_COUNT_MAX = s.day_cap || Infinity;
+        }
 
         // Which values are shaded at all, and which set the column's min/max.
         // Day counts over a year are data problems (a vehicle never marked
@@ -485,8 +526,10 @@ const BASE_URL = window.BASE_URL;
         // lands near the good end and the column reads uniformly green. These
         // rows are left UNSHADED entirely rather than pinned to the red end:
         // an anomaly is not "the worst case", it is bad data.
-        const DAY_COUNT_MAX = 365;
+        // Set from the Highlighting tab's Day Cap (0 there = no cap).
+        let DAY_COUNT_MAX = 365;
         const withinYear = v => v <= DAY_COUNT_MAX;
+        applyShadingSettings(window.OD_SHADING);
         const SHADE_IN_SCALE = {
             ack_dis: withinYear,
             dts: withinYear,
@@ -575,6 +618,30 @@ const BASE_URL = window.BASE_URL;
         const expandedSummaryRows = new Set();
         const expandKey = (dimKey, label) => `${dimKey}||${label}`;
 
+        // Summary tables the user has collapsed down to their heading row.
+        // Kept per user in Aurora (same /api/user-prefs as the font sizes) so
+        // a collapsed table stays collapsed on the next visit.
+        const COLLAPSED_PREF_KEY = 'orders_deliveries_collapsed_tables';
+        const collapsedTables = new Set();
+        async function loadCollapsedTables() {
+            try {
+                const resp = await fetch(BASE_URL + '/api/user-prefs/' + COLLAPSED_PREF_KEY);
+                if (!resp.ok) return;
+                const data = await resp.json();
+                if (Array.isArray(data.value)) data.value.forEach(k => collapsedTables.add(String(k)));
+                if (allRows.length) renderSummary();
+            } catch (e) { /* none collapsed */ }
+        }
+        async function saveCollapsedTables() {
+            try {
+                await fetch(BASE_URL + '/api/user-prefs/' + COLLAPSED_PREF_KEY, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify([...collapsedTables]),
+                });
+            } catch (e) { /* non-fatal - it just will not persist this time */ }
+        }
+
         // One sub-row per selected period for an expanded group: the same
         // columns as the parent, computed over that group's rows in that
         // period only. Periods come from the rows themselves, so a period with
@@ -631,7 +698,10 @@ const BASE_URL = window.BASE_URL;
         // this page's "build a shader per column key, emit an HTML attribute"
         // rendering style.
         function columnShader(dataRows, key) {
-            return shadeScale(dataRows, r => r[key], { inScale: SHADE_IN_SCALE[key] });
+            if (dataRows.length < (shadeOpts.min_rows || 2)) return null;
+            return shadeScale(dataRows, r => r[key], {
+                inScale: SHADE_IN_SCALE[key], spreadSds: shadeOpts.strength, colour: shadeOpts.colourFns[key],
+            });
         }
         // Returns a ready-to-inline style attribute (or '' when not shadeable).
         function shadeAttr(shader, value, direction) {
@@ -738,10 +808,12 @@ const BASE_URL = window.BASE_URL;
             // Sales Type only ever has 2-3 rows (Rate/Cash, 0%, Unknown) — a
             // min->max shade over that few rows just marks "biggest of three",
             // not a meaningful spread, so it is left unshaded.
-            if (table.dimKey !== '__sales_type_bucket') {
+            if (table.dimKey !== '__sales_type_bucket' || shadeOpts.shade_sales_type) {
                 SHADE_COLS.forEach(k => { shaders[k] = columnShader(table.rows, k); });
             }
 
+            // Clicking the heading cell collapses the table to this one row.
+            const isCollapsed = collapsedTables.has(table.dimKey);
             const head = `<tr><th>${escapeHtml(table.heading)}</th>` +
                 SUMMARY_COLS.map(c => {
                     // title only when there is no info marker — otherwise the
@@ -772,7 +844,7 @@ const BASE_URL = window.BASE_URL;
             // colour and show no movement at all. Built per expanded group.
             const subShaders = subRows => {
                 const s = {};
-                SHADE_COLS.forEach(k => { s[k] = columnShader(subRows, k); });
+                if (shadeOpts.shade_sub_rows) SHADE_COLS.forEach(k => { s[k] = columnShader(subRows, k); });
                 return s;
             };
 
@@ -821,10 +893,12 @@ const BASE_URL = window.BASE_URL;
             }).join('');
             const totalHtml = `<tr class="total-row"><td class="dim-label">${escapeHtml(table.totalRow.label)}</td>${totalCells}</tr>`;
 
-            return `<div class="summary-table-wrap"><table class="summary">
+            // The button sits in the panel's left padding, outside the table,
+            // level with the header row (its height is set after layout).
+            return `<div class="summary-table-wrap"><button type="button" class="collapse-btn" data-dim="${escapeHtml(table.dimKey)}" title="${isCollapsed ? 'Show' : 'Hide'} this table">${isCollapsed ? '+' : '−'}</button><table class="summary${isCollapsed ? ' is-collapsed' : ''}">
                 ${summaryColgroupHtml()}
                 <thead>${head}</thead>
-                <tbody>${table.rows.map(rowHtml).join('')}${totalHtml}</tbody>
+                ${isCollapsed ? '' : `<tbody>${table.rows.map(rowHtml).join('')}${totalHtml}</tbody>`}
             </table></div>`;
         }
 
@@ -842,10 +916,21 @@ const BASE_URL = window.BASE_URL;
             { key: 'supplier_channel', heading: 'Channel', expandable: true },
             { key: 'dis_band', heading: 'Days in Stock Band', order: SLICER_ORDER.dis_band, expandable: true },
             { key: 'fuel', heading: 'Fuel Type', order: SLICER_ORDER.fuel, expandable: true },
-            { key: 'price_band', heading: 'Price Band (Rate/Cash)', order: ['<10k','10-12.5k','12.5-15k','15-20k','20-25k','25-30k','30k+','Interest Free'], expandable: true },
+            { key: 'price_band', heading: 'Price Band (Rate/Cash)', expandable: true },
             { key: 'mileage_band', heading: 'Mileage Band', expandable: true },
             { key: 'age_band', heading: 'Age Band', expandable: true },
         ];
+
+        // Price, mileage and age bands are set in Settings > Orders & Deliveries
+        // Bands, so their label order comes with the data, not from this file.
+        function applyBandOrders(orders) {
+            if (!orders) return;
+            Object.keys(orders).forEach(key => {
+                SLICER_ORDER[key] = orders[key];
+                const dim = SUMMARY_DIMENSIONS.find(d => d.key === key);
+                if (dim) dim.order = orders[key];
+            });
+        }
 
         function renderSummary() {
             const area = document.getElementById('summary-area');
@@ -885,6 +970,19 @@ const BASE_URL = window.BASE_URL;
             const emptyHtml = '<div class="empty-state">No rows match the current view.</div>';
             area.classList.remove('is-loading');   // let the fit-content width rule take over
             area.innerHTML = tables.map(renderSummaryTableHtml).join('') || emptyHtml;
+
+            area.querySelectorAll('button.collapse-btn').forEach(btn => {
+                // Same height as the header row it sits beside.
+                const th = btn.parentElement.querySelector('thead th');
+                if (th) btn.style.height = th.getBoundingClientRect().height + 'px';
+                btn.addEventListener('click', () => {
+                    const k = btn.dataset.dim;
+                    if (collapsedTables.has(k)) collapsedTables.delete(k);
+                    else collapsedTables.add(k);
+                    saveCollapsedTables();
+                    renderSummary();
+                });
+            });
 
             area.querySelectorAll('button.btn-view').forEach(btn => {
                 btn.addEventListener('click', () =>
@@ -1016,7 +1114,7 @@ const BASE_URL = window.BASE_URL;
             // this popup's own rows (min->max within THIS group, same as a
             // single summary table's shading — not across the whole page).
             const shaders = {};
-            Object.keys(SHADE_DIRECTION).forEach(k => {
+            if (shadeOpts.shade_popup) Object.keys(SHADE_DIRECTION).forEach(k => {
                 if (MODAL_COLS.some(c => c.key === k)) shaders[k] = columnShader(rows, k);
             });
             const body = rows.length
@@ -2107,6 +2205,7 @@ const BASE_URL = window.BASE_URL;
                 const data = await resp.json();
                 if (data.status !== 'ok') throw new Error(data.message || 'Failed to load data');
                 allRows = data.rows || [];
+                applyBandOrders(data.band_orders);
                 fetchStartIso = data.fetch_start || null;
                 defaultPeriodFilter(data.today);
                 showCacheNote(data);
@@ -2141,4 +2240,5 @@ const BASE_URL = window.BASE_URL;
         }
 
         loadFont();
+        loadCollapsedTables();
         load();
