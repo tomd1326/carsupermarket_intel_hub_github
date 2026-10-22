@@ -29,7 +29,7 @@ from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, HTTPException
 
-from utils.db_utils import get_database_connection
+from utils.db_utils import get_database_connection, save_settings_partial
 from utils.snowflake_client import SnowflakeClient
 from .core import get_current_user, ADMIN_USERNAME
 from . import api_requests, dbt_runs
@@ -103,6 +103,12 @@ def _ensure_tables(conn) -> None:
             " stage_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),"
             " finished_at TIMESTAMPTZ)"
         )
+        # A recipe can update several tables; target_model keeps the first.
+        cur.execute("ALTER TABLE live_update_recipes ADD COLUMN IF NOT EXISTS target_models TEXT[]")
+        # The page the recipe updates; its name links there on Settings.
+        cur.execute("ALTER TABLE live_update_recipes ADD COLUMN IF NOT EXISTS page_path VARCHAR(200)")
+        cur.execute("UPDATE live_update_recipes SET page_path = '/reports/apex-missing-finance' "
+                    "WHERE recipe_key = 'apex_missing_finance' AND page_path IS NULL")
         cur.execute("SELECT COUNT(*) FROM live_update_recipes")
         if cur.fetchone()[0] == 0:
             for i, r in enumerate(DEFAULT_RECIPES):
@@ -113,7 +119,8 @@ def _ensure_tables(conn) -> None:
     conn.commit()
 
 
-_RECIPE_COLS = ['recipe_key', 'name', 'source', 'endpoints', 'target_model', 'lookback_hours', 'sort_order']
+_RECIPE_COLS = ['recipe_key', 'name', 'source', 'endpoints', 'target_model', 'lookback_hours', 'sort_order',
+                'target_models', 'page_path']
 _RUN_COLS = ['run_id', 'recipe_key', 'name', 'status', 'stage', 'message', 'since', 'plan', 'steps',
              'api_job_id', 'dbt_chain_id', 'dbt_started_at', 'stop_requested', 'created_by', 'created_at',
              'stage_at', 'finished_at']
@@ -122,7 +129,31 @@ _RUN_COLS = ['run_id', 'recipe_key', 'name', 'status', 'stage', 'message', 'sinc
 def _load_recipes(conn) -> list:
     with conn.cursor() as cur:
         cur.execute(f"SELECT {', '.join(_RECIPE_COLS)} FROM live_update_recipes ORDER BY sort_order, name")
-        return [dict(zip(_RECIPE_COLS, r), endpoints=list(r[3] or [])) for r in cur.fetchall()]
+        return [dict(zip(_RECIPE_COLS, r), endpoints=list(r[3] or []), targets=list(r[7] or [r[4]]))
+                for r in cur.fetchall()]
+
+
+# Settings > Live Update > Run Settings. API workers and items per page are
+# the API Requests settings (api_requests reads them for every Nexus pull).
+DEFAULT_DBT_THREADS = 20
+
+
+def _setting(conn, key: str, default):
+    with conn.cursor() as cur:
+        cur.execute("SELECT value FROM settings WHERE key = %s", (key,))
+        row = cur.fetchone()
+    if not row or row[0] in (None, ''):
+        return default
+    try:
+        return type(default)(row[0]) if not isinstance(default, list) else json.loads(row[0])
+    except (TypeError, ValueError):
+        return default
+
+
+def _run_settings(conn) -> dict:
+    config = api_requests._load_config(conn, 'nexus')
+    return {'nexus_workers': config['nexus_workers'], 'nexus_per_page': config['nexus_per_page'],
+            'dbt_threads': _setting(conn, 'live_update_dbt_threads', DEFAULT_DBT_THREADS)}
 
 
 def _load_run(conn, run_id: str):
@@ -224,13 +255,21 @@ def build_plan(conn, recipe: dict) -> dict:
     lineage = dbt_runs.load_lineage(conn)
     models = dbt_runs.with_children(lineage['models'])
     cfg = api_requests._source(recipe['source'])
-    target = recipe['target_model']
-    errors, endpoints, chosen = [], [], set()
-    if target not in models:
-        errors.append(f"{target} is not in the model list. " + dbt_runs.OUT_OF_DATE)
-    else:
-        upstream = dbt_runs.walk(models, target, 'parents') | {target}
+    targets = recipe['targets']
+    target = ', '.join(targets)
+    errors, warnings, endpoints, chosen = [], [], [], set()
+    no_updated_at = set(_setting(conn, 'nexus_no_updated_at', []))
+    missing = [t for t in targets if t not in models]
+    for t in missing:
+        errors.append(f"{t} is not in the model list. " + dbt_runs.OUT_OF_DATE)
+    if not missing:
+        upstream = set(targets)
+        for t in targets:
+            upstream |= dbt_runs.walk(models, t, 'parents')
         for route in recipe['endpoints']:
+            if route in no_updated_at:
+                warnings.append(f"{route} has no updated_at filter, so every row is pulled each time "
+                                "(it may take minutes and must finish within 10)")
             path = cfg['stage_path'](route)
             starts = sorted(n for n, m in models.items() if _same_folder(m.get('stage_url'), path))
             ep = {'route': route, 'folder': path, 'models': starts, 'check_table': None}
@@ -254,15 +293,26 @@ def build_plan(conn, recipe: dict) -> dict:
                     ep['check_table'] = {'model': raw[0], 'schema': m['schema'], 'table': m['table']}
             endpoints.append(ep)
     jobs = dbt_runs._load_jobs(conn)
-    steps = dbt_runs.steps_for(models, chosen, jobs, target) if chosen else []
+    steps = dbt_runs.steps_for(models, chosen, jobs) if chosen else []
     for s in steps:
         if not s['job_id']:
             errors.append(f"No dbt job for the {s['project']} project - add one in Manual dbt")
+        for m in s['models']:
+            m['is_target'] = m['name'] in targets
+        if s['project'] == 'raw':
+            # The raw project holds only raw models, so "stg_x+" runs the
+            # endpoint's stg model and everything after it there (dedup view,
+            # __s table), including models added since the list was checked.
+            starts = sorted({n for e in endpoints for n in e['models'] if models[n]['project'] == 'raw'})
+            if starts:
+                s['select'] = ' '.join(f"{n}+" for n in starts)
+                s['plus'] = True
     checked = lineage.get('checked_at')
     old = (lineage['source'] != 'recheck'
            or (checked and _now() - checked > datetime.timedelta(days=LINEAGE_WARN_DAYS)))
-    return {'recipe_key': recipe['recipe_key'], 'target': target, 'endpoints': endpoints, 'steps': steps,
-            'errors': errors, 'lineage': dbt_runs._lineage_info(lineage), 'lineage_old': bool(old)}
+    return {'recipe_key': recipe['recipe_key'], 'target': target, 'targets': targets, 'endpoints': endpoints,
+            'steps': steps, 'errors': errors, 'warnings': warnings,
+            'lineage': dbt_runs._lineage_info(lineage), 'lineage_old': bool(old)}
 
 
 def _initial_steps(plan: dict, since: str, reload: bool) -> list:
@@ -272,8 +322,11 @@ def _initial_steps(plan: dict, since: str, reload: bool) -> list:
     steps.append({'key': 'check_api', 'label': 'Check The Pull',
                   'detail': 'Every endpoint worked and at least one returned rows', 'status': 'waiting'})
     for i, s in enumerate(plan['steps']):
+        detail = ', '.join(m['name'] for m in s['models'])
+        if s.get('plus'):
+            detail = f"--select {s['select']} (planned: {detail})"
         steps.append({'key': f"dbt:{i}", 'label': f"dbt {s['project'].title()} ({len(s['models'])} Models)",
-                      'detail': ', '.join(m['name'] for m in s['models']), 'status': 'waiting', 'chain_pos': i})
+                      'detail': detail, 'status': 'waiting', 'chain_pos': i})
     steps.append({'key': 'check_data', 'label': 'Check The New Data Reached Snowflake',
                   'detail': 'Newest updated_at in each raw table is at least the newest pulled',
                   'status': 'waiting'})
@@ -337,7 +390,11 @@ def _after_api(conn, run: dict, job: dict) -> None:
             return
         _set_step(run, 'check_api', 'done', f"{total} rows across {len(routes)} endpoint(s)")
         plan = run['plan']
-        steps = [{'job_id': s['job_id'], 'select': s['select'], 'expected_models': len(s['models']),
+        threads = _setting(conn, 'live_update_dbt_threads', DEFAULT_DBT_THREADS)
+        conn.rollback()
+        # A + step may run more models than planned, so only "at least" is checked.
+        steps = [{'job_id': s['job_id'], 'select': s['select'], 'threads': threads,
+                  ('expected_min' if s.get('plus') else 'expected_models'): len(s['models']),
                   'label': f"Live Update {s['project']}"} for s in plan['steps']]
         today = datetime.datetime.now(UK).strftime('%Y-%m-%d')
         try:
@@ -525,6 +582,7 @@ def lu_config(recipe: str = '', user: str = Depends(get_current_user)):
         routes = api_requests._load_config(conn, 'nexus')['routes']
         lineage = dbt_runs.load_lineage(conn)
         open_id = _open_run_id(conn, recipe or None)
+        run_settings = _run_settings(conn)
         with conn.cursor() as cur:
             cur.execute("SELECT run_id, name, status, message, created_by, created_at, finished_at "
                         "FROM live_update_runs ORDER BY created_at DESC LIMIT 15")
@@ -533,7 +591,93 @@ def lu_config(recipe: str = '', user: str = Depends(get_current_user)):
         conn.rollback()
     return {"status": "ok", "recipes": recipes, "endpoints": routes, "models": sorted(lineage['models']),
             "lineage": dbt_runs._lineage_info(lineage), "open_run_id": open_id, "recent": recent,
-            "lineage_warn_days": LINEAGE_WARN_DAYS}
+            "lineage_warn_days": LINEAGE_WARN_DAYS, "run_settings": run_settings,
+            "pages": _pages()}
+
+
+@router.post("/api/live-update/settings")
+def lu_save_settings(data: dict, user: str = Depends(get_current_user)):
+    """Run Settings: API workers and items per page (shared with Manual API
+    Requests) and the dbt threads Live Update runs with."""
+    _admin(user)
+    try:
+        values = {'nexus_workers': min(10, max(1, int(data.get('nexus_workers')))),
+                  'nexus_per_page': min(100, max(1, int(data.get('nexus_per_page')))),
+                  'live_update_dbt_threads': min(64, max(1, int(data.get('dbt_threads'))))}
+    except (TypeError, ValueError):
+        return {"status": "error", "message": "Enter whole numbers"}
+    with get_database_connection() as conn:
+        conn.rollback()
+        save_settings_partial(conn, values)
+    logger.info("Live Update run settings saved by %s: %s", user, values)
+    return {"status": "ok"}
+
+
+# ---------------------------------------------------------------------------
+# A recipe from a page
+# ---------------------------------------------------------------------------
+
+def _pages() -> list:
+    """Pages a recipe can be built from: the page list plus the reports that
+    are not in it."""
+    from .page_registry import PAGES
+    pages = [{'path': p.path, 'label': p.label} for p in PAGES]
+    extra = [('/reports/apex-missing-finance', 'Apex Missing Finance')]
+    known = {p['path'] for p in pages}
+    return pages + [{'path': path, 'label': label} for path, label in extra if path not in known]
+
+
+def _route_of(stage_url: str):
+    """'nexus_point/invoices/invoice-finance-amounts/json/v0/' -> 'invoices/invoice-finance-amounts'."""
+    s = (stage_url or '').strip('/')
+    if not s.startswith('nexus_point/') or '/json/' not in s:
+        return None
+    return s[len('nexus_point/'):].split('/json/')[0]
+
+
+@router.get("/api/live-update/from-page")
+def lu_from_page(path: str, days: int = 30, user: str = Depends(get_current_user)):
+    """The recipe a page needs, worked out from what it really read: the
+    Snowflake tables the Logs page recorded against the page's requests,
+    matched to dbt models, and every Nexus endpoint those models read from."""
+    _admin(user)
+    path = '/' + path.strip().strip('/')
+    if len(path) < 2:
+        return {"status": "error", "message": "Pick a page"}
+    with get_database_connection() as conn:
+        conn.rollback()
+        _ensure_tables(conn)
+        with conn.cursor() as cur:
+            cur.execute("SELECT to_regclass('app_logs')")
+            if cur.fetchone()[0] is None:
+                return {"status": "error", "message": "No logs yet - open the page first"}
+            cur.execute("SELECT tables, MAX(logged_at) FROM app_logs WHERE source = 'snowflake' AND success "
+                        "AND tables IS NOT NULL AND tables <> '' AND task LIKE %s "
+                        "AND logged_at > NOW() - make_interval(days => %s) GROUP BY tables",
+                        (f"%{path}%", max(1, min(365, days))))
+            rows = cur.fetchall()
+        lineage = dbt_runs.load_lineage(conn)
+        routes = api_requests._load_config(conn, 'nexus')['routes']
+        conn.rollback()
+    tables = sorted({t.strip() for r in rows for t in (r[0] or '').split(',') if t.strip()})
+    if not tables:
+        return {"status": "error", "message": f"No Snowflake queries logged for {path} in the last {days} days - "
+                                              "open the page (and use its buttons) so its tables get logged, "
+                                              "then try again."}
+    models = dbt_runs.with_children(lineage['models'])
+    by_table = {f"{(m['schema'] or '').upper()}.{(m['table'] or '').upper()}": n for n, m in models.items()}
+    targets = sorted({by_table[t] for t in tables if t in by_table})
+    unmatched = [t for t in tables if t not in by_table]
+    upstream = set(targets)
+    for t in targets:
+        upstream |= dbt_runs.walk(models, t, 'parents')
+    feeds = sorted({models[n]['stage_url'] for n in upstream if models[n].get('stage_url')})
+    nexus = sorted({_route_of(f) for f in feeds if _route_of(f)})
+    other = [f for f in feeds if not _route_of(f)]
+    label = next((p['label'] for p in _pages() if p['path'] == path), path)
+    return {"status": "ok", "name": label, "targets": targets, "tables": tables, "unmatched": unmatched,
+            "endpoints": [r for r in nexus if r in routes], "not_in_list": [r for r in nexus if r not in routes],
+            "other_feeds": other, "days": days}
 
 
 def _slug(name: str) -> str:
@@ -545,7 +689,15 @@ def lu_save_recipe(data: dict, user: str = Depends(get_current_user)):
     """Add a recipe (no recipe_key) or update one."""
     _admin(user)
     name = str(data.get('name') or '').strip()
-    target = str(data.get('target_model') or '').strip()
+    # Tables to update: a list, or text separated by commas / spaces / lines.
+    raw_targets = data.get('targets')
+    if not isinstance(raw_targets, list):
+        raw_targets = re.split(r'[\s,]+', str(raw_targets or data.get('target_model') or ''))
+    targets = list(dict.fromkeys(t.strip() for t in raw_targets if t and t.strip()))
+    page_path = str(data.get('page_path') or '').strip()
+    if page_path and page_path not in {p['path'] for p in _pages()}:
+        return {"status": "error", "message": f"Unknown page: {page_path}"}
+    page_path = page_path or None
     endpoints = [api_requests._clean_route(e) for e in data.get('endpoints') or []]
     endpoints = list(dict.fromkeys(e for e in endpoints if e))
     try:
@@ -561,8 +713,13 @@ def lu_save_recipe(data: dict, user: str = Depends(get_current_user)):
     with get_database_connection() as conn:
         conn.rollback()
         _ensure_tables(conn)
-        if target not in dbt_runs.load_lineage(conn)['models']:
-            return {"status": "error", "message": f"{target or 'The target'} is not in the model list"}
+        if not targets:
+            return {"status": "error", "message": "Enter at least one table to update"}
+        known_models = dbt_runs.load_lineage(conn)['models']
+        bad = [t for t in targets if t not in known_models]
+        if bad:
+            return {"status": "error", "message": f"Not in the model list: {', '.join(bad)}"}
+        target = targets[0]
         known = set(api_requests._load_config(conn, 'nexus')['routes'])
         unknown = [e for e in endpoints if e not in known]
         if unknown:
@@ -571,13 +728,15 @@ def lu_save_recipe(data: dict, user: str = Depends(get_current_user)):
         with conn.cursor() as cur:
             if key:
                 cur.execute("UPDATE live_update_recipes SET name = %s, endpoints = %s, target_model = %s, "
-                            "lookback_hours = %s WHERE recipe_key = %s", (name, endpoints, target, lookback, key))
+                            "target_models = %s, lookback_hours = %s, page_path = %s WHERE recipe_key = %s",
+                            (name, endpoints, target, targets, lookback, page_path, key))
             else:
                 key = _slug(name) or str(uuid.uuid4())[:8]
                 cur.execute("INSERT INTO live_update_recipes (recipe_key, name, source, endpoints, target_model,"
-                            " lookback_hours, sort_order) SELECT %s, %s, 'nexus', %s, %s, %s, "
+                            " target_models, lookback_hours, page_path, sort_order) "
+                            "SELECT %s, %s, 'nexus', %s, %s, %s, %s, %s, "
                             " COALESCE(MAX(sort_order), 0) + 10 FROM live_update_recipes ON CONFLICT DO NOTHING",
-                            (key, name, endpoints, target, lookback))
+                            (key, name, endpoints, target, targets, lookback, page_path))
                 if cur.rowcount != 1:
                     conn.rollback()
                     return {"status": "error", "message": f"A recipe called {name} already exists"}

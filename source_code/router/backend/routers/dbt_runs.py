@@ -87,6 +87,14 @@ OUT_OF_DATE = "The model list is out of date - press Recheck Lineage, then try a
 _LINEAGE_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                              'data', 'dbt_lineage.json')
 
+# dbt's colour codes (ESC[0m etc.), which show as "[0m" on the page.
+_ANSI = re.compile(r'\x1b\[[0-9;]*[A-Za-z]')
+
+
+def _clean(line: str) -> str:
+    return _ANSI.sub('', line or '')
+
+
 _NOTHING = re.compile(r"Nothing to do|does not match any enabled nodes")
 _DONE = re.compile(r"Done\. PASS=(\d+).*?ERROR=(\d+).*?TOTAL=(\d+)")
 _ERROR = re.compile(r"(Compilation|Database|Runtime|Parsing|Dependency) Error|Error in model|"
@@ -264,7 +272,8 @@ def _run_summary(run: dict) -> dict:
         'command': shlex.join((run['spec'] or {}).get('command') or []),
         'start_log': list(run['start_log'] or []), 'links': _links(run),
         'checked': bool(checks.get('checked')), 'errors': checks.get('errors') or [],
-        'total': checks.get('total'), 'expected': (run['spec'] or {}).get('expected_models'),
+        'total': checks.get('total'),
+        'expected': (run['spec'] or {}).get('expected_models') or (run['spec'] or {}).get('expected_min'),
         'hint': _hint(run),
     }
 
@@ -393,7 +402,7 @@ def _read_whole_log(run: dict) -> list:
             kwargs['nextToken'] = token
         resp = logs.get_log_events(**kwargs)
         events = resp.get('events') or []
-        lines.extend(e['message'] for e in events)
+        lines.extend(_clean(e['message']) for e in events)
         new_token = resp.get('nextForwardToken')
         if not events or new_token == token:
             return lines
@@ -459,7 +468,10 @@ def dbt_config(user: str = Depends(get_current_user)):
     today = datetime.datetime.now(ZoneInfo('Europe/London')).strftime('%Y-%m-%d')
     return {"status": "ok", "env": env, "cluster": _cluster(env), "region": _region(env),
             "today": today, "jobs": jobs, "runs": runs, "open_run_id": row[0] if row else None,
-            "models": sorted(lineage['models']), "lineage": _lineage_info(lineage)}
+            "models": sorted(lineage['models']), "lineage": _lineage_info(lineage),
+            # For the Project then Table lists in Plan From A Model.
+            "model_info": {n: {'project': m.get('project'), 'table': m.get('table'), 'schema': m.get('schema'),
+                               'materialized': m.get('materialized')} for n, m in lineage['models'].items()}}
 
 
 def _validate_job(data: dict) -> dict:
@@ -521,9 +533,10 @@ def dbt_delete_job(data: dict, user: str = Depends(get_current_user)):
 
 
 @router.get("/api/dbt/plan")
-def dbt_plan(model: str, upstream: int = 1, downstream: int = 0, user: str = Depends(get_current_user)):
-    """The steps needed to rebuild `model`: one per project, in run order,
-    each listing that project's models from the chosen set."""
+def dbt_plan(model: str, upstream: int = 0, downstream: int = 1, user: str = Depends(get_current_user)):
+    """The steps needed to rebuild the models in `model` (comma separated):
+    one per project, in run order, each listing that project's models from
+    the chosen set."""
     _admin(user)
     with get_database_connection() as conn:
         conn.rollback()
@@ -531,17 +544,27 @@ def dbt_plan(model: str, upstream: int = 1, downstream: int = 0, user: str = Dep
         jobs = _load_jobs(conn)
         models = with_children(load_lineage(conn)['models'])
         conn.rollback()
-    if model not in models:
-        return {"status": "error", "message": f"{model} is not in the model list. " + OUT_OF_DATE}
-    chosen = {model}
-    if upstream:
-        chosen |= walk(models, model, 'parents')
-    if downstream:
-        chosen |= walk(models, model, 'children')
+    picked = list(dict.fromkeys(m.strip() for m in model.split(',') if m.strip()))
+    missing = [m for m in picked if m not in models]
+    if not picked or missing:
+        return {"status": "error", "message": f"{', '.join(missing) or 'No table'} is not in the model list. "
+                                              + OUT_OF_DATE}
+    chosen = set(picked)
+    for m in picked:
+        if upstream:
+            chosen |= walk(models, m, 'parents')
+        if downstream:
+            chosen |= walk(models, m, 'children')
+    steps = steps_for(models, chosen, jobs)
+    for s in steps:
+        for m in s['models']:
+            m['is_target'] = m['name'] in picked
     # The S3 folders the raw models read, i.e. which ingestion feeds this.
     feeds = sorted({models[n]['stage_url'] for n in chosen if models[n].get('stage_url')})
-    return {"status": "ok", "model": model, "steps": steps_for(models, chosen, jobs, model), "feeds": feeds,
-            "parents": models[model]['parents'], "children": sorted(models[model]['children'])}
+    parents = sorted({p for m in picked for p in models[m]['parents']} - set(picked))
+    children = sorted({c for m in picked for c in models[m]['children']} - set(picked))
+    return {"status": "ok", "model": ', '.join(picked), "models": picked, "steps": steps, "feeds": feeds,
+            "parents": parents, "children": children}
 
 
 @router.post("/api/dbt/lineage/recheck")
@@ -699,6 +722,20 @@ def _busy_message(conn) -> str:
     return f"{busy[0]} is still going - stop it first." if busy else ''
 
 
+def _with_threads(command: list, threads: int) -> list:
+    """The command with --threads set to `threads`, replacing any value it had."""
+    out, skip = [], False
+    for t in command:
+        if skip:
+            skip = False
+            continue
+        if t == '--threads':
+            skip = True
+            continue
+        out.append(t)
+    return out + ['--threads', str(threads)]
+
+
 def start_chain(conn, steps: list, user: str, current_date: str = '') -> tuple:
     """Add the steps as one chain and start the first. Each step is
     {job_id, select, full_refresh} or {job_id, command} (a ready token list),
@@ -725,12 +762,16 @@ def start_chain(conn, steps: list, user: str, current_date: str = '') -> tuple:
                 raise ValueError(f"{job['name']}: command could not be read: {e}")
             if step.get('full_refresh'):
                 command.append('--full-refresh')
+        if step.get('threads'):
+            command = _with_threads(command, int(step['threads']))
         spec = {k: job[k] for k in ('task_definition', 'container_name', 'capacity_provider',
                                      'memory_reservation', 'snowflake_wh_override')}
         spec['command'] = command
         spec['kind'] = step.get('kind') or 'run'
         if step.get('expected_models'):
             spec['expected_models'] = int(step['expected_models'])
+        if step.get('expected_min'):
+            spec['expected_min'] = int(step['expected_min'])
         planned.append((step.get('label') or job['name'], spec))
     if not planned:
         raise ValueError("Nothing to run")
@@ -823,7 +864,12 @@ def _check_finished(conn, run: dict) -> str:
     expected = spec.get('expected_models')
     if expected and checks.get('total') is not None and checks['total'] != expected:
         return f"dbt ran {checks['total']} models but the plan has {expected}. " + OUT_OF_DATE
-    if expected and checks.get('total') is None:
+    # A + selection lets dbt find the models itself, so it may run more than
+    # planned - but never fewer.
+    least = spec.get('expected_min')
+    if least and checks.get('total') is not None and checks['total'] < least:
+        return f"dbt ran {checks['total']} models but the plan needs at least {least}. " + OUT_OF_DATE
+    if (expected or least) and checks.get('total') is None:
         return "dbt's summary line (Done. PASS=...) was not found in the log, so the models run cannot be counted"
     return ''
 
@@ -874,7 +920,7 @@ def poll_run(conn, run_id: str, token: str = '') -> dict:
             if token:
                 kwargs['nextToken'] = token
             resp = boto3.client('logs', region_name=_region(run['env'])).get_log_events(**kwargs)
-            lines = [e['message'] for e in resp.get('events') or []]
+            lines = [_clean(e['message']) for e in resp.get('events') or []]
             next_token = resp.get('nextForwardToken') or token
         except ClientError as e:
             # The stream does not exist until the container writes its first line.

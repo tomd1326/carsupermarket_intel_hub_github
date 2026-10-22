@@ -1374,6 +1374,15 @@ KPI_DEFAULT_SETTINGS = {
     "days_total": 90,      # days available to scroll across
     "label_angle": 0,      # tilt of the value labels on the data points
     "label_below": 0,      # 1 = value labels under the line's points, 0 = above
+    "line_label_font_px": 10,   # value labels on line charts
+    # Labels on stacked / column charts. Every label on one chart always runs
+    # the same way - never some across and some on their side.
+    "stack_label_dir": 0,       # 0 = auto (across if all fit, else all on their side), 1 = across, 2 = on their side
+    "stack_label_overflow": 0,  # 0 = hide only labels that do not fit, 1 = hide all on that chart, 2 = show anyway
+    "stack_seg_font_px": 9,     # values inside segments
+    "stack_total_font_px": 10,  # column totals / values above columns
+    "stack_seg_min_px": 12,     # a segment shorter than this gets no value inside it
+    "stack_min_col_px": 0,      # columns narrower than this: no labels on that chart (0 = off)
     "section_font_px": 13,  # section heading, e.g. "Upper Funnel" (was 0.82rem)
     "title_font_px": 14,    # chart titles (was 0.88rem)
     "subtitle_font_px": 12,  # optional line under a chart title (was 0.78rem)
@@ -1411,6 +1420,13 @@ KPI_SETTING_LIMITS = {
     "days_total": (7, 400),
     "label_angle": (-90, 90),
     "label_below": (0, 1),
+    "line_label_font_px": (7, 20),
+    "stack_label_dir": (0, 2),
+    "stack_label_overflow": (0, 2),
+    "stack_seg_font_px": (7, 20),
+    "stack_total_font_px": (7, 20),
+    "stack_seg_min_px": (0, 60),
+    "stack_min_col_px": (0, 100),
     "section_font_px": (10, 28),
     "title_font_px": (10, 28),
     "subtitle_font_px": (8, 24),
@@ -2334,6 +2350,39 @@ def _validate_metric_names(names) -> str | None:
     return None
 
 
+def _validate_derived_names(names) -> str | None:
+    """Names for derived metrics: key 'source|column*source|column' (the
+    metric times the Multiplied By metric). Kept apart from the column names
+    so naming the result never renames the column it was made from."""
+    if not isinstance(names, dict) or len(names) > 500:
+        return "bad derived column names"
+    for key, name in names.items():
+        parts = key.split('*') if isinstance(key, str) else []
+        if len(parts) != 2 or not all(re.fullmatch(_METRIC_NAME_KEY, p) for p in parts):
+            return f"bad derived column: {key}"
+        if not isinstance(name, str) or not name.strip() or len(name) > 60:
+            return f"{key}: names must be 1 to 60 characters"
+    return None
+
+
+@router.post("/kpi/derived-names")
+def kpi_derived_names_save(request: Request, payload: dict, user: str = Depends(require_page_api('kpi'))):
+    """Settings > Column Names > Derived Column Names. Admin only. Replaces the whole list."""
+    if not is_admin(user):
+        return {"status": "error", "message": "Only the admin can change column names"}
+    names = (payload or {}).get("names")
+    err = _validate_derived_names(names)
+    if err:
+        return {"status": "error", "message": err}
+    names = {k: v.strip() for k, v in names.items()}
+    try:
+        _write_kpi_layout_value('derived_names', names)
+    except Exception as e:
+        logger.error(f"KPI derived column names save failed: {e}")
+        return {"status": "error", "message": str(e)}
+    return {"status": "ok", "names": names}
+
+
 @router.post("/kpi/metric-names")
 def kpi_metric_names_save(request: Request, payload: dict, user: str = Depends(require_page_api('kpi'))):
     """The shared column display names. Admin only. Replaces the whole list."""
@@ -2480,6 +2529,15 @@ def _validate_layout(layout: dict, sections: list) -> str | None:
             return "bad include_current"
         if not isinstance(row.get("data_labels", True), bool):
             return "bad data_labels"
+        # Data Labels popup: scale and decimals of the labels (absent = the
+        # chart's own Label Format and Decimals). The unit (number, £, %) is
+        # always the Label Format's.
+        if row.get("label_scale", "auto") not in ("auto", "none", "k", "M"):
+            return "bad label_scale"
+        label_decimals = row.get("label_decimals")
+        if label_decimals is not None and (not isinstance(label_decimals, int) or isinstance(label_decimals, bool)
+                                           or not 0 <= label_decimals <= 4):
+            return "bad label_decimals"
         if row.get("fmt", "num") not in ("num", "pct", "pct100", "k", "km", "gbp", "gbpkm"):
             return f"bad fmt: {row.get('fmt')}"
         decimals = row.get("decimals", 0)
@@ -2660,6 +2718,7 @@ def kpi_layout_get(request: Request, user: str = Depends(require_page_api('kpi')
         if metric_names is None:
             metric_names = _seed_metric_names(layout)
         metric_formats = _read_kpi_layout_value('metric_formats') or {}
+        derived_names = _read_kpi_layout_value('derived_names') or {}
     except Exception as e:
         # Report it rather than serving an empty layout: the page saves the
         # whole layout in one go, so a save made on an empty one would wipe
@@ -2679,7 +2738,8 @@ def kpi_layout_get(request: Request, user: str = Depends(require_page_api('kpi')
         at_periods, at_ppc_periods = [], []
     return {"status": "ok", "layout": layout, "sections": sections, "settings": settings,
             "setting_limits": KPI_SETTING_LIMITS, "notes": notes, "themes": themes,
-            "metric_names": metric_names, "metric_formats": metric_formats, "at_periods": at_periods, "at_ppc_periods": at_ppc_periods,
+            "metric_names": metric_names, "metric_formats": metric_formats, "derived_names": derived_names,
+            "at_periods": at_periods, "at_ppc_periods": at_ppc_periods,
             "hidden_sections": [s for s in (_read_kpi_layout_value('hidden_sections') or []) if s in sections],
             "collapsed_rows": _user_row_list(_COLLAPSED_KEY, user),
             "rolling_rows": _user_row_list(_ROLLING_KEY, user),

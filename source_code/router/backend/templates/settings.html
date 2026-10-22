@@ -439,15 +439,16 @@
         <style>
             #lu-endpoints-pick { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 2px 16px; }
             #lu-recipes td, #lu-recent td { vertical-align: top; }
-            details.lu-manual > summary { font-weight: 600; cursor: pointer; margin-bottom: 12px; }
+            .lu-section { font-size: 1.35rem; font-weight: 700; margin: 8px 0 12px; padding-bottom: 6px;
+                          border-bottom: 2px solid #adb5bd; }
+            .lu-block { margin-bottom: 36px; }
+            #dbt-picked .badge { font-size: 0.85rem; font-weight: 500; }
+            #dbt-picked .badge button { border: none; background: none; color: inherit; padding: 0 0 0 6px; }
         </style>
         <div id="lu-error" class="alert alert-danger py-2 px-3" style="display:none"></div>
-        <p class="mt-0">
-            A recipe pulls its endpoints from the API, rebuilds only the dbt models between those endpoints and its
-            table, and checks each step. Every run writes to <strong>PROD</strong>. Keep the page open while it runs;
-            reopening it picks the run up again.
-        </p>
 
+        <section class="lu-block">
+        <h4 class="lu-section">Model List</h4>
         <div class="card mb-4">
             <div class="card-header fw-semibold d-flex align-items-center gap-2">
                 <span>Model List</span>
@@ -465,6 +466,42 @@
                 <pre id="lu-recheck-log" class="small border rounded p-2 mt-2 mb-0 bg-light" style="display:none; white-space: pre-wrap; max-height: 250px; overflow-y: auto;"></pre>
             </div>
         </div>
+        </section>
+
+        <section class="lu-block">
+        <h4 class="lu-section">Live Update</h4>
+        <p class="mt-0">
+            A recipe pulls its endpoints from the API, rebuilds only the dbt models between those endpoints and its
+            tables, and checks each step. Every run writes to <strong>PROD</strong>. Keep the page open while it runs;
+            reopening it picks the run up again.
+        </p>
+
+        <div class="card mb-4">
+            <div class="card-header fw-semibold">Run Settings</div>
+            <div class="card-body">
+                <div class="d-flex align-items-end gap-3 flex-wrap">
+                    <div><label class="form-label mb-1" for="lu-s-workers">API Workers</label>
+                        <input class="form-control" type="number" id="lu-s-workers" min="1" max="10" style="width: 110px;">
+                        <div class="form-text">Pages fetched at once. Default: 4</div></div>
+                    <div><label class="form-label mb-1" for="lu-s-per-page">Items Per Page</label>
+                        <input class="form-control" type="number" id="lu-s-per-page" min="1" max="100" style="width: 110px;">
+                        <div class="form-text">Default: 100 (the API maximum)</div></div>
+                    <div><label class="form-label mb-1" for="lu-s-threads">dbt Threads</label>
+                        <input class="form-control" type="number" id="lu-s-threads" min="1" max="64" style="width: 110px;">
+                        <div class="form-text">Models built at once. Default: 20</div></div>
+                    <div class="mb-4 d-flex align-items-center gap-2">
+                        <button type="button" class="btn btn-primary btn-sm" onclick="luSaveSettings()">Save</button>
+                        <span class="text-muted small" id="lu-s-note"></span>
+                    </div>
+                </div>
+                <div class="d-flex align-items-center gap-2 flex-wrap">
+                    <button type="button" class="btn btn-outline-secondary btn-sm" id="lu-swagger-btn" onclick="luSwagger()">
+                        <i class="fas fa-file-import me-1"></i>Load Endpoints From Swagger
+                    </button>
+                    <span class="small" id="lu-swagger-note">Adds any Nexus Point endpoint in the API's swagger.json that is not in the list yet.</span>
+                </div>
+            </div>
+        </div>
 
         <div class="card mb-4">
             <div class="card-header fw-semibold d-flex align-items-center">
@@ -475,16 +512,29 @@
             </div>
             <div class="card-body">
                 <table class="table table-sm mb-0" id="lu-recipes">
-                    <thead><tr><th>Name</th><th>Endpoints</th><th>Table</th><th>Look Back</th><th></th></tr></thead>
+                    <thead><tr><th>Name</th><th>Endpoints</th><th>Tables</th><th>Look Back</th><th></th></tr></thead>
                     <tbody><tr><td colspan="5" class="text-muted">Loading...</td></tr></tbody>
                 </table>
                 <div id="lu-form" class="border rounded p-3 mt-3" style="display:none">
                     <input type="hidden" id="lu-f-key">
+                    <div class="d-flex align-items-end gap-2 flex-wrap mb-3 pb-3 border-bottom">
+                        <div><label class="form-label mb-1" for="lu-f-page">Page (Name Links Here)</label>
+                            <select class="form-select" id="lu-f-page" style="width: 280px;"></select></div>
+                        <div><label class="form-label mb-1" for="lu-f-days">Logs From The Last (Days)</label>
+                            <input class="form-control" type="number" id="lu-f-days" min="1" max="365" value="30" style="width: 110px;"></div>
+                        <button type="button" class="btn btn-outline-secondary btn-sm mb-1" onclick="luFromPage()">
+                            <i class="fas fa-magic me-1"></i>Fill From Page</button>
+                        <div class="w-100 small" id="lu-f-page-note">Uses the Snowflake tables the page actually read
+                            (from the Logs page), the dbt models that build them, and every Nexus endpoint those models read.</div>
+                    </div>
                     <div class="d-flex gap-3 flex-wrap mb-2">
                         <div><label class="form-label mb-1" for="lu-f-name">Name</label>
                             <input class="form-control" id="lu-f-name" style="width: 240px;"></div>
-                        <div><label class="form-label mb-1" for="lu-f-target">Table To Update (Model)</label>
-                            <input class="form-control" id="lu-f-target" list="lu-model-options" style="width: 320px;" autocomplete="off">
+                        <div><label class="form-label mb-1" for="lu-f-targets">Tables To Update (Models, One Per Line)</label>
+                            <textarea class="form-control font-monospace" id="lu-f-targets" rows="3" style="width: 360px;"></textarea>
+                            <input class="form-control form-control-sm mt-1" id="lu-f-add-target" list="lu-model-options"
+                                   placeholder="Type to add a model" style="width: 360px;" autocomplete="off"
+                                   onchange="luAddTarget(this)">
                             <datalist id="lu-model-options"></datalist></div>
                         <div><label class="form-label mb-1" for="lu-f-lookback">Look Back (Hours)</label>
                             <input class="form-control" type="number" id="lu-f-lookback" min="1" max="720" style="width: 110px;"></div>
@@ -516,8 +566,10 @@
             </div>
         </div>
 
-        <details class="lu-manual mb-3">
-        <summary>Manual API Requests</summary>
+        </section>
+
+        <section class="lu-block">
+        <h4 class="lu-section">Manual API Requests</h4>
         <style>
             #nx-routes { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 2px 16px; }
             #nx-routes .nx-route { display: flex; align-items: center; gap: 6px; }
@@ -606,7 +658,7 @@
             </div>
         </div>
         </div>{# /nexus #}
-        </details>
+        </section>
         <script src="{{ static_url('js/api_requests.js') }}"></script>
         <script src="{{ static_url('js/live_update.js') }}"></script>
         <script>
@@ -776,8 +828,8 @@
             nxLoad();
         </script>
 
-        <details class="lu-manual mb-3">
-        <summary>Manual dbt</summary>
+        <section class="lu-block">
+        <h4 class="lu-section">Manual dbt Run</h4>
         <style>
             .dbt-small { font-size: 0.85rem; }
             #dbt-steps td, #dbt-runs td, #dbt-jobs td { vertical-align: top; }
@@ -792,25 +844,36 @@
             <div class="card-header fw-semibold">Plan From A Model</div>
             <div class="card-body dbt-small">
                 <p class="form-text mt-0">
-                    Pick the model you want up to date. The plan lists every model it reads from, directly or
-                    further back, split into one step per project in the order they must run: raw, then transform,
-                    then product. <span id="dbt-lineage-note"></span>
+                    Pick the tables you want rebuilt: the project, then the table, then Add (repeat for more). The plan
+                    lists them plus everything they feed (downstream) and, if ticked, everything they read from
+                    (upstream), split into one step per project in run order: raw, then transform, then product.
+                    <span id="dbt-lineage-note"></span>
                 </p>
-                <div class="d-flex align-items-end gap-3 flex-wrap mb-3">
+                <div class="d-flex align-items-end gap-3 flex-wrap mb-2">
                     <div>
-                        <label for="dbt-model" class="form-label mb-1">Model</label>
-                        <input class="form-control" id="dbt-model" list="dbt-model-options" style="width: 360px;"
-                               placeholder="e.g. sales_performance__p" autocomplete="off"
-                               onkeydown="if (event.key === 'Enter') dbtPlan()">
-                        <datalist id="dbt-model-options"></datalist>
+                        <label for="dbt-project" class="form-label mb-1">Project</label>
+                        <select class="form-select" id="dbt-project" style="width: 160px;" onchange="dbtFillTables()">
+                            <option value="raw">Raw</option>
+                            <option value="transform">Transform</option>
+                            <option value="product" selected>Product</option>
+                        </select>
                     </div>
-                    <div class="form-check mb-2">
-                        <input class="form-check-input" type="checkbox" id="dbt-upstream" checked>
-                        <label class="form-check-label" for="dbt-upstream">Include Upstream</label>
+                    <div>
+                        <label for="dbt-table" class="form-label mb-1">Table</label>
+                        <select class="form-select" id="dbt-table" style="width: 380px;"></select>
                     </div>
-                    <div class="form-check mb-2">
-                        <input class="form-check-input" type="checkbox" id="dbt-downstream">
+                    <button type="button" class="btn btn-outline-secondary" onclick="dbtAddModel()">
+                        <i class="fas fa-plus me-1"></i>Add</button>
+                </div>
+                <div id="dbt-picked" class="d-flex gap-2 flex-wrap mb-3"><span class="text-muted">No tables added yet.</span></div>
+                <div class="d-flex align-items-center gap-3 flex-wrap mb-3">
+                    <div class="form-check">
+                        <input class="form-check-input" type="checkbox" id="dbt-downstream" checked>
                         <label class="form-check-label" for="dbt-downstream">Include Downstream</label>
+                    </div>
+                    <div class="form-check">
+                        <input class="form-check-input" type="checkbox" id="dbt-upstream">
+                        <label class="form-check-label" for="dbt-upstream">Include Upstream</label>
                     </div>
                     <button type="button" class="btn btn-outline-secondary" onclick="dbtPlan()">Show Plan</button>
                 </div>
@@ -932,7 +995,7 @@
             </div>
         </div>
 
-        </details>
+        </section>
         <script>
             let dbtJobs = [];
             let dbtPlanSteps = [];
@@ -973,7 +1036,8 @@
                         `Runs on the <strong>${dbtEsc(d.env)}</strong> ECS cluster <code>${dbtEsc(d.cluster)}</code> (${dbtEsc(d.region)}) with <code>--target ${dbtEsc(d.env)}</code>, ` +
                         `from this site and every other one (dev and local included), so every run writes to <strong>PROD</strong>.`;
                     if (!document.getElementById('dbt-date').value) document.getElementById('dbt-date').value = d.today;
-                    document.getElementById('dbt-model-options').innerHTML = d.models.map(m => `<option value="${dbtEsc(m)}">`).join('');
+                    dbtModelInfo = d.model_info || {};
+                    dbtFillTables();
                     document.getElementById('dbt-lineage-note').textContent = luLineageText(d.lineage);
                     dbtRenderJobs();
                     dbtRenderRuns(d.runs);
@@ -1018,8 +1082,46 @@
                     '<tr><td colspan="7" class="text-muted">No runs yet.</td></tr>';
             }
 
+            // Plan From A Model: project, then table, then Add; several tables can be planned together.
+            let dbtModelInfo = {};
+            let dbtPicked = [];
+
+            function dbtFillTables() {
+                const project = document.getElementById('dbt-project').value;
+                const sel = document.getElementById('dbt-table');
+                const keep = sel.value;
+                const names = Object.keys(dbtModelInfo).filter(n => dbtModelInfo[n].project === project)
+                    .sort((a, b) => (dbtModelInfo[a].table || a).localeCompare(dbtModelInfo[b].table || b));
+                sel.innerHTML = names.map(n => {
+                    const m = dbtModelInfo[n];
+                    const label = `${(m.table || n).toUpperCase()}  (${m.schema || ''} - ${n}${m.materialized ? ', ' + m.materialized : ''})`;
+                    return `<option value="${dbtEsc(n)}">${dbtEsc(label)}</option>`;
+                }).join('') || '<option value="">No tables in this project</option>';
+                if (names.includes(keep)) sel.value = keep;
+            }
+
+            function dbtAddModel() {
+                const n = document.getElementById('dbt-table').value;
+                if (n && !dbtPicked.includes(n)) dbtPicked.push(n);
+                dbtRenderPicked();
+            }
+
+            function dbtRemoveModel(n) {
+                dbtPicked = dbtPicked.filter(x => x !== n);
+                dbtRenderPicked();
+            }
+
+            function dbtRenderPicked() {
+                document.getElementById('dbt-picked').innerHTML = dbtPicked.map(n => {
+                    const m = dbtModelInfo[n] || {};
+                    return `<span class="badge bg-light text-dark border">${dbtEsc(m.project || '')}: ${dbtEsc(n)}
+                        <button type="button" title="Remove" onclick="dbtRemoveModel('${dbtEsc(n)}')"><i class="fas fa-times"></i></button></span>`;
+                }).join('') || '<span class="text-muted">No tables added yet.</span>';
+            }
+
             async function dbtPlan() {
-                const model = document.getElementById('dbt-model').value.trim();
+                if (!dbtPicked.length) dbtAddModel();
+                const model = dbtPicked.join(',');
                 const box = document.getElementById('dbt-plan');
                 if (!model) return;
                 box.textContent = 'Working out the plan...';
@@ -1043,7 +1145,7 @@
                         </tr>`;
                     }).join('');
                     box.innerHTML = `
-                        <div class="mb-2"><strong>${dbtEsc(d.model)}</strong> reads directly from:
+                        <div class="mb-2"><strong>${d.models.map(dbtEsc).join(', ')}</strong> read directly from:
                             ${d.parents.length ? d.parents.map(dbtEsc).join(', ') : 'no other models'}.
                             Read directly by: ${d.children.length ? d.children.map(dbtEsc).join(', ') : 'nothing'}.</div>
                         ${d.feeds.length ? `<div class="mb-2">The raw models read these S3 folders, so their ingestion jobs (or
@@ -1232,6 +1334,14 @@
                     err.style.display = 'none';
                     luRecipes = d.recipes;
                     luEndpoints = d.endpoints;
+                    document.getElementById('lu-s-workers').value = d.run_settings.nexus_workers;
+                    document.getElementById('lu-s-per-page').value = d.run_settings.nexus_per_page;
+                    document.getElementById('lu-s-threads').value = d.run_settings.dbt_threads;
+                    const pageSel = document.getElementById('lu-f-page');
+                    const keepPage = pageSel.value;
+                    pageSel.innerHTML = '<option value="">Choose A Page...</option>' +
+                        d.pages.map(p => `<option value="${dbtEsc(p.path)}">${dbtEsc(p.label)}</option>`).join('');
+                    pageSel.value = keepPage;
                     document.getElementById('lu-model-options').innerHTML = d.models.map(m => `<option value="${dbtEsc(m)}">`).join('');
                     const note = document.getElementById('lu-lineage-note');
                     note.textContent = luLineageText(d.lineage);
@@ -1255,9 +1365,11 @@
 
             function luRenderRecipes() {
                 document.querySelector('#lu-recipes tbody').innerHTML = luRecipes.map(r => `<tr>
-                    <td class="fw-semibold">${dbtEsc(r.name)}</td>
+                    <td class="fw-semibold">${r.page_path
+                        ? `<a href="${BASE_URL}${dbtEsc(r.page_path)}" target="_blank" rel="noopener" title="Open the page">${dbtEsc(r.name)}</a>`
+                        : dbtEsc(r.name)}</td>
                     <td>${r.endpoints.map(e => `<code>${dbtEsc(e)}</code>`).join('<br>')}</td>
-                    <td><code>${dbtEsc(r.target_model)}</code></td>
+                    <td>${r.targets.map(t => `<code>${dbtEsc(t)}</code>`).join('<br>')}</td>
                     <td>${r.lookback_hours} hours</td>
                     <td class="text-nowrap">
                         <button class="btn btn-sm btn-outline-secondary" onclick="luShowPlan('${r.recipe_key}')">Show Plan</button>
@@ -1267,23 +1379,92 @@
             }
 
             function luEdit(key) {
-                const r = luRecipes.find(x => x.recipe_key === key) || { recipe_key: '', name: '', endpoints: [], target_model: '', lookback_hours: 3 };
+                const r = luRecipes.find(x => x.recipe_key === key) || { recipe_key: '', name: '', endpoints: [], targets: [], lookback_hours: 3 };
                 document.getElementById('lu-f-key').value = r.recipe_key;
                 document.getElementById('lu-f-name').value = r.name;
-                document.getElementById('lu-f-target').value = r.target_model;
+                document.getElementById('lu-f-targets').value = r.targets.join('\n');
+                document.getElementById('lu-f-page').value = r.page_path || '';
                 document.getElementById('lu-f-lookback').value = r.lookback_hours;
+                luRenderEndpointPick(r.endpoints);
+                document.getElementById('lu-f-note').textContent = '';
+                document.getElementById('lu-f-page-note').className = 'w-100 small';
+                document.getElementById('lu-form').style.display = '';
+            }
+
+            function luRenderEndpointPick(ticked) {
                 document.getElementById('lu-endpoints-pick').innerHTML = luEndpoints.map((e, i) => `
                     <div class="form-check"><input class="form-check-input" type="checkbox" id="lu-ep-${i}" value="${dbtEsc(e)}"
-                        ${r.endpoints.includes(e) ? 'checked' : ''}><label class="form-check-label" for="lu-ep-${i}">${dbtEsc(e)}</label></div>`).join('');
-                document.getElementById('lu-f-note').textContent = '';
-                document.getElementById('lu-form').style.display = '';
+                        ${ticked.includes(e) ? 'checked' : ''}><label class="form-check-label" for="lu-ep-${i}">${dbtEsc(e)}</label></div>`).join('');
+            }
+
+            function luAddTarget(input) {
+                const box = document.getElementById('lu-f-targets');
+                const v = input.value.trim();
+                if (v && !box.value.split(/\s+/).includes(v)) box.value = (box.value.trim() ? box.value.trim() + '\n' : '') + v;
+                input.value = '';
+            }
+
+            // Fill the form from the tables a page actually read.
+            async function luFromPage() {
+                const path = document.getElementById('lu-f-page').value;
+                const note = document.getElementById('lu-f-page-note');
+                if (!path) { note.textContent = 'Choose a page first.'; return; }
+                note.className = 'w-100 small';
+                note.textContent = 'Reading the page\'s logged queries...';
+                try {
+                    const d = await apiGetJson(`${BASE_URL}/api/live-update/from-page?path=${encodeURIComponent(path)}&days=${encodeURIComponent(document.getElementById('lu-f-days').value || 30)}`);
+                    if (d.status !== 'ok') { note.className = 'w-100 small text-danger'; note.textContent = d.message || d.detail; return; }
+                    if (!document.getElementById('lu-f-name').value) document.getElementById('lu-f-name').value = d.name;
+                    document.getElementById('lu-f-targets').value = d.targets.join('\n');
+                    luRenderEndpointPick(d.endpoints);
+                    const parts = [`Read ${d.tables.length} table(s) in the last ${d.days} days: ${d.tables.join(', ')}.`,
+                                   `${d.targets.length} are dbt models (filled in above); ${d.endpoints.length} Nexus endpoint(s) feed them (ticked below).`];
+                    if (d.unmatched.length) parts.push(`Not built by dbt, so left out: ${d.unmatched.join(', ')}.`);
+                    if (d.not_in_list.length) parts.push(`Nexus endpoints not in the endpoint list (use Load Endpoints From Swagger, or Add Endpoint): ${d.not_in_list.join(', ')}.`);
+                    if (d.other_feeds.length) parts.push(`Also fed by data Live Update cannot pull (left as the scheduled jobs last saved it): ${d.other_feeds.join(', ')}.`);
+                    note.innerHTML = parts.map(dbtEsc).join('<br>');
+                } catch (e) {
+                    note.className = 'w-100 small text-danger';
+                    note.textContent = 'Failed: ' + e.message;
+                }
+            }
+
+            async function luSaveSettings() {
+                const note = document.getElementById('lu-s-note');
+                const d = await apiPostJson(BASE_URL + '/api/live-update/settings', {
+                    nexus_workers: document.getElementById('lu-s-workers').value,
+                    nexus_per_page: document.getElementById('lu-s-per-page').value,
+                    dbt_threads: document.getElementById('lu-s-threads').value,
+                });
+                note.textContent = d.status === 'ok' ? 'Saved' : d.message;
+                if (d.status === 'ok') { luLoad(); nxLoad(); }
+            }
+
+            async function luSwagger() {
+                const btn = document.getElementById('lu-swagger-btn');
+                const note = document.getElementById('lu-swagger-note');
+                btn.disabled = true;
+                note.textContent = 'Reading swagger.json...';
+                try {
+                    const d = await apiPostJson(BASE_URL + '/api/api-requests/nexus/routes/swagger');
+                    if (d.status !== 'ok') throw new Error(d.message || d.detail);
+                    note.textContent = `${d.found} endpoints in swagger.json; added ${d.added.length}` +
+                        (d.added.length ? `: ${d.added.join(', ')}` : '') + '.' +
+                        (d.no_updated_at.length ? ` No updated_at filter (every row pulled each time): ${d.no_updated_at.join(', ')}.` : '');
+                    luLoad(); nxLoad();
+                } catch (e) {
+                    note.textContent = 'Failed: ' + e.message;
+                } finally {
+                    btn.disabled = false;
+                }
             }
 
             async function luSave() {
                 const d = await apiPostJson(BASE_URL + '/api/live-update/recipes', {
                     recipe_key: document.getElementById('lu-f-key').value || null,
                     name: document.getElementById('lu-f-name').value,
-                    target_model: document.getElementById('lu-f-target').value.trim(),
+                    targets: document.getElementById('lu-f-targets').value.split(/[\s,]+/).filter(Boolean),
+                    page_path: document.getElementById('lu-f-page').value,
                     lookback_hours: document.getElementById('lu-f-lookback').value,
                     endpoints: [...document.querySelectorAll('#lu-endpoints-pick input:checked')].map(el => el.value),
                 });
@@ -1310,13 +1491,16 @@
                         <div class="fw-semibold mb-1">${dbtEsc(d.recipe.name)}: what a run does</div>
                         ${p.lineage_old ? `<div class="dbt-warn mb-2">The model list was not rechecked in the last ${7} days. If the dbt SQL changed since, press Recheck Lineage first.</div>` : ''}
                         ${p.errors.length ? `<div class="alert alert-danger py-2 px-3">${p.errors.map(dbtEsc).join('<br>')}</div>` : ''}
+                        ${(p.warnings || []).length ? `<div class="dbt-warn mb-2">${p.warnings.map(dbtEsc).join('<br>')}</div>` : ''}
+                        <div class="mb-2">Tables updated: ${p.targets.map(t => `<code>${dbtEsc(t)}</code>`).join(', ')}</div>
                         <table class="table table-sm mb-2"><thead><tr><th>Step</th><th>Models</th></tr></thead><tbody>
                         ${p.endpoints.map(e => `<tr><td class="text-nowrap">Pull <code>${dbtEsc(e.route)}</code></td>
                             <td><div class="dbt-model-list">Read by ${e.models.map(dbtEsc).join(', ') || 'no model'}${e.check_table ? `; checked in ${dbtEsc(e.check_table.model)}` : ''}</div></td></tr>`).join('')}
                         ${p.steps.map(s => {
                             const fr = s.models.filter(m => m.needs_full_refresh_on_column_change).map(m => m.name);
                             return `<tr><td class="text-nowrap">dbt ${dbtEsc(s.project)} (${s.models.length})</td>
-                            <td><div class="dbt-model-list">${s.models.map(m => `${dbtEsc(m.name)} <span class="text-muted">(${dbtEsc(m.materialized)})</span>`).join(', ')}</div>
+                            <td>${s.plus ? `<div><code>--select ${dbtEsc(s.select)}</code></div>` : ''}
+                            <div class="dbt-model-list">${s.plus ? 'Planned: ' : ''}${s.models.map(m => `${dbtEsc(m.name)} <span class="text-muted">(${dbtEsc(m.materialized)})</span>`).join(', ')}</div>
                             ${fr.length ? `<div class="dbt-model-list dbt-warn">Need Full Refresh (from Manual dbt) if a column was added, removed or renamed: ${dbtEsc(fr.join(', '))}</div>` : ''}</td></tr>`;
                         }).join('')}
                         </tbody></table>
