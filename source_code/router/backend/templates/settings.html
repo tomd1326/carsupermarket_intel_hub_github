@@ -13,7 +13,7 @@
 </head>
 <body>
     {{ page_header('Settings', user) }}
-    <div class="settings-card{% if active_section in ('sharepoint', 'live-update') %} settings-card-wide{% endif %}">
+    <div class="settings-card{% if active_section in ('sharepoint', 'live-update', 'ai') %} settings-card-wide{% endif %}">
 
         <div class="settings-layout">
         {% include '_settings_nav.html' %}
@@ -248,6 +248,137 @@
                 }
             });
         </script>
+
+        {# Page settings and Knowledge are saved through JSON (routers/ai_knowledge.py),
+           so they sit outside the form above and have their own Save buttons. #}
+        <div id="ai-settings" data-base="{{ BASE_URL }}">
+            <div class="card mb-4 mt-4">
+                <div class="card-header fw-semibold">Page Settings</div>
+                <div class="card-body">
+                    <div class="d-flex gap-2 align-items-center mb-3">
+                        <label class="form-label mb-0" for="ai-page">Page</label>
+                        <select class="form-select" id="ai-page" style="max-width: 260px;"></select>
+                        <button type="button" class="btn btn-outline-secondary" id="ai-preview-btn">Preview What Cortex Sees</button>
+                    </div>
+                    <label class="form-label" for="ai-instructions">Instructions</label>
+                    <textarea class="form-control font-monospace" id="ai-instructions" rows="14"></textarea>
+                    <div class="form-text">Sent before every question on this page, followed by the page's knowledge. Clear the box and save to go back to the default.</div>
+                    <div class="row g-3 mt-1">
+                        <div class="col-auto">
+                            <label class="form-label" for="ai-max-tokens">Answer Length Limit (Tokens)</label>
+                            <input type="number" class="form-control" id="ai-max-tokens" style="width: 160px;">
+                        </div>
+                        <div class="col-auto">
+                            <label class="form-label" for="ai-temperature">Temperature</label>
+                            <input type="number" class="form-control" id="ai-temperature" step="0.05" style="width: 120px;">
+                        </div>
+                        <div class="col-auto">
+                            <label class="form-label" for="ai-history-turns">Messages Remembered</label>
+                            <input type="number" class="form-control" id="ai-history-turns" style="width: 140px;">
+                        </div>
+                        <div class="col-auto">
+                            <label class="form-label" for="ai-knowledge-max">Knowledge Size Limit (Characters)</label>
+                            <input type="number" class="form-control" id="ai-knowledge-max" step="1000" style="width: 200px;">
+                        </div>
+                    </div>
+                    <div class="form-text">Temperature: 0 gives the same answer every time, higher gives more varied wording. Messages Remembered: how many earlier questions and answers are sent with a follow-up.</div>
+                    <div class="d-flex gap-2 mt-3">
+                        <button type="button" class="btn btn-primary" id="ai-page-save">Save Page Settings</button>
+                        <button type="button" class="btn btn-outline-secondary" id="ai-page-reset">Reset To Default</button>
+                        <span class="align-self-center text-muted" id="ai-page-note"></span>
+                    </div>
+                    <pre id="ai-preview" class="mt-3 p-3 border rounded bg-light" style="display:none; white-space: pre-wrap; max-height: 500px; overflow: auto;"></pre>
+                </div>
+            </div>
+
+            <div class="card mb-4">
+                <div class="card-header fw-semibold">Knowledge</div>
+                <div class="card-body">
+                    <div class="form-text mb-2">What every Ask AI reads before answering: table descriptions, notes on what columns mean, business rules and instructions. Proposed entries (starting entries, AI drafts, things Ask AI suggests remembering) are not sent until you approve them.</div>
+                    <div id="ai-usage" class="mb-2"></div>
+                    <div class="d-flex flex-wrap gap-2 mb-3">
+                        <input type="search" class="form-control" id="ai-search" placeholder="Search" style="max-width: 240px;">
+                        <select class="form-select" id="ai-filter-page" style="max-width: 200px;"></select>
+                        <select class="form-select" id="ai-filter-status" style="max-width: 170px;">
+                            <option value="">All Statuses</option>
+                            <option value="active">Active</option>
+                            <option value="proposed">Proposed</option>
+                        </select>
+                        <button type="button" class="btn btn-primary" id="ai-add">Add Entry</button>
+                        <button type="button" class="btn btn-outline-primary" id="ai-add-column">Add Column Note</button>
+                        <button type="button" class="btn btn-outline-primary" id="ai-draft">Draft With AI</button>
+                        <button type="button" class="btn btn-outline-secondary" id="ai-seed">Add Starting Entries</button>
+                    </div>
+
+                    <div id="ai-editor" class="border rounded p-3 mb-3" style="display:none;">
+                        <div class="row g-2">
+                            <div class="col-md-5">
+                                <label class="form-label" for="ai-e-title">Title</label>
+                                <input type="text" class="form-control" id="ai-e-title" maxlength="200">
+                            </div>
+                            <div class="col-md-2">
+                                <label class="form-label" for="ai-e-kind">Kind</label>
+                                <select class="form-select" id="ai-e-kind"></select>
+                            </div>
+                            <div class="col-md-2">
+                                <label class="form-label" for="ai-e-scope">Page</label>
+                                <select class="form-select" id="ai-e-scope"></select>
+                            </div>
+                            <div class="col-md-2">
+                                <label class="form-label" for="ai-e-status">Status</label>
+                                <select class="form-select" id="ai-e-status">
+                                    <option value="active">Active</option>
+                                    <option value="proposed">Proposed</option>
+                                </select>
+                            </div>
+                            <div class="col-md-1 d-flex align-items-end">
+                                <div class="form-check mb-2">
+                                    <input class="form-check-input" type="checkbox" id="ai-e-enabled">
+                                    <label class="form-check-label" for="ai-e-enabled">On</label>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="row g-2 mt-1" id="ai-e-column-pick" style="display:none;">
+                            <div class="col-md-6">
+                                <label class="form-label" for="ai-e-table">Table</label>
+                                <select class="form-select" id="ai-e-table"></select>
+                            </div>
+                            <div class="col-md-6">
+                                <label class="form-label" for="ai-e-column">Column</label>
+                                <select class="form-select" id="ai-e-column"></select>
+                            </div>
+                        </div>
+                        <label class="form-label mt-2" for="ai-e-content">Text</label>
+                        <textarea class="form-control font-monospace" id="ai-e-content" rows="12"></textarea>
+                        <div class="d-flex gap-2 mt-2">
+                            <button type="button" class="btn btn-primary" id="ai-e-save">Save Entry</button>
+                            <button type="button" class="btn btn-outline-secondary" id="ai-e-cancel">Cancel</button>
+                            <span class="align-self-center text-muted" id="ai-e-note"></span>
+                        </div>
+                    </div>
+
+                    <div id="ai-draft-box" class="border rounded p-3 mb-3" style="display:none;">
+                        <label class="form-label" for="ai-draft-table">Table To Describe</label>
+                        <div class="d-flex gap-2">
+                            <select class="form-select" id="ai-draft-table" style="max-width: 480px;"></select>
+                            <button type="button" class="btn btn-primary" id="ai-draft-go">Draft</button>
+                            <button type="button" class="btn btn-outline-secondary" id="ai-draft-cancel">Cancel</button>
+                        </div>
+                        <div class="form-text" id="ai-draft-note">Cortex writes a description from the table's columns and any Column Notes already written for it. It is saved as Proposed for you to check.</div>
+                    </div>
+
+                    <div class="table-responsive">
+                        <table class="table table-sm align-middle" id="ai-table">
+                            <thead>
+                                <tr><th>Title</th><th>Kind</th><th>Page</th><th>Status</th><th>On</th><th class="text-end">Size</th><th>Updated</th><th></th></tr>
+                            </thead>
+                            <tbody></tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <script src="{{ static_url('js/ai_settings.js') }}"></script>
         {% endif %}
 
         {# ── CAP Credential Override ─────────────────────────── #}

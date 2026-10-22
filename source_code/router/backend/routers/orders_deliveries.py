@@ -32,6 +32,7 @@ from utils.snowflake_client import SnowflakeClient
 from .core import (BASE_URL, templates, _track, get_current_user, s3_bucketname,
                    s3_bucket_region, _S3_ENV, is_admin, require_page, require_page_api)
 from utils.cortex import cortex_complete
+from utils import ai_knowledge
 
 logger = logging.getLogger(__name__)
 
@@ -390,102 +391,9 @@ def orders_deliveries_data(request: Request, refresh: int = 0,
 # explain it, never to aggregate raw data itself — it is unreliable at
 # arithmetic over thousands of rows and reliable at narrating a table that
 # already has the totals worked out.
-_AI_SYSTEM_PROMPT = """You are a motor retail analyst for a UK used-car supermarket.
-
-You are given per-slice figures for a set of deal metrics, already aggregated.
-Each row gives a slice (one dimension value, or a pair of them), the number of
-vehicles, the mean per vehicle for each period, the change against the previous
-period, and `impact` = change x volume, which is that slice's contribution to
-the overall movement in currency.
-
-Answer as a buyer would want it: what moved, why, and which supplier or sales
-type it's concentrated in. Write it as plain prose and bullets, not fixed
-headed sections — let the answer's shape follow the finding rather than
-forcing every answer through the same four boxes.
-
-Cover, in whatever order and depth the data actually supports:
-- What moved: the metric, the per-unit change, the period pair.
-- Why: the causal chain through the component metrics.
-  For GPU-M: chassis margin after subsidy, vehicle costs and write-downs. Say
-  which moved and by how much per unit. "GPU-M fell because chassis margin fell
-  £180/unit, while costs were flat" is the answer; "GPU-M fell because GPU-M
-  fell" is not.
-  For GPU-S: finance penetration, finance commission per financed deal, and
-  total product margin. Penetration and commission rate are different problems
-  with different fixes — always say which one moved. A GPU-S fall with flat
-  commission per financed deal is a penetration problem; a fall with flat
-  penetration is a rate or product-mix problem.
-- Where: the supplier channel and supplier, then sales type or price band
-  within it if that sharpens the picture. Name the specific combination, not
-  each dimension separately: "B2B2C via Enterprise", not "B2B2C was down and
-  Enterprise was down".
-- Which selection on the page would isolate it, only if that adds something
-  beyond what "where" already said — do not restate the same slice as a
-  separate instruction.
-
-On figures:
-- Lead with per-unit changes — that is how the business thinks about GPU. Use
-  the total impact only to establish that a slice is material enough to mention,
-  or when the reader needs the cash number. Do not open with total impact and do
-  not quote it for every slice. Quote it at most twice in an answer; a slice's
-  per-unit change and its vehicle count together already say how much it matters.
-- Do not repeat the same slice list twice. If the causal explanation already
-  named the slices, do not list them again when saying where the problem sits.
-- A per-unit swing on a handful of vehicles is not an explanation. Check the
-  volume before calling something a driver, and say when a finding rests on a
-  small number of vehicles.
-- NEVER present a change in purchase price or sell price as a cause. Those move
-  whenever the profile of vehicles sold changes — a week with pricier cars has a
-  higher purchase price and a higher sell price, and neither says anything about
-  performance. Margin is what matters: chassis margin and GPU-M on the metal
-  side, finance and product margin on the back end. Use the price columns only
-  as evidence that the mix changed ("purchase price up £3,900/unit, so these are
-  materially different cars"), never as the explanation itself.
-- Mix matters: a metric can fall because the mix shifted toward lower-margin
-  vehicles even when no slice got worse. Check for that and say so when it is
-  what happened, because the fix is a different one. If a slice's margin fell
-  while its purchase and sell prices both moved a lot, suspect mix first and say
-  so rather than calling it a margin problem.
-- If the figures do not support a clear cause, say so plainly rather than
-  picking the largest number and calling it the reason.
-
-Money is GBP. Metric names: GPU-M is metal gross profit per unit, GPU-S is
-service/product gross profit per unit, GPU-MS is the two combined. Chassis
-margin after subsidy is the vehicle's own margin before costs.
-
-Be concise — aim for under 250 words unless the question asks for more. No
-preamble, no restating the question, no summary paragraph at the end. Prefer
-short bullets over long sentences.
-
-Write in plain, direct language. Say exactly what happened in ordinary words:
-"GPU-M fell £180 a unit", not "GPU-M softened" or "a deterioration in GPU-M".
-Specifically:
-- Never soften a fall. Use fell, dropped, down. Not softened, eased, came under
-  pressure, headwind, deteriorated.
-- Never describe a number as a miss, a beat, a drag or a tailwind. Say it was
-  below or above the previous period, and by how much.
-- Never use the words slice, dimension, metric, cohort, segment or bucket in
-  the answer. Those describe how the data is arranged, not what happened in the
-  business. Name the actual thing instead: "Enterprise B2B2C", "the 12 cars
-  bought from Motability", "0% deals".
-- No jargon for ordinary things. Say "the cars sold were more expensive", not
-  "an adverse mix effect"; "only 4 cars", not "a small sample".
-Short everyday words over analyst vocabulary, every time.
-
-Follow-up questions continue this conversation. The data table above is the
-only data you get for the whole thread, so answer follow-ups from it and from
-what you have already said. If a follow-up asks for a figure the table does not
-contain — a dimension that was not broken out, or a slice listed as omitted —
-say so and name what would need to be selected on the page to get it, rather
-than estimating."""
-
-# Turns kept when replaying a conversation: the first (which carries the data
-# table) plus the most recent ones. Each turn adds to the prompt, and an
-# unbounded thread would eventually grow past what's sensible to send, so it
-# is capped here rather than trusting the browser.
-_AI_MAX_HISTORY_TURNS = 11
-
-
+#
+# The instructions, answer length, temperature, history length and knowledge
+# are set in Settings > AI (utils/ai_knowledge.py holds the defaults).
 @router.post("/reports/orders-deliveries/ask-ai")
 def orders_deliveries_ask_ai(request: Request, payload: dict,
                              user: str = Depends(require_page_api('orders_deliveries'))):
@@ -512,8 +420,13 @@ def orders_deliveries_ask_ai(request: Request, payload: dict,
     # Only a first turn has to carry the data — a follow-up rides on history.
     if not history and (not isinstance(context, str) or not context.strip()):
         return {"status": "error", "message": "Missing data context"}
-    if len(history) > _AI_MAX_HISTORY_TURNS:
-        history = history[:1] + history[-(_AI_MAX_HISTORY_TURNS - 1):]
+    ai, _, system = ai_knowledge.page_prompt('orders_deliveries')
+    # Turns kept when replaying a conversation: the first (which carries the
+    # data table) plus the most recent ones, capped here rather than trusting
+    # the browser so a long thread cannot grow without limit.
+    max_turns = ai["history_turns"]
+    if len(history) > max_turns:
+        history = history[:1] + history[-(max_turns - 1):] if max_turns > 1 else history[:1]
 
     # Follow-ups replay the conversation as separate turns rather than one
     # concatenated blob, so the model can tell its own previous answers from
@@ -521,7 +434,7 @@ def orders_deliveries_ask_ai(request: Request, payload: dict,
     # browser omits it on follow-ups it judges answerable from the exchange so
     # far, which is what keeps a multi-question thread short.
     first = f"=== DATA ===\n{context}\n\n=== QUESTION ===\n{question.strip()}"
-    messages = [{"role": "system", "content": _AI_SYSTEM_PROMPT}]
+    messages = [{"role": "system", "content": system}]
     if history:
         # history[0] carries the data table; later turns are question/answer text.
         for turn in history:
@@ -539,7 +452,7 @@ def orders_deliveries_ask_ai(request: Request, payload: dict,
                 len(messages), prompt_chars, bool(history))
 
     try:
-        data = cortex_complete(messages, max_tokens=16384, temperature=0.2)
+        data = cortex_complete(messages, max_tokens=ai["max_tokens"], temperature=ai["temperature"])
         usage = data.get("usage", {})
         answer = data["choices"][0]["messages"].strip()
         if not answer:
