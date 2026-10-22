@@ -419,6 +419,30 @@
         }
         .series-row input[type="color"] { width: 34px; height: 30px; padding: 1px 2px; border: 1px solid #cbd5e1; border-radius: 6px; background: #fff; cursor: pointer; }
         .series-row .btn { width: 100%; padding: 3px 0; font-size: 0.76rem; }
+        /* Magnifier on each chart card and the chart popup (openChartZoom). */
+        /* Just below the title line at its right end (under Monthly / Weekly /
+           Daily), in the space above the plot, so the title line keeps its height. */
+        .chart-card-head { position: relative; }
+        .chart-zoom-btn { position: absolute; top: 100%; right: 0; z-index: 2; border: none; background: none;
+                          padding: 2px; color: #64748b; cursor: pointer; font-size: 0.85rem; }
+        .chart-zoom-btn:hover { color: #0f172a; }
+        .chart-zoom-overlay { position: fixed; inset: 0; z-index: 1900; background: rgba(15, 23, 42, 0.45);
+                              display: flex; align-items: center; justify-content: center; }
+        .chart-zoom-box { box-sizing: border-box; display: flex; flex-direction: column; background: #fff; border-radius: 10px;
+                          box-shadow: 0 12px 40px rgba(15, 23, 42, 0.3); padding: 10px 14px 14px;
+                          resize: both; overflow: hidden; min-width: 360px; min-height: 260px; max-width: 98vw; max-height: 96vh; }
+        .chart-zoom-bar { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; }
+        .chart-zoom-bar .btn-close { margin-left: 4px; }
+        .chart-zoom-gap { flex: 1; }
+        .chart-zoom-hint { flex: none; text-align: right; color: #94a3b8; font-size: 0.75rem; margin: 2px 6px -8px 0; }
+        .chart-zoom-days { display: flex; align-items: center; gap: 6px; margin: 0; font-size: 0.8rem; font-weight: 600; color: #475569; }
+        .chart-zoom-days input { width: 64px; padding: 3px 6px; border: 1px solid #cbd5e1; border-radius: 6px; }
+        /* A chart column never grows to fit its canvas, so a chart can never
+           push the row's columns out of their set widths. */
+        .charts-row > * { min-width: 0; }
+        .chart-zoom-box .chart-card { flex: 1; min-height: 0; display: flex; flex-direction: column; border: none; padding: 0; height: auto; }
+        .chart-zoom-box .chart-wrap { flex: 1; min-height: 0; height: auto; }
+        .chart-zoom-box .chart-zoom-btn { display: none; }
         /* Data Labels popup (openLabelPopup) */
         .label-popup { position: absolute; z-index: 2000; background: #fff; border: 1px solid #cbd5e1; border-radius: 8px;
                        box-shadow: 0 8px 24px rgba(15, 23, 42, 0.18); padding: 10px 12px; width: 250px; font-size: 13px; }
@@ -1530,6 +1554,15 @@
                     <label for="setLegendFont">Chart Legend Size (px)</label>
                     <input type="number" id="setLegendFont" step="1">
                 </div>
+                <div class="modal-field">
+                    <label for="setZoomSize">Chart Popup Opens At</label>
+                    <select id="setZoomSize">
+                        <option value="0">Small</option>
+                        <option value="1">Medium</option>
+                        <option value="2">Large</option>
+                        <option value="3">Full Screen</option>
+                    </select>
+                </div>
             </div>
             <div class="modal-hint" id="appearanceHint"></div>
             </div>
@@ -1617,11 +1650,14 @@
 
     DayWindow.configure({
         getCount: () => kpiDates.length,
-        getSize: () => settings.days_window,
+        // The chart popup can show more days; the page goes back on close.
+        getSize: () => (chartZoom && chartZoom.days) || settings.days_window,
         onChange: () => {
-            DayWindow.applyToCharts(Object.values(rowCharts).map(charts => charts[2]));
+            DayWindow.applyToCharts(dayWindowCharts());
             updateDayTitles();
         },
+        // A daily chart in the popup scrolls on its own; the page's scrollers stay put.
+        getScrollerRoot: () => (zoomOnDaily() ? chartZoom.overlay : document),
     });
 
     function metricKey(source, column) { return source + '|' + column; }
@@ -2070,6 +2106,8 @@
             dayScroller,
             legend: false,
             headExtra: `<span class="chart-period" id="p-${row.id}-${suffix}">${escHtml(period)}</span>${headExtra}`,
+            headEnd: `<button type="button" class="chart-zoom-btn" title="Open this chart larger"
+                              onclick="openChartZoom('${row.id}', '${suffix}', this)"><i class="fas fa-search-plus"></i></button>`,
         });
         // Daily / 7-day average switch on the daily chart (line charts only).
         const rolling = rollingOn(row.id);
@@ -2153,11 +2191,204 @@
     }
 
     function dropRowElement(id) {
+        if (chartZoom && chartZoom.rowId === id) closeChartZoom(false);
         (rowCharts[id] || []).forEach(c => c && c.destroy());
         delete rowCharts[id];
         const el = customRowEls[id];
         if (el) el.remove();
         delete customRowEls[id];
+    }
+
+    // ── Chart popup (magnifier) ──
+    // The chart card itself moves into the popup, so its labels, targets,
+    // notes, hover box and day scroller keep working; a blank box the same
+    // size holds its place in the row until it is put back. The size it opens
+    // at is in Settings > Appearance. CSV export is only offered here.
+    const ZOOM_SIZES = [['s', 'Small', 50, 50], ['m', 'Medium', 70, 65], ['l', 'Large', 85, 80], ['f', 'Full Screen', 98, 94]];
+    const PERIOD_NAMES = { m: 'Monthly', w: 'Weekly', d: 'Daily' };
+    let chartZoom = null;   // { rowId, k, card, holder, overlay }
+
+    function zoomChart() {
+        return chartZoom && (rowCharts[chartZoom.rowId] || [])[{ m: 0, w: 1, d: 2 }[chartZoom.k]];
+    }
+
+    function openChartZoom(rowId, k, button) {
+        closeChartZoom();
+        const card = button.closest('.chart-card');
+        if (!card) return;
+        const holder = document.createElement('div');
+        holder.className = 'chart-zoom-holder';
+        holder.style.height = card.offsetHeight + 'px';
+        card.replaceWith(holder);
+        const overlay = document.createElement('div');
+        overlay.className = 'chart-zoom-overlay';
+        overlay.innerHTML = `
+            <div class="chart-zoom-box" role="dialog" aria-label="Chart">
+                <div class="chart-zoom-bar">
+                    <span class="labels-toggle" role="group" aria-label="Popup size">
+                        ${ZOOM_SIZES.map(([key, name]) => `<button type="button" data-zoom-size="${key}" onclick="setChartZoomSize('${key}')">${name}</button>`).join('')}
+                    </span>
+                    ${k === 'd' ? `
+                    <label class="chart-zoom-days">Days Shown
+                        <input type="number" id="zoomDays" min="7" max="${kpiDates.length}" step="1"
+                               value="${Math.min(settings.days_window, kpiDates.length)}" onchange="setZoomDays(this.value)">
+                    </label>
+                    <button type="button" class="chart-title-btn" onclick="setZoomDays(kpiDates.length)">All ${kpiDates.length} Days</button>` : ''}
+                    <span class="chart-zoom-gap"></span>
+                    <button type="button" class="chart-title-btn" onclick="downloadChartCsv()" title="Download the figures in this chart as a CSV file">
+                        <i class="fas fa-file-csv"></i> CSV
+                    </button>
+                    <button type="button" class="btn-close" title="Close" onclick="closeChartZoom()"></button>
+                </div>
+            </div>`;
+        const box = overlay.querySelector('.chart-zoom-box');
+        box.appendChild(card);
+        box.insertAdjacentHTML('beforeend', '<div class="chart-zoom-hint">Or Drag The Bottom Right Corner To Resize</div>');
+        overlay.addEventListener('mousedown', e => { if (e.target === overlay) closeChartZoom(); });
+        document.body.appendChild(overlay);
+        // offset: the page's day window position, put back on close.
+        chartZoom = { rowId, k, card, holder, overlay, days: null, offset: DayWindow.offset };
+        // Settings > Appearance: the size it opens at (Small unless changed).
+        setChartZoomSize((ZOOM_SIZES[Number(settings.zoom_size) || 0] || ZOOM_SIZES[0])[0]);
+    }
+
+    // Daily chart in the popup: how many days, up to every day loaded. Only
+    // while the popup is open; the page's own window comes back on close.
+    function setZoomDays(n) {
+        if (!chartZoom) return;
+        const days = Math.min(Math.max(Math.round(Number(n)) || settings.days_window, 7), kpiDates.length);
+        chartZoom.days = days;
+        const input = document.getElementById('zoomDays');
+        if (input) input.value = days;
+        redrawDayWindow();
+    }
+
+    function zoomOnDaily() { return !!chartZoom && chartZoom.k === 'd'; }
+
+    // The daily charts the day window moves: only the popup's while a daily
+    // chart is open in it, so the page's charts do not move with it.
+    function dayWindowCharts() {
+        return zoomOnDaily() ? [zoomChart()] : Object.values(rowCharts).map(charts => charts[2]);
+    }
+
+    function redrawDayWindow() {
+        DayWindow.applyToCharts(dayWindowCharts());
+        updateDayTitles();
+        DayWindow.updateScrollers();
+    }
+
+    function setChartZoomSize(key) {
+        const size = ZOOM_SIZES.find(s => s[0] === key);
+        if (!chartZoom || !size) return;
+        const box = chartZoom.overlay.querySelector('.chart-zoom-box');
+        box.style.width = size[2] + 'vw';
+        box.style.height = size[3] + 'vh';
+        box.querySelectorAll('[data-zoom-size]').forEach(b => b.classList.toggle('active', b.dataset.zoomSize === key));
+    }
+
+    // restore = false when the row is being removed: the card goes with the popup.
+    function closeChartZoom(restore = true) {
+        if (!chartZoom) return;
+        const chart = zoomChart();
+        const { k, card, holder, overlay, offset } = chartZoom;
+        chartZoom = null;
+        if (restore && holder.isConnected) holder.replaceWith(card);
+        else holder.remove();
+        overlay.remove();
+        // Back to the page's own day window: its position and number of days.
+        if (k === 'd') {
+            DayWindow.offset = offset;
+            redrawDayWindow();
+        }
+        if (!restore || !chart) return;
+        // The canvas is still drawn at the popup's size (its width / height
+        // and its style), which would hold the row's grid column wide. Drop
+        // both and fit the card again.
+        const fit = () => {
+            const canvas = chart.canvas;
+            canvas.style.width = '';
+            canvas.style.height = '';
+            canvas.width = 0;
+            canvas.height = 0;
+            chart.resize();
+        };
+        fit();
+        requestAnimationFrame(fit);
+    }
+
+    document.addEventListener('keydown', e => { if (e.key === 'Escape' && chartZoom) closeChartZoom(); });
+
+    function csvCell(v) {
+        const s = String(v ?? '');
+        return /[",\r\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+    }
+
+    // The figures in the popup's chart, as drawn: plain numbers (no £ % k M or
+    // commas), rounded as set out below. Daily
+    // charts give every loaded day, not just the days on screen; days with no
+    // figure yet are blank, not 0.
+    function downloadChartCsv() {
+        const chart = zoomChart();
+        const row = chartZoom && findRow(chartZoom.rowId);
+        const d = row && customRowData[row.id];
+        if (!chart || !d) return;
+        const k = chartZoom.k;
+        const stacked = isStacked(row);
+        const full = chart.$dayFull;
+        const labels = full ? full.labels : chart.data.labels;
+        const starts = k === 'm' ? (d.monthly_starts || []) : k === 'w' ? (d.weekly_starts || []) : d.dates;
+        // Rounding: a figure from one column takes that column's Decimals
+        // (Settings > Column Names), times 100 when its format is "% from a
+        // decimal"; a figure worked out from several columns (divided, added,
+        // multiplied, totals, 100% shares) takes the chart's own Decimals; a
+        // column with no format keeps up to 6 decimals.
+        const chartRule = { dec: row.decimals || 0, x100: !(stacked && row.pct) && fmtRow(row).fmt === 'pct100' };
+        const columnRule = (source, metric) => {
+            const f = metricFormats[metricKey(source || 'snowflake', metric)];
+            return f && f.fmt ? { dec: f.decimals || 0, x100: f.fmt === 'pct100' } : { dec: 6, x100: false };
+        };
+        const ownRule = stacked || rowOwnTarget(row) || row.multiply_by ? chartRule : columnRule(rowSource(row), row.metric);
+        const seriesRule = i => {
+            const s = (row.series || [])[i];
+            return !s || s.multiply_by || row.pct ? chartRule : columnRule(s.source, s.metric);
+        };
+        const sets = chart.data.datasets.map((ds, i) => ({ ds, data: full ? full.data[i] : ds.data,
+            rule: stacked && ds.label !== 'Target' ? seriesRule(i) : ownRule }));
+        const rolling = !stacked && k === 'd' && rollingOn(row.id);
+        const name = ds => ds.label === 'N-1' ? 'Last Year'
+            : rolling && ds.label !== 'Target' ? ds.label + ' (7-Day Average)' : ds.label;
+        // The chart's own figures first, then last year, then the target.
+        const rank = ds => ds.label === 'Target' ? 2 : ds.label === 'N-1' ? 1 : 0;
+        const cols = [...sets].sort((a, b) => rank(a.ds) - rank(b.ds)).map(s => ({ name: name(s.ds), data: s.data, rule: s.rule }));
+        // Column charts: the column total before the target (not on 100% charts).
+        if (stacked && !row.pct) {
+            const bars = sets.filter(s => s.ds.type === 'bar');
+            const total = labels.map((_, i) => {
+                const known = bars.map(s => s.data[i]).filter(v => v !== null && v !== undefined);
+                return known.length ? known.reduce((a, b) => a + b, 0) : null;
+            });
+            const at = cols.findIndex(c => c.name === 'Target');
+            cols.splice(at < 0 ? cols.length : at, 0, { name: 'Total', data: total, rule: chartRule });
+        }
+        const value = (v, rule) => {
+            if (v === null || v === undefined || !isFinite(v)) return '';
+            const scale = 10 ** rule.dec;
+            return String(Math.round((rule.x100 ? v * 100 : v) * scale) / scale);
+        };
+        const head = k === 'd' ? ['Date'] : [k === 'w' ? 'Week' : 'Month', (k === 'w' ? 'Week' : 'Month') + ' Start'];
+        const lines = [[...head, ...cols.map(c => c.name)]];
+        labels.forEach((label, i) => {
+            const when = k === 'd' ? [starts[i] || label] : [label, starts[i] || ''];
+            lines.push([...when, ...cols.map(c => value(c.data[i], c.rule))]);
+        });
+        const text = lines.map(r => r.map(csvCell).join(',')).join('\r\n');
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(new Blob(['﻿' + text], { type: 'text/csv;charset=utf-8' }));
+        a.download = `${rowTitle(row)} - ${PERIOD_NAMES[k]}.csv`.replace(/[\\/:*?"<>|]+/g, '-');
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        setTimeout(() => URL.revokeObjectURL(a.href), 1000);
     }
 
     // Charts not hidden in Settings > Charts. Hidden ones stay saved but are
@@ -5487,6 +5718,7 @@
         subtitle_font_px: 'setSubtitleFont', period_font_px: 'setPeriodFont',
         toolbar_font_px: 'setToolbarFont', at_font_px: 'setAtFont', at_table_font_px: 'setAtTableFont',
         legend_font_px: 'setLegendFont', line_label_font_px: 'setLineLabelFont',
+        zoom_size: 'setZoomSize',
         stack_label_dir: 'setStackLabelDir', stack_label_overflow: 'setStackLabelOverflow',
         stack_seg_font_px: 'setStackSegFont', stack_total_font_px: 'setStackTotalFont',
         stack_seg_min_px: 'setStackSegMin', stack_min_col_px: 'setStackMinCol',
@@ -6231,7 +6463,8 @@
             + `top bar ${lim('toolbar_font_px')} px (every button and label in the bar at the top), `
             + `Autotrader figures ${lim('at_font_px')} px (Advert Allowance, Published, Capped, Unpublished), `
             + `Autotrader rows text ${lim('at_table_font_px')} px (Settings > Autotrader Costs), `
-            + `chart legend ${lim('legend_font_px')} px (the series names above stacked charts). `
+            + `chart legend ${lim('legend_font_px')} px (the series names above stacked charts), `
+            + 'and the size the magnifier opens a chart popup at. '
             + 'Applies to the KPI page for everyone.';
         sectionDraft = SECTIONS.map(name => ({ name, from: name, hidden: hiddenSections.has(name) }));
         loadChartDraft();
