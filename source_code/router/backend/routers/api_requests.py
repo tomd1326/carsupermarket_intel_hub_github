@@ -255,6 +255,54 @@ def api_add_route(source: str, data: dict, user: str = Depends(get_current_user)
     return {"status": "ok"}
 
 
+@router.post("/api/api-requests/nexus/routes/swagger")
+def api_routes_from_swagger(user: str = Depends(get_current_user)):
+    """Add every list endpoint in the Nexus API's swagger.json that is not in
+    the list yet, and remember which take no updated_at filter (those pull
+    every row on each run - Live Update warns about them)."""
+    _admin(user)
+    import requests
+    from utils.secrets_manager_client import get_secret
+    with get_database_connection() as conn:
+        conn.rollback()
+        _ensure_tables(conn)
+        host = _load_config(conn, 'nexus')['nexus_host']
+        conn.rollback()
+    try:
+        resp = requests.get(f"{host.rstrip('/')}/swagger.json", timeout=30, headers={
+            'Authorization': f"Bearer {get_secret(nexus_ingest.NEXUS_SECRET_NAME)['access_token']}"})
+        resp.raise_for_status()
+        paths = resp.json().get('paths') or {}
+    except Exception as e:
+        return {"status": "error", "message": f"Could not read {host}/swagger.json: {str(e)[:300]}"}
+    found, no_filter = [], []
+    for path, ops in paths.items():
+        get = (ops or {}).get('get') if isinstance(ops, dict) else None
+        if not get or '{' in path:
+            continue   # only plain list endpoints, not /vehicles/adverts/{advert_id}
+        route = _clean_route(path)
+        if not route:
+            continue
+        found.append(route)
+        params = {p.get('name') for p in (get.get('parameters') or []) if isinstance(p, dict)}
+        if 'updated_at' not in params:
+            no_filter.append(route)
+    added = []
+    with get_database_connection() as conn:
+        _ensure_tables(conn)
+        with conn.cursor() as cur:
+            for route in found:
+                cur.execute("INSERT INTO api_request_routes (source, route, sort_order) "
+                            "SELECT 'nexus', %s, COALESCE(MAX(sort_order), 0) + 10 FROM api_request_routes "
+                            "WHERE source = 'nexus' ON CONFLICT DO NOTHING", (route,))
+                if cur.rowcount == 1:
+                    added.append(route)
+        conn.commit()
+        save_settings_partial(conn, {'nexus_no_updated_at': json.dumps(sorted(no_filter))})
+    logger.info("API requests [nexus]: %s endpoints added from swagger by %s", len(added), user)
+    return {"status": "ok", "found": len(found), "added": added, "no_updated_at": sorted(no_filter)}
+
+
 @router.post("/api/api-requests/{source}/routes/delete")
 def api_delete_route(source: str, data: dict, user: str = Depends(get_current_user)):
     _admin(user)
