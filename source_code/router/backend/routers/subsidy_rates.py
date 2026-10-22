@@ -13,12 +13,12 @@ import logging
 from decimal import Decimal, ROUND_HALF_UP
 
 from fastapi import APIRouter, Request, Depends
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 
 from utils.db_utils import (get_database_connection, get_subsidy_schedules,
                             save_subsidy_schedule, delete_subsidy_schedule)
 
-from .core import (BASE_URL, templates, _track, get_current_user,
+from .core import (BASE_URL, templates, _track,
                    require_page, require_page_api)
 
 logger = logging.getLogger(__name__)

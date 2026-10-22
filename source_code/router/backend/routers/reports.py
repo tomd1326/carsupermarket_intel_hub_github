@@ -45,7 +45,7 @@ from fastapi import APIRouter, Request, Depends, HTTPException
 from fastapi.responses import HTMLResponse, RedirectResponse, FileResponse
 
 from utils.lambda_http import LambdaRequestsManager
-from .core import (BASE_URL, templates, _track, get_current_user, s3_bucketname,
+from .core import (BASE_URL, templates, _track, s3_bucketname,
                    s3_bucket_region, _S3_ENV, require_page, require_page_api)
 
 _is_local = os.getenv('LOCAL_ENV') == '1'

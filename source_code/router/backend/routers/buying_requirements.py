@@ -5,7 +5,7 @@ import threading
 from concurrent.futures import ThreadPoolExecutor
 
 from fastapi import APIRouter, Request, Depends, HTTPException
-from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse, FileResponse
+from fastapi.responses import HTMLResponse, StreamingResponse, FileResponse
 import json
 import os
 import requests
@@ -22,7 +22,7 @@ from utils import sharepoint_sources
 from list_processor.cap_client import CAPClient
 from utils.file_handler import read_dataframe_file, write_dataframe_file
 
-from .core import (BASE_URL, _S3_ENV, templates, s3_bucketname, _track, get_current_user,
+from .core import (BASE_URL, _S3_ENV, templates, s3_bucketname, _track,
                    is_admin, require_page, require_page_api)
 
 logger = logging.getLogger(__name__)

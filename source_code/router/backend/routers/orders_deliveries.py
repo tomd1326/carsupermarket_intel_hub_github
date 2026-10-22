@@ -25,12 +25,12 @@ import zoneinfo
 import boto3
 
 from fastapi import APIRouter, Request, Depends, HTTPException
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse
 
 from utils.db_utils import get_database_connection, get_user_preference, get_settings
 from utils.snowflake_client import SnowflakeClient
-from .core import (BASE_URL, templates, _track, get_current_user, s3_bucketname,
-                   s3_bucket_region, _S3_ENV, is_admin, require_page, require_page_api)
+from .core import (BASE_URL, templates, _track, s3_bucketname,
+                   s3_bucket_region, require_page, require_page_api)
 from utils.cortex import cortex_complete
 from utils import ai_knowledge
 

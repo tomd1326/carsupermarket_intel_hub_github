@@ -3,24 +3,19 @@ import os
 import re
 import time
 
-from fastapi import FastAPI, Request, Form, Depends, HTTPException
-from fastapi.templating import Jinja2Templates
-from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
-from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
+from fastapi import FastAPI, Request, HTTPException
+from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.sessions import SessionMiddleware
 from starlette.middleware.gzip import GZipMiddleware
-from starlette.status import HTTP_401_UNAUTHORIZED
 from mangum import Mangum
 import json
-import hashlib
 
 from exceptions import unhandled_exception_handler, http_exception_handler
 from utils.secrets_manager_client import get_secret
 from utils.lambda_http import LambdaRequestsManager
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.concurrency import run_in_threadpool
-from starlette.responses import Response
 import routers
 from routers.core import PageRedirect
 

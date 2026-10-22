@@ -1,7 +1,7 @@
 import datetime
 import re
 
-from pydantic import BaseModel, ValidationError
+from pydantic import ValidationError
 from typing import Optional, Dict
 import pandas as pd
 from list_processor.structs import VehicleRow
