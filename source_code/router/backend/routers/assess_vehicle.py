@@ -5,7 +5,7 @@ import requests
 from concurrent.futures import ThreadPoolExecutor
 
 from fastapi import APIRouter, Request, Depends, HTTPException
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse
 
 from utils.db_utils import (
     get_database_connection, get_settings, get_vehicle_database_connection,
@@ -19,7 +19,7 @@ from utils.vehicle_store import (
     has_confirmed_spec,
 )
 
-from .core import (BASE_URL, templates, _track, get_current_user, _uk_now,
+from .core import (BASE_URL, templates, _track, _uk_now,
                    require_page, require_page_api)
 from .buying_requirements import (
     _get_sf_rows, _get_dbs_purchases_cached, _get_cb_purchases_cached,

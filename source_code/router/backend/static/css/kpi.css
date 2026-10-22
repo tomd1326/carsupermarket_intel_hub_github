@@ -1,0 +1,550 @@
+/* KPI page styles, moved out of templates/kpi.html. Shared chart styles live in charts.css. */
+
+/* ── Chart popup (Add / Edit Chart) ─────────────────────────────────── */
+/* KPI charts are taller than the shared 289px: 316px, plus the 19px
+   freed by moving the scroller onto the title line (old: ~17px title
+   + 4px gap + 22px legend line + 2px gap = 45px; new: 22px title
+   line + 4px gap = 26px). The card's outer height stays as it was. */
+.chart-wrap { height: 335px; }
+/* Section heading and chart title sizes come from Settings > Appearance
+   (applyAppearance sets the two variables); the fallbacks are the
+   shared charts.css sizes. */
+.category-header { font-size: var(--kpi-section-font, 0.82rem); }
+/* Sections show as tabs along the top; one section's charts at a time. */
+/* Stays pinned to the top of the window while the charts scroll under it.
+   Background is the page's own (#f1f5f9, charts.css) so it hides the
+   charts passing behind; padding-top keeps the tabs off the window edge. */
+.kpi-tabs {
+    display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 12px;
+    border-bottom: 1px solid #cbd5e1;
+    position: sticky; top: var(--kpi-top-bar-h, 0px); z-index: 20;
+    background: var(--c-page-bg); padding-top: 8px;
+    /* Fills the gap under the bar (its margin-bottom) with the page colour, so
+       charts scrolling underneath are hidden at the bar's edge, not just below it. */
+    box-shadow: 0 12px 0 var(--c-page-bg);
+}
+/* Same height as the .btn-edit buttons in the top bar (.btn-edit in
+   charts.css: 0.9rem text at Bootstrap's 1.5 line height, 7px padding
+   and 1px border top and bottom), whatever the section font size. The
+   text is centred in that height rather than padded. */
+.kpi-tab {
+    display: flex; align-items: center; gap: 8px;
+    height: calc(0.9rem * 1.5 + 16px);
+    padding: 0 16px; margin-bottom: -1px; cursor: pointer;
+    background: #e2e8f0; border: 1px solid #cbd5e1; border-radius: 8px 8px 0 0;
+    font-size: var(--kpi-section-font, 0.82rem); font-weight: 700; color: #475569;
+}
+.kpi-tab:hover { background: #d1d9e2; }
+.kpi-tab.active { background: #fff; color: #0f172a; border-bottom-color: #fff; }
+/* My Charts: each user's own page, picked out in light blue. */
+.kpi-tab.my-charts-tab { background: #dbeafe; border-color: #93c5fd; color: #1e40af; }
+.kpi-tab.my-charts-tab:hover { background: #bfdbfe; }
+.kpi-tab.my-charts-tab.active { background: #eff6ff; border-bottom-color: #eff6ff; }
+/* The same chart row is moved into My Charts while that tab shows, so
+   its buttons change with where it sits. */
+.my-charts-only { display: none; }
+#sec-my-charts-own .my-charts-only { display: inline-flex; }
+#sec-my-charts-own .not-my-charts { display: none !important; }
+.chart-row .in-my-chart-btn { display: none; }
+.chart-row.in-my-charts .add-my-chart-btn { display: none; }
+.chart-row.in-my-charts .in-my-chart-btn { display: inline-block; color: #1e40af; border-color: #93c5fd; background: #eff6ff; }
+/* A collapsed row is one clean line: no Targets or My Charts add. */
+.chart-row.collapsed .targets-btn,
+.chart-row.collapsed .add-my-chart-btn,
+.chart-row.collapsed .in-my-chart-btn { display: none !important; }
+.my-charts-empty { color: #64748b; font-size: 0.85rem; padding: 8px 0; }
+.at-strip { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 12px; }
+/* Size from Settings > Appearance ("Autotrader Figures Size"); padding
+   and the figure are in em so the box keeps its shape at any size. */
+.at-stat {
+    display: flex; align-items: baseline; gap: 0.6em; line-height: 1.2;
+    padding: 0.3em 0.9em; background: #fff; border: 1px solid #cbd5e1; border-radius: 6px;
+    font-size: var(--kpi-at-font, 0.85rem); color: #475569;
+}
+.at-stat strong { font-size: 1.15em; color: #0f172a; }
+/* Capped: Excel's "Bad" style (light red fill, dark red text). */
+.at-stat.at-stat-bad { background: #ffc7ce; border-color: #f4a3ad; color: #9c0006; }
+.at-stat.at-stat-bad strong { color: #9c0006; }
+/* Capped at zero: Excel's "Good" style (light green fill, dark green text). */
+.at-stat.at-stat-good { background: #c6efce; border-color: #a3d9ad; color: #006100; }
+.at-stat.at-stat-good strong { color: #006100; }
+.at-strip-note { align-self: center; font-size: 0.78rem; color: #94a3b8; }
+/* New or copied chart: a blue glow that pulses twice then fades. Colour
+   only, so nothing is left behind when the animation ends. */
+@keyframes row-flash {
+    0%, 50%, 100% { box-shadow: 0 0 0 0 rgba(42, 120, 214, 0); background-color: transparent; }
+    20%, 70% { box-shadow: 0 0 0 4px rgba(42, 120, 214, 0.55); background-color: rgba(42, 120, 214, 0.08); }
+}
+.chart-row.row-flash { animation: row-flash 2s ease-in-out; border-radius: 10px; }
+#sectionsContainer .category-header { display: none; }
+#sectionsContainer .category-body { margin-top: 0; }
+.chart-card h2 { font-size: var(--kpi-title-font, 0.88rem); }
+.chart-card-subtitle { font-size: var(--kpi-subtitle-font, 0.78rem); }
+.chart-period {
+    flex: none; white-space: nowrap; color: #475569; font-weight: 600;
+    font-size: var(--kpi-period-font, 0.75rem);
+}
+/* Row title slightly bigger than the shared 0.86rem. */
+.chart-row-title.kpi-row-title { font-size: 0.95rem; }
+/* Edit Chart: tabs down the left, one pane showing at a time. The pane
+   area has a fixed height so switching tabs does not make the popup
+   jump; a long pane scrolls inside it. Nearer the top than other
+   popups (3vh, not 10vh). */
+#chartModal { padding-top: 3vh; }
+.modal-box.chart-modal { width: 1100px; max-width: 97vw; max-height: 95vh; display: flex; flex-direction: column; }
+.chart-modal-body { display: flex; gap: 22px; min-height: 0; flex: 1; }
+.chart-tabs { display: flex; flex-direction: column; gap: 4px; width: 170px; flex: none; }
+.chart-tabs button {
+    text-align: left; padding: 8px 12px; border: 1px solid transparent; border-radius: 8px;
+    background: none; font: inherit; font-size: 0.9rem; color: #334155; cursor: pointer;
+}
+.chart-tabs button:hover { background: #f1f5f9; }
+.chart-tabs button.active { background: #e8ecf3; border-color: #0f172a; font-weight: 700; color: #0f172a; }
+.chart-panes { flex: 1; min-width: 0; height: 66vh; overflow-y: auto; padding-right: 4px; }
+.chart-pane { display: none; }
+.chart-pane.active { display: block; }
+.chart-modal .modal-field { margin-bottom: 10px; }
+.chart-modal .modal-hint { margin-top: 3px; line-height: 1.35; }
+.chart-modal .modal-section-title { margin-top: 0; }
+/* A second or third heading in a pane needs space above it. */
+.chart-pane .modal-section-title:not(:first-child) { margin-top: 14px; }
+.chart-modal .modal-actions { margin-top: 8px; }
+.chart-modal .metric-desc:empty { display: none; }
+@media (max-width: 700px) { .chart-modal-body { flex-direction: column; } .chart-tabs { flex-direction: row; flex-wrap: wrap; width: auto; } }
+.modal-box.notes-modal { width: 760px; max-width: 96vw; max-height: 92vh; overflow-y: auto; }
+.modal-box.target-modal { width: 620px; max-width: 96vw; max-height: 92vh; overflow-y: auto; }
+.notes-modal textarea { width: 100%; box-sizing: border-box; font: inherit; font-size: 0.85rem; padding: 6px 8px; border: 1px solid #cbd5e1; border-radius: 6px; resize: vertical; }
+.note-item { display: flex; align-items: flex-start; gap: 10px; padding: 7px 0; border-bottom: 1px solid #f1f5f9; font-size: 0.84rem; }
+.note-item-main { flex: 1; min-width: 0; }
+.note-item-head { font-weight: 700; color: #0f172a; }
+.note-item-date { color: #7c3aed; margin-right: 6px; }
+.note-item-scope { font-weight: 400; color: #64748b; margin-left: 6px; font-size: 0.78rem; }
+.note-item-text { color: #475569; white-space: pre-wrap; margin-top: 2px; }
+.note-item .btn { padding: 3px 10px; font-size: 0.76rem; }
+.notes-empty { font-size: 0.84rem; color: #64748b; }
+/* Hover popup for a note line. Fixed so it is never clipped by a card. */
+.note-tip {
+    position: fixed; z-index: 2000; display: none; pointer-events: none;
+    max-width: 320px; background: #fff; border: 1px solid #c4b5fd; border-left: 4px solid #7c3aed;
+    border-radius: 6px; padding: 7px 10px; box-shadow: 0 4px 14px rgba(15,23,42,0.15);
+    font-size: 0.8rem; color: #334155;
+}
+.note-tip .note-tip-item + .note-tip-item { margin-top: 6px; padding-top: 6px; border-top: 1px solid #ede9fe; }
+.note-tip .note-tip-title { font-weight: 700; color: #0f172a; }
+.note-tip .note-tip-date { color: #7c3aed; font-weight: 600; margin-right: 5px; }
+.note-tip .note-tip-text { white-space: pre-wrap; margin-top: 2px; }
+.modal-section-title {
+    font-size: 0.82rem; font-weight: 700; color: #64748b;
+    border-bottom: 1px solid #e2e8f0;
+    padding-bottom: 4px; margin: 6px 0 10px;
+}
+.modal-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0 14px; }
+.modal-grid.three { grid-template-columns: 1fr 1fr 1fr; }
+.modal-grid .span-2 { grid-column: span 2; }
+.metric-desc { font-size: 0.8rem; color: #64748b; margin-top: 5px; min-height: 18px; }
+.metric-search { width: 100%; box-sizing: border-box; margin-bottom: 5px; padding: 5px 8px; border: 1px solid #cbd5e1; border-radius: 6px; font-size: 0.82rem; }
+.ds-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.6fr) auto auto; gap: 8px; align-items: center; margin-bottom: 6px; font-size: 0.85rem; }
+.ds-row .ds-detail { color: #64748b; font-size: 0.8rem; }
+.ds-section { border: 1px solid #e2e8f0; border-radius: 8px; padding: 10px 14px 6px; margin-bottom: 12px; }
+.ds-section-head { display: flex; justify-content: space-between; align-items: center; gap: 10px;
+                   font-weight: 600; color: #0d3d6e; font-size: 0.95rem; margin-bottom: 2px; }
+.ds-section-head i { margin-right: 4px; }
+.ds-section-sub { font-size: 0.8rem; color: #64748b; margin-bottom: 8px; }
+.ds-form { border: 1px solid #cbd5e1; border-radius: 8px; padding: 12px 14px; margin: 4px 0 10px; background: #f8fafc; }
+.ds-form .modal-section-title { margin-top: 0; }
+.ds-form-buttons { display: flex; gap: 8px; margin-top: 6px; }
+.ds-status { font-size: 0.82rem; color: #1c5cab; min-height: 18px; margin-bottom: 4px; }
+.ds-files { margin: -2px 0 8px 14px; font-size: 0.8rem; color: #334155; }
+.ds-file { margin-bottom: 2px; }
+.ds-tag { display: inline-block; padding: 0 6px; border-radius: 8px; font-size: 0.72rem; }
+.ds-tag.on { background: #dcfce7; color: #166534; }
+.ds-tag.off { background: #f1f5f9; color: #64748b; }
+.agg-options { display: flex; gap: 18px; flex-wrap: wrap; font-size: 0.85rem; color: #334155; min-height: 34px; align-items: center; }
+.agg-options label { display: flex; align-items: center; gap: 5px; font-weight: 400; margin: 0; }
+.settings-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0 14px; }
+.section-item { display: flex; align-items: center; gap: 6px; margin-bottom: 6px; }
+.section-item input {
+    flex: 1; min-width: 0; padding: 6px 10px; border: 1px solid #cbd5e1; border-radius: 6px;
+    background: #fff; color: #0f172a;
+}
+.section-item .btn { padding: 3px 9px; font-size: 0.78rem; }
+.section-item.is-hidden input { color: #94a3b8; }
+.section-item .section-count { font-size: 0.76rem; color: #64748b; width: 62px; text-align: right; }
+.chart-list-section { font-size: 0.78rem; font-weight: 700; color: #64748b; margin: 10px 0 4px; }
+.chart-list-section:first-child { margin-top: 0; }
+.chart-item { display: flex; align-items: center; gap: 6px; margin-bottom: 4px; font-size: 0.85rem; }
+.chart-item label { display: flex; align-items: center; gap: 4px; margin: 0; font-weight: 400; width: 58px; }
+.chart-item .chart-item-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chart-item.is-hidden .chart-item-title { color: #94a3b8; }
+.chart-item select { width: 150px; padding: 3px 6px; border: 1px solid #cbd5e1; border-radius: 6px; }
+.chart-item .btn { padding: 3px 9px; font-size: 0.78rem; }
+.section-tools { display: flex; gap: 8px; margin-bottom: 12px; }
+.at-period-scroll { overflow-x: auto; margin-bottom: 6px; }
+.at-period-table { border-collapse: collapse; font-size: 0.82rem; }
+.at-period-table th { font-weight: 600; color: #475569; text-align: left; padding: 4px 6px; vertical-align: bottom; max-width: 120px; }
+.at-period-table td { padding: 3px 6px; }
+.at-period-table input { width: 100px; padding: 4px 6px; border: 1px solid #cbd5e1; border-radius: 6px; }
+.at-period-table input[type="date"] { width: 140px; }
+.at-period-table .at-worked { color: #475569; text-align: right; }
+.at-period-table .btn { padding: 3px 9px; font-size: 0.78rem; }
+.at-period-table td.num, .at-period-table th.num { text-align: right; }
+.at-period-table input[type="number"] { text-align: right; }
+/* Settings > Autotrader rows: fills the pane exactly (fixed column
+   widths, boxes as wide as their column) so it never scrolls sideways.
+   Text size from Settings > Appearance ("Autotrader Rows Text Size"). */
+.at-rows-table { width: 100%; table-layout: fixed; font-size: var(--kpi-at-table-font, 11px); margin-bottom: 6px; }
+.at-rows-table th { max-width: none; padding: 3px 3px; font-size: inherit; line-height: 1.2; }
+.at-rows-table td { padding: 2px 3px; overflow: hidden; }
+.at-rows-table input { width: 100%; box-sizing: border-box; padding: 2px 3px; font-size: inherit; }
+.at-rows-table input[type="date"] { width: 100%; }
+.at-rows-table input[type="number"] { -moz-appearance: textfield; }
+.at-rows-table input[type="number"]::-webkit-outer-spin-button,
+.at-rows-table input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+.at-rows-table .btn { padding: 2px 6px; font-size: inherit; }
+.at-rows-table td.at-cpspd, .at-rows-table th.at-cpspd { font-weight: 700; color: #0d3d6e; text-align: right; }
+.at-rows-table tr.at-continued td { color: #64748b; font-style: italic; }
+.at-rows-table tr.at-month-total td { font-weight: 700; background: #eef2f7; border-top: 1px solid #cbd5e1; border-bottom: 2px solid #94a3b8; }
+.at-rows-table tr.at-month-total td.at-cpspd { color: #0d3d6e; }
+.at-month-toggle { cursor: pointer; }
+.at-rows-table tr.at-month-bar td { border-bottom: 1px solid #cbd5e1; border-top: 2px solid #94a3b8; }
+.at-month-toggle i { width: 1em; }
+.at-rows-table tr.at-year-bar td { background: #dde5ef; }
+.at-rows-table td.at-month-indent { padding-left: 1.6em; }
+.at-messages { font-size: 0.8rem; margin: 0 0 6px; }
+.at-messages div { padding: 1px 0; }
+.at-messages .at-ok { color: #15803d; }
+.at-messages .at-warn { color: #b45309; }
+.at-messages .at-err { color: #b91c1c; }
+.section-add-btn { padding: 4px 12px; font-size: 0.8rem; margin: 2px 0 8px; }
+.target-dates-overlay { z-index: 210; }
+.target-paste {
+    width: 100%; box-sizing: border-box; font-family: Consolas, monospace; font-size: 0.8rem;
+    padding: 6px 8px; border: 1px solid #cbd5e1; border-radius: 6px; resize: vertical;
+}
+.targets-table { margin-top: 8px; }
+.targets-table td.num { text-align: right; }
+.targets-table .target-warn { color: #b45309; }
+.input-target-row { display: flex; align-items: center; gap: 8px; font-size: 0.8rem; margin-top: 4px; }
+.input-target-row span { flex: 0 0 45%; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.input-target-row select { flex: 1; min-width: 0; width: auto; }
+.calc-row { display: flex; gap: 6px; margin-top: 4px; }
+.calc-row select { flex: 1; min-width: 0; }
+.calc-row input { width: 90px; }
+.input-with-unit { display: flex; align-items: center; gap: 6px; }
+.input-with-unit input { flex: 1; min-width: 0; }
+.input-unit { font-size: 0.85rem; font-weight: 600; color: #475569; white-space: nowrap; }
+.btn-remove-chart {
+    background: #fff; border: 1px solid #fca5a5; color: #b91c1c; font-weight: 700;
+    border-radius: 6px; padding: 7px 16px; font-size: 0.9rem;
+}
+.btn-remove-chart:hover { background: #fef2f2; color: #b91c1c; }
+.chart-modal-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+/* Heading and X stay at the top while a long popup scrolls. The box has
+   22px top padding (.modal-box), and a sticky header pins inside that
+   padding, leaving a 22px gap that the content would scroll through.
+   So the header pulls up over the padding (margin-top -22px), fills it
+   with its own white padding, and pins 22px higher (top -22px) — flush
+   with the box's top edge, with nothing showing above it. */
+.chart-modal > .chart-modal-head,
+.settings-modal > .chart-modal-head,
+.notes-modal > .chart-modal-head,
+.target-modal > .chart-modal-head {
+    position: sticky; top: -22px; z-index: 5;
+    margin-top: -22px; padding-top: 22px; background: #fff;
+}
+/* .modal-sub normally pulls up 12px under the heading (margin -12px). With
+   the heading's white background now covering that space, the top of the
+   line was hidden. Same 4px gap instead from a smaller heading margin and
+   no pull-up. */
+.chart-modal > .chart-modal-head h2,
+.settings-modal > .chart-modal-head h2,
+.notes-modal > .chart-modal-head h2,
+.target-modal > .chart-modal-head h2 { margin-bottom: 4px; }
+.chart-modal > .chart-modal-head + *,
+.settings-modal > .chart-modal-head + .modal-sub,
+.notes-modal > .chart-modal-head + .modal-sub,
+.target-modal > .chart-modal-head + .modal-sub { margin-top: 0; }
+.modal-close-x {
+    background: none; border: none; font-size: 22px; line-height: 1;
+    cursor: pointer; color: #6b7280; padding: 0 2px; margin-top: -4px;
+}
+.modal-close-x:hover { color: #111; }
+/* .page-loading and .spin: shared style in theme.css. */
+/* Hidden, not removed, so charts drawn during the load still get their real size */
+.page-is-loading #sectionsContainer { visibility: hidden; }
+
+/* ── Point popup and View Vehicles ──────────────────────────────────── */
+.chart-wrap canvas { cursor: pointer; }
+/* Narrow until the vehicles load, then full width for the table. */
+.modal-box.point-modal { width: fit-content; min-width: 560px; max-width: 96vw; max-height: 86vh; display: flex; flex-direction: column; }
+.modal-box.point-modal.has-vehicles { width: 1400px; }
+.modal-overlay#pointModal { padding-top: 6vh; }
+.point-figures { display: flex; gap: 22px; flex-wrap: wrap; font-size: 0.86rem; color: #334155; margin-bottom: 12px; }
+.point-figures b { color: #0f172a; }
+.point-calc { font-size: 0.84rem; color: #334155; margin: -4px 0 12px; padding: 8px 10px; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 6px; display: none; }
+.point-calc.show { display: block; overflow-x: auto; }
+.point-calc table { border-collapse: collapse; width: 100%; }
+.point-calc th { white-space: nowrap; }
+.point-calc .calc-how { margin-bottom: 10px; padding-bottom: 8px; border-bottom: 1px solid #e2e8f0; line-height: 1.6; }
+.point-calc .calc-how-title { font-weight: 700; color: #0f172a; margin-bottom: 2px; }
+.point-calc .calc-how-label { color: #64748b; }
+.point-calc .calc-how b { color: #0f172a; }
+.point-calc tr.calc-groups th { text-align: center; color: #334155; font-size: 0.8rem; border-bottom: 2px solid #cbd5e1; }        .point-calc th { text-align: right; font-weight: 600; color: #64748b; font-size: 0.78rem; padding: 2px 10px 4px; border-bottom: 1px solid #e2e8f0; }
+.point-calc td { text-align: right; padding: 3px 10px; font-variant-numeric: tabular-nums; }
+.point-calc .calc-date { text-align: left; padding-left: 0; }
+.point-calc .calc-start { border-left: 2px solid #cbd5e1; }
+.point-calc .calc-tot { color: #64748b; }
+.point-calc .calc-res { font-weight: 700; color: #0f172a; }
+.point-calc .calc-foot td { border-top: 1px solid #e2e8f0; color: #334155; }
+.point-calc .calc-foot td:first-child { text-align: right; }
+.point-actions { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.point-status { font-size: 0.82rem; color: #64748b; }
+.point-inspect { display: block; margin-top: 3px; color: #b45309; }
+/* Scroll container with no border or top padding: the frame is drawn
+   on the table itself, and a sticky header pins flush to this box's
+   top edge, so rows never show through a gap above it. */
+.vehicles-wrap { margin-top: 12px; overflow: auto; flex: 1; min-height: 0; display: none; }
+.vehicles-wrap.show { display: block; }
+/* Gridlines as the Orders & Deliveries vehicle popup: grey outer frame,
+   rounded corners, a 1px line between every row and column.
+   The frame is drawn on the outer CELLS, not the table. The header row
+   sticks to the top of the scroll box and the total row to the bottom;
+   a frame on the table scrolls away underneath them, which left the top
+   of the header and the bottom of the total row with no line. Cells
+   that stick carry their own edge with them. Corners are rounded on the
+   corner cells, since overflow: hidden on the table would stop the
+   header sticking. */
+.vehicles-table {
+    border-collapse: separate; border-spacing: 0; font-size: 0.78rem; width: max-content; min-width: 100%;
+}
+.vehicles-table th {
+    position: sticky; top: 0; z-index: 3;
+    background: var(--c-table-header-bg); color: var(--c-table-header-text); font-weight: 600; text-align: left;
+    padding: 0.5em 0.6em; white-space: nowrap; cursor: pointer; user-select: none;
+    border-top: 1px solid var(--c-border);
+    border-right: 1px solid var(--c-border);
+    border-bottom: 1px solid var(--c-border);
+}
+.vehicles-table th:hover { background: var(--c-table-header-hover); }
+.vehicles-table th.num { text-align: right; }
+.vehicles-table td {
+    padding: 0.35em 0.6em; white-space: nowrap; color: var(--c-text);
+    border-bottom: 1px solid var(--c-border); border-right: 1px solid var(--c-border-soft);
+}
+.vehicles-table td.num { text-align: right; font-variant-numeric: tabular-nums; }
+/* Hyperlink columns: a centred icon, no underline. */
+.vehicles-table td.link { text-align: center; }
+.vehicles-table .veh-link { color: var(--c-table-header-text); text-decoration: none; }
+.vehicles-table .veh-link:hover { color: #2563eb; }
+.vehicles-table tbody tr:hover td { background: var(--c-surface-alt); }
+/* Outer left and right edges in the frame colour. The last column's
+   right edge is the frame, not the lighter line between columns. */
+.vehicles-table th:first-child, .vehicles-table td:first-child { border-left: 1px solid var(--c-border); }
+.vehicles-table td:last-child { border-right: 1px solid var(--c-border); }
+.vehicles-table thead tr:first-child th:first-child { border-top-left-radius: 4px; }
+.vehicles-table thead tr:first-child th:last-child { border-top-right-radius: 4px; }
+.vehicles-table tbody tr:last-child td:first-child { border-bottom-left-radius: 4px; }
+.vehicles-table tbody tr:last-child td:last-child { border-bottom-right-radius: 4px; }
+.vehicles-table .sort-mark { opacity: 0.5; margin-left: 4px; font-size: 0.85em; }
+/* Total / average row: pinned to the bottom of the scroll box so it stays
+   in view, with a strong rule above it like the Orders & Deliveries
+   totals row, and the frame's bottom edge under it. With a total row the
+   body's last row is no longer the bottom of the table: it loses its
+   bottom line (the 2px rule sits there) and its rounded corners. */
+.vehicles-table tfoot td {
+    position: sticky; bottom: 0; z-index: 2;
+    background: var(--c-table-total-bg); font-weight: 700;
+    border-top: 2px solid var(--c-border-strong); border-bottom: 1px solid var(--c-border);
+}
+.vehicles-table tfoot tr td:first-child { border-bottom-left-radius: 4px; }
+.vehicles-table tfoot tr td:last-child { border-bottom-right-radius: 4px; }
+.vehicles-table:has(tfoot) tbody tr:last-child td { border-radius: 0; border-bottom: none; }
+
+/* ── View Vehicles setup (Edit Chart and Settings popups) ──────────── */
+.veh-filter { display: grid; grid-template-columns: 1.4fr 1fr 1.2fr auto; gap: 6px; margin-bottom: 6px; align-items: center; }
+.veh-filter select, .veh-filter input {
+    width: 100%; min-width: 0; padding: 5px 8px; border: 1px solid #cbd5e1; border-radius: 6px; background: #fff; font-size: 0.82rem;
+}
+.veh-filter .btn { padding: 3px 9px; font-size: 0.78rem; }
+/* Quick filters above the vehicle list (popup) and their setup rows (Settings). */
+.veh-quick { display: none; flex-wrap: wrap; gap: 10px; align-items: flex-end; margin-top: 12px; }
+.veh-quick.show { display: flex; }
+.veh-quick label { display: flex; flex-direction: column; gap: 2px; font-size: 0.76rem; font-weight: 600; color: #475569; }
+.veh-quick select, .veh-quick input {
+    padding: 4px 8px; border: 1px solid #cbd5e1; border-radius: 6px; background: #fff; font-size: 0.82rem; max-width: 190px;
+}
+.veh-quick input[type="number"] { width: 90px; }
+.veh-multi-field { display: flex; flex-direction: column; gap: 2px; font-size: 0.76rem; font-weight: 600; color: #475569; }
+.veh-multi { position: relative; font-weight: 400; }
+.veh-multi summary {
+    padding: 4px 8px; border: 1px solid #cbd5e1; border-radius: 6px; background: #fff; font-size: 0.82rem;
+    cursor: pointer; min-width: 110px; max-width: 190px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #0f172a;
+}
+.veh-multi-list {
+    position: absolute; z-index: 20; top: 100%; left: 0; min-width: 100%; max-height: 260px; overflow: auto;
+    background: #fff; border: 1px solid #cbd5e1; border-radius: 6px; padding: 4px 8px; box-shadow: 0 4px 12px rgba(0,0,0,.12);
+}
+.veh-multi-list label { display: flex; flex-direction: row; gap: 6px; align-items: center; font-weight: 400; font-size: 0.82rem; color: #0f172a; white-space: nowrap; padding: 2px 0; }
+.veh-multi-list a { display: block; font-size: 0.76rem; padding: 2px 0 4px; }
+.veh-quick .veh-quick-range { display: flex; gap: 4px; align-items: center; }
+.veh-quick .veh-quick-count { font-size: 0.78rem; color: #64748b; margin-left: auto; }
+.veh-quick-row { display: grid; grid-template-columns: 1.4fr 1.4fr auto auto auto; gap: 6px; margin-bottom: 6px; align-items: center; }
+.veh-quick-row select, .veh-quick-row input {
+    width: 100%; min-width: 0; padding: 5px 8px; border: 1px solid #cbd5e1; border-radius: 6px; background: #fff; font-size: 0.82rem;
+}
+.veh-quick-row .btn { padding: 3px 9px; font-size: 0.78rem; }
+/* Stacked chart series rows: metric, name, colour, order, remove. */
+/* Fixed widths for the colour and button columns: each row is its own
+   grid, so "auto" columns sized to their content would make the
+   heading row (empty there) split the space differently. */
+.series-row { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(0, 1.2fr) minmax(0, 1fr) 34px 34px 34px 34px 34px 34px 34px; gap: 5px; margin-bottom: 6px; align-items: center; }
+.series-row select, .series-row input[type="text"] {
+    width: 100%; min-width: 0; padding: 5px 8px; border: 1px solid #cbd5e1; border-radius: 6px; background: #fff; font-size: 0.82rem;
+}
+.series-row input[type="color"] { width: 34px; height: 30px; padding: 1px 2px; border: 1px solid #cbd5e1; border-radius: 6px; background: #fff; cursor: pointer; }
+.series-row .btn { width: 100%; padding: 3px 0; font-size: 0.76rem; }
+/* Magnifier on each chart card and the chart popup (openChartZoom). */
+/* Just below the title line at its right end (under Monthly / Weekly /
+   Daily), in the space above the plot, so the title line keeps its height. */
+.chart-card-head { position: relative; }
+.chart-zoom-btn { position: absolute; top: 100%; right: 0; z-index: 2; border: none; background: none;
+                  padding: 2px; color: #64748b; cursor: pointer; font-size: 0.85rem; }
+.chart-zoom-btn:hover { color: #0f172a; }
+.chart-zoom-overlay { position: fixed; inset: 0; z-index: 1900; background: rgba(15, 23, 42, 0.45);
+                      display: flex; align-items: center; justify-content: center; }
+.chart-zoom-box { box-sizing: border-box; display: flex; flex-direction: column; background: #fff; border-radius: 10px;
+                  box-shadow: 0 12px 40px rgba(15, 23, 42, 0.3); padding: 10px 14px 14px;
+                  resize: both; overflow: hidden; min-width: 360px; min-height: 260px; max-width: 98vw; max-height: 96vh; }
+.chart-zoom-bar { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; }
+.chart-zoom-bar .btn-close { margin-left: 4px; }
+.chart-zoom-gap { flex: 1; }
+.chart-zoom-hint { flex: none; text-align: right; color: #94a3b8; font-size: 0.75rem; margin: 2px 6px -8px 0; }
+.chart-zoom-days { display: flex; align-items: center; gap: 6px; margin: 0; font-size: 0.8rem; font-weight: 600; color: #475569; }
+.chart-zoom-days input { width: 64px; padding: 3px 6px; border: 1px solid #cbd5e1; border-radius: 6px; }
+/* A chart column never grows to fit its canvas, so a chart can never
+   push the row's columns out of their set widths. */
+.charts-row > * { min-width: 0; }
+.chart-zoom-box .chart-card { flex: 1; min-height: 0; display: flex; flex-direction: column; border: none; padding: 0; height: auto; }
+.chart-zoom-box .chart-wrap { flex: 1; min-height: 0; height: auto; }
+.chart-zoom-box .chart-zoom-btn { display: none; }
+/* Data Labels popup (openLabelPopup) */
+.label-popup { position: absolute; z-index: 2000; background: #fff; border: 1px solid #cbd5e1; border-radius: 8px;
+               box-shadow: 0 8px 24px rgba(15, 23, 42, 0.18); padding: 10px 12px; width: 250px; font-size: 13px; }
+.label-popup-head { display: flex; align-items: center; justify-content: space-between; font-weight: 700; margin-bottom: 8px; }
+.label-popup-head .btn-close { font-size: 10px; }
+.label-popup-field { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 6px 0; font-weight: 600; }
+.label-popup-field select { width: 150px; padding: 2px 6px; border: 1px solid #cbd5e1; border-radius: 5px; }
+.label-popup-note { color: #64748b; font-size: 12px; margin: 4px 0; }
+.series-row select.series-multiplied { border-color: #2a78d6; background: #eef5fd; }
+.series-row.series-head { margin-bottom: 2px; font-size: 0.76rem; font-weight: 600; color: #475569; }
+.series-row .series-own { outline: 2px solid #0f172a; outline-offset: 1px; }
+/* Settings > Appearance colour themes: name, swatches, add / remove. */
+.theme-row { display: flex; align-items: center; gap: 8px; padding: 6px 0; border-bottom: 1px solid #f1f5f9; flex-wrap: wrap; }
+.theme-row > input[type="text"] { width: 170px; padding: 5px 8px; border: 1px solid #cbd5e1; border-radius: 6px; font-size: 0.82rem; }
+.theme-swatches { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; flex: 1; min-width: 0; }
+.theme-swatch { position: relative; }
+.theme-swatch input[type="color"] { width: 30px; height: 28px; padding: 1px 2px; border: 1px solid #cbd5e1; border-radius: 5px; background: #fff; cursor: pointer; }
+.theme-swatch button {
+    position: absolute; top: -6px; right: -6px; width: 15px; height: 15px; line-height: 13px; padding: 0;
+    border-radius: 50%; border: 1px solid #cbd5e1; background: #fff; color: #64748b; font-size: 10px; cursor: pointer; display: none;
+}
+.theme-swatch:hover button { display: block; }
+.theme-row .btn { padding: 3px 9px; font-size: 0.78rem; }
+.theme-transparency { display: flex; align-items: center; gap: 5px; margin: 0; font-size: 0.78rem; font-weight: 400; color: #475569; white-space: nowrap; }
+.theme-transparency input { width: 56px; padding: 4px 6px; border: 1px solid #cbd5e1; border-radius: 6px; font-size: 0.8rem; }
+.theme-row .theme-uses { font-size: 0.76rem; color: #64748b; white-space: nowrap; }
+/* Wide enough for the longest column names (about 45 characters) with
+   the heading, format and order controls beside them. */
+/* The overlay puts boxes 10vh from the top (charts.css). Settings sits
+   1cm higher than that, and its height is capped so its bottom edge
+   stays at least 1cm above the bottom of the window:
+   (10vh - 1cm) + 90vh = 100vh - 1cm. */
+.modal-overlay#settingsModal, .modal-overlay#atRowsModal { padding-top: calc(10vh - 1cm); }
+/* The rows popup sits above Settings, which is open underneath it. */
+.modal-overlay#atRowsModal { z-index: 1100; }
+.modal-box.settings-modal { width: 1500px; max-width: 96vw; max-height: 90vh; overflow-y: auto; }
+/* minmax(0, ...): a plain 1fr column cannot be narrower than its longest
+   unbroken column name, which pushed the grid past the box edge and
+   hid the Add buttons. With 0 as the minimum the columns always fit the
+   box, and a name that still does not fit is cut with "..." (full name
+   on hover). */
+.veh-cols { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); gap: 0 18px; }
+.veh-col-list { border: 1px solid #e2e8f0; border-radius: 6px; height: 340px; overflow-y: auto; padding: 4px; }
+.veh-col-item { display: flex; align-items: center; gap: 6px; padding: 3px 4px; font-size: 0.8rem; border-bottom: 1px solid #f8fafc; }
+.veh-col-item .veh-col-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #0f172a; }
+.veh-col-item .veh-col-type { color: #94a3b8; font-size: 0.72rem; flex-shrink: 0; }
+.veh-col-item input[type="text"] { width: 160px; flex-shrink: 0; padding: 3px 7px; border: 1px solid #cbd5e1; border-radius: 5px; font-size: 0.78rem; }
+/* No fixed widths: each dropdown sizes to its longest option plus its
+   arrow, so "0 dp" or "Date & time" is never cut off. */
+.veh-col-item select { flex-shrink: 0; width: auto; padding: 3px 5px; border: 1px solid #cbd5e1; border-radius: 5px; font-size: 0.78rem; background: #fff; }
+.veh-col-item select:disabled { opacity: 0.4; }
+.veh-col-item .btn { padding: 2px 7px; font-size: 0.72rem; flex-shrink: 0; }
+.veh-col-item.missing .veh-col-name { color: #b91c1c; }
+.veh-col-blank { display: flex; align-items: center; gap: 4px; flex-shrink: 0; margin: 0; font-size: 0.76rem; font-weight: 400; color: #475569; white-space: nowrap; }
+.veh-grey-row { display: flex; align-items: center; gap: 8px; }
+.veh-grey-row select, .veh-grey-row input { flex: 1; min-width: 0; }
+.veh-grey-row span { font-size: 0.82rem; color: #64748b; }
+/* Added metrics under Metric / Divided by: "+ [metric] [x]". */
+.plus-row { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
+.plus-row span { font-weight: 600; color: #64748b; }
+.plus-row select { flex: 1; min-width: 0; }
+.plus-row select.plus-op { flex: none; width: auto; }
+.plus-add { margin-top: 6px; align-self: flex-start; }
+/* Rows matched by the Settings grey-out rule (cancelled deals). */
+/* Light grey fill only; the text stays the same colour as every other
+   row. A touch darker under the pointer so the hover still shows. */
+.vehicles-table tbody tr.grey-row td { background: #e5e7eb; }
+.vehicles-table tbody tr.grey-row:hover td { background: #d9dce1; }
+/* Admin View / User View switch: shared style in theme.css. */
+/* The shared header row (page_header) stays at the top while the charts
+   scroll under it; the section tabs pin just beneath it. Below the
+   popups (z-index) so a popup covers it. One size for every button and
+   label in it (Settings > Appearance, "Top bar size"); padding is in
+   em so it grows with the text. */
+.kpi-top-bar { position: sticky; top: 0; z-index: 100; }
+.kpi-top-bar .btn { font-size: var(--kpi-toolbar-font, 0.88rem); line-height: 1.3; padding: 0.45em 1em; }
+.kpi-top-bar .view-toggle button { font-size: var(--kpi-toolbar-font, 0.88rem); line-height: 1.3; padding: 0.3em 0.9em; }
+.kpi-top-bar .status-text, .kpi-top-bar .account-nav { font-size: var(--kpi-toolbar-font, 0.88rem); }        /* Data Labels On / Off on each chart row: the same switch, sized to the
+   row's other buttons. Its own class, since setPageView() resets every
+   .view-toggle button. */
+.labels-toggle { display: inline-flex; align-items: center; background: #e2e8f0; border-radius: 6px; padding: 2px; gap: 2px; }
+.labels-toggle-name { font-size: 0.74rem; font-weight: 700; color: #475569; padding: 0 6px; }
+.labels-toggle button {
+    border: none; background: transparent; border-radius: 5px; padding: 2px 9px;
+    font-size: 0.74rem; font-weight: 700; color: #475569; cursor: pointer;
+}
+.labels-toggle button.active { background: #fff; color: #0f172a; box-shadow: 0 1px 2px rgba(15,23,42,0.15); cursor: default; }
+.chart-row.collapsed .labels-toggle { display: none; }
+body.user-view .chart-row-admin { display: none !important; }
+body.targets-off.not-admin .targets-btn, body.targets-off.user-view .targets-btn { display: none !important; }
+/* Settings popup: tabs down the left, one pane showing on the right. The
+   box keeps one height whichever tab is open, so it does not jump. */
+.settings-body { display: grid; grid-template-columns: 170px minmax(0, 1fr); gap: 22px; min-height: 62vh; }
+.settings-tabs { display: flex; flex-direction: column; gap: 4px; border-right: 1px solid #e2e8f0; padding-right: 12px; }
+.settings-tabs button {
+    text-align: left; background: none; border: none; border-radius: 6px; padding: 8px 10px;
+    font-size: 0.88rem; font-weight: 600; color: #475569; cursor: pointer;
+}
+.settings-tabs button:hover { background: #f1f5f9; color: #0f172a; }
+.settings-tabs button.active { background: var(--c-table-header-bg); color: var(--c-table-header-text); }
+.settings-pane { display: none; }
+.settings-pane.active { display: block; }
+/* A tab's sub-sections, listed under it in the left menu while it is open. */
+.settings-subtabs { display: none; flex-direction: column; gap: 2px; margin: 0 0 4px 10px; padding-left: 8px; border-left: 2px solid #e2e8f0; }
+.settings-subtabs.open { display: flex; }
+.settings-subtabs button {
+    text-align: left; background: none; border: none; border-radius: 6px; padding: 6px 10px;
+    font-size: 0.82rem; font-weight: 600; color: #64748b; cursor: pointer;
+}
+.settings-subtabs button:hover { background: #f1f5f9; color: #0f172a; }
+.settings-subtabs button.active { background: #e2e8f0; color: #0f172a; }
+.chart-subpane { display: none; }
+.chart-subpane.active { display: block; }
+/* Chart List keeps the box at the same 62vh as every other tab
+   (.settings-body min-height): the list scrolls inside, with the hint
+   below it, instead of making the box taller. */
+#chartSubList.active { display: flex; flex-direction: column; height: 62vh; }
+#chartSubList #chartList { flex: 1; min-height: 0; overflow-y: auto; }
+.setting-colour { width: 100%; height: 32px; padding: 2px; border: 1px solid #cbd5e1; border-radius: 6px; cursor: pointer; }
+.veh-col-search { width: 100%; padding: 5px 9px; border: 1px solid #cbd5e1; border-radius: 6px; margin-bottom: 6px; font-size: 0.82rem; }
+.veh-col-head { font-size: 0.8rem; font-weight: 700; color: #334155; margin-bottom: 4px; }

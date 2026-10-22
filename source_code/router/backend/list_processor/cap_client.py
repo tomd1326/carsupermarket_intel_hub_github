@@ -15,7 +15,6 @@ import hashlib
 import time
 import requests
 import os
-import re
 import pandas as pd
 import pydantic
 

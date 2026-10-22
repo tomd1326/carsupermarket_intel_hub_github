@@ -2,7 +2,6 @@ from typing import Optional
 
 import boto3
 import json
-from datetime import datetime
 import os
 import asyncio
 import logging
