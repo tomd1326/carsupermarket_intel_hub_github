@@ -226,6 +226,8 @@
         .at-month-toggle { cursor: pointer; }
         .at-rows-table tr.at-month-bar td { border-bottom: 1px solid #cbd5e1; border-top: 2px solid #94a3b8; }
         .at-month-toggle i { width: 1em; }
+        .at-rows-table tr.at-year-bar td { background: #dde5ef; }
+        .at-rows-table td.at-month-indent { padding-left: 1.6em; }
         .at-messages { font-size: 0.8rem; margin: 0 0 6px; }
         .at-messages div { padding: 1px 0; }
         .at-messages .at-ok { color: #15803d; }
@@ -475,7 +477,9 @@
            1cm higher than that, and its height is capped so its bottom edge
            stays at least 1cm above the bottom of the window:
            (10vh - 1cm) + 90vh = 100vh - 1cm. */
-        .modal-overlay#settingsModal { padding-top: calc(10vh - 1cm); }
+        .modal-overlay#settingsModal, .modal-overlay#atRowsModal { padding-top: calc(10vh - 1cm); }
+        /* The rows popup sits above Settings, which is open underneath it. */
+        .modal-overlay#atRowsModal { z-index: 1100; }
         .modal-box.settings-modal { width: 1500px; max-width: 96vw; max-height: 90vh; overflow-y: auto; }
         /* minmax(0, ...): a plain 1fr column cannot be narrower than its longest
            unbroken column name, which pushed the grid past the box edge and
@@ -1152,33 +1156,8 @@
                 <i class="fas fa-envelope-open-text"></i> Read Email
             </button>
             <div id="atEmailMessages" class="at-messages"></div>
-            <div style="margin-bottom:4px;">
-                <button type="button" class="btn btn-edit" onclick="setAtMonthsCollapsed(true)"><i class="fas fa-compress-alt"></i> Collapse All</button>
-                <button type="button" class="btn btn-edit" onclick="setAtMonthsCollapsed(false)"><i class="fas fa-expand-alt"></i> Expand All</button>
-            </div>
-            <table class="at-period-table at-rows-table">
-                <colgroup>
-                    <col style="width:9%"><col style="width:9%"><col style="width:5.5%"><col style="width:5%">
-                    <col style="width:4%"><col style="width:5%"><col style="width:7.5%"><col style="width:6%">
-                    <col style="width:5%"><col style="width:6.5%"><col style="width:6%"><col style="width:6.5%">
-                    <col style="width:4.5%"><col style="width:7.5%"><col style="width:8.5%"><col style="width:4%">
-                </colgroup>
-                <thead><tr>
-                    <th>From</th><th>To</th><th>Source</th><th class="num">Base Slots</th><th class="num">Flex %</th>
-                    <th class="num" title="Base + flex + tactical">Total Slots</th>
-                    <th class="num" title="Invoice rows: cost for the row's From to To days. Estimate rows: cost per month">Market Extension (£)</th>
-                    <th class="num" title="Invoice rows: cost for the row's From to To days. Estimate rows: cost per month">Finance Calculator (£)</th>
-                    <th class="num">Tactical Slots</th>
-                    <th class="num" title="Invoice rows: cost for the row's From to To days. Estimate rows: cost per month">Tactical (£)</th>
-                    <th class="num" title="Invoice rows: cost for the row's From to To days. Estimate rows: cost per month">Connect (£)</th>
-                    <th class="at-cpspd" title="(Market Extension + Finance Calculator + Tactical + Connect) per day / Total Slots. The same figure as the at_cost_per_slot_day chart metric">Cost Per Slot Per Day (£)</th>
-                    <th class="num">Days</th><th class="num" title="Every product including Connect, for these days. PPC not included">Cost (£)</th>
-                    <th class="num">Month Running Total (£)</th><th></th>
-                </tr></thead>
-                <tbody id="atPeriodList"></tbody>
-            </table>
-            <button type="button" class="btn btn-edit section-add-btn" onclick="addAtPeriod()">
-                <i class="fas fa-plus"></i> Add Row
+            <button type="button" class="btn btn-edit section-add-btn" onclick="openAtRowsModal()">
+                <i class="fas fa-table"></i> View And Edit Rows
             </button>
             <div class="modal-section-title at-month-toggle" style="margin-top:16px;" data-at-box="atPpcListBox" onclick="toggleAtBox(this)" title="Collapse or expand">
                 <i class="fas fa-chevron-right"></i> PPC Cost</div>
@@ -1200,10 +1179,20 @@
                 and replaces any adjustment email rows for the days the invoices cover; an email row that runs on
                 past the last invoice is kept from the day after it. Email rows are estimates. Invoices import
                 straight away; rows and PPC rows save with Save.<br>
-                Read Email adds a row from the go-live date, with products the email does not list copied from the
-                email's current figures. Those current figures are only a check against the row before. Flex is
+                Read Email reads two kinds of email. An order change ("The changes we discussed", with a go-live
+                date) adds a row from the go-live date, with products the email does not list copied from the
+                email's current figures. Those current figures are only a check against the row before. A tactical
+                change (a Tactical Adverts line with Current and Future slots) adds a row with the Future slots,
+                from the Sent date for a reduction or the day after it for an increase; paste it with its Sent line. Flex is
                 free: Flex Slots = Base Slots x Flex %, rounded to a whole slot. A month's cost is spread over the
-                days in that month. Autotrader API allowance today: <span id="atApiTotal">-</span>.<br>
+                days in that month.<br>
+                Slot increases (including tactical) start straight away; add a row from the first full day, which
+                Add Row uses by default. Decreases take 30 days: use the go-live date in the email. On estimate rows,
+                Tactical (£) works itself out as Tactical Slots x Market Extension / Base Slots (a tactical slot
+                costs the same as a contracted slot); type over it if the email says otherwise. Tactical slots
+                cannot be more than 10% of the base slots: Save refuses an estimate row over that.<br>
+                In the charts, the current month and week add up only the days so far, up to today.
+                Autotrader API allowance today: <span id="atApiTotal">-</span>.<br>
                 In Edit Chart these are under Autotrader Costs. Costs (Sum): "at_cost_total", or each product
                 on its own. Cost per slot per day for a week or month: Metric "at_cost_total", Sum, Divided By
                 "at_total_allowance". PPC cost per click for each date: Metric "at_cost_per_ppc_click" (each invoiced month's PPC
@@ -1571,6 +1560,49 @@
             <div class="modal-actions">
                 <button type="button" class="btn btn-edit" onclick="closeSettingsModal()">Cancel</button>
                 <button type="button" class="btn btn-apply" id="settingsSaveBtn" onclick="saveSettings()">Save</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Autotrader rows popup, opened from Settings > Autotrader Costs. The rows
+         are edited as a draft and saved with the Settings Save button. -->
+    <div class="modal-overlay" id="atRowsModal">
+        <div class="modal-box settings-modal">
+            <div class="chart-modal-head">
+                <h2><i class="fas fa-car"></i> Autotrader Cost Rows</h2>
+                <button type="button" class="modal-close-x" onclick="closeAtRowsModal()" aria-label="Close">&times;</button>
+            </div>
+            <p class="modal-sub">Rows save with the Save button in Settings.</p>
+            <div style="margin-bottom:4px;">
+                <button type="button" class="btn btn-edit" onclick="setAtMonthsCollapsed(true)"><i class="fas fa-compress-alt"></i> Collapse All</button>
+                <button type="button" class="btn btn-edit" onclick="setAtMonthsCollapsed(false)"><i class="fas fa-expand-alt"></i> Expand All</button>
+            </div>
+            <table class="at-period-table at-rows-table">
+                <colgroup>
+                    <col style="width:9%"><col style="width:9%"><col style="width:5.5%"><col style="width:5%">
+                    <col style="width:4%"><col style="width:5%"><col style="width:7.5%"><col style="width:6%">
+                    <col style="width:5%"><col style="width:6.5%"><col style="width:6%"><col style="width:6.5%">
+                    <col style="width:4.5%"><col style="width:7.5%"><col style="width:8.5%"><col style="width:4%">
+                </colgroup>
+                <thead><tr>
+                    <th>From</th><th>To</th><th>Source</th><th class="num">Base Slots</th><th class="num">Flex %</th>
+                    <th class="num" title="Base + flex + tactical">Total Slots</th>
+                    <th class="num" title="Invoice rows: cost for the row's From to To days. Estimate rows: cost per month">Market Extension (£)</th>
+                    <th class="num" title="Invoice rows: cost for the row's From to To days. Estimate rows: cost per month">Finance Calculator (£)</th>
+                    <th class="num">Tactical Slots</th>
+                    <th class="num" title="Invoice rows: cost for the row's From to To days. Estimate rows: cost per month, worked out as Tactical Slots x Market Extension / Base Slots (type over it to change)">Tactical (£)</th>
+                    <th class="num" title="Invoice rows: cost for the row's From to To days. Estimate rows: cost per month">Connect (£)</th>
+                    <th class="at-cpspd" title="(Market Extension + Finance Calculator + Tactical + Connect) per day / Total Slots. The same figure as the at_cost_per_slot_day chart metric">Cost Per Slot Per Day (£)</th>
+                    <th class="num">Days</th><th class="num" title="Every product including Connect, for these days. PPC not included">Cost (£)</th>
+                    <th class="num">Month Running Total (£)</th><th></th>
+                </tr></thead>
+                <tbody id="atPeriodList"></tbody>
+            </table>
+            <button type="button" class="btn btn-edit section-add-btn" onclick="addAtPeriod()">
+                <i class="fas fa-plus"></i> Add Row
+            </button>
+            <div class="modal-actions">
+                <button type="button" class="btn btn-apply" onclick="closeAtRowsModal()">Done</button>
             </div>
         </div>
     </div>
@@ -5785,10 +5817,9 @@
             atApiCapacity === null ? 'not available' : atApiCapacity.toLocaleString('en-GB');
         document.getElementById('atEmailMessages').innerHTML = '';
         document.getElementById('atInvoiceMessages').innerHTML = '';
-        // Everything starts collapsed: the two lists and every month of rows.
+        // Everything starts collapsed: the two lists and every year and month of rows.
         document.querySelectorAll('[data-at-box]').forEach(h => setAtBox(h, false));
-        atCollapsed.clear();
-        atFigures().months.forEach((t, m) => atCollapsed.add(m));
+        atCollapseAll(true);
         renderAtDraft();
         loadAtInvoices();
     }
@@ -5943,7 +5974,19 @@
             t.last = p.key;
             months.set(m, t);
         });
-        return { pieces, months };
+        // Each year's totals, added up from its months the same way.
+        const years = new Map();
+        months.forEach((t, m) => {
+            const y = m.slice(0, 4);
+            const yt = years.get(y) || { cost: 0, slotCost: 0, slotDays: 0, days: 0,
+                                         dim: atDayCount(`${y}-01-01`, `${y}-12-31`), last: null,
+                                         products: Object.fromEntries(AT_PRODUCT_COSTS.map(f => [f, 0])) };
+            yt.cost += t.cost; yt.slotCost += t.slotCost; yt.slotDays += t.slotDays; yt.days += t.days;
+            AT_PRODUCT_COSTS.forEach(f => { yt.products[f] += t.products[f]; });
+            yt.last = m;
+            years.set(y, yt);
+        });
+        return { pieces, months, years };
     }
 
     const atCpspd = v => (v === null || v === undefined ? '-' : atFmt(v, 2));
@@ -5958,15 +6001,29 @@
         setAtBox(heading, document.getElementById(heading.dataset.atBox).style.display === 'none');
     }
 
-    // Months folded to their total line. Kept while the popup is open.
+    // Years and months folded to their total line. Kept while the popup is open.
     const atCollapsed = new Set();
+    const atCollapsedYears = new Set();
     function toggleAtMonth(m) {
         if (atCollapsed.has(m)) atCollapsed.delete(m); else atCollapsed.add(m);
         renderAtDraft();
     }
-    function setAtMonthsCollapsed(collapse) {
+    function toggleAtYear(y) {
+        if (atCollapsedYears.has(y)) atCollapsedYears.delete(y); else atCollapsedYears.add(y);
+        renderAtDraft();
+    }
+    // Folds (or opens) every year and every month.
+    function atCollapseAll(collapse) {
         atCollapsed.clear();
-        if (collapse) atFigures().months.forEach((t, m) => atCollapsed.add(m));
+        atCollapsedYears.clear();
+        if (collapse) {
+            const { months, years } = atFigures();
+            months.forEach((t, m) => atCollapsed.add(m));
+            years.forEach((t, y) => atCollapsedYears.add(y));
+        }
+    }
+    function setAtMonthsCollapsed(collapse) {
+        atCollapseAll(collapse);
         renderAtDraft();
     }
 
@@ -5977,7 +6034,7 @@
         const box = (i, field, step) => {
             const v = atDraft[i][field];
             const shown = v === null || v === undefined || v === '' ? '' : money.has(field) ? Number(v).toFixed(2) : v;
-            return `<input type="number" min="0" step="${step}" value="${shown}"
+            return `<input type="number" min="0" step="${step}" value="${shown}" data-field="${field}"
                         oninput="setAtField(${i}, '${field}', this.value)">`;
         };
         // Dates re-draw the table when the box is left (blur), not on every
@@ -6006,36 +6063,58 @@
                     <i class="fas fa-trash"></i></button></td>
             </tr>`;
         };
-        const { pieces, months } = atFigures();
+        const { pieces, months, years } = atFigures();
         const html = [];
         // Rows still being filled in (no From yet) at the top, so they are seen.
         atDraft.forEach((p, i) => { if (!p.from) html.push(editRow(i, null)); });
-        // A month's totals: under each product column, that product's cost for
-        // the days covered this month (what the invoice charged, for invoice rows).
-        const totalCells = (m, t) => {
-            const prod = f => `<td class="num" data-month="${m}" data-cell="${f}">${atFmt(t.products[f], 2)}</td>`;
+        // A month's or year's totals (level 'month' or 'year'): under each
+        // product column, that product's cost for the days covered (what the
+        // invoice charged, for invoice rows).
+        const totalCells = (level, k, t) => {
+            const at = `data-${level}="${k}"`;
+            const prod = f => `<td class="num" ${at} data-cell="${f}">${atFmt(t.products[f], 2)}</td>`;
             return `${prod('me_cost')}${prod('finance_cost')}<td></td>${prod('tactical_cost')}${prod('connect_cost')}
-                <td class="at-cpspd" data-month="${m}" data-cell="cpspd">${atCpspd(t.slotDays ? t.slotCost / t.slotDays : null)}</td>
-                <td class="num" data-month="${m}" data-cell="days" title="Days covered of the days in the month">${t.days} of ${t.dim}</td>
-                <td class="num" data-month="${m}" data-cell="cost"></td>
-                <td class="num" data-month="${m}" data-cell="running">${atFmt(t.cost, 2)}</td><td></td>`;
+                <td class="at-cpspd" ${at} data-cell="cpspd">${atCpspd(t.slotDays ? t.slotCost / t.slotDays : null)}</td>
+                <td class="num" ${at} data-cell="days" title="Days covered of the days in the ${level}">${t.days} of ${t.dim}</td>
+                <td class="num" ${at} data-cell="cost"></td>
+                <td class="num" ${at} data-cell="running">${atFmt(t.cost, 2)}</td><td></td>`;
         };
-        let monthShown = null;
+        // The total line under an open year's last month.
+        const atYearTotal = (y, yt) => `<tr class="at-month-total at-year-bar">
+                <td colspan="6">Total ${y}</td>${totalCells('year', y, yt)}
+            </tr>`;
+        let monthShown = null, yearShown = null;
         pieces.forEach(p => {
             const m = p.start.slice(0, 7);
+            const y = m.slice(0, 4);
             const t = months.get(m);
+            const yt = years.get(y);
+            const yearFolded = atCollapsedYears.has(y);
+            if (y !== yearShown) {
+                // Year bar above the year's months, clicked to collapse or
+                // expand. Collapsed, it carries the year's totals itself.
+                yearShown = y;
+                html.push(`<tr class="at-month-total at-month-bar at-year-bar">
+                    <td colspan="6" class="at-month-toggle" onclick="toggleAtYear('${y}')" title="${yearFolded ? 'Expand' : 'Collapse'} this year">
+                        <i class="fas fa-chevron-${yearFolded ? 'right' : 'down'}"></i> ${y}</td>
+                    ${yearFolded ? totalCells('year', y, yt) : '<td colspan="10"></td>'}
+                </tr>`);
+            }
+            if (yearFolded) return;
             const folded = atCollapsed.has(m);
             if (m !== monthShown) {
                 // Month bar above the month's rows, clicked to collapse or
                 // expand. Collapsed, it carries the month's totals itself.
                 monthShown = m;
                 html.push(`<tr class="at-month-total at-month-bar">
-                    <td colspan="6" class="at-month-toggle" onclick="toggleAtMonth('${m}')" title="${folded ? 'Expand' : 'Collapse'} this month">
+                    <td colspan="6" class="at-month-toggle at-month-indent" onclick="toggleAtMonth('${m}')" title="${folded ? 'Expand' : 'Collapse'} this month">
                         <i class="fas fa-chevron-${folded ? 'right' : 'down'}"></i> ${atMonthLabel(p.start)}</td>
-                    ${folded ? totalCells(m, t) : '<td colspan="10"></td>'}
+                    ${folded ? totalCells('month', m, t) : '<td colspan="10"></td>'}
                 </tr>`);
             }
             if (folded) {
+                // The year's total line still goes under its last month.
+                if (t.last === p.key && yt.last === m) html.push(atYearTotal(y, yt));
                 return;
             } else if (p.first) {
                 html.push(editRow(p.i, p));
@@ -6052,12 +6131,14 @@
             }
             if (t.last === p.key) {
                 html.push(`<tr class="at-month-total">
-                    <td colspan="6">Total ${atMonthLabel(p.start)}</td>${totalCells(m, t)}
+                    <td colspan="6" class="at-month-indent">Total ${atMonthLabel(p.start)}</td>${totalCells('month', m, t)}
                 </tr>`);
+                if (yt.last === m) html.push(atYearTotal(y, yt));
             }
         });
         document.getElementById('atPeriodList').innerHTML = html.join('')
             || '<tr><td colspan="16" class="modal-hint">No rows yet. Apply the invoices, paste an adjustment email above, or add a row.</td></tr>';
+        atDraft.forEach((p, i) => atMarkTactical(i));
     }
 
     // ── Invoices: imported straight away, not on Save ────────────────────────
@@ -6259,8 +6340,95 @@
         return row;
     }
 
+    // A tactical change email ("We've now completed the below tactical advert
+    // reduction"): a Tactical Adverts heading, then one line per dealer with
+    // its Current and Future slots. Returns {current, future, sent} summed over
+    // the dealer lines, or null when the text is not one of these.
+    function parseAtTacticalEmail(text) {
+        const lines = text.split(/\r?\n/).map(l => l.trim());
+        const start = lines.findIndex(l => /^Tactical Adverts\b/i.test(l));
+        if (start < 0 || !lines.some(l => /\bCurrent\b/i.test(l) && /\bFuture\b/i.test(l))) return null;
+        let current = 0, future = 0, found = 0;
+        for (const line of lines.slice(start + 1)) {
+            if (!line || /\bCurrent\b.*\bFuture\b/i.test(line)) continue;
+            const m = line.match(/^\d+\s*-\s*.+?\s+(\d[\d,]*)\s+(\d[\d,]*)$/);
+            if (!m) { if (found) break; continue; }
+            current += Number(m[1].replace(/,/g, ''));
+            future += Number(m[2].replace(/,/g, ''));
+            found++;
+        }
+        if (!found) return null;
+        // "Sent: 19 October 2026 11:56" or "Sent: Monday, October 19, 2026 11:56 AM".
+        let sent = null;
+        const dm = text.match(/^\s*Sent:\s*(?:[A-Za-z]+,?\s+)?(\d{1,2})\s+([A-Za-z]+),?\s+(\d{4})/im);
+        const md = text.match(/^\s*Sent:\s*(?:[A-Za-z]+,?\s+)?([A-Za-z]+)\s+(\d{1,2}),?\s+(\d{4})/im);
+        const [day, month, year] = dm ? [dm[1], dm[2], dm[3]] : md ? [md[2], md[1], md[3]] : [];
+        const mi = month ? AT_MONTHS.indexOf(month.toLowerCase()) + 1 : 0;
+        if (mi) sent = `${year}-${String(mi).padStart(2, '0')}-${day.padStart(2, '0')}`;
+        return { current, future, sent };
+    }
+
+    // A copy of a row to start a new estimate row on `from`. An invoice row's
+    // costs are for its own days, so they are turned into a month's cost.
+    function atEstimateCopy(row, from) {
+        const copy = { ...row };
+        if (row.source === 'invoice' && row.to) {
+            const scale = atDaysInMonth(from) / atDayCount(row.from, row.to);
+            AT_PRODUCT_COSTS.forEach(f => { if (copy[f] !== null && copy[f] !== undefined) copy[f] = Number(copy[f]) * scale; });
+        }
+        return { ...copy, from, to: null, source: 'email' };
+    }
+
+    // Adds (or updates) the row for a tactical change email. A reduction
+    // applies from the day it was sent; an increase from the day after, the
+    // first full day billed at the new number.
+    function readAtTacticalEmail(t) {
+        if (!t.sent) {
+            atMessages('atEmailMessages', [{ kind: 'err', text: 'Tactical change email: no Sent date found. Paste it with its From / Sent / To header lines.' }]);
+            return false;
+        }
+        const from = t.future < t.current ? t.sent : atAddDays(t.sent, 1);
+        const before = atDraft.filter(p => p.from && p.from <= from)
+            .sort((a, b) => a.from.localeCompare(b.from)).pop();
+        if (!before) {
+            atMessages('atEmailMessages', [{ kind: 'err', text: `Tactical change email: no row in force on ${atDateUk(from)} to take the other figures from. Add that row first.` }]);
+            return false;
+        }
+        const messages = [];
+        if (Number(before.tactical) !== t.current) {
+            messages.push({ kind: 'warn', text: `The email says ${t.current} tactical slots before the change; the row from ${atDateUk(before.from)} has ${before.tactical}.` });
+        }
+        let row;
+        if (before.from === from && before.source !== 'invoice') {
+            row = before;                                // a row already starts that day: change it
+        } else {
+            row = atEstimateCopy(before, from);
+            // The row before ran on past this day with its own To: the new row
+            // takes the rest of those days, and the row before ends the day before.
+            if (before.to && before.to >= from) { row.to = before.to; before.to = atAddDays(from, -1); }
+            atDraft.push(row);
+        }
+        row.tactical = t.future;
+        if (Number(row.base) > 0 && row.me_cost !== null && row.me_cost !== undefined) {
+            row.tactical_cost = t.future * Number(row.me_cost) / Number(row.base);
+        }
+        if (atTacticalOver(row)) {
+            messages.push({ kind: 'err', text: `${t.future} tactical slots is more than ${AT_TACTICAL_MAX_PCT}% of ${row.base} base slots: Save will refuse it.` });
+        }
+        messages.unshift({ kind: 'ok', text: `Tactical ${t.current} to ${t.future} from ${atDateUk(from)} `
+            + `(${t.future < t.current ? 'a reduction applies on the day it is made' : 'an increase is billed from the next full day'}): `
+            + `Tactical £${atFmt(row.tactical_cost, 2)} a month. Check it, then Save.` });
+        atMessages('atEmailMessages', messages);
+        return true;
+    }
+
     function readAtEmail() {
         const box = document.getElementById('atEmailPaste');
+        const tactical = parseAtTacticalEmail(box.value);
+        if (tactical) {
+            if (readAtTacticalEmail(tactical)) { box.value = ''; renderAtDraft(); }
+            return;
+        }
         const email = parseAtEmail(box.value);
         const messages = [];
         if (email.unknown.length) {
@@ -6352,9 +6520,34 @@
     // As setAtPpcField: the draft is updated and only the worked-out cells
     // (Flex Slots, Total Slots, Total Per Month) are refreshed in place.
     function setAtField(i, field, value) {
-        atDraft[i][field] = field === 'from' ? value : field === 'to' ? (value || null)
+        const p = atDraft[i];
+        p[field] = field === 'from' ? value : field === 'to' ? (value || null)
             : (value === '' ? null : Number(value));
+        // Estimate rows: a tactical slot costs the same a month as a contracted
+        // slot (Market Extension / base slots; Autotrader's emails match this
+        // to the penny), so Tactical (£) follows the slots and the package
+        // price. Typing in Tactical (£) itself still overrides it.
+        if (p.source !== 'invoice' && ['base', 'tactical', 'me_cost'].includes(field)
+                && Number(p.base) > 0 && p.me_cost !== null && p.me_cost !== undefined) {
+            p.tactical_cost = (Number(p.tactical) || 0) * Number(p.me_cost) / Number(p.base);
+            const box = document.querySelector(`#atPeriodList tr[data-at="${i}"] input[data-field="tactical_cost"]`);
+            if (box) box.value = p.tactical_cost.toFixed(2);
+        }
+        if (field === 'base' || field === 'tactical') atMarkTactical(i);
         updateAtWorked();
+    }
+
+    // Autotrader allows tactical slots up to 10% of the base slots (kpi.py
+    // _AT_TACTICAL_MAX_PCT; Save refuses an estimate row over it).
+    const AT_TACTICAL_MAX_PCT = 10;
+    const atTacticalOver = p => p.source !== 'invoice'
+        && (Number(p.tactical) || 0) > (Number(p.base) || 0) * AT_TACTICAL_MAX_PCT / 100;
+    function atMarkTactical(i) {
+        const box = document.querySelector(`#atPeriodList tr[data-at="${i}"] input[data-field="tactical"]`);
+        if (!box) return;
+        const over = atTacticalOver(atDraft[i]);
+        box.style.borderColor = over ? '#c0392b' : '';
+        box.title = over ? `More than ${AT_TACTICAL_MAX_PCT}% of the base slots: Save will refuse this row` : '';
     }
 
     // Figures typed in only change the worked-out cells, so those are updated
@@ -6365,8 +6558,8 @@
         list.querySelectorAll('tr[data-at]').forEach(tr => {
             tr.querySelector('[data-cell="slots"]').textContent = atFmt(atWorked(atDraft[Number(tr.dataset.at)]).totalSlots);
         });
-        const { pieces, months } = atFigures();
-        const set = (sel, cell, text) => { const el = list.querySelector(`[${sel}][data-cell="${cell}"]`); if (el) el.textContent = text; };
+        const { pieces, months, years } = atFigures();
+        const set = (sel, cell, text) => list.querySelectorAll(`[${sel}][data-cell="${cell}"]`).forEach(el => { el.textContent = text; });
         pieces.forEach(p => {
             set(`data-key="${p.key}"`, 'cpspd', atCpspd(p.perSlotDay));
             set(`data-key="${p.key}"`, 'cost', atFmt(p.cost, 2));
@@ -6377,13 +6570,21 @@
             set(`data-month="${m}"`, 'cpspd', atCpspd(t.slotDays ? t.slotCost / t.slotDays : null));
             set(`data-month="${m}"`, 'running', atFmt(t.cost, 2));
         });
+        years.forEach((t, y) => {
+            AT_PRODUCT_COSTS.forEach(f => set(`data-year="${y}"`, f, atFmt(t.products[f], 2)));
+            set(`data-year="${y}"`, 'cpspd', atCpspd(t.slotDays ? t.slotCost / t.slotDays : null));
+            set(`data-year="${y}"`, 'running', atFmt(t.cost, 2));
+        });
     }
 
     function addAtPeriod() {
         const latest = [...atDraft].sort((a, b) => String(a.from).localeCompare(String(b.from))).pop();
         const copy = latest ? { ...latest } : { base: null, flex_pct: 10, tactical: 0, me_cost: null,
             finance_cost: null, tactical_cost: 0, connect_cost: 0 };
-        atDraft.push({ ...copy, from: new Date().toISOString().slice(0, 10), to: null, source: 'email' });
+        // Starts tomorrow: a slot increase takes effect straight away, and the
+        // first full day is the first one billed at the new number.
+        const from = atAddDays(new Date().toLocaleDateString('en-CA'), 1);
+        atDraft.push(atEstimateCopy(copy, from));
         renderAtDraft();
     }
 
@@ -7535,7 +7736,18 @@
         if (keep.length) await saveSections();
     }
 
+    // Autotrader rows popup, opened from Settings > Autotrader Costs. The rows
+    // are the same draft the Settings Save button saves.
+    function openAtRowsModal() {
+        document.getElementById('atRowsModal').classList.add('open');
+    }
+
+    function closeAtRowsModal() {
+        document.getElementById('atRowsModal').classList.remove('open');
+    }
+
     function closeSettingsModal() {
+        document.getElementById('atRowsModal').classList.remove('open');
         document.getElementById('settingsModal').classList.remove('open');
         // Rows saved by Apply Invoices change the charts, Save or not.
         if (atRowsSaved) {

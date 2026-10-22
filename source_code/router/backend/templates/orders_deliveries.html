@@ -81,8 +81,9 @@
              table built client-side (buildAiContext) — the vehicle rows
              themselves are never sent. Follows the current lens, granularity
              and every live slicer selection. Restricted to tdrayson while this
-             is still being trialled — matches the /ask-ai backend gate. -->
-        {% if user == 'tdrayson' %}
+             is still being trialled — matches the /ask-ai backend gate. Also
+             switched on in Settings > AI (off by default). -->
+        {% if user == 'tdrayson' and ai_enabled %}
         <div class="panel shadow-sm mb-3" id="ai-panel">
             <div class="ai-row">
                 <span class="control-label ai-label"><i class="fas fa-wand-magic-sparkles me-1"></i>Ask AI</span>

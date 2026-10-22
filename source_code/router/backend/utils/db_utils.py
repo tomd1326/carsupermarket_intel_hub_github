@@ -163,7 +163,13 @@ SETTINGS_DEFAULTS = {
     'calc_buying_reqs':                 '0',
     'get_stock':                        '0',
     'enable_cars_bought':               '0',
+    # Settings > AI: Ask AI on or off per page, and the Cortex model every page uses.
     'kpi_ai_summary':                   '0',
+    'orders_deliveries_ai':             '0',
+    'cortex_model':                     'claude-sonnet-5',
+    # Models offered in the Settings > AI dropdown, comma separated. Filled by
+    # the Update Available Models button, which asks Snowflake what it serves.
+    'cortex_models':                    'claude-sonnet-5',
     'mot_workers':                      10,
     'valuation_cache_hours':            36,
     # How long Buying Requirements reuses data before refetching. Minutes.
@@ -251,7 +257,7 @@ SETTINGS_DEFAULTS = {
     'sessions_invalidated_at':          0,
 }
 
-BOOL_SETTINGS = {'calc_buying_reqs', 'get_stock', 'enable_cars_bought', 'kpi_ai_summary', 'cap_override_enabled'}
+BOOL_SETTINGS = {'calc_buying_reqs', 'get_stock', 'enable_cars_bought', 'kpi_ai_summary', 'orders_deliveries_ai', 'cap_override_enabled'}
 
 # Live users colours, stored as '#rrggbb' text.
 PRESENCE_COLOUR_SETTINGS = {'presence_border_colour', 'presence_text_colour', 'presence_more_colour'}
@@ -302,7 +308,7 @@ def get_settings(conn, user: str = None) -> dict:
             rows = cur.fetchall()
         row_map = dict(rows)
         result = dict(SETTINGS_DEFAULTS)
-        STRING_SETTINGS = {'cap_override_subscriber_id', 'cap_override_password',
+        STRING_SETTINGS = {'cap_override_subscriber_id', 'cap_override_password', 'cortex_model', 'cortex_models',
                            'email_sender', 'email_test_recipient', 'login_mode',
                            'password_link_base_prod', 'password_link_base_dev'} | set(PASSWORD_EMAIL_KEYS) | PRESENCE_COLOUR_SETTINGS | APPEARANCE_COLOUR_SETTINGS
         for key, value in rows:
@@ -320,6 +326,12 @@ def get_settings(conn, user: str = None) -> dict:
         # Global bool settings (not per-user).
         result['enable_cars_bought'] = row_map.get('enable_cars_bought', '0') == '1'
         result['kpi_ai_summary'] = row_map.get('kpi_ai_summary', '0') == '1'
+        result['orders_deliveries_ai'] = row_map.get('orders_deliveries_ai', '0') == '1'
+        result['cortex_model'] = row_map.get('cortex_model') or SETTINGS_DEFAULTS['cortex_model']
+        models = [m for m in (row_map.get('cortex_models') or '').split(',') if m.strip()]
+        if result['cortex_model'] not in models:
+            models.append(result['cortex_model'])
+        result['cortex_models'] = models
         result['cap_override_enabled'] = row_map.get('cap_override_enabled', '0') == '1'
         result['cap_override_subscriber_id'] = row_map.get('cap_override_subscriber_id', '')
         result['cap_override_password'] = row_map.get('cap_override_password', '')
@@ -343,6 +355,7 @@ def get_settings(conn, user: str = None) -> dict:
             d[key] = user in ALWAYS_ENABLED_USERS
         d['enable_cars_bought'] = False
         d['kpi_ai_summary'] = False
+        d['orders_deliveries_ai'] = False
         d['cap_override_enabled'] = False
         d['cap_override_subscriber_id'] = ''
         d['cap_override_password'] = ''
