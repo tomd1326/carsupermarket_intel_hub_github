@@ -188,22 +188,66 @@
         </form>
         {% endif %}
 
-        {# ── KPI Dashboard ───────────────────────────────────── #}
-        {% if active_section == 'kpi' %}
-        <form method="post" action="{{ BASE_URL }}/settings/section/kpi">
+        {# ── AI ──────────────────────────────────────────────── #}
+        {% if active_section == 'ai' %}
+        <form method="post" action="{{ BASE_URL }}/settings/section/ai">
             <div class="card mb-4">
-                <div class="card-header fw-semibold">KPI Dashboard</div>
+                <div class="card-header fw-semibold">Model</div>
+                <div class="card-body">
+                    <label class="form-label" for="cortex_model">Model Used By Every Ask AI</label>
+                    <div class="d-flex gap-2">
+                        <select class="form-select" id="cortex_model" name="cortex_model" style="max-width: 320px;">
+                            {% for m in settings.cortex_models %}
+                            <option value="{{ m }}" {% if m == settings.cortex_model %}selected{% endif %}>{{ m }}</option>
+                            {% endfor %}
+                        </select>
+                        <button type="button" class="btn btn-outline-secondary" id="ai-refresh-models">Update Available Models</button>
+                    </div>
+                    <div class="form-text mt-1" id="ai-refresh-note">Models are run through Snowflake Cortex. Update Available Models asks Snowflake which models it serves, then pick one and save.</div>
+                </div>
+            </div>
+            <div class="card mb-4">
+                <div class="card-header fw-semibold">Pages</div>
                 <div class="card-body">
                     <div class="form-check">
                         <input class="form-check-input" type="checkbox" id="kpi_ai_summary" name="kpi_ai_summary"
                                {% if settings.kpi_ai_summary %}checked{% endif %}>
-                        <label class="form-check-label" for="kpi_ai_summary">Enable AI Summary panel <span class="text-muted">(tdrayson only)</span></label>
+                        <label class="form-check-label" for="kpi_ai_summary">KPI <span class="text-muted">(tdrayson only)</span></label>
                     </div>
-                    <div class="form-text mt-1">Shows an AI-generated commentary panel alongside the KPI charts.</div>
+                    <div class="form-check mt-2">
+                        <input class="form-check-input" type="checkbox" id="orders_deliveries_ai" name="orders_deliveries_ai"
+                               {% if settings.orders_deliveries_ai %}checked{% endif %}>
+                        <label class="form-check-label" for="orders_deliveries_ai">Orders &amp; Deliveries <span class="text-muted">(tdrayson only)</span></label>
+                    </div>
+                    <div class="form-text mt-1">Turns Ask AI on or off for each page. While off, the Ask AI box is hidden and its requests are refused.</div>
                 </div>
             </div>
-            <button type="submit" class="btn btn-primary">Save KPI Dashboard</button>
+            <button type="submit" class="btn btn-primary">Save AI</button>
         </form>
+        <script>
+            document.getElementById('ai-refresh-models').addEventListener('click', async function () {
+                const btn = this, note = document.getElementById('ai-refresh-note'), sel = document.getElementById('cortex_model');
+                btn.disabled = true;
+                note.textContent = 'Asking Snowflake for its models...';
+                try {
+                    const resp = await fetch('{{ BASE_URL }}/settings/ai/refresh-models', {method: 'POST'});
+                    const data = await resp.json();
+                    if (!resp.ok) throw new Error(data.error || data.detail || 'Request failed');
+                    const chosen = sel.value;
+                    sel.innerHTML = '';
+                    data.models.forEach(function (m) {
+                        const opt = document.createElement('option');
+                        opt.value = m; opt.textContent = m; opt.selected = (m === chosen);
+                        sel.appendChild(opt);
+                    });
+                    note.textContent = data.models.length + ' models found. Pick one and save.';
+                } catch (e) {
+                    note.textContent = String(e.message || e);
+                } finally {
+                    btn.disabled = false;
+                }
+            });
+        </script>
         {% endif %}
 
         {# ── CAP Credential Override ─────────────────────────── #}
