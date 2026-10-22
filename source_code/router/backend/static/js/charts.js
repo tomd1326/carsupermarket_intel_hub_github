@@ -266,7 +266,8 @@ function segmentHitsBox(x1, y1, x2, y2, box) {
 // title line instead, so the plot gets the freed height (KPI page).
 // subtitle, if given, sits under the title in smaller grey text (no-legend cards only).
 // headExtra is the page's own HTML for the title line, before the scroller (no-legend cards only).
-function chartCardHtml({ canvasId, titleId = '', title = '', subtitle = '', legendId = '', dayScroller = false, legend = true, headExtra = '' }) {
+// headEnd is the page's own HTML at the far right of the title line, after the scroller (no-legend cards only).
+function chartCardHtml({ canvasId, titleId = '', title = '', subtitle = '', legendId = '', dayScroller = false, legend = true, headExtra = '', headEnd = '' }) {
     if (!legend) {
         return `
         <div class="chart-card">
@@ -274,6 +275,7 @@ function chartCardHtml({ canvasId, titleId = '', title = '', subtitle = '', lege
                 <h2${titleId ? ` id="${titleId}"` : ''}>${escHtml(title)}</h2>
                 ${headExtra}
                 ${dayScroller ? DayWindow.scrollerHtml() : ''}
+                ${headEnd}
             </div>
             ${subtitle ? `<div class="chart-card-subtitle">${escHtml(subtitle)}</div>` : ''}
             <div class="chart-wrap">
@@ -330,11 +332,14 @@ const DayWindow = {
     _getCount: () => 0,
     _getSize: () => 25,
     _onChange: () => {},
+    // Where updateScrollers looks for scrollers (a page can narrow it to a popup).
+    _getScrollerRoot: () => document,
     // End index of the window; null = pinned to the latest day, so a reload
     // follows new data.
     offset: null,
 
-    configure({ getCount, getSize, onChange }) {
+    configure({ getCount, getSize, onChange, getScrollerRoot }) {
+        if (getScrollerRoot) this._getScrollerRoot = getScrollerRoot;
         if (getCount) this._getCount = getCount;
         if (getSize) this._getSize = getSize;
         if (onChange) this._onChange = onChange;
@@ -419,7 +424,7 @@ const DayWindow = {
     // the same position.
     updateScrollers() {
         const count = this.count();
-        const scrollers = document.querySelectorAll('[data-day-scroller]');
+        const scrollers = this._getScrollerRoot().querySelectorAll('[data-day-scroller]');
         // Nothing to scroll when everything already fits on one screen.
         if (!count || count <= this.size()) {
             scrollers.forEach(s => { s.style.display = 'none'; });

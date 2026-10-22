@@ -1391,6 +1391,7 @@ KPI_DEFAULT_SETTINGS = {
     "at_font_px": 13,        # Autotrader figures boxes (Published, Capped etc.)
     "at_table_font_px": 11,  # Settings > Autotrader rows table
     "legend_font_px": 10,   # series names in the legend above stacked charts
+    "zoom_size": 0,         # chart popup (magnifier) opens at: 0 small, 1 medium, 2 large, 3 full screen
     # Line thickness in px on line charts. Halves allowed, so these are the
     # only settings that are not whole numbers (see _clamp_setting).
     "main_line_px": 2.5,     # the chart's own line
@@ -1435,6 +1436,7 @@ KPI_SETTING_LIMITS = {
     "at_font_px": (9, 22),
     "at_table_font_px": (8, 16),
     "legend_font_px": (8, 24),
+    "zoom_size": (0, 3),
     "main_line_px": (0.5, 8),
     "n1_line_px": (0.5, 8),
     "target_line_px": (0.5, 8),
