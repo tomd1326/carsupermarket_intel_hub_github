@@ -27,6 +27,11 @@
             <button class="btn btn-refresh ms-2" id="refresh-btn" onclick="refreshData()" title="Reload the latest data from Snowflake">
                 <i class="fas fa-rotate-right"></i> Refresh Data
             </button>
+            {% if is_admin %}
+            <button class="btn btn-refresh ms-2" onclick="openOdSettings()" title="Bands and highlighting for this page, for everyone">
+                <i class="fas fa-cog"></i> Settings
+            </button>
+            {% endif %}
             <!-- Page font resizer — scales everything except the vehicle grid,
                  which has its own resizer next to its CSV button. -->
             <div class="d-flex align-items-center gap-1 ms-2">
@@ -131,18 +136,111 @@
         </div>
     </div>
 
-    <!-- shadeScale()/shadeColour() — shared with the other report pages so the
-         red/amber/green scale stays identical everywhere. -->
+    {% if is_admin %}
+    <!-- Settings popup (admin only): tabs down the left, one pane on the right.
+         One Save covers both tabs. Behaviour is in orders_deliveries_settings.js. -->
+    <div class="od-modal-overlay" id="od-settings-modal">
+        <div class="od-modal-box">
+            <div class="od-modal-head">
+                <h2><i class="fas fa-cog"></i> Settings</h2>
+                <button type="button" class="od-modal-close" onclick="closeOdSettings()" aria-label="Close">&times;</button>
+            </div>
+            <p class="od-modal-sub">Applies to this page, for everyone.</p>
+            <div class="od-modal-error" id="od-settings-error"></div>
+            <div class="od-settings-body">
+                <nav class="od-settings-tabs">
+                    <button type="button" data-tab="od-tab-bands" class="active">Bands</button>
+                    <button type="button" data-tab="od-tab-shading">Highlighting</button>
+                </nav>
+                <div>
+                    <div class="od-settings-pane active" id="od-tab-bands">
+                        <div class="od-hint mb-3">Type the upper limit of each band, separated by commas. The labels are built from them, and the last band is everything above the final limit.</div>
+                        <div id="od-bands-rows"></div>
+                    </div>
+                    <div class="od-settings-pane" id="od-tab-shading">
+                        <div class="od-section-title">Default Colour Scheme</div>
+                        <div class="d-flex gap-4 flex-wrap align-items-end mb-2">
+                            <div>
+                                <label class="od-label" for="od-scheme">Scheme</label>
+                                <select class="form-select form-select-sm" id="od-scheme" style="width: 220px;">
+                                    <option value="rag">Red, Amber, Green</option>
+                                    <option value="single">Shades Of One Colour</option>
+                                </select>
+                            </div>
+                            <div class="od-rag-only">
+                                <label class="od-label">Worst</label>
+                                <input type="color" class="form-control form-control-color" id="od-rag-low">
+                            </div>
+                            <div class="od-rag-only">
+                                <label class="od-label">Middle</label>
+                                <input type="color" class="form-control form-control-color" id="od-rag-mid">
+                            </div>
+                            <div class="od-rag-only">
+                                <label class="od-label">Best</label>
+                                <input type="color" class="form-control form-control-color" id="od-rag-high">
+                            </div>
+                            <div class="od-single-only">
+                                <label class="od-label">Colour</label>
+                                <input type="color" class="form-control form-control-color" id="od-single-colour">
+                            </div>
+                            <div class="od-swatch" id="od-swatch" title="How the scale looks, worst to best"></div>
+                        </div>
+                        <div class="od-hint mb-3">With one colour, the best values get the strongest shade and the worst the palest. Each column below uses this scheme unless you give it its own.</div>
+
+                        <div class="od-section-title">Options</div>
+                        <div class="d-flex gap-4 flex-wrap mb-2">
+                            <div>
+                                <label class="od-label" for="od-strength">Colour Strength</label>
+                                <input type="number" class="form-control form-control-sm" id="od-strength" step="0.25" min="0.25" max="5" style="width: 110px;">
+                                <div class="od-hint" style="max-width: 260px;">How far from a column's average a value must be to get full colour, in standard deviations. Lower gives stronger colours.</div>
+                            </div>
+                            <div>
+                                <label class="od-label" for="od-day-cap">Day Cap (DIS, DTS)</label>
+                                <input type="number" class="form-control form-control-sm" id="od-day-cap" step="1" min="0" max="5000" style="width: 110px;">
+                                <div class="od-hint" style="max-width: 260px;">Days in stock or to sell above this are treated as bad data and left uncoloured. 0 turns this off.</div>
+                            </div>
+                            <div>
+                                <label class="od-label" for="od-min-rows">Minimum Rows</label>
+                                <input type="number" class="form-control form-control-sm" id="od-min-rows" step="1" min="2" max="100" style="width: 110px;">
+                                <div class="od-hint" style="max-width: 260px;">Tables or popups with fewer rows than this are left uncoloured.</div>
+                            </div>
+                        </div>
+                        <div class="form-check"><input class="form-check-input" type="checkbox" id="od-shade-sales-type"><label class="form-check-label" for="od-shade-sales-type">Colour The Sales Type Table</label></div>
+                        <div class="form-check"><input class="form-check-input" type="checkbox" id="od-shade-sub-rows"><label class="form-check-label" for="od-shade-sub-rows">Colour Expanded Rows (Each Group Split By Period)</label></div>
+                        <div class="form-check mb-3"><input class="form-check-input" type="checkbox" id="od-shade-popup"><label class="form-check-label" for="od-shade-popup">Colour The Vehicle Popup</label></div>
+
+                        <div class="od-section-title">Highlighted Columns</div>
+                        <table class="table table-sm align-middle od-shade-cols">
+                            <thead><tr><th>Column</th><th>Highlight</th><th>Colour Scheme</th><th>Colours</th><th>Preview</th></tr></thead>
+                            <tbody id="od-shade-cols"></tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+            <div class="od-modal-actions">
+                <button type="button" class="btn btn-outline-secondary" id="od-settings-reset">Reset This Tab To Defaults</button>
+                <span class="flex-grow-1 text-muted" id="od-settings-note"></span>
+                <button type="button" class="btn btn-outline-secondary" onclick="closeOdSettings()">Cancel</button>
+                <button type="button" class="btn btn-primary" id="od-settings-save">Save</button>
+            </div>
+        </div>
+    </div>
+    {% endif %}
+
     <!-- Server-side values the page JS needs. Must come before
-         orders_deliveries.js, which reads both at load time. -->
+         orders_deliveries.js, which reads them at load time. -->
     <script>
         window.BASE_URL = "{{ BASE_URL }}";
         window.FONT_SIZES = { page: {{ font_summary }}, vehicle: {{ font_vehicle }} };
+        window.OD_SHADING = {{ shading | tojson }};
     </script>
     <!-- shadeScale()/shadeColour() - shared with the other report pages so the
          red/amber/green scale stays identical everywhere. Must load before
          orders_deliveries.js, which wraps them. -->
     <script src="{{ static_url('js/shading.js') }}"></script>
     <script src="{{ static_url('js/orders_deliveries.js') }}"></script>
+    {% if is_admin %}
+    <script src="{{ static_url('js/orders_deliveries_settings.js') }}"></script>
+    {% endif %}
 </body>
 </html>
