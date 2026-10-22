@@ -4,7 +4,7 @@ The reading itself is in utils/sharepoint_sources.py.
 """
 import logging
 
-from fastapi import APIRouter, Request, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 
 from utils import sharepoint_sources as sps
 

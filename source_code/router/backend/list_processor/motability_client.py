@@ -2,8 +2,6 @@ import asyncio
 import io
 import logging
 import time
-import os
-from datetime import datetime
 
 from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeoutError
 import pandas as pd

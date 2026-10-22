@@ -1,7 +1,7 @@
 """KPI dashboard: Snowflake daily summary, SharePoint sessions, Cortex AI summary."""
 
 from fastapi import APIRouter, Request, Depends, HTTPException
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse
 import calendar
 import json
 import re
@@ -20,11 +20,12 @@ from utils.db_utils import (get_database_connection, get_prod_pricer_connection,
                             add_ga4_campaign, remove_ga4_campaign, get_settings)
 from utils.snowflake_client import SnowflakeClient
 from utils.cortex import cortex_complete
+from utils import ai_knowledge
 from utils import sharepoint_sources
 from utils import at_invoices
 from utils import kpi_data_sources as kds
 
-from .core import (BASE_URL, templates, _track, get_current_user, is_admin,
+from .core import (BASE_URL, templates, _track, is_admin,
                    require_page, require_page_api, _uk_now,
                    s3_bucketname, s3_bucket_region, _S3_ENV)
 
@@ -2665,17 +2666,30 @@ def _validate_layout(layout: dict, sections: list) -> str | None:
     return None
 
 
-def _read_kpi_layout_value(key: str):
+# Set once the CREATE TABLE below has been committed, so later calls skip it.
+# Left False if that fails, so the next call tries again.
+_kpi_layout_table_ready = False
+
+
+def _read_kpi_layout_values(keys) -> dict:
+    """Several keys in one query: {key: value} for the keys that are saved."""
+    global _kpi_layout_table_ready
     # Layout and settings live in the PROD cluster so local edits and prod
     # serve the same dashboard. The deployed dev Lambda cannot reach PROD, so
     # it keeps its own copy in the dev cluster.
     with get_prod_pricer_connection() as conn:
         with conn.cursor() as cur:
-            cur.execute("CREATE TABLE IF NOT EXISTS kpi_layout (key VARCHAR(50) PRIMARY KEY, value TEXT)")
-            cur.execute("SELECT value FROM kpi_layout WHERE key = %s", (key,))
-            row = cur.fetchone()
+            if not _kpi_layout_table_ready:
+                cur.execute("CREATE TABLE IF NOT EXISTS kpi_layout (key VARCHAR(50) PRIMARY KEY, value TEXT)")
+            cur.execute("SELECT key, value FROM kpi_layout WHERE key = ANY(%s)", (list(keys),))
+            rows = cur.fetchall()
         conn.commit()
-    return json.loads(row[0]) if row else None
+    _kpi_layout_table_ready = True
+    return {row[0]: json.loads(row[1]) for row in rows}
+
+
+def _read_kpi_layout_value(key: str):
+    return _read_kpi_layout_values([key]).get(key)
 
 
 def _write_kpi_layout_value(key: str, value) -> None:
@@ -2684,9 +2698,11 @@ def _write_kpi_layout_value(key: str, value) -> None:
 
 def _write_kpi_layout_values(values: dict) -> None:
     """Write several keys in one transaction: all are saved or none are."""
+    global _kpi_layout_table_ready
     with get_prod_pricer_connection() as conn:
         with conn.cursor() as cur:
-            cur.execute("CREATE TABLE IF NOT EXISTS kpi_layout (key VARCHAR(50) PRIMARY KEY, value TEXT)")
+            if not _kpi_layout_table_ready:
+                cur.execute("CREATE TABLE IF NOT EXISTS kpi_layout (key VARCHAR(50) PRIMARY KEY, value TEXT)")
             for key, value in values.items():
                 cur.execute(
                     "INSERT INTO kpi_layout (key, value) VALUES (%s, %s) "
@@ -2694,6 +2710,7 @@ def _write_kpi_layout_values(values: dict) -> None:
                     (key, json.dumps(value))
                 )
         conn.commit()
+    _kpi_layout_table_ready = True
 
 
 def _targets_refused(user) -> str | None:
@@ -2718,16 +2735,22 @@ def _kpi_settings(stored: dict | None) -> dict:
 @router.get("/kpi/layout")
 def kpi_layout_get(request: Request, user: str = Depends(require_page_api('kpi'))):
     try:
-        layout = _read_kpi_layout_value('layout') or KPI_DEFAULT_LAYOUT
-        settings = _kpi_settings(_read_kpi_layout_value('settings'))
-        notes = _read_kpi_layout_value('notes') or []
+        # Every key the page needs, in one query rather than one per key.
+        stored = _read_kpi_layout_values([
+            'layout', 'settings', 'notes', 'themes', 'metric_names', 'metric_formats',
+            'derived_names', 'hidden_sections', _AT_PERIODS_KEY, _AT_PPC_KEY,
+            _COLLAPSED_KEY, _ROLLING_KEY, _MY_CHARTS_KEY,
+        ])
+        layout = stored.get('layout') or KPI_DEFAULT_LAYOUT
+        settings = _kpi_settings(stored.get('settings'))
+        notes = stored.get('notes') or []
         sections = _kpi_sections(layout)
-        themes = _read_kpi_layout_value('themes') or KPI_DEFAULT_THEMES
-        metric_names = _read_kpi_layout_value('metric_names')
+        themes = stored.get('themes') or KPI_DEFAULT_THEMES
+        metric_names = stored.get('metric_names')
         if metric_names is None:
             metric_names = _seed_metric_names(layout)
-        metric_formats = _read_kpi_layout_value('metric_formats') or {}
-        derived_names = _read_kpi_layout_value('derived_names') or {}
+        metric_formats = stored.get('metric_formats') or {}
+        derived_names = stored.get('derived_names') or {}
     except Exception as e:
         # Report it rather than serving an empty layout: the page saves the
         # whole layout in one go, so a save made on an empty one would wipe
@@ -2739,9 +2762,9 @@ def kpi_layout_get(request: Request, user: str = Depends(require_page_api('kpi')
     # now created on the page. Drop them from a layout saved before that.
     layout = {**layout, "rows": [r for r in layout.get("rows", []) if r.get("type") == "custom"]}
     try:
-        raw = _read_kpi_layout_value(_AT_PERIODS_KEY) or []
-        at_periods = _at_allowance_periods()
-        at_ppc_periods = _at_ppc_periods(raw)
+        raw = stored.get(_AT_PERIODS_KEY) or []
+        at_periods = _at_allowance_periods(raw)
+        at_ppc_periods = _at_ppc_periods(raw, stored.get(_AT_PPC_KEY))
     except Exception as e:
         logger.warning("Autotrader settings read failed: %s", e)
         at_periods, at_ppc_periods = [], []
@@ -2749,10 +2772,10 @@ def kpi_layout_get(request: Request, user: str = Depends(require_page_api('kpi')
             "setting_limits": KPI_SETTING_LIMITS, "notes": notes, "themes": themes,
             "metric_names": metric_names, "metric_formats": metric_formats, "derived_names": derived_names,
             "at_periods": at_periods, "at_ppc_periods": at_ppc_periods,
-            "hidden_sections": [s for s in (_read_kpi_layout_value('hidden_sections') or []) if s in sections],
-            "collapsed_rows": _user_row_list(_COLLAPSED_KEY, user),
-            "rolling_rows": _user_row_list(_ROLLING_KEY, user),
-            "my_charts": _user_row_list(_MY_CHARTS_KEY, user)}
+            "hidden_sections": [s for s in (stored.get('hidden_sections') or []) if s in sections],
+            "collapsed_rows": (stored.get(_COLLAPSED_KEY) or {}).get(user, []),
+            "rolling_rows": (stored.get(_ROLLING_KEY) or {}).get(user, []),
+            "my_charts": (stored.get(_MY_CHARTS_KEY) or {}).get(user, [])}
 
 
 # ── Per-user chart row lists ─────────────────────────────────────────────────
@@ -3086,10 +3109,15 @@ def _validate_at_rows(rows, fields: tuple, optional: tuple, what: str, max_rows:
     return None
 
 
-def _at_ppc_periods(allowance_rows: list) -> list:
+_UNREAD = object()
+
+
+def _at_ppc_periods(allowance_rows: list, rows=_UNREAD) -> list:
     """The PPC cost rows. Before they had their own list the cost was on the
-    allowance rows, so those are used until the list is first saved."""
-    rows = _read_kpi_layout_value(_AT_PPC_KEY)
+    allowance rows, so those are used until the list is first saved. Pass
+    `rows` when the stored list has already been read."""
+    if rows is _UNREAD:
+        rows = _read_kpi_layout_value(_AT_PPC_KEY)
     if rows is not None:
         return rows
     return [{"from": p["from"], "ppc_view_cost": p["ppc_view_cost"]}
@@ -3110,12 +3138,15 @@ def _at_row_from_old(p: dict) -> dict:
             "tactical_cost": slot_cost * tactical, "connect_cost": 0}
 
 
-def _at_allowance_periods() -> list:
+def _at_allowance_periods(raw: list | None = None) -> list:
     """The Settings rows, sorted by date, without the PPC cost they used to
     carry. Rows saved before To and Source existed run until the next row
-    and count as email rows."""
+    and count as email rows. Pass `raw` when the stored rows have already
+    been read."""
+    if raw is None:
+        raw = _read_kpi_layout_value(_AT_PERIODS_KEY) or []
     rows = []
-    for p in (_read_kpi_layout_value(_AT_PERIODS_KEY) or []):
+    for p in raw:
         if "me_cost" not in p and "slot_cost" in p:
             p = _at_row_from_old(p)
         row = {k: p.get(k) for k in _AT_PERIOD_FIELDS}
@@ -3272,7 +3303,7 @@ def _at_setting_values():
     above _AT_PERIODS_KEY). Reads them once, so build it once per load."""
     import bisect
     raw = _read_kpi_layout_value(_AT_PERIODS_KEY) or []
-    periods = _at_allowance_periods()
+    periods = _at_allowance_periods(raw)
     starts = [p["from"] for p in periods]
     ppc = sorted(_at_ppc_periods(raw), key=lambda p: p["from"])
     ppc_starts = [p["from"] for p in ppc]
@@ -3343,7 +3374,7 @@ def _kpi_sections(layout: dict) -> list:
 
 
 def _section_slug(name: str) -> str:
-    """Matches sectionDomId in kpi.html, so two names never share a page element."""
+    """Matches sectionDomId in kpi.js, so two names never share a page element."""
     return re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")
 
 
@@ -3921,20 +3952,24 @@ def kpi_vehicles(request: Request, row_id: str, start: str, end: str,
 
 @router.post("/kpi/ai-summary")
 def kpi_ai_summary(request: Request, payload: dict, user: str = Depends(require_page_api('kpi'))):
-    # Admin only, and only while Settings > KPI Dashboard > Enable Ask AI is on.
+    # Admin only, and only while Settings > AI > Pages > KPI is on. The
+    # instructions, knowledge, answer length and temperature are all set in
+    # Settings > AI.
     if not is_admin(user):
         raise HTTPException(status_code=403, detail="Forbidden")
     with get_database_connection() as conn:
         if not get_settings(conn).get('kpi_ai_summary'):
-            return {"status": "error", "message": "Ask AI is turned off in Settings > KPI Dashboard"}
+            return {"status": "error", "message": "Ask AI is turned off in Settings > AI"}
 
     prompt = (payload or {}).get("prompt")
     if not isinstance(prompt, str) or not prompt.strip():
         return {"status": "error", "message": "Missing prompt"}
 
     try:
-        data = cortex_complete([{"role": "user", "content": prompt}],
-                               max_tokens=4096, temperature=0.3)
+        ai, _, system = ai_knowledge.page_prompt('kpi')
+        data = cortex_complete([{"role": "system", "content": system},
+                                {"role": "user", "content": prompt}],
+                               max_tokens=ai["max_tokens"], temperature=ai["temperature"])
         summary = data["choices"][0]["messages"].strip()
         return {"status": "ok", "summary": summary}
     except Exception as e:

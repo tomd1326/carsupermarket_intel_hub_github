@@ -27,7 +27,7 @@ from utils.secrets_manager_client import get_secret
 from utils.file_handler import read_dataframe_file, write_dataframe_file
 
 from .core import (BASE_URL, _S3_ENV, templates, s3_bucketname, s3_bucket_region, _track,
-                   get_current_user, _uk_now, is_admin, require_page, require_page_api)
+                   get_current_user, _uk_now, require_page, require_page_api)
 
 logger = logging.getLogger(__name__)
 

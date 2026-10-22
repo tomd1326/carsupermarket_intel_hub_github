@@ -1,13 +1,10 @@
 import datetime
-import io
 import logging
 import os
 import time
 from concurrent.futures import ThreadPoolExecutor
 from threading import Lock
 import threading
-import functools
-from inspect import signature
 import pandas as pd
 
 import requests

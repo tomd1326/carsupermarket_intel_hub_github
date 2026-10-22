@@ -2,7 +2,7 @@ from utils.singleton import Singleton
 import functools
 from inspect import signature
 from abc import abstractmethod
-from redis import Redis, ConnectionPool, RedisError
+from redis import Redis, ConnectionPool
 import os
 import json
 
