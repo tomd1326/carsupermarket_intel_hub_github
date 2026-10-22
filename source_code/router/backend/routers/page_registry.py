@@ -45,6 +45,7 @@ PAGES: tuple[Page, ...] = (
     # only checks that you are logged in. Enforcement closes that.
     Page('subsidy_rates',       '/subsidy-rates',              'Subsidy Rate Calculator',  False),
     Page('apex_reports',        '/reports/apex',               'Apex Reports',             False),
+    Page('apex_missing_finance', '/reports/apex-missing-finance', 'Apex Missing Finance',   False),
 )
 
 PAGES_BY_KEY: dict[str, Page] = {p.key: p for p in PAGES}

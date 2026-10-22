@@ -78,13 +78,18 @@ def _nexus_describe(p: dict) -> str:
             f"{p['per_page']} per page, {p['workers']} workers, to {p['folder']}")
 
 
-def _nexus_run_route(route: str, p: dict, note, stop_requested) -> None:
+def _nexus_run_route(route: str, p: dict, note, stop_requested) -> dict:
+    """Fetch and save one endpoint. Returns what was saved, kept on the job so
+    Live Update can check it: row count, S3 file, newest updated_at."""
     rows = nexus_ingest.fetch_route(p['host'], route, p['per_page'], p['workers'], p['updated_since'],
                                     note=note, stop_requested=stop_requested)
-    if rows:
-        note(f"{route}: {len(rows)} rows saved to {nexus_ingest.upload_route(route, rows, p['folder'])}")
-    else:
+    if not rows:
         note(f"{route}: no rows - nothing saved")
+        return {'rows': 0}
+    s3 = nexus_ingest.upload_route(route, rows, p['folder'])
+    note(f"{route}: {len(rows)} rows saved to {s3}")
+    updated = [str(r['updated_at']) for r in rows if isinstance(r, dict) and r.get('updated_at')]
+    return {'rows': len(rows), 's3': s3, 'max_updated_at': max(updated) if updated else None}
 
 
 SOURCES = {
@@ -111,6 +116,9 @@ SOURCES = {
         'describe': _nexus_describe,
         'run_route': _nexus_run_route,
         'stopped_error': nexus_ingest.FetchStopped,
+        # The S3 folder dbt reads for an endpoint - matched against the raw
+        # models' stage_url to find which models an endpoint feeds.
+        'stage_path': lambda route: f"nexus_point/{route}/json/v0/",
     },
 }
 
@@ -156,6 +164,8 @@ def _ensure_tables(conn) -> None:
             " heartbeat_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),"
             " finished_at TIMESTAMPTZ)"
         )
+        # Per endpoint: {route: {rows, s3, max_updated_at} or {error}}.
+        cur.execute("ALTER TABLE api_request_jobs ADD COLUMN IF NOT EXISTS results JSONB NOT NULL DEFAULT '{}'")
         for source, cfg in SOURCES.items():
             cur.execute("SELECT 1 FROM api_request_routes WHERE source = %s LIMIT 1", (source,))
             if cur.fetchone() is None:
@@ -245,6 +255,54 @@ def api_add_route(source: str, data: dict, user: str = Depends(get_current_user)
     return {"status": "ok"}
 
 
+@router.post("/api/api-requests/nexus/routes/swagger")
+def api_routes_from_swagger(user: str = Depends(get_current_user)):
+    """Add every list endpoint in the Nexus API's swagger.json that is not in
+    the list yet, and remember which take no updated_at filter (those pull
+    every row on each run - Live Update warns about them)."""
+    _admin(user)
+    import requests
+    from utils.secrets_manager_client import get_secret
+    with get_database_connection() as conn:
+        conn.rollback()
+        _ensure_tables(conn)
+        host = _load_config(conn, 'nexus')['nexus_host']
+        conn.rollback()
+    try:
+        resp = requests.get(f"{host.rstrip('/')}/swagger.json", timeout=30, headers={
+            'Authorization': f"Bearer {get_secret(nexus_ingest.NEXUS_SECRET_NAME)['access_token']}"})
+        resp.raise_for_status()
+        paths = resp.json().get('paths') or {}
+    except Exception as e:
+        return {"status": "error", "message": f"Could not read {host}/swagger.json: {str(e)[:300]}"}
+    found, no_filter = [], []
+    for path, ops in paths.items():
+        get = (ops or {}).get('get') if isinstance(ops, dict) else None
+        if not get or '{' in path:
+            continue   # only plain list endpoints, not /vehicles/adverts/{advert_id}
+        route = _clean_route(path)
+        if not route:
+            continue
+        found.append(route)
+        params = {p.get('name') for p in (get.get('parameters') or []) if isinstance(p, dict)}
+        if 'updated_at' not in params:
+            no_filter.append(route)
+    added = []
+    with get_database_connection() as conn:
+        _ensure_tables(conn)
+        with conn.cursor() as cur:
+            for route in found:
+                cur.execute("INSERT INTO api_request_routes (source, route, sort_order) "
+                            "SELECT 'nexus', %s, COALESCE(MAX(sort_order), 0) + 10 FROM api_request_routes "
+                            "WHERE source = 'nexus' ON CONFLICT DO NOTHING", (route,))
+                if cur.rowcount == 1:
+                    added.append(route)
+        conn.commit()
+        save_settings_partial(conn, {'nexus_no_updated_at': json.dumps(sorted(no_filter))})
+    logger.info("API requests [nexus]: %s endpoints added from swagger by %s", len(added), user)
+    return {"status": "ok", "found": len(found), "added": added, "no_updated_at": sorted(no_filter)}
+
+
 @router.post("/api/api-requests/{source}/routes/delete")
 def api_delete_route(source: str, data: dict, user: str = Depends(get_current_user)):
     _admin(user)
@@ -274,26 +332,57 @@ def api_start(source: str, data: dict, user: str = Depends(get_current_user)):
     except ValueError as e:
         return {"status": "error", "message": str(e)}
 
-    job_id = str(uuid.uuid4())
     with get_database_connection() as conn:
         conn.rollback()
+        from .live_update import open_live_update
+        busy = open_live_update(conn)
+        if busy:
+            return {"status": "error", "message": f"Live Update {busy} is going - wait for it or stop it first."}
         save_settings_partial(conn, cfg['remember'](params))
-        _mark_stale(conn)
-        with conn.cursor() as cur:
-            cur.execute("SELECT COUNT(*) FROM api_request_jobs WHERE source = %s "
-                        "AND status IN ('queued', 'running')", (source,))
-            if cur.fetchone()[0]:
-                conn.rollback()
-                return {"status": "error", "message": f"A {cfg['label']} run is already going - press Stop first."}
-            cur.execute(
-                "INSERT INTO api_request_jobs (job_id, source, status, routes, params, created_by) "
-                "VALUES (%s, %s, 'queued', %s, %s, %s)",
-                (job_id, source, routes, json.dumps(params), user))
-        conn.commit()
-    logger.info("API requests [%s] job %s started by %s: %s, %s",
-                source, job_id, user, ', '.join(routes), cfg['describe'](params))
+        try:
+            job_id = create_job(conn, source, routes, params, user)
+        except ValueError as e:
+            return {"status": "error", "message": str(e)}
     _dispatch(job_id, 0)
     return {"status": "started", "job_id": job_id}
+
+
+def create_job(conn, source: str, routes: list, params: dict, user: str) -> str:
+    """Add a queued job and return its id; the caller starts it with
+    _dispatch(job_id, 0) once committed. ValueError if one is already going."""
+    cfg = _source(source)
+    _ensure_tables(conn)
+    _mark_stale(conn)
+    job_id = str(uuid.uuid4())
+    with conn.cursor() as cur:
+        cur.execute("SELECT COUNT(*) FROM api_request_jobs WHERE source = %s "
+                    "AND status IN ('queued', 'running')", (source,))
+        if cur.fetchone()[0]:
+            conn.rollback()
+            raise ValueError(f"A {cfg['label']} run is already going - press Stop first.")
+        cur.execute(
+            "INSERT INTO api_request_jobs (job_id, source, status, routes, params, created_by) "
+            "VALUES (%s, %s, 'queued', %s, %s, %s)",
+            (job_id, source, routes, json.dumps(params), user))
+    conn.commit()
+    logger.info("API requests [%s] job %s started by %s: %s, %s",
+                source, job_id, user, ', '.join(routes), cfg['describe'](params))
+    return job_id
+
+
+def load_job(conn, job_id: str):
+    """The job as Live Update needs it, or None."""
+    _mark_stale(conn)
+    with conn.cursor() as cur:
+        cur.execute("SELECT status, message, log, results, routes, claimed_index FROM api_request_jobs "
+                    "WHERE job_id = %s", (job_id,))
+        row = cur.fetchone()
+    conn.rollback()
+    if not row:
+        return None
+    results = row[3] if isinstance(row[3], dict) else json.loads(row[3] or '{}')
+    return {'status': row[0], 'message': row[1] or '', 'log': list(row[2] or []), 'results': results,
+            'routes': list(row[4] or []), 'claimed_index': row[5]}
 
 
 @router.get("/api/api-requests/job/{job_id}")
@@ -377,6 +466,14 @@ def _log(job_id: str, line: str) -> None:
         conn.commit()
 
 
+def _save_result(job_id: str, route: str, result: dict) -> None:
+    with get_database_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute("UPDATE api_request_jobs SET results = results || jsonb_build_object(%s, %s::jsonb) "
+                        "WHERE job_id = %s", (route, json.dumps(result, default=str), job_id))
+        conn.commit()
+
+
 def _stop_requested(job_id: str) -> bool:
     with get_database_connection() as conn:
         with conn.cursor() as cur:
@@ -441,7 +538,8 @@ def _run_one(job_id: str, index: int) -> None:
 
     note(f"[{index + 1}/{len(routes)}] {cfg['label']} {route} - {cfg['describe'](params)}")
     try:
-        cfg['run_route'](route, params, note, lambda: _stop_requested(job_id))
+        result = cfg['run_route'](route, params, note, lambda: _stop_requested(job_id))
+        _save_result(job_id, route, result or {})
     except cfg['stopped_error']:
         note(f"{route}: stopped part way - nothing saved for it")
         _finish(job_id, "stopped", "Stopped by you")
@@ -450,6 +548,7 @@ def _run_one(job_id: str, index: int) -> None:
         # As the ingestion jobs do: a failed endpoint is skipped and the rest still run.
         logger.exception("API requests job %s: %s failed", job_id, route)
         note(f"{route}: FAILED - {e}. Nothing saved for it")
+        _save_result(job_id, route, {'error': str(e)[:500]})
         with get_database_connection() as conn:
             with conn.cursor() as cur:
                 cur.execute("UPDATE api_request_jobs SET failed_count = failed_count + 1 WHERE job_id = %s",

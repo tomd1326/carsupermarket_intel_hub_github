@@ -419,6 +419,38 @@
         }
         .series-row input[type="color"] { width: 34px; height: 30px; padding: 1px 2px; border: 1px solid #cbd5e1; border-radius: 6px; background: #fff; cursor: pointer; }
         .series-row .btn { width: 100%; padding: 3px 0; font-size: 0.76rem; }
+        /* Magnifier on each chart card and the chart popup (openChartZoom). */
+        /* Just below the title line at its right end (under Monthly / Weekly /
+           Daily), in the space above the plot, so the title line keeps its height. */
+        .chart-card-head { position: relative; }
+        .chart-zoom-btn { position: absolute; top: 100%; right: 0; z-index: 2; border: none; background: none;
+                          padding: 2px; color: #64748b; cursor: pointer; font-size: 0.85rem; }
+        .chart-zoom-btn:hover { color: #0f172a; }
+        .chart-zoom-overlay { position: fixed; inset: 0; z-index: 1900; background: rgba(15, 23, 42, 0.45);
+                              display: flex; align-items: center; justify-content: center; }
+        .chart-zoom-box { box-sizing: border-box; display: flex; flex-direction: column; background: #fff; border-radius: 10px;
+                          box-shadow: 0 12px 40px rgba(15, 23, 42, 0.3); padding: 10px 14px 14px;
+                          resize: both; overflow: hidden; min-width: 360px; min-height: 260px; max-width: 98vw; max-height: 96vh; }
+        .chart-zoom-bar { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; }
+        .chart-zoom-bar .btn-close { margin-left: 4px; }
+        .chart-zoom-gap { flex: 1; }
+        .chart-zoom-hint { flex: none; text-align: right; color: #94a3b8; font-size: 0.75rem; margin: 2px 6px -8px 0; }
+        .chart-zoom-days { display: flex; align-items: center; gap: 6px; margin: 0; font-size: 0.8rem; font-weight: 600; color: #475569; }
+        .chart-zoom-days input { width: 64px; padding: 3px 6px; border: 1px solid #cbd5e1; border-radius: 6px; }
+        /* A chart column never grows to fit its canvas, so a chart can never
+           push the row's columns out of their set widths. */
+        .charts-row > * { min-width: 0; }
+        .chart-zoom-box .chart-card { flex: 1; min-height: 0; display: flex; flex-direction: column; border: none; padding: 0; height: auto; }
+        .chart-zoom-box .chart-wrap { flex: 1; min-height: 0; height: auto; }
+        .chart-zoom-box .chart-zoom-btn { display: none; }
+        /* Data Labels popup (openLabelPopup) */
+        .label-popup { position: absolute; z-index: 2000; background: #fff; border: 1px solid #cbd5e1; border-radius: 8px;
+                       box-shadow: 0 8px 24px rgba(15, 23, 42, 0.18); padding: 10px 12px; width: 250px; font-size: 13px; }
+        .label-popup-head { display: flex; align-items: center; justify-content: space-between; font-weight: 700; margin-bottom: 8px; }
+        .label-popup-head .btn-close { font-size: 10px; }
+        .label-popup-field { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 6px 0; font-weight: 600; }
+        .label-popup-field select { width: 150px; padding: 2px 6px; border: 1px solid #cbd5e1; border-radius: 5px; }
+        .label-popup-note { color: #64748b; font-size: 12px; margin: 4px 0; }
         .series-row select.series-multiplied { border-color: #2a78d6; background: #eef5fd; }
         .series-row.series-head { margin-bottom: 2px; font-size: 0.76rem; font-weight: 600; color: #475569; }
         .series-row .series-own { outline: 2px solid #0f172a; outline-offset: 1px; }
@@ -1237,9 +1269,55 @@
                     </select>
                 </div>
             </div>
+            <div class="settings-grid">
+                <div class="modal-field">
+                    <label for="setLineLabelFont">Line Chart Label Size (px)</label>
+                    <input type="number" id="setLineLabelFont" step="1">
+                </div>
+            </div>
             <div class="modal-hint">
                 The figures on each line chart's own line. Angle: 0 is flat, -40 tilts them up to the
                 right. Each figure is moved clear of the line where the line is steep.
+            </div>
+            <div class="settings-grid mt-2">
+                <div class="modal-field">
+                    <label for="setStackLabelDir">Column Label Direction</label>
+                    <select id="setStackLabelDir">
+                        <option value="0">Auto - All Across If They All Fit, Else All On Their Side</option>
+                        <option value="1">Always Across</option>
+                        <option value="2">Always On Their Side</option>
+                    </select>
+                </div>
+                <div class="modal-field">
+                    <label for="setStackLabelOverflow">When A Label Does Not Fit</label>
+                    <select id="setStackLabelOverflow">
+                        <option value="0">Hide Just That Label</option>
+                        <option value="1">Hide Every Label On That Chart</option>
+                        <option value="2">Show It Anyway</option>
+                    </select>
+                </div>
+                <div class="modal-field">
+                    <label for="setStackSegFont">Segment Value Size (px)</label>
+                    <input type="number" id="setStackSegFont" step="1">
+                </div>
+                <div class="modal-field">
+                    <label for="setStackTotalFont">Column Total Size (px)</label>
+                    <input type="number" id="setStackTotalFont" step="1">
+                </div>
+                <div class="modal-field">
+                    <label for="setStackSegMin">Smallest Segment With A Value (px)</label>
+                    <input type="number" id="setStackSegMin" step="1">
+                </div>
+                <div class="modal-field">
+                    <label for="setStackMinCol">No Labels When Columns Are Narrower Than (px)</label>
+                    <input type="number" id="setStackMinCol" step="1">
+                </div>
+            </div>
+            <div class="modal-hint">
+                Column charts (stacked and side by side). Every label on one chart runs the same way - never a mix of
+                across and on their side. Auto picks across when every label on the chart fits across, otherwise turns
+                them all on their side. A label that still does not fit is hidden or shown as chosen above. 0 in the
+                last box turns that rule off.
             </div>
             </div>
             <div class="chart-subpane" id="chartSubLines">
@@ -1299,6 +1377,17 @@
                 Format and Decimals set how the column's figure shows in the point popup of a
                 calculated chart (a % or ratio, or columns added together). A row may have a
                 format and no name.
+            </div>
+            <h6 class="mt-3 mb-1">Derived Column Names</h6>
+            <div id="derivedList"></div>
+            <button type="button" class="btn btn-edit section-add-btn" onclick="addDerivedDraft()">
+                <i class="fas fa-plus"></i> Add Derived Name
+            </button>
+            <div class="modal-hint">
+                The name of a metric made from two columns: the first column Multiplied By the second (e.g. PPC Advert
+                Views × Cost Per View = PPC Advert View Cost). Every chart using that pair takes this name; the two
+                columns keep their own names above. A name typed for a multiplied series in Edit Chart is saved here.
+                With no name, charts show "First × Second".
             </div>
             </div>
             <!-- Snowflake tables whose figures can be charted, added on the page.
@@ -1465,6 +1554,15 @@
                     <label for="setLegendFont">Chart Legend Size (px)</label>
                     <input type="number" id="setLegendFont" step="1">
                 </div>
+                <div class="modal-field">
+                    <label for="setZoomSize">Chart Popup Opens At</label>
+                    <select id="setZoomSize">
+                        <option value="0">Small</option>
+                        <option value="1">Medium</option>
+                        <option value="2">Large</option>
+                        <option value="3">Full Screen</option>
+                    </select>
+                </div>
             </div>
             <div class="modal-hint" id="appearanceHint"></div>
             </div>
@@ -1509,6 +1607,18 @@
     // { 'source|column': { fmt, decimals } }: how each column's figure shows in
     // the point popup's breakdown (Settings > Column Names).
     let metricFormats = {};
+    // { 'source|column*source|column': name }: the name of a metric multiplied
+    // by another (Settings > Column Names > Derived Column Names). Kept apart
+    // from metricNames so naming the result never renames the column itself.
+    let derivedNames = {};
+    function derivedKey(s) {
+        const m = s.multiply_by;
+        return m && m.metric ? `${metricKey(s.source || 'snowflake', s.metric)}*${metricKey(m.source || 'snowflake', m.metric)}` : '';
+    }
+    // Shown when a derived metric has no name of its own.
+    function derivedDefaultName(s) {
+        return `${metricName(s.source, s.metric)} × ${metricName(s.multiply_by.source, s.multiply_by.metric)}`;
+    }
     function metricName(source, column) {
         return metricNames[metricKey(source || 'snowflake', column)] || column;
     }
@@ -1540,11 +1650,14 @@
 
     DayWindow.configure({
         getCount: () => kpiDates.length,
-        getSize: () => settings.days_window,
+        // The chart popup can show more days; the page goes back on close.
+        getSize: () => (chartZoom && chartZoom.days) || settings.days_window,
         onChange: () => {
-            DayWindow.applyToCharts(Object.values(rowCharts).map(charts => charts[2]));
+            DayWindow.applyToCharts(dayWindowCharts());
             updateDayTitles();
         },
+        // A daily chart in the popup scrolls on its own; the page's scrollers stay put.
+        getScrollerRoot: () => (zoomOnDaily() ? chartZoom.overlay : document),
     });
 
     function metricKey(source, column) { return source + '|' + column; }
@@ -1628,6 +1741,7 @@
             atPpcPeriods = layoutResp.at_ppc_periods || [];
             metricNames = layoutResp.metric_names || {};
             metricFormats = layoutResp.metric_formats || {};
+            derivedNames = layoutResp.derived_names || {};
             metricsCatalogue = metricsResp.metrics || [];
             metricsByKey = Object.fromEntries(metricsCatalogue.map(m => [metricKey(m.source, m.column), m]));
         } catch (err) {
@@ -1992,6 +2106,8 @@
             dayScroller,
             legend: false,
             headExtra: `<span class="chart-period" id="p-${row.id}-${suffix}">${escHtml(period)}</span>${headExtra}`,
+            headEnd: `<button type="button" class="chart-zoom-btn" title="Open this chart larger"
+                              onclick="openChartZoom('${row.id}', '${suffix}', this)"><i class="fas fa-search-plus"></i></button>`,
         });
         // Daily / 7-day average switch on the daily chart (line charts only).
         const rolling = rollingOn(row.id);
@@ -2016,12 +2132,10 @@
             </button>` : '';
         // For everyone, in both views. See setDataLabels for who it changes.
         const labelsToggle = `
-            <span class="labels-toggle" role="group" aria-label="Data labels"
-                  title="${IS_ADMIN ? 'Show or hide the figures on these charts. Sets the default for everyone' : 'Show or hide the figures on these charts'}">
-                <span class="labels-toggle-name">Data Labels</span>
-                <button type="button" class="${dataLabelsOn(row) ? 'active' : ''}" onclick="setDataLabels('${row.id}', true)">On</button>
-                <button type="button" class="${dataLabelsOn(row) ? '' : 'active'}" onclick="setDataLabels('${row.id}', false)">Off</button>
-            </span>`;
+            <button type="button" class="chart-title-btn" onclick="openLabelPopup('${row.id}', this)"
+                    title="${IS_ADMIN ? 'Data labels on or off, their scale (k / M) and decimals. Sets the default for everyone' : 'Data labels on or off, their scale (k / M) and decimals'}">
+                <i class="fas fa-tag"></i> Data Labels
+            </button>`;
         // Hide / show is for everyone; the title shows next to it so a
         // collapsed row still says what it is.
         const toggleButton = `
@@ -2077,11 +2191,204 @@
     }
 
     function dropRowElement(id) {
+        if (chartZoom && chartZoom.rowId === id) closeChartZoom(false);
         (rowCharts[id] || []).forEach(c => c && c.destroy());
         delete rowCharts[id];
         const el = customRowEls[id];
         if (el) el.remove();
         delete customRowEls[id];
+    }
+
+    // ── Chart popup (magnifier) ──
+    // The chart card itself moves into the popup, so its labels, targets,
+    // notes, hover box and day scroller keep working; a blank box the same
+    // size holds its place in the row until it is put back. The size it opens
+    // at is in Settings > Appearance. CSV export is only offered here.
+    const ZOOM_SIZES = [['s', 'Small', 50, 50], ['m', 'Medium', 70, 65], ['l', 'Large', 85, 80], ['f', 'Full Screen', 98, 94]];
+    const PERIOD_NAMES = { m: 'Monthly', w: 'Weekly', d: 'Daily' };
+    let chartZoom = null;   // { rowId, k, card, holder, overlay }
+
+    function zoomChart() {
+        return chartZoom && (rowCharts[chartZoom.rowId] || [])[{ m: 0, w: 1, d: 2 }[chartZoom.k]];
+    }
+
+    function openChartZoom(rowId, k, button) {
+        closeChartZoom();
+        const card = button.closest('.chart-card');
+        if (!card) return;
+        const holder = document.createElement('div');
+        holder.className = 'chart-zoom-holder';
+        holder.style.height = card.offsetHeight + 'px';
+        card.replaceWith(holder);
+        const overlay = document.createElement('div');
+        overlay.className = 'chart-zoom-overlay';
+        overlay.innerHTML = `
+            <div class="chart-zoom-box" role="dialog" aria-label="Chart">
+                <div class="chart-zoom-bar">
+                    <span class="labels-toggle" role="group" aria-label="Popup size">
+                        ${ZOOM_SIZES.map(([key, name]) => `<button type="button" data-zoom-size="${key}" onclick="setChartZoomSize('${key}')">${name}</button>`).join('')}
+                    </span>
+                    ${k === 'd' ? `
+                    <label class="chart-zoom-days">Days Shown
+                        <input type="number" id="zoomDays" min="7" max="${kpiDates.length}" step="1"
+                               value="${Math.min(settings.days_window, kpiDates.length)}" onchange="setZoomDays(this.value)">
+                    </label>
+                    <button type="button" class="chart-title-btn" onclick="setZoomDays(kpiDates.length)">All ${kpiDates.length} Days</button>` : ''}
+                    <span class="chart-zoom-gap"></span>
+                    <button type="button" class="chart-title-btn" onclick="downloadChartCsv()" title="Download the figures in this chart as a CSV file">
+                        <i class="fas fa-file-csv"></i> CSV
+                    </button>
+                    <button type="button" class="btn-close" title="Close" onclick="closeChartZoom()"></button>
+                </div>
+            </div>`;
+        const box = overlay.querySelector('.chart-zoom-box');
+        box.appendChild(card);
+        box.insertAdjacentHTML('beforeend', '<div class="chart-zoom-hint">Or Drag The Bottom Right Corner To Resize</div>');
+        overlay.addEventListener('mousedown', e => { if (e.target === overlay) closeChartZoom(); });
+        document.body.appendChild(overlay);
+        // offset: the page's day window position, put back on close.
+        chartZoom = { rowId, k, card, holder, overlay, days: null, offset: DayWindow.offset };
+        // Settings > Appearance: the size it opens at (Small unless changed).
+        setChartZoomSize((ZOOM_SIZES[Number(settings.zoom_size) || 0] || ZOOM_SIZES[0])[0]);
+    }
+
+    // Daily chart in the popup: how many days, up to every day loaded. Only
+    // while the popup is open; the page's own window comes back on close.
+    function setZoomDays(n) {
+        if (!chartZoom) return;
+        const days = Math.min(Math.max(Math.round(Number(n)) || settings.days_window, 7), kpiDates.length);
+        chartZoom.days = days;
+        const input = document.getElementById('zoomDays');
+        if (input) input.value = days;
+        redrawDayWindow();
+    }
+
+    function zoomOnDaily() { return !!chartZoom && chartZoom.k === 'd'; }
+
+    // The daily charts the day window moves: only the popup's while a daily
+    // chart is open in it, so the page's charts do not move with it.
+    function dayWindowCharts() {
+        return zoomOnDaily() ? [zoomChart()] : Object.values(rowCharts).map(charts => charts[2]);
+    }
+
+    function redrawDayWindow() {
+        DayWindow.applyToCharts(dayWindowCharts());
+        updateDayTitles();
+        DayWindow.updateScrollers();
+    }
+
+    function setChartZoomSize(key) {
+        const size = ZOOM_SIZES.find(s => s[0] === key);
+        if (!chartZoom || !size) return;
+        const box = chartZoom.overlay.querySelector('.chart-zoom-box');
+        box.style.width = size[2] + 'vw';
+        box.style.height = size[3] + 'vh';
+        box.querySelectorAll('[data-zoom-size]').forEach(b => b.classList.toggle('active', b.dataset.zoomSize === key));
+    }
+
+    // restore = false when the row is being removed: the card goes with the popup.
+    function closeChartZoom(restore = true) {
+        if (!chartZoom) return;
+        const chart = zoomChart();
+        const { k, card, holder, overlay, offset } = chartZoom;
+        chartZoom = null;
+        if (restore && holder.isConnected) holder.replaceWith(card);
+        else holder.remove();
+        overlay.remove();
+        // Back to the page's own day window: its position and number of days.
+        if (k === 'd') {
+            DayWindow.offset = offset;
+            redrawDayWindow();
+        }
+        if (!restore || !chart) return;
+        // The canvas is still drawn at the popup's size (its width / height
+        // and its style), which would hold the row's grid column wide. Drop
+        // both and fit the card again.
+        const fit = () => {
+            const canvas = chart.canvas;
+            canvas.style.width = '';
+            canvas.style.height = '';
+            canvas.width = 0;
+            canvas.height = 0;
+            chart.resize();
+        };
+        fit();
+        requestAnimationFrame(fit);
+    }
+
+    document.addEventListener('keydown', e => { if (e.key === 'Escape' && chartZoom) closeChartZoom(); });
+
+    function csvCell(v) {
+        const s = String(v ?? '');
+        return /[",\r\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+    }
+
+    // The figures in the popup's chart, as drawn: plain numbers (no £ % k M or
+    // commas), rounded as set out below. Daily
+    // charts give every loaded day, not just the days on screen; days with no
+    // figure yet are blank, not 0.
+    function downloadChartCsv() {
+        const chart = zoomChart();
+        const row = chartZoom && findRow(chartZoom.rowId);
+        const d = row && customRowData[row.id];
+        if (!chart || !d) return;
+        const k = chartZoom.k;
+        const stacked = isStacked(row);
+        const full = chart.$dayFull;
+        const labels = full ? full.labels : chart.data.labels;
+        const starts = k === 'm' ? (d.monthly_starts || []) : k === 'w' ? (d.weekly_starts || []) : d.dates;
+        // Rounding: a figure from one column takes that column's Decimals
+        // (Settings > Column Names), times 100 when its format is "% from a
+        // decimal"; a figure worked out from several columns (divided, added,
+        // multiplied, totals, 100% shares) takes the chart's own Decimals; a
+        // column with no format keeps up to 6 decimals.
+        const chartRule = { dec: row.decimals || 0, x100: !(stacked && row.pct) && fmtRow(row).fmt === 'pct100' };
+        const columnRule = (source, metric) => {
+            const f = metricFormats[metricKey(source || 'snowflake', metric)];
+            return f && f.fmt ? { dec: f.decimals || 0, x100: f.fmt === 'pct100' } : { dec: 6, x100: false };
+        };
+        const ownRule = stacked || rowOwnTarget(row) || row.multiply_by ? chartRule : columnRule(rowSource(row), row.metric);
+        const seriesRule = i => {
+            const s = (row.series || [])[i];
+            return !s || s.multiply_by || row.pct ? chartRule : columnRule(s.source, s.metric);
+        };
+        const sets = chart.data.datasets.map((ds, i) => ({ ds, data: full ? full.data[i] : ds.data,
+            rule: stacked && ds.label !== 'Target' ? seriesRule(i) : ownRule }));
+        const rolling = !stacked && k === 'd' && rollingOn(row.id);
+        const name = ds => ds.label === 'N-1' ? 'Last Year'
+            : rolling && ds.label !== 'Target' ? ds.label + ' (7-Day Average)' : ds.label;
+        // The chart's own figures first, then last year, then the target.
+        const rank = ds => ds.label === 'Target' ? 2 : ds.label === 'N-1' ? 1 : 0;
+        const cols = [...sets].sort((a, b) => rank(a.ds) - rank(b.ds)).map(s => ({ name: name(s.ds), data: s.data, rule: s.rule }));
+        // Column charts: the column total before the target (not on 100% charts).
+        if (stacked && !row.pct) {
+            const bars = sets.filter(s => s.ds.type === 'bar');
+            const total = labels.map((_, i) => {
+                const known = bars.map(s => s.data[i]).filter(v => v !== null && v !== undefined);
+                return known.length ? known.reduce((a, b) => a + b, 0) : null;
+            });
+            const at = cols.findIndex(c => c.name === 'Target');
+            cols.splice(at < 0 ? cols.length : at, 0, { name: 'Total', data: total, rule: chartRule });
+        }
+        const value = (v, rule) => {
+            if (v === null || v === undefined || !isFinite(v)) return '';
+            const scale = 10 ** rule.dec;
+            return String(Math.round((rule.x100 ? v * 100 : v) * scale) / scale);
+        };
+        const head = k === 'd' ? ['Date'] : [k === 'w' ? 'Week' : 'Month', (k === 'w' ? 'Week' : 'Month') + ' Start'];
+        const lines = [[...head, ...cols.map(c => c.name)]];
+        labels.forEach((label, i) => {
+            const when = k === 'd' ? [starts[i] || label] : [label, starts[i] || ''];
+            lines.push([...when, ...cols.map(c => value(c.data[i], c.rule))]);
+        });
+        const text = lines.map(r => r.map(csvCell).join(',')).join('\r\n');
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(new Blob(['﻿' + text], { type: 'text/csv;charset=utf-8' }));
+        a.download = `${rowTitle(row)} - ${PERIOD_NAMES[k]}.csv`.replace(/[\\/:*?"<>|]+/g, '-');
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        setTimeout(() => URL.revokeObjectURL(a.href), 1000);
     }
 
     // Charts not hidden in Settings > Charts. Hidden ones stay saved but are
@@ -2605,7 +2912,12 @@
         return row.divide_by && row.ratio_as !== 'dec' && row.fmt === 'pct100' ? { ...row, fmt: 'pct' } : row;
     }
 
-    function rowFormatter(row) {
+    // labels = false for the hover box, which never takes the Data Labels popup's choices.
+    function rowFormatter(row, labels = true) {
+        if (labels) {
+            const own = labelOptions(row);
+            if (own.scale || own.decimals !== null) return labelFormatter(row, own);
+        }
         row = fmtRow(row);
         const decimals = row.decimals || 0;
         if (row.fmt === 'pct') return v => withCommas(v, decimals) + '%';
@@ -2617,6 +2929,138 @@
         return v => withCommas(v, decimals);
     }
 
+    // ── Data Labels popup ──
+    // The base unit is fixed by the chart's Label Format and cannot be changed
+    // here: Number (Number, k, k/M), £ (Pounds, Pounds k/M) or % (both Percent
+    // formats). The popup sets only the scale - Auto (k or M by each figure's
+    // size), None, k or M (not on % charts) - and the decimals. Blank / null =
+    // the chart's own Label Format and Decimals. The admin's choice is saved on
+    // the chart (label_scale, label_decimals) as everyone's default; anyone
+    // else's is kept in their browser, like Data Labels On / Off.
+    const LABEL_OPTIONS_KEY = 'kpiLabelOptions';
+    const BASE_UNIT_NAMES = { num: 'Number', gbp: 'Pounds (£)', pct: 'Percent (%)' };
+    const LABEL_SCALES = [['', 'Chart Default'], ['auto', 'Auto (k / M By Size)'], ['none', 'None'], ['k', 'Thousands (k)'], ['M', 'Millions (M)']];
+
+    function baseUnit(row) {
+        const fmt = fmtRow(row).fmt;
+        if (fmt === 'pct' || fmt === 'pct100') return 'pct';
+        if (fmt === 'gbp' || fmt === 'gbpkm') return 'gbp';
+        return 'num';
+    }
+
+    function ownLabelOptions() {
+        try { return JSON.parse(localStorage.getItem(LABEL_OPTIONS_KEY) || '{}') || {}; }
+        catch (e) { return {}; }
+    }
+
+    // { scale: '' | 'auto' | 'none' | 'k' | 'M', decimals: null | 0-4 } for this user.
+    function labelOptions(row) {
+        const own = IS_ADMIN ? null : ownLabelOptions()[row.id];
+        const src = own || { scale: row.label_scale, decimals: row.label_decimals };
+        return { scale: baseUnit(row) === 'pct' ? '' : (src.scale || ''),
+                 decimals: Number.isInteger(src.decimals) ? src.decimals : null };
+    }
+
+    function labelFormatter(row, own) {
+        const r = fmtRow(row);
+        const d = own.decimals !== null ? own.decimals : (r.decimals || 0);
+        if (r.fmt === 'pct') return v => withCommas(v, d) + '%';
+        if (r.fmt === 'pct100') return v => withCommas(v * 100, d) + '%';
+        // The chart's own scale when only the decimals were changed.
+        const scale = own.scale || ({ k: 'k', km: 'auto', gbpkm: 'auto' }[r.fmt] || 'none');
+        const num = scale === 'k' ? v => withCommas(v / 1e3, d) + 'k'
+            : scale === 'M' ? v => withCommas(v / 1e6, d) + 'M'
+            : scale === 'auto' ? v => withKOrM(v, d, x => withCommas(x, d))
+            : v => withCommas(v, d);
+        return baseUnit(row) === 'gbp' ? v => withPound(num(v)) : num;
+    }
+
+    function closeLabelPopup() {
+        const pop = document.getElementById('labelPopup');
+        if (pop) pop.remove();
+    }
+
+    function openLabelPopup(rowId, button) {
+        closeLabelPopup();
+        const row = findRow(rowId);
+        if (!row) return;
+        const own = labelOptions(row);
+        const unit = baseUnit(row);
+        const pop = document.createElement('div');
+        pop.id = 'labelPopup';
+        pop.className = 'label-popup';
+        pop.innerHTML = `
+            <div class="label-popup-head">Data Labels
+                <button type="button" class="btn-close" aria-label="Close" onclick="closeLabelPopup()"></button></div>
+            <div class="labels-toggle mb-2" role="group">
+                <button type="button" class="${dataLabelsOn(row) ? 'active' : ''}" onclick="setDataLabels('${row.id}', true); closeLabelPopup()">On</button>
+                <button type="button" class="${dataLabelsOn(row) ? '' : 'active'}" onclick="setDataLabels('${row.id}', false); closeLabelPopup()">Off</button>
+            </div>
+            <div class="label-popup-note">Unit: <strong>${BASE_UNIT_NAMES[unit]}</strong> (set by the chart)</div>
+            <label class="label-popup-field">Scale
+                <select id="labelPopupScale" ${unit === 'pct' ? 'disabled title="Percent charts have no k / M"' : ''}>
+                    ${LABEL_SCALES.map(([v, l]) => `<option value="${v}"${v === own.scale ? ' selected' : ''}>${escHtml(l)}</option>`).join('')}
+                </select></label>
+            <label class="label-popup-field">Decimals
+                <select id="labelPopupDecimals">
+                    <option value=""${own.decimals === null ? ' selected' : ''}>Chart Default (${fmtRow(row).decimals || 0})</option>
+                    ${[0, 1, 2, 3, 4].map(n => `<option value="${n}"${own.decimals === n ? ' selected' : ''}>${n}</option>`).join('')}
+                </select></label>
+            <div class="label-popup-note">${IS_ADMIN ? 'Saved on the chart as everyone\'s default.' : 'Saved for you only, in this browser.'}</div>
+            <div class="d-flex gap-2 mt-2">
+                <button type="button" class="btn btn-primary btn-sm" onclick="applyLabelPopup('${row.id}')">Apply</button>
+                <button type="button" class="btn btn-outline-secondary btn-sm" onclick="applyLabelPopup('${row.id}', true)">Reset</button>
+            </div>`;
+        document.body.appendChild(pop);
+        const b = button.getBoundingClientRect();
+        pop.style.top = (window.scrollY + b.bottom + 4) + 'px';
+        pop.style.left = Math.max(8, Math.min(window.scrollX + b.left, window.scrollX + document.documentElement.clientWidth - pop.offsetWidth - 8)) + 'px';
+    }
+
+    // Close the popup on a click anywhere else or Escape.
+    document.addEventListener('mousedown', e => {
+        const pop = document.getElementById('labelPopup');
+        if (pop && !pop.contains(e.target) && !e.target.closest('[onclick^="openLabelPopup"]')) closeLabelPopup();
+    });
+    document.addEventListener('keydown', e => { if (e.key === 'Escape') closeLabelPopup(); });
+
+    async function applyLabelPopup(rowId, reset = false) {
+        const row = findRow(rowId);
+        if (!row) return;
+        const scale = reset ? '' : document.getElementById('labelPopupScale').value;
+        const decText = reset ? '' : document.getElementById('labelPopupDecimals').value;
+        const decimals = decText === '' ? null : parseInt(decText, 10);
+        closeLabelPopup();
+        if (!IS_ADMIN) {
+            const own = ownLabelOptions();
+            if (!scale && decimals === null) delete own[rowId]; else own[rowId] = { scale, decimals };
+            try { localStorage.setItem(LABEL_OPTIONS_KEY, JSON.stringify(own)); } catch (e) {}
+            rebuildCustomRow(row, false);
+            return;
+        }
+        // As Data Labels: redraw straight away, save in the background, put it back if the save fails.
+        const before = layout.rows;
+        const rows = before.map(r => {
+            if (r.id !== rowId) return r;
+            const next = { ...r };
+            delete next.label_scale; delete next.label_decimals; delete next.label_precision;
+            if (scale) next.label_scale = scale;
+            if (decimals !== null) next.label_decimals = decimals;
+            return next;
+        });
+        layout.rows = rows;
+        rebuildCustomRow(findRow(rowId), false);
+        try {
+            await saveLayout(rows);
+        } catch (err) {
+            if (layout.rows === rows) {
+                layout.rows = before;
+                rebuildCustomRow(findRow(rowId), false);
+            }
+            document.getElementById('statusText').textContent = 'Data labels change failed: ' + err.message;
+        }
+    }
+
     // Hover box: the figure in full, whatever the Label Format and Decimals
     // (no k / M, up to 4 decimals). The % or £ stays, as it says what the
     // figure is; a decimal shown as a % is still shown as a %.
@@ -2625,7 +3069,7 @@
     // decimals alone give the figure in full at exactly those decimals.
     function rowFullFormatter(row, pct = false) {
         const hd = row.hover_decimals;
-        if (row.hover_fmt && !pct) return rowFormatter({ ...row, fmt: row.hover_fmt, decimals: hd ?? 0 });
+        if (row.hover_fmt && !pct) return rowFormatter({ ...row, fmt: row.hover_fmt, decimals: hd ?? 0 }, false);
         if (hd !== null && hd !== undefined) {
             const fixed = v => v.toLocaleString('en-GB', { minimumFractionDigits: hd, maximumFractionDigits: hd });
             row = fmtRow(row);
@@ -3646,7 +4090,7 @@
                 plugins: [
                     makeBgPlugin(invert, chartTarget),
                     PLOT_FRAME_PLUGIN,
-                    ...(opts.dataLabels ? [makeDataLabelPlugin(canvasId + 'Labels', seriesLabel, 10, fmt, () => settings.label_angle,
+                    ...(opts.dataLabels ? [makeDataLabelPlugin(canvasId + 'Labels', seriesLabel, Number(settings.line_label_font_px) || 10, fmt, () => settings.label_angle,
                         () => Number(settings.label_below) === 1)] : []),
                     ...(opts.notes ? [makeNotesPlugin(opts.notes)] : [])
                 ]
@@ -3681,7 +4125,18 @@
     // The shared column name wins, so renaming it in Settings changes every
     // chart; a label saved on the series before names were shared is next.
     function seriesLabel(s) {
+        // A multiplied series is a new metric: its own name, never the column's.
+        const dk = derivedKey(s);
+        if (dk) return derivedNames[dk] || derivedDefaultName(s);
         return metricNames[metricKey(s.source || 'snowflake', s.metric)] || s.label || s.metric;
+    }
+
+    // What the Legend Name box holds for a series: its derived name when
+    // multiplied, else the shared column name ('' when there is none).
+    function seriesBoxName(s) {
+        const dk = derivedKey(s);
+        if (dk) return derivedNames[dk] || '';
+        return metricNames[metricKey(s.source || 'snowflake', s.metric)] || '';
     }
 
     function fetchStackedData(row) {
@@ -3801,34 +4256,36 @@
                     .map((ds, i) => ({ ds, meta: chart.getDatasetMeta(i), visible: chart.isDatasetVisible(i) }))
                     .filter(b => b.ds.type === 'bar' && b.visible);
                 if (!bars.length) return;
-                const SEG_FONT = '600 9px DM Sans, system-ui, sans-serif';
-                const TOTAL_FONT = 'bold 10px DM Sans, system-ui, sans-serif';
+                // Sizes and rules from KPI Settings > Labels.
+                const segPx = Number(settings.stack_seg_font_px) || 9;
+                const totalPx = Number(settings.stack_total_font_px) || 10;
+                const segMin = Number(settings.stack_seg_min_px ?? 12);
+                const dirMode = Number(settings.stack_label_dir) || 0;        // 0 auto, 1 across, 2 on their side
+                const overflow = Number(settings.stack_label_overflow) || 0;  // 0 hide that one, 1 hide all, 2 show anyway
+                const SEG_FONT = `600 ${segPx}px DM Sans, system-ui, sans-serif`;
+                const TOTAL_FONT = `bold ${totalPx}px DM Sans, system-ui, sans-serif`;
                 // A total may use the column's whole slot, gap included.
                 const slot = chart.scales.x.width / Math.max(1, chart.data.labels.length);
-                // Work out every label first: { text, x, y, font, colour, base,
-                // align, rotate, fits }. A label too wide for its column turns
-                // on its side and runs up it instead (rotate).
+                const minCol = Number(settings.stack_min_col_px) || 0;
+                if (minCol && slot < minCol) return;
+                // Work out every label first, with whether it fits across and
+                // whether it fits on its side. One direction is then chosen for
+                // the whole chart, so labels never mix across and on their side.
                 const labels = [];
                 const plotTop = chart.chartArea.top;
                 ctx.save();
-                // Inside a segment: across it if it fits, else up it.
+                // Inside a segment: centred in it either way.
                 const inside = (text, el, colour) => {
                     const w = ctx.measureText(text).width, h = Math.abs(el.base - el.y), bw = el.width || slot;
-                    const across = h >= 12 && w <= bw - 2;
-                    const up = !across && bw >= 11 && w <= h - 4;
-                    // A segment too small either way is just skipped.
-                    if (!across && !up) return;
-                    labels.push({ text, x: el.x, y: (el.y + el.base) / 2, font: ctx.font, base: 'middle', align: 'center',
-                                  rotate: up, colour, fits: across || up });
+                    if (h < segMin) return;   // too short to hold a value at all
+                    labels.push({ text, x: el.x, y: (el.y + el.base) / 2, font: ctx.font, colour, inside: true,
+                                  across: h >= segPx + 3 && w <= bw - 2, up: bw >= segPx + 2 && w <= h - 4 });
                 };
-                // Above a column (room up to the top of the plot): across if it
-                // fits the width given, else up from the column's top.
+                // Above a column (room up to the top of the plot).
                 const above = (text, x, top, width) => {
                     const w = ctx.measureText(text).width;
-                    const across = w <= width;
-                    labels.push({ text, x, y: top - 3, font: ctx.font, base: across ? 'bottom' : 'middle',
-                                  align: across ? 'center' : 'left', rotate: !across,
-                                  colour: '#0f172a', fits: across || top - 3 - w >= plotTop });
+                    labels.push({ text, x, y: top - 3, font: ctx.font, colour: '#0f172a', inside: false,
+                                  across: w <= width && top - 3 - totalPx >= plotTop - 2, up: top - 3 - w >= plotTop });
                 };
                 for (let i = 0; i < chart.data.labels.length; i++) {
                     if (opts.segLabels) {
@@ -3858,10 +4315,19 @@
                     ctx.font = TOTAL_FONT;
                     above(opts.fmt(total), known[0].meta.data[i].x, Math.min(...known.map(b => b.meta.data[i].y)), slot - 2);
                 }
-                // The daily chart shows all its labels or none: if any one does
-                // not fit even on its side, none are drawn. The month and week
-                // charts just leave out the ones that do not fit.
-                const shown = opts.day && labels.some(l => !l.fits) ? [] : labels.filter(l => l.fits);
+                // One direction for the whole chart.
+                // Auto turns them all on their side only when that helps: some
+                // label fits on its side but not across.
+                const rotate = dirMode === 2 || (dirMode === 0 && labels.some(l => !l.across && l.up));
+                labels.forEach(l => {
+                    l.rotate = rotate;
+                    l.fits = rotate ? l.up : l.across;
+                    l.base = l.inside || rotate ? 'middle' : 'bottom';
+                    l.align = l.inside || !rotate ? 'center' : 'left';
+                });
+                const shown = overflow === 2 ? labels
+                    : overflow === 1 && labels.some(l => !l.fits) ? []
+                    : labels.filter(l => l.fits);
                 shown.forEach(l => {
                     ctx.font = l.font;
                     ctx.textBaseline = l.base;
@@ -4737,7 +5203,7 @@
         document.getElementById('chartTypeSelect').value = stacked ? 'stacked' : 'line';
         seriesDraft = stacked ? JSON.parse(JSON.stringify(row.series || [])) : [];
         // The name box shows the shared column name.
-        seriesDraft.forEach(s => { s.label = seriesLabel(s) === s.metric ? '' : seriesLabel(s); });
+        seriesDraft.forEach(s => { s.label = seriesBoxName(s); });
         document.getElementById('themeSelect').innerHTML = themes.map(t =>
             `<option value="${escHtml(t.id)}">${escHtml(t.name)}</option>`).join('');
         document.getElementById('themeSelect').value = stacked && row.theme ? row.theme : (themes[0] ? themes[0].id : '');
@@ -4821,8 +5287,12 @@
                     <select title="Multiplied By: each day of the metric times the same day of this one"
                             class="${s.multiply_by && s.multiply_by.metric ? 'series-multiplied' : ''}"
                             onchange="onSeriesMultiply(${i}, this.value)">${seriesMetricOptions(s.multiply_by || {}, '(Not Multiplied)')}</select>
-                    <input type="text" maxlength="60" value="${escHtml(s.label || '')}" placeholder="${escHtml(s.metric || 'Legend name')}"
-                           title="Name in the legend. Shared: every chart using this column takes it (Settings > Column Names)"
+                    <input type="text" maxlength="60" value="${escHtml(s.label || '')}"
+                           placeholder="${escHtml(derivedKey(s) ? derivedDefaultName(s) : (s.metric || 'Legend name'))}"
+                           title="${derivedKey(s)
+                               ? 'Name of this multiplied metric. Saved under Settings > Column Names > Derived Column Names; the column itself keeps its own name'
+                               : 'Name in the legend. Shared: every chart using this column takes it (Settings > Column Names)'}"
+                           class="${derivedKey(s) ? 'series-multiplied' : ''}"
                            oninput="seriesDraft[${i}].label = this.value">
                     <input type="color" value="${escHtml(colour)}" class="${s.colour ? 'series-own' : ''}"
                            title="${s.colour ? 'Own colour - Reset goes back to the theme' : 'Theme colour - pick one to override it'}"
@@ -4851,13 +5321,15 @@
         const cut = key.indexOf('|');
         seriesDraft[i].source = cut > 0 ? key.slice(0, cut) : 'snowflake';
         seriesDraft[i].metric = cut > 0 ? key.slice(cut + 1) : '';
-        seriesDraft[i].label = metricNames[key] || '';
+        seriesDraft[i].label = seriesBoxName(seriesDraft[i]);
         renderSeriesList();
     }
 
     function onSeriesMultiply(i, key) {
         const cut = key.indexOf('|');
         seriesDraft[i].multiply_by = key ? { source: cut > 0 ? key.slice(0, cut) : 'snowflake', metric: cut > 0 ? key.slice(cut + 1) : key } : null;
+        // The box now names a different thing (the derived metric, or the column).
+        seriesDraft[i].label = seriesBoxName(seriesDraft[i]);
         renderSeriesList();
     }
 
@@ -4886,10 +5358,18 @@
         if (series.length !== seriesDraft.length) { showChartError('Choose a metric for each series, or remove it.'); return; }
         // Names typed here go to the shared column names (a cleared box
         // removes that column's name); the series keeps no name of its own.
+        // A multiplied series' name goes to the derived names instead, so the
+        // column it was made from keeps its own name.
         const names = { ...metricNames };
+        const derived = { ...derivedNames };
         series.forEach(s => {
-            const key = metricKey(s.source, s.metric);
-            if (s.label) names[key] = s.label; else delete names[key];
+            const dk = derivedKey(s);
+            if (dk) {
+                if (s.label) derived[dk] = s.label; else delete derived[dk];
+            } else {
+                const key = metricKey(s.source, s.metric);
+                if (s.label) names[key] = s.label; else delete names[key];
+            }
             s.label = '';
         });
         let yMin, yMax;
@@ -4946,7 +5426,9 @@
         const button = document.getElementById('chartSaveBtn');
         button.disabled = true;
         try {
-            const namesChanged = await saveMetricNames(names);
+            const plainChanged = await saveMetricNames(names);
+            const derivedChanged = await saveDerivedNames(derived);
+            const namesChanged = plainChanged || derivedChanged;
             await saveLayout(rows);
             layout.rows = rows;
             const row = findRow(updated.id);
@@ -5235,7 +5717,11 @@
         section_font_px: 'setSectionFont', title_font_px: 'setTitleFont',
         subtitle_font_px: 'setSubtitleFont', period_font_px: 'setPeriodFont',
         toolbar_font_px: 'setToolbarFont', at_font_px: 'setAtFont', at_table_font_px: 'setAtTableFont',
-        legend_font_px: 'setLegendFont',
+        legend_font_px: 'setLegendFont', line_label_font_px: 'setLineLabelFont',
+        zoom_size: 'setZoomSize',
+        stack_label_dir: 'setStackLabelDir', stack_label_overflow: 'setStackLabelOverflow',
+        stack_seg_font_px: 'setStackSegFont', stack_total_font_px: 'setStackTotalFont',
+        stack_seg_min_px: 'setStackSegMin', stack_min_col_px: 'setStackMinCol',
         main_line_px: 'setMainLinePx', n1_line_px: 'setN1LinePx', target_line_px: 'setTargetLinePx',
         main_line_colour: 'setMainLineColour', n1_line_colour: 'setN1LineColour',
         target_line_colour: 'setTargetLineColour',
@@ -5977,7 +6463,8 @@
             + `top bar ${lim('toolbar_font_px')} px (every button and label in the bar at the top), `
             + `Autotrader figures ${lim('at_font_px')} px (Advert Allowance, Published, Capped, Unpublished), `
             + `Autotrader rows text ${lim('at_table_font_px')} px (Settings > Autotrader Costs), `
-            + `chart legend ${lim('legend_font_px')} px (the series names above stacked charts). `
+            + `chart legend ${lim('legend_font_px')} px (the series names above stacked charts), `
+            + 'and the size the magnifier opens a chart popup at. '
             + 'Applies to the KPI page for everyone.';
         sectionDraft = SECTIONS.map(name => ({ name, from: name, hidden: hiddenSections.has(name) }));
         loadChartDraft();
@@ -5985,6 +6472,7 @@
         loadVehColumnDraft();
         loadThemeDraft();
         loadNamesDraft();
+        loadDerivedDraft();
         loadAtDraft();
         restoreSettingsGroups();
         document.getElementById('settingsError').classList.remove('show');
@@ -6152,6 +6640,75 @@
             </div>`).join('') || '<div class="point-status" style="padding:2px 0 6px;">No column names yet.</div>';
         // Each row has two selects: the column (first) and the format (second, already set above).
         list.querySelectorAll('.series-row').forEach((r, i) => { r.querySelector('select').value = namesDraft[i].key; });
+    }
+
+    // ── Derived column names (Settings > Column Names) ──
+    async function saveDerivedNames(names) {
+        if (JSON.stringify(names) === JSON.stringify(derivedNames)) return false;
+        const resp = await fetch(BASE_URL + '/kpi/derived-names', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ names }),
+        }).then(r => r.json());
+        if (resp.status !== 'ok') throw new Error(resp.message || 'Derived column names save failed');
+        derivedNames = resp.names;
+        return true;
+    }
+
+    // Edited as [{ base, mult, name }] with base / mult as 'source|column'.
+    let derivedDraft = [];
+
+    function loadDerivedDraft() {
+        derivedDraft = Object.entries(derivedNames).map(([key, name]) => {
+            const [base, mult] = key.split('*');
+            return { base, mult, name };
+        }).sort((a, b) => a.name.localeCompare(b.name));
+        renderDerivedDraft();
+    }
+
+    function renderDerivedDraft() {
+        const options = (key, blank) => {
+            const missing = key && !metricsByKey[key]
+                ? `<option value="${escHtml(key)}">${escHtml(key.slice(key.indexOf('|') + 1))}</option>` : '';
+            const group = source => {
+                const items = metricsCatalogue.filter(m => m.source === source);
+                if (!items.length) return '';
+                return `<optgroup label="${escHtml(sourceLabel(source))}">`
+                    + items.map(m => {
+                        const k = metricKey(m.source, m.column);
+                        return `<option value="${escHtml(k)}"${k === key ? ' selected' : ''}>${escHtml(metricOptionText(m.source, m.column))}</option>`;
+                    }).join('') + '</optgroup>';
+            };
+            return `<option value="">${blank}</option>` + missing + allMetricGroups(group);
+        };
+        document.getElementById('derivedList').innerHTML = derivedDraft.map((n, i) => `
+            <div class="series-row">
+                <select title="The metric" onchange="derivedDraft[${i}].base = this.value">${options(n.base, '(choose a column)')}</select>
+                <select title="Multiplied By" class="series-multiplied" onchange="derivedDraft[${i}].mult = this.value">${options(n.mult, '(multiplied by)')}</select>
+                <input type="text" maxlength="60" value="${escHtml(n.name)}" placeholder="Name of the result, e.g. PPC Advert View Cost"
+                       oninput="derivedDraft[${i}].name = this.value">
+                <button type="button" class="btn btn-remove-chart" title="Remove name" onclick="derivedDraft.splice(${i}, 1); renderDerivedDraft()">
+                    <i class="fas fa-trash"></i></button>
+            </div>`).join('') || '<div class="point-status" style="padding:2px 0 6px;">No derived names yet.</div>';
+    }
+
+    function addDerivedDraft() {
+        derivedDraft.push({ base: '', mult: '', name: '' });
+        renderDerivedDraft();
+    }
+
+    // The draft as the object to save. Throws on a half-filled or repeated row.
+    function derivedDraftPayload() {
+        const out = {};
+        derivedDraft.forEach(n => {
+            const name = String(n.name || '').trim();
+            if (!n.base && !n.mult && !name) return;
+            if (!n.base || !n.mult || !name) throw new Error('Each derived name needs a column, a Multiplied By column and a name, or remove it.');
+            const key = `${n.base}*${n.mult}`;
+            if (key in out) throw new Error(`${name}: that pair of columns is listed twice.`);
+            out[key] = name;
+        });
+        return out;
     }
 
     function addNameDraft() {
@@ -7003,8 +7560,8 @@
             errorBox.classList.add('show');
             return;
         }
-        let names, formats;
-        try { ({ names, formats } = namesDraftPayload()); } catch (err) {
+        let names, formats, derived;
+        try { ({ names, formats } = namesDraftPayload()); derived = derivedDraftPayload(); } catch (err) {
             errorBox.textContent = err.message;
             errorBox.classList.add('show');
             return;
@@ -7017,6 +7574,7 @@
             await saveVehColumnDraft();
             await saveThemeDraft();
             await saveMetricNames(names);
+            await saveDerivedNames(derived);
             await saveMetricFormats(formats);
             const atChanged = await saveAtPeriods();
             const resp = await fetch(BASE_URL + '/kpi/settings', {

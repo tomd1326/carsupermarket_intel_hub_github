@@ -4,6 +4,8 @@
     @font-face { font-family: 'DM Sans'; src: url('{{ BASE_URL }}/static/fonts/DMSans-Medium.ttf');   font-weight: 500; }
     @font-face { font-family: 'DM Sans'; src: url('{{ BASE_URL }}/static/fonts/DMSans-SemiBold.ttf'); font-weight: 600; }
     @font-face { font-family: 'DM Sans'; src: url('{{ BASE_URL }}/static/fonts/DMSans-Bold.ttf');     font-weight: 700; }
+    /* Text size for the settings area (Settings > Appearance). Bootstrap sizes in rem, so it all scales. */
+    html { font-size: {{ (settings or {}).get('settings_font_size') or 14 }}px; }
     body, button, input, select, textarea { font-family: 'DM Sans', system-ui, sans-serif; }
     .settings-card { max-width: 1180px; margin: 40px auto; padding: 0 16px; }
     /* Sections holding a wide table (e.g. SharePoint Files) get more room instead of scrolling */
