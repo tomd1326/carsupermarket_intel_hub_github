@@ -20,6 +20,7 @@ from utils.db_utils import (get_database_connection, get_prod_pricer_connection,
                             add_ga4_campaign, remove_ga4_campaign, get_settings)
 from utils.snowflake_client import SnowflakeClient
 from utils.cortex import cortex_complete
+from utils import ai_knowledge
 from utils import sharepoint_sources
 from utils import at_invoices
 from utils import kpi_data_sources as kds
@@ -3921,20 +3922,24 @@ def kpi_vehicles(request: Request, row_id: str, start: str, end: str,
 
 @router.post("/kpi/ai-summary")
 def kpi_ai_summary(request: Request, payload: dict, user: str = Depends(require_page_api('kpi'))):
-    # Admin only, and only while Settings > KPI Dashboard > Enable Ask AI is on.
+    # Admin only, and only while Settings > AI > Pages > KPI is on. The
+    # instructions, knowledge, answer length and temperature are all set in
+    # Settings > AI.
     if not is_admin(user):
         raise HTTPException(status_code=403, detail="Forbidden")
     with get_database_connection() as conn:
         if not get_settings(conn).get('kpi_ai_summary'):
-            return {"status": "error", "message": "Ask AI is turned off in Settings > KPI Dashboard"}
+            return {"status": "error", "message": "Ask AI is turned off in Settings > AI"}
 
     prompt = (payload or {}).get("prompt")
     if not isinstance(prompt, str) or not prompt.strip():
         return {"status": "error", "message": "Missing prompt"}
 
     try:
-        data = cortex_complete([{"role": "user", "content": prompt}],
-                               max_tokens=4096, temperature=0.3)
+        ai, _, system = ai_knowledge.page_prompt('kpi')
+        data = cortex_complete([{"role": "system", "content": system},
+                                {"role": "user", "content": prompt}],
+                               max_tokens=ai["max_tokens"], temperature=ai["temperature"])
         summary = data["choices"][0]["messages"].strip()
         return {"status": "ok", "summary": summary}
     except Exception as e:

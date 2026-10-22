@@ -192,13 +192,17 @@ def refresh_ai_models(request: Request, user: str = Depends(get_current_user)):
     try:
         from utils.snowflake_client import SnowflakeClient
         with SnowflakeClient() as client:
-            client.execute("CALL SNOWFLAKE.MODELS.CORTEX_BASE_MODELS_REFRESH()")
             rows, columns = client.execute("SHOW MODELS IN SNOWFLAKE.MODELS")
         names = [c.lower() for c in columns]
         name_at = names.index("name")
         type_at = names.index("model_type") if "model_type" in names else None
+        # The list also holds models that cannot chat (embeddings, safety
+        # checks, Arctic extract / parse / sentiment / translate tools).
+        not_chat = ("embed", "e5-", "voyage", "guard", "twelvelabs")
         found = sorted({str(r[name_at]).lower() for r in rows
-                        if type_at is None or str(r[type_at]).upper() == "CORTEX_BASE"})
+                        if (type_at is None or str(r[type_at]).upper() == "CORTEX_BASE")
+                        and not str(r[name_at]).lower().startswith("arctic-")
+                        and not any(word in str(r[name_at]).lower() for word in not_chat)})
     except Exception as e:
         logger.error("Settings [AI] model refresh failed: %s", e)
         return JSONResponse({"error": f"Could not read the model list from Snowflake: {e}"}, status_code=500)
@@ -535,6 +539,8 @@ PROD_TO_DEV_TABLES = [
     'subsidy_rate_benchmarks',
     'sharepoint_sources',
     'ga4_campaigns',
+    'ai_knowledge',
+    'ai_page_settings',
 ]
 
 
