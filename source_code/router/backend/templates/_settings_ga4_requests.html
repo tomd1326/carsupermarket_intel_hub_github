@@ -1,0 +1,119 @@
+{# Settings > GA4 Requests. Included by settings.html; the code is in static/js/ga4_requests.js. #}
+<style>
+    .g4-intro { font-size: 0.85rem; }
+    #g4-table { font-size: 0.82rem; }
+    #g4-table th { white-space: nowrap; font-weight: 600; }
+    #g4-table td { vertical-align: top; }
+    #g4-table .g4-fields { font-family: monospace; font-size: 0.75rem; word-break: break-word; max-width: 260px; }
+    #g4-table .g4-sub { font-size: 0.75rem; color: var(--c-text-muted); }
+    #g4-table .g4-missing { color: var(--c-text-danger); }
+    #g4-table .g4-actions { display: flex; gap: 4px; justify-content: flex-end; white-space: nowrap; }
+    #g4-table .g4-actions .btn { font-size: 0.75rem; padding: 0.15rem 0.45rem; }
+    #g4-table tr.g4-detail > td { background: var(--c-surface-alt); }
+    .g4-detail-grid { display: grid; grid-template-columns: 150px 1fr; gap: 4px 12px; font-size: 0.8rem; }
+    .g4-detail-grid .g4-k { font-weight: 600; }
+    .g4-code { font-family: monospace; font-size: 0.75rem; background: var(--c-surface); border: 1px solid var(--c-border-soft);
+               border-radius: var(--radius-sm); padding: 4px 6px; word-break: break-all; }
+    .g4-cols { font-family: monospace; font-size: 0.75rem; }
+    #g4-edit textarea, #g4-edit input[type=text] { font-family: monospace; font-size: 0.8rem; }
+</style>
+<div class="card mb-4">
+    <div class="card-header fw-semibold d-flex align-items-center gap-2">
+        <span>GA4 Requests</span>
+        <button type="button" class="btn btn-sm btn-outline-secondary ms-auto" id="g4-check-btn" onclick="g4Check()">
+            <i class="fas fa-snowflake me-1"></i>Check Snowflake
+        </button>
+        <button type="button" class="btn btn-sm btn-primary" onclick="g4Edit(null)">
+            <i class="fas fa-plus me-1"></i>Add Request
+        </button>
+    </div>
+    <div class="card-body">
+        <p class="form-text g4-intro mt-0">
+            The GA4 Data API requests run by <code>common_google_analytics_ingestion</code>, one Rundeck step each,
+            and the Snowflake table each one ends up in. This list is kept by hand: changing it here does not change
+            Rundeck, so copy the command into the Rundeck step after editing. The S3 folder, dbt models, table and
+            column names are worked out from the query name and fields, the same way the ingestion job and the
+            <code>uk_dbt_raw_data</code> ux_tracking models name them. Check Snowflake reads each table in PROD.
+        </p>
+        <div id="g4-error" class="alert alert-danger d-none py-1 small"></div>
+        <div class="table-responsive">
+            <table class="table table-sm align-middle" id="g4-table">
+                <thead>
+                    <tr>
+                        <th>Query Name</th>
+                        <th>Dimensions</th>
+                        <th>Metrics</th>
+                        <th>Start Date</th>
+                        <th>Snowflake Table</th>
+                        <th>Latest Date</th>
+                        <th>Last Changed</th>
+                        <th>Used By</th>
+                        <th></th>
+                    </tr>
+                </thead>
+                <tbody id="g4-body"><tr><td colspan="9" class="text-muted">Loading...</td></tr></tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<div class="card mb-4 d-none" id="g4-edit">
+    <div class="card-header fw-semibold" id="g4-edit-title">Add Request</div>
+    <div class="card-body">
+        <div id="g4-edit-error" class="alert alert-danger d-none py-1 small"></div>
+        <div class="d-flex gap-3 flex-wrap mb-3">
+            <div>
+                <label for="g4-query_name" class="form-label mb-1">Query Name</label>
+                <input class="form-control" type="text" id="g4-query_name" style="width: 260px;" placeholder="total_sessions">
+                <div class="form-text">Names the S3 folder and the tables.</div>
+            </div>
+            <div class="flex-grow-1">
+                <label for="g4-description" class="form-label mb-1">Description</label>
+                <input class="form-control" type="text" id="g4-description" placeholder="What it is for">
+            </div>
+        </div>
+        <div class="mb-3">
+            <label for="g4-dimensions" class="form-label mb-1">Dimensions</label>
+            <input class="form-control" type="text" id="g4-dimensions" placeholder="date,sessionSourceMedium">
+            <div class="form-text">GA4 API names, comma separated. Custom ones as <code>customEvent:page_type</code>.</div>
+        </div>
+        <div class="mb-3">
+            <label for="g4-metrics" class="form-label mb-1">Metrics</label>
+            <input class="form-control" type="text" id="g4-metrics" placeholder="sessions">
+        </div>
+        <div class="mb-3">
+            <label for="g4-filter" class="form-label mb-1">Filter (Optional)</label>
+            <textarea class="form-control" id="g4-filter" rows="2"
+                      placeholder='{"field":"eventName","op":"EXACT","value":"page_view"}'></textarea>
+            <div class="form-text">JSON, as the ingestion job's <code>--filter</code> takes it.</div>
+        </div>
+        <div class="form-check mb-3">
+            <input class="form-check-input" type="checkbox" id="g4-start_date">
+            <label class="form-check-label" for="g4-start_date">
+                Pass <code>--start-date</code> from the Rundeck START_DATE option (days ago)
+            </label>
+        </div>
+        <div class="d-flex gap-3 flex-wrap mb-3">
+            <div class="flex-grow-1">
+                <label for="g4-unique_key" class="form-label mb-1">Unique Key</label>
+                <input class="form-control" type="text" id="g4-unique_key" placeholder="date, page_path">
+                <div class="form-text">The <code>unique_key</code> of the incremental <code>ga4_&lt;query&gt;__s</code> model.</div>
+            </div>
+            <div class="flex-grow-1">
+                <label for="g4-used_by" class="form-label mb-1">Used By</label>
+                <input class="form-control" type="text" id="g4-used_by" placeholder="ga4_daily_metrics__c">
+                <div class="form-text">dbt models that read the table.</div>
+            </div>
+        </div>
+        <div class="mb-3">
+            <label for="g4-notes" class="form-label mb-1">Notes</label>
+            <textarea class="form-control" id="g4-notes" rows="2"></textarea>
+        </div>
+        <div class="d-flex gap-2">
+            <button type="button" class="btn btn-primary" id="g4-save-btn" onclick="g4Save()">Save</button>
+            <button type="button" class="btn btn-outline-secondary" onclick="g4CloseEdit()">Cancel</button>
+        </div>
+    </div>
+</div>
+<script>const BASE_URL = "{{ BASE_URL }}";</script>
+<script src="{{ static_url('js/ga4_requests.js') }}"></script>
