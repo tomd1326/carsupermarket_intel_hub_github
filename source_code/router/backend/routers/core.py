@@ -98,9 +98,12 @@ def static_url(path: str) -> str:
             version = str(int(os.path.getmtime(os.path.join(_static_dir, *rel.split('/')))))
         except OSError:
             version = '0'
-        # In Lambda the bundle is immutable, so caching the lookup is safe. Locally
-        # the reloader restarts the process on each edit, which clears this.
-        _static_version_cache[rel] = version
+        # In Lambda the bundle is immutable, so caching the lookup is safe.
+        # Locally it is not cached: the reloader only restarts the server for
+        # Python changes, so an edited .js or .css would keep its old stamp
+        # and the browser would keep using its old copy.
+        if os.getenv("AWS_LAMBDA_FUNCTION_NAME"):
+            _static_version_cache[rel] = version
     return f"{BASE_URL}/static/{rel}?v={version}"
 
 

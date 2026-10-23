@@ -36,8 +36,9 @@
         return 'hsl(' + (h % 360) + ', 55%, 42%)';
     }
 
-    function circle(text, title, colour, extraClass) {
-        const el = document.createElement('span');
+    function circle(text, title, colour, extraClass, tag) {
+        const el = document.createElement(tag || 'span');
+        if (tag === 'button') el.type = 'button';
         el.className = 'live-user' + (extraClass ? ' ' + extraClass : '');
         el.textContent = text;
         el.title = title;
@@ -64,6 +65,47 @@
         s.setProperty('--live-user-ring-gap', c.presence_ring_gap + 'px');
     }
 
+    // Clicking "+N" opens a list of everyone, the way Microsoft 365 does. It
+    // stays open while the circles refresh, and closes on a click elsewhere
+    // or Escape.
+    const list = document.createElement('div');
+    list.className = 'live-users-list';
+    list.hidden = true;
+    let listOpen = false;
+
+    function setListOpen(open) {
+        listOpen = open;
+        list.hidden = !open;
+        const more = box.querySelector('.live-user-more');
+        if (more) more.setAttribute('aria-expanded', String(open));
+    }
+
+    function fillList(users, me) {
+        list.replaceChildren();
+        users.forEach(u => {
+            const row = document.createElement('div');
+            row.className = 'live-users-list-row';
+            row.appendChild(circle(u.initials, u.name, colourFor(u.username)));
+            const text = document.createElement('div');
+            const name = document.createElement('div');
+            name.className = 'live-users-list-name';
+            name.textContent = u.username === me ? u.name + ' (You)' : u.name;
+            const where = document.createElement('div');
+            where.className = 'live-users-list-pages';
+            where.textContent = u.pages ? u.pages.join(', ') : 'On This Page';
+            text.append(name, where);
+            row.appendChild(text);
+            list.appendChild(row);
+        });
+    }
+
+    document.addEventListener('click', e => {
+        if (listOpen && !list.contains(e.target)) setListOpen(false);
+    });
+    document.addEventListener('keydown', e => {
+        if (e.key === 'Escape' && listOpen) setListOpen(false);
+    });
+
     // The viewer's own circle is always shown and not counted: Max Circles
     // limits other people only, so it can never hide you inside "+N".
     function render(users, me) {
@@ -76,7 +118,17 @@
         own.concat(shown).forEach(u => box.appendChild(circle(u.initials, here(u), colourFor(u.username))));
         const rest = others.slice(shown.length);
         if (rest.length) {
-            box.appendChild(circle('+' + rest.length, rest.map(here).join('\n'), null, 'live-user-more'));
+            const more = circle('+' + rest.length, 'Show Everyone', null, 'live-user-more', 'button');
+            more.addEventListener('click', e => {
+                e.stopPropagation();
+                setListOpen(!listOpen);
+            });
+            box.appendChild(more);
+            fillList(own.concat(others), me);
+            box.appendChild(list);
+            setListOpen(listOpen);
+        } else {
+            setListOpen(false);
         }
     }
 
