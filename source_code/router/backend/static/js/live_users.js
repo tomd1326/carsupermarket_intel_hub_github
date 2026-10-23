@@ -1,8 +1,8 @@
 /* Live users circles beside the Home button.
  *
  * Each page load gets its own tab id, so two windows on one login are tracked
- * separately. The tab sends a heartbeat every interval while it is visible,
- * and tells the server straight away when it is hidden or closed. The server
+ * separately. The tab sends a heartbeat every interval, visible or hidden,
+ * and tells the server straight away when it is closed. The server
  * (routers/presence.py) decides who is listed; this only draws what it sends.
  *
  * Every message carries seq, one higher than the last. The server ignores a
@@ -82,7 +82,7 @@
 
     function schedule() {
         clearTimeout(timer);
-        if (!stopped && document.visibilityState === 'visible') timer = setTimeout(beat, intervalMs);
+        if (!stopped) timer = setTimeout(beat, intervalMs);
     }
 
     async function beat() {
@@ -129,19 +129,18 @@
         }
     }
 
+    // A hidden tab (another tab or window in front) keeps checking in, so the
+    // person stays listed while the app is open in the background. Browsers
+    // slow timers in hidden tabs, which is why the drop-off time is set
+    // longer than the interval. Coming back to the tab refreshes at once.
     document.addEventListener('visibilitychange', () => {
         if (stopped) return;
-        if (document.visibilityState === 'hidden') {
-            leave();
-            render([]);
-        } else {
-            beat();
-        }
+        if (document.visibilityState === 'visible') beat();
     });
     window.addEventListener('pagehide', leave);
     // Back/Forward can restore this page from the browser's memory after the
     // leave above; check in again so the circle comes back.
     window.addEventListener('pageshow', e => { if (e.persisted && !stopped) beat(); });
 
-    if (document.visibilityState === 'visible') beat();
+    beat();
 })();

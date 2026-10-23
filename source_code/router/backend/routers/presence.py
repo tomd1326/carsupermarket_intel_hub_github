@@ -91,6 +91,22 @@ _DISPLAY_KEYS = ('presence_interval_seconds', 'presence_max_circles', 'presence_
                  'presence_text_colour', 'presence_more_colour', 'presence_ring_width', 'presence_ring_gap')
 
 
+@router.post("/api/client-error")
+async def client_error(request: Request):
+    """Logs an error a page hit in the browser (sent by static/js/client_errors.js),
+    which would otherwise only show in that user's browser console. Signed-in
+    users only, so the endpoint cannot be used to fill the log."""
+    user = get_current_user(request)
+    if not user:
+        return {"status": "ignored"}
+    body = await _read_body(request)
+    page = str(body.get("page", ""))[:200]
+    message = str(body.get("message", ""))[:1000]
+    stack = str(body.get("stack", ""))[:4000]
+    logger.error(f"Browser error on {page} for {user}: {message}\n{stack}")
+    return {"status": "ok"}
+
+
 @router.post("/api/presence")
 async def presence_heartbeat(request: Request):
     user = get_current_user(request)
