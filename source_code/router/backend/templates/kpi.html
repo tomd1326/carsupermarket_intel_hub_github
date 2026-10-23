@@ -182,7 +182,8 @@
             <nav class="chart-tabs">
                 <button type="button" data-tab="data" onclick="showChartTab('data')">Data</button>
                 <button type="button" data-tab="columns" class="stacked-only" onclick="showChartTab('columns')">Columns</button>
-                <button type="button" data-tab="labels" onclick="showChartTab('labels')">Labels &amp; Axis</button>
+                <button type="button" data-tab="labels" onclick="showChartTab('labels')">Number Format</button>
+                <button type="button" data-tab="axis" onclick="showChartTab('axis')">Axis &amp; Target</button>
                 <button type="button" data-tab="title" onclick="showChartTab('title')">Title &amp; Placement</button>
                 <button type="button" data-tab="vehicles" onclick="showChartTab('vehicles')">View Vehicles</button>
             </nav>
@@ -288,15 +289,8 @@
             </div>
 
             <div class="chart-pane" data-pane="labels">
-            <div class="modal-section-title">Labels</div>
+            <div class="modal-section-title">Chart Labels</div>
             <div class="modal-grid three">
-                <div class="modal-field">
-                    <label for="invertSelect">Green When</label>
-                    <select id="invertSelect">
-                        <option value="0">Above Target</option>
-                        <option value="1">Below Target</option>
-                    </select>
-                </div>
                 <div class="modal-field">
                     <label for="fmtSelect">Label Format</label>
                     <select id="fmtSelect">
@@ -319,6 +313,7 @@
                     </select>
                 </div>
             </div>
+            <div class="modal-section-title">Hover Box</div>
             <div class="modal-grid">
                 <div class="modal-field">
                     <label for="hoverFmtSelect">Hover Format</label>
@@ -342,6 +337,19 @@
                         <option value="2">2</option>
                         <option value="3">3</option>
                         <option value="4">4</option>
+                    </select>
+                </div>
+            </div>
+            </div>
+
+            <div class="chart-pane" data-pane="axis">
+            <div class="modal-section-title">Target Colour</div>
+            <div class="modal-grid">
+                <div class="modal-field">
+                    <label for="invertSelect">Green When</label>
+                    <select id="invertSelect">
+                        <option value="0">Above Target</option>
+                        <option value="1">Below Target</option>
                     </select>
                 </div>
             </div>
@@ -417,6 +425,15 @@
                         <label><input type="checkbox" id="segLabelsInput"> Values In Segments</label>
                     </div>
                     <div class="modal-hint">Each series' own colour is set in its row on the Data tab.</div>
+                </div>
+                <div class="modal-field">
+                    <label for="segLabelPosSelect">Value Position In Segments</label>
+                    <select id="segLabelPosSelect">
+                        <option value="center">Centre</option>
+                        <option value="end">Inside Top</option>
+                        <option value="start">Inside Bottom</option>
+                    </select>
+                    <div class="modal-hint">Applies to the whole chart when Values In Segments is on.</div>
                 </div>
             </div>
             </div>
@@ -575,8 +592,19 @@
             <!-- Autotrader: imported invoices, adjustment email rows and PPC
                  cost rows, used by the Autotrader Costs metrics in Edit Chart. -->
             <div class="settings-pane" id="setGroupAutotrader">
+            <button type="button" class="btn btn-edit section-add-btn" onclick="openAtRowsModal()">
+                <i class="fas fa-table"></i> View Cost Breakdown
+            </button>
+            <button type="button" class="btn btn-edit section-add-btn" onclick="downloadAtBreakdownCsv()">
+                <i class="fas fa-file-csv"></i> Download Full CSV
+            </button>
+            <div class="modal-hint">
+                Autotrader costs are kept as rows, one for each change. View Cost Breakdown shows and edits them
+                (press Save here afterwards). Add to the rows in any of the ways below. The charts read the rows.
+            </div>
+            <div class="modal-section-title" style="margin-top:16px;">Add Or Change Rows</div>
             <div class="modal-section-title at-month-toggle" data-at-box="atInvoiceListBox" onclick="toggleAtBox(this)" title="Collapse or expand">
-                <i class="fas fa-chevron-right"></i> Invoices</div>
+                <i class="fas fa-chevron-right"></i> 1. Invoices (Import PDFs)</div>
             <label class="btn btn-edit section-add-btn">
                 <i class="fas fa-file-upload"></i> Import Invoice PDFs
                 <input type="file" id="atInvoiceFile" accept="application/pdf,.pdf" multiple hidden onchange="importAtInvoices(this)">
@@ -600,18 +628,26 @@
             <button type="button" class="btn btn-edit section-add-btn" onclick="applyAtInvoiceRows()">
                 <i class="fas fa-file-import"></i> Apply Invoices To Rows
             </button>
-            <div class="modal-section-title" style="margin-top:16px;">Rows (Invoices And Adjustment Emails)</div>
+            <div class="modal-section-title" style="margin-top:16px;">2. Adjustment Emails (Paste)</div>
             <textarea id="atEmailPaste" class="target-paste" rows="5"
                       placeholder="Paste an Autotrader adjustment email here, then press Read Email"></textarea>
             <button type="button" class="btn btn-edit section-add-btn" onclick="readAtEmail()">
                 <i class="fas fa-envelope-open-text"></i> Read Email
             </button>
             <div id="atEmailMessages" class="at-messages"></div>
-            <button type="button" class="btn btn-edit section-add-btn" onclick="openAtRowsModal()">
-                <i class="fas fa-table"></i> View And Edit Rows
+            <div class="modal-section-title" style="margin-top:16px;">3. Tactical Numbers (Paste A Table)</div>
+            <textarea id="atTacticalPaste" class="target-paste" rows="5"
+                      placeholder="Paste two columns copied from a spreadsheet: Dynamic Date (dd/mm/yyyy) and Tactical Stock Average, then press Read Tactical Numbers"></textarea>
+            <button type="button" class="btn btn-edit section-add-btn" onclick="readAtTacticalTable()">
+                <i class="fas fa-paste"></i> Read Tactical Numbers
             </button>
+            <div id="atTacticalMessages" class="at-messages"></div>
+            <div class="modal-hint">
+                Each number carries on until the next date that changes it. A row is added only where the number
+                changes; a row you already have for that date is updated. Invoice rows are left alone.
+            </div>
             <div class="modal-section-title at-month-toggle" style="margin-top:16px;" data-at-box="atPpcListBox" onclick="toggleAtBox(this)" title="Collapse or expand">
-                <i class="fas fa-chevron-right"></i> PPC Cost</div>
+                <i class="fas fa-chevron-right"></i> 4. PPC Cost</div>
             <div id="atPpcListBox">
             <div class="at-period-scroll">
             <table class="at-period-table">
@@ -623,7 +659,9 @@
                 <i class="fas fa-plus"></i> Add PPC Cost Row
             </button>
             </div>
-            <div class="modal-hint">
+            <div class="modal-section-title at-month-toggle" style="margin-top:16px;" data-at-box="atHelpBox" onclick="toggleAtBox(this)" title="Collapse or expand">
+                <i class="fas fa-chevron-right"></i> How It Works</div>
+            <div id="atHelpBox" class="modal-hint">
                 The charts read the rows. Each row applies from its From date to its To date, or with no To,
                 until the next row. A day no row covers is left blank. Apply Invoices To Rows adds a row for every
                 change in the imported invoices (each line's charge spread evenly over its own days, PPC left out)
@@ -1027,22 +1065,26 @@
             <div style="margin-bottom:4px;">
                 <button type="button" class="btn btn-edit" onclick="setAtMonthsCollapsed(true)"><i class="fas fa-compress-alt"></i> Collapse All</button>
                 <button type="button" class="btn btn-edit" onclick="setAtMonthsCollapsed(false)"><i class="fas fa-expand-alt"></i> Expand All</button>
+                <button type="button" class="btn btn-edit" id="atSourceBtn" onclick="toggleAtSource()" title="Estimate rows store a monthly cost. Show and edit those monthly figures"><i class="fas fa-database"></i> View Source Data</button>
             </div>
             <table class="at-period-table at-rows-table">
                 <colgroup>
-                    <col style="width:9%"><col style="width:9%"><col style="width:5.5%"><col style="width:5%">
-                    <col style="width:4%"><col style="width:5%"><col style="width:7.5%"><col style="width:6%">
-                    <col style="width:5%"><col style="width:6.5%"><col style="width:6%"><col style="width:6.5%">
-                    <col style="width:4.5%"><col style="width:7.5%"><col style="width:8.5%"><col style="width:4%">
+                    <col style="width:8%"><col style="width:8%"><col style="width:5%"><col style="width:4.5%">
+                    <col style="width:3.5%"><col style="width:4.5%"><col style="width:4.5%"><col style="width:7%">
+                    <col style="width:5.5%"><col style="width:6%"><col style="width:5%"><col style="width:5.5%">
+                    <col style="width:5.5%"><col style="width:5.5%"><col style="width:3.5%"><col style="width:6.5%">
+                    <col style="width:8.5%"><col style="width:3.5%">
                 </colgroup>
                 <thead><tr>
                     <th>From</th><th>To</th><th>Source</th><th class="num">Base Slots</th><th class="num">Flex %</th>
-                    <th class="num" title="Base + flex + tactical">Total Slots</th>
-                    <th class="num" title="Invoice rows: cost for the row's From to To days. Estimate rows: cost per month">Market Extension (£)</th>
-                    <th class="num" title="Invoice rows: cost for the row's From to To days. Estimate rows: cost per month">Finance Calculator (£)</th>
                     <th class="num">Tactical Slots</th>
-                    <th class="num" title="Invoice rows: cost for the row's From to To days. Estimate rows: cost per month, worked out as Tactical Slots x Market Extension / Base Slots (type over it to change)">Tactical (£)</th>
-                    <th class="num" title="Invoice rows: cost for the row's From to To days. Estimate rows: cost per month">Connect (£)</th>
+                    <th class="num" title="Base + flex + tactical">Total Slots</th>
+                    <th class="num" data-at-money="Market Extension" title="Cost for the row's dates. View Source Data shows an estimate row's monthly figure, which is what is stored and edited">Market Extension (£)</th>
+                    <th class="num" data-at-money="Finance Calculator" title="Cost for the row's dates. View Source Data shows an estimate row's monthly figure">Finance Calculator (£)</th>
+                    <th class="num" data-at-money="Connect" title="Cost for the row's dates. View Source Data shows an estimate row's monthly figure">Connect (£)</th>
+                    <th class="num" title="(Market Extension + Finance Calculator + Connect) per day / (Base Slots + Flex Slots). Tactical is left out">Base + Flex £ Per Slot Per Day</th>
+                    <th class="num" data-at-money="Tactical" title="Cost for the row's dates. View Source Data shows an estimate row's monthly figure: Tactical Slots x Market Extension / Base Slots (type over it to change)">Tactical (£)</th>
+                    <th class="num" title="Tactical (£) per day / Tactical Slots">Tactical £ Per Slot Per Day</th>
                     <th class="at-cpspd" title="(Market Extension + Finance Calculator + Tactical + Connect) per day / Total Slots. The same figure as the at_cost_per_slot_day chart metric">Cost Per Slot Per Day (£)</th>
                     <th class="num">Days</th><th class="num" title="Every product including Connect, for these days. PPC not included">Cost (£)</th>
                     <th class="num">Month Running Total (£)</th><th></th>

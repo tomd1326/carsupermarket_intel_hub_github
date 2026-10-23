@@ -194,7 +194,7 @@ body { background: var(--c-page-bg); }
 /* Sits on the legend line of each day chart. Every copy drives the one shared
    window (DayWindow in charts.js), so they all move together. */
 .chart-day-scroller {
-    flex: 0 1 300px; min-width: 180px;
+    flex: 0 1 240px; min-width: 144px;
     display: flex; align-items: center; gap: 4px;
 }
 /* The track is the whole history; the thumb's WIDTH is the visible window's

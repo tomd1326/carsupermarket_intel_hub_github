@@ -107,6 +107,26 @@ def static_url(path: str) -> str:
 templates.env.globals['static_url'] = static_url
 
 
+# Every page gets static/js/client_errors.js at the top of <head>, so a browser
+# error (even one that stops the page's own script loading) is written to the
+# server log. Added here rather than in each template so new pages get it too.
+_render_template = templates.TemplateResponse
+
+
+def _template_response_with_error_log(*args, **kwargs):
+    response = _render_template(*args, **kwargs)
+    body = getattr(response, "body", b"")
+    if b"<head>" in body:
+        tag = (f'<head>\n    <script src="{static_url("js/client_errors.js")}" '
+               f'data-base="{BASE_URL}"></script>').encode()
+        response.body = body.replace(b"<head>", tag, 1)
+        response.headers["content-length"] = str(len(response.body))
+    return response
+
+
+templates.TemplateResponse = _template_response_with_error_log
+
+
 # Page names set on Settings > Page Names, cached per process. Like page
 # access, each Lambda container keeps its own copy, so a rename shows
 # everywhere within PAGE_NAMES_TTL_SECONDS. A failed read keeps the last copy

@@ -171,6 +171,10 @@ SETTINGS_DEFAULTS = {
     # the Update Available Models button, which asks Snowflake what it serves.
     'cortex_models':                    'claude-sonnet-5',
     'mot_workers':                      10,
+    # Settings > Email Attachments: skip inline / signature images (1 = yes),
+    # but keep any inline image bigger than this many KB.
+    'email_attach_skip_inline':         1,
+    'email_attach_inline_keep_kb':      100,
     'valuation_cache_hours':            36,
     # How long Buying Requirements reuses data before refetching. Minutes.
     # 0 on the Snowflake setting means "follow the dbt schedule only".
@@ -182,7 +186,7 @@ SETTINGS_DEFAULTS = {
     # Live users circles beside the Home button (Settings > Live Users).
     'presence_enabled':                 1,
     'presence_interval_seconds':        20,
-    'presence_drop_off_seconds':        60,
+    'presence_drop_off_seconds':        150,
     'presence_circle_size':             26,
     # Set-password links (Settings > User Accounts > Password Links): hours a
     # link works for, and the address each environment's links start with.

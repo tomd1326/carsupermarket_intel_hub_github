@@ -1,0 +1,380 @@
+{% from '_navigation.html' import page_header with context %}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ page_name('email_attachments') }}</title>
+    <link rel="icon" type="image/png" href="{{ BASE_URL }}/static/icon.png">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css" rel="stylesheet">
+    <link href="{{ static_url('css/theme.css') }}" rel="stylesheet">
+    <!-- Reads the .msg file (an OLE compound file) in the browser -->
+    <script src="https://cdn.jsdelivr.net/npm/cfb@1.2.2/dist/cfb.min.js"></script>
+    <style>
+        @font-face { font-family: 'DM Sans'; src: url('{{ BASE_URL }}/static/fonts/DMSans-Regular.ttf');  font-weight: 400; }
+        @font-face { font-family: 'DM Sans'; src: url('{{ BASE_URL }}/static/fonts/DMSans-Medium.ttf');   font-weight: 500; }
+        @font-face { font-family: 'DM Sans'; src: url('{{ BASE_URL }}/static/fonts/DMSans-SemiBold.ttf'); font-weight: 600; }
+        @font-face { font-family: 'DM Sans'; src: url('{{ BASE_URL }}/static/fonts/DMSans-Bold.ttf');     font-weight: 700; }
+        body, button, input, select, textarea { font-family: 'DM Sans', system-ui, sans-serif; }
+        body { background-color: var(--c-page-bg); color: var(--c-text); min-height: 100vh; }
+
+        .page-wrap { padding: 24px 32px 64px; }
+        .card {
+            border: 1px solid var(--c-border);
+            border-radius: var(--radius-lg);
+            box-shadow: none;
+        }
+        .card-body { padding: 24px 28px; }
+
+        .drop-zone {
+            border: 2px dashed var(--c-border);
+            border-radius: var(--radius-md);
+            padding: 28px 16px;
+            text-align: center;
+            color: var(--c-text-muted, #6c757d);
+            cursor: pointer;
+            transition: background 0.15s, border-color 0.15s;
+        }
+        .drop-zone.drag-over { background-color: #f0f7ff; border-color: var(--c-primary); }
+        .drop-zone i { font-size: 1.8rem; display: block; margin-bottom: 8px; }
+
+        .btn-process {
+            background-color: var(--c-primary);
+            border: none;
+            color: var(--c-surface);
+            font-weight: 700;
+            font-size: 1rem;
+            padding: 11px 0;
+            border-radius: var(--radius-md);
+            width: 100%;
+            transition: background 0.15s;
+        }
+        .btn-process:hover { background-color: var(--c-primary-hover); color: var(--c-surface); }
+        .btn-process:disabled { opacity: 0.6; cursor: not-allowed; }
+
+        .result-scroll { max-height: 70vh; overflow-y: auto; overflow-x: auto; }
+        .result-table { font-size: 0.82rem; width: 100%; }
+        .result-table th { white-space: nowrap; background-color: #f0f4f8; font-weight: 600; padding: 7px 10px; position: sticky; top: 0; z-index: 1; border-bottom: 1px solid #dee2e6; }
+        .result-table td { padding: 7px 10px; border-top: 1px solid #dee2e6; vertical-align: middle; }
+        .result-table td.num { text-align: right; white-space: nowrap; }
+        .result-table td.renamed { color: #8a5a00; font-weight: 600; }
+        .result-empty { color: #adb5bd; font-size: 0.88rem; }
+        .file-list { font-size: 0.82rem; }
+        #statusMsg { white-space: pre-line; }
+    </style>
+</head>
+<body>
+    {{ page_header(page_name('email_attachments'), user) }}
+
+    <div class="page-wrap">
+        <div class="row g-4 align-items-start">
+
+            <!-- Left: pick the email and the folder -->
+            <div class="col-12 col-lg-4 col-xl-3">
+                <div class="card">
+                    <div class="card-body">
+                        <div class="drop-zone mb-3" id="dropZone" onclick="document.getElementById('fileInput').click()">
+                            <i class="fas fa-envelope-open-text"></i>
+                            Drop .msg Files Here Or Click To Choose
+                        </div>
+                        <input type="file" id="fileInput" accept=".msg" multiple style="display:none">
+                        <div class="form-text mb-3">
+                            In Outlook, drag the email onto your desktop (or File &gt; Save As) to get a .msg file.
+                            The file is read in this browser and is not uploaded anywhere.
+                        </div>
+                        <div class="file-list mb-3" id="fileList"></div>
+                        <button class="btn btn-process mb-2" id="saveBtn" onclick="saveToFolder()" disabled>
+                            <i class="fas fa-folder-open me-1"></i>Save To Folder
+                        </button>
+                        <button class="btn btn-outline-secondary w-100 mb-2" id="downloadBtn" onclick="downloadAll()" disabled>
+                            <i class="fas fa-download me-1"></i>Download All
+                        </button>
+                        <button class="btn btn-link btn-sm w-100" id="clearBtn" onclick="clearAll()" disabled>Clear</button>
+                        <div class="alert mt-3 mb-0 small" id="statusMsg" style="display:none;"></div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Right: what was found -->
+            <div class="col-12 col-lg-8 col-xl-9">
+                <div class="card">
+                    <div class="card-body">
+                        <div class="d-flex align-items-baseline justify-content-between mb-2">
+                            <h5 class="fw-bold mb-0">Attachments Found <span class="text-muted fw-normal" id="foundCount"></span></h5>
+                            <span class="small text-muted" id="skippedNote"></span>
+                        </div>
+                        <div class="result-empty" id="resultEmpty">Choose an email to see its attachments.</div>
+                        <div class="result-scroll" id="resultWrap" style="display:none;">
+                            <table class="result-table">
+                                <thead>
+                                    <tr><th>#</th><th>File Name</th><th>Saved As</th><th>Size</th><th>From Email</th></tr>
+                                </thead>
+                                <tbody id="resultBody"></tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+        </div>
+    </div>
+
+    <script>
+        // Settings > Email Attachments
+        const SKIP_INLINE = {{ 'true' if skip_inline else 'false' }};
+        const INLINE_KEEP_KB = {{ inline_keep_kb }};
+
+        let _found = [];     // every attachment found: {name, data, size, from, inline}
+        let _sources = [];   // names of the .msg files loaded
+
+        // ── Reading a .msg file ──────────────────────────────────────────────
+        // A .msg is a compound file: each attachment is a folder
+        // "__attach_version1.0_#NNNNNNNN/". A file attachment holds its bytes in
+        // stream 37010102. An attached email is a sub-folder "__substg1.0_3701000D/"
+        // laid out like a whole .msg, so it is walked the same way.
+
+        function _bytes(entry) {
+            if (!entry || !entry.content) return null;
+            const b = entry.content instanceof Uint8Array ? entry.content : new Uint8Array(entry.content);
+            return (typeof entry.size === 'number' && entry.size < b.length) ? b.subarray(0, entry.size) : b;
+        }
+
+        // String property: 001F = UTF-16, 001E = 8-bit
+        function _str(map, dir, id) {
+            const wide = _bytes(map.get(dir + '__substg1.0_' + id.toLowerCase() + '001f'));
+            if (wide) return new TextDecoder('utf-16le').decode(wide).replace(/\0+$/, '');
+            const narrow = _bytes(map.get(dir + '__substg1.0_' + id.toLowerCase() + '001e'));
+            if (narrow) return new TextDecoder('windows-1252').decode(narrow).replace(/\0+$/, '');
+            return '';
+        }
+
+        // Fixed-size properties (numbers, true/false): property id -> low 32 bits of the value.
+        // The header is 32 bytes on the outer email, 24 on an attached email, 8 on an attachment.
+        function _props(map, dir, headerSize) {
+            const out = new Map();
+            const b = _bytes(map.get(dir + '__properties_version1.0'));
+            if (!b) return out;
+            const view = new DataView(b.buffer, b.byteOffset, b.byteLength);
+            for (let o = headerSize; o + 16 <= b.length; o += 16) {
+                out.set(view.getUint32(o, true) >>> 16, view.getUint32(o + 8, true));
+            }
+            return out;
+        }
+
+        function _attachDirs(map, dir) {
+            const prefix = dir + '__attach_version1.0_#';
+            return [...map.keys()]
+                .filter(k => k.startsWith(prefix) && k.indexOf('/', prefix.length) === k.length - 1)
+                .sort();
+        }
+
+        function _walk(map, dir, ctx, depth) {
+            if (depth > 20) return;
+            ctx.emailNo += 1;
+            const label = '#' + ctx.emailNo + ' ' + (_str(map, dir, '0037') || '(No Subject)');
+            for (const att of _attachDirs(map, dir)) {
+                const props = _props(map, att, 8);
+                const inner = att + '__substg1.0_3701000d/';
+                // Method 5 = attached email, 6 = embedded OLE object (also a sub-folder, skipped)
+                if (map.has(inner)) {
+                    if (props.get(0x3705) !== 6) _walk(map, inner, ctx, depth + 1);
+                    continue;
+                }
+                const data = _bytes(map.get(att + '__substg1.0_37010102'));
+                if (!data) continue;
+                const name = _str(map, att, '3707') || _str(map, att, '3704') || _str(map, att, '3001') || 'Attachment';
+                const mime = _str(map, att, '370E').toLowerCase();
+                const hidden = ((props.get(0x7FFE) || 0) & 0xFF) !== 0;
+                const isImage = mime.startsWith('image/') || /\.(png|jpe?g|gif|bmp|emz|wmf)$/i.test(name);
+                const inline = hidden || (!!_str(map, att, '3712') && isImage);
+                ctx.out.push({ name, data, size: data.length, from: ctx.source + ' > ' + label, inline });
+            }
+        }
+
+        function readMsg(bytes, sourceName) {
+            const cfb = CFB.read(bytes, { type: 'array' });
+            const map = new Map();
+            cfb.FullPaths.forEach((p, i) => map.set(p.toLowerCase(), cfb.FileIndex[i]));
+            const root = cfb.FullPaths[0].toLowerCase();
+            if (!map.has(root + '__properties_version1.0')) throw new Error('not an Outlook email');
+            const ctx = { out: [], emailNo: 0, source: sourceName };
+            _walk(map, root, ctx, 0);
+            return ctx.out;
+        }
+
+        // ── File names ───────────────────────────────────────────────────────
+        function _safeName(name) {
+            const clean = name.replace(/[<>:"\/\\|?*\x00-\x1F]/g, '_').replace(/[. ]+$/, '').trim();
+            return clean || 'Attachment';
+        }
+
+        // Windows treats names case-insensitively, so compare lower case
+        function _uniqueName(name, used) {
+            const dot = name.lastIndexOf('.');
+            const base = dot > 0 ? name.slice(0, dot) : name;
+            const ext = dot > 0 ? name.slice(dot) : '';
+            let n = 1;
+            let candidate = name;
+            while (used.has(candidate.toLowerCase())) {
+                n += 1;
+                candidate = base + ' (' + n + ')' + ext;
+            }
+            used.add(candidate.toLowerCase());
+            return candidate;
+        }
+
+        function _kept() {
+            return _found.filter(f => !(SKIP_INLINE && f.inline && f.size <= INLINE_KEEP_KB * 1024));
+        }
+
+        // Names given within this batch only; Save To Folder redoes this against the folder
+        function _planNames() {
+            const used = new Set();
+            _kept().forEach(f => { f.savedAs = _uniqueName(_safeName(f.name), used); f.saved = false; });
+        }
+
+        // ── Page ─────────────────────────────────────────────────────────────
+        function _fmtSize(bytes) {
+            if (bytes < 1024) return bytes + ' B';
+            if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+            return (bytes / 1024 / 1024).toFixed(1) + ' MB';
+        }
+
+        function _esc(s) {
+            return String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
+        }
+
+        function setStatus(text, kind) {
+            const el = document.getElementById('statusMsg');
+            if (!text) { el.style.display = 'none'; return; }
+            el.className = 'alert mt-3 mb-0 small alert-' + (kind || 'info');
+            el.textContent = text;
+            el.style.display = '';
+        }
+
+        function render() {
+            const kept = _kept();
+            const skipped = _found.length - kept.length;
+            document.getElementById('fileList').innerHTML = _sources.map(s => '<div><i class="fas fa-envelope me-1"></i>' + _esc(s) + '</div>').join('');
+            document.getElementById('foundCount').textContent = _found.length ? '(' + kept.length + ')' : '';
+            document.getElementById('skippedNote').textContent = skipped
+                ? skipped + ' inline / signature image' + (skipped === 1 ? '' : 's') + ' skipped (Settings > Email Attachments)'
+                : '';
+            document.getElementById('resultEmpty').style.display = _sources.length ? 'none' : '';
+            document.getElementById('resultWrap').style.display = _sources.length ? '' : 'none';
+            document.getElementById('resultBody').innerHTML = kept.length
+                ? kept.map((f, i) => `<tr>
+                    <td class="num">${i + 1}</td>
+                    <td>${_esc(f.name)}</td>
+                    <td class="${f.savedAs !== _safeName(f.name) ? 'renamed' : ''}">${_esc(f.savedAs)}${f.saved ? ' <i class="fas fa-check text-success ms-1"></i>' : ''}</td>
+                    <td class="num">${_fmtSize(f.size)}</td>
+                    <td>${_esc(f.from)}</td>
+                </tr>`).join('')
+                : '<tr><td colspan="5" class="result-empty">No attachments found in this email.</td></tr>';
+            const any = kept.length > 0;
+            document.getElementById('saveBtn').disabled = !any;
+            document.getElementById('downloadBtn').disabled = !any;
+            document.getElementById('clearBtn').disabled = !_sources.length;
+        }
+
+        async function loadFiles(fileList) {
+            setStatus('');
+            const errors = [];
+            for (const file of fileList) {
+                if (!/\.msg$/i.test(file.name)) { errors.push(file.name + ': only .msg files are supported'); continue; }
+                try {
+                    const bytes = new Uint8Array(await file.arrayBuffer());
+                    _found.push(...readMsg(bytes, file.name));
+                    _sources.push(file.name);
+                } catch (e) {
+                    errors.push(file.name + ': could not be read (' + e.message + ')');
+                }
+            }
+            _planNames();
+            render();
+            if (errors.length) setStatus(errors.join('\n'), 'danger');
+        }
+
+        async function saveToFolder() {
+            const kept = _kept();
+            if (!kept.length) return;
+            if (!window.showDirectoryPicker) {
+                setStatus('This browser cannot save into a folder. Use Edge or Chrome, or use Download All.', 'warning');
+                return;
+            }
+            let dir;
+            try {
+                dir = await window.showDirectoryPicker({ id: 'email-attachments', mode: 'readwrite' });
+            } catch (e) {
+                if (e.name !== 'AbortError') setStatus('Could not open the folder: ' + e.message, 'danger');
+                return;
+            }
+            const btn = document.getElementById('saveBtn');
+            btn.disabled = true;
+            try {
+                // Seed with what is already in the folder so nothing there is overwritten
+                const used = new Set();
+                for await (const existing of dir.keys()) used.add(existing.toLowerCase());
+                let done = 0;
+                for (const f of kept) {
+                    f.savedAs = _uniqueName(_safeName(f.name), used);
+                    const handle = await dir.getFileHandle(f.savedAs, { create: true });
+                    const writer = await handle.createWritable();
+                    await writer.write(f.data);
+                    await writer.close();
+                    f.saved = true;
+                    done += 1;
+                    setStatus('Saving ' + done + ' of ' + kept.length + '...', 'info');
+                }
+                const renamed = kept.filter(f => f.savedAs !== _safeName(f.name)).length;
+                setStatus('Saved ' + done + ' file' + (done === 1 ? '' : 's') + ' to "' + dir.name + '"'
+                    + (renamed ? ', ' + renamed + ' renamed because the name was already used.' : '.'), 'success');
+            } catch (e) {
+                setStatus('Saving stopped: ' + e.message, 'danger');
+            } finally {
+                render();
+            }
+        }
+
+        async function downloadAll() {
+            const kept = _kept();
+            _planNames();
+            render();
+            for (const f of kept) {
+                const url = URL.createObjectURL(new Blob([f.data]));
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = f.savedAs;
+                document.body.appendChild(a);
+                a.click();
+                a.remove();
+                setTimeout(() => URL.revokeObjectURL(url), 10000);
+                await new Promise(r => setTimeout(r, 250));
+            }
+            setStatus('Sent ' + kept.length + ' file' + (kept.length === 1 ? '' : 's') + ' to your Downloads folder.', 'success');
+        }
+
+        function clearAll() {
+            _found = [];
+            _sources = [];
+            document.getElementById('fileInput').value = '';
+            setStatus('');
+            render();
+        }
+
+        document.getElementById('fileInput').addEventListener('change', e => loadFiles(e.target.files));
+        const dz = document.getElementById('dropZone');
+        dz.addEventListener('dragover', e => { e.preventDefault(); dz.classList.add('drag-over'); });
+        dz.addEventListener('dragleave', () => dz.classList.remove('drag-over'));
+        dz.addEventListener('drop', e => {
+            e.preventDefault();
+            dz.classList.remove('drag-over');
+            if (e.dataTransfer.files.length) loadFiles(e.dataTransfer.files);
+        });
+        if (!window.showDirectoryPicker) {
+            document.getElementById('saveBtn').title = 'Needs Edge or Chrome';
+        }
+    </script>
+</body>
+</html>
