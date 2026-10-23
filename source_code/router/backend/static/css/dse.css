@@ -1,0 +1,65 @@
+/* DSE (Daily Spend & Enquiries) page. Sizes and colours come from Settings >
+   Appearance as CSS variables set on #dse-table by dse.js. */
+body, button, input, select, textarea { font-family: 'DM Sans', system-ui, sans-serif; font-size: 13px; }
+
+.dse-controls { padding: 16px 32px 0 32px; }
+.dse-date { width: 140px; }
+.dse-empty { padding: 24px 32px; color: var(--c-text-muted); font-size: 1rem; }
+
+/* Zero top padding: the sticky header pins to this box's padding edge. */
+.dse-wrap { overflow: auto; max-height: 82vh; margin: 12px 32px 32px 32px; padding: 0; }
+
+#dse-table {
+    border-collapse: separate; border-spacing: 0; table-layout: fixed; width: max-content;
+    font-size: var(--dse-font, 12px);
+}
+#dse-table th, #dse-table td {
+    border-right: 1px solid var(--c-border-soft); border-bottom: 1px solid var(--c-border-soft);
+    padding: 0 5px; height: var(--dse-row-h, 22px); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+#dse-table th:last-child, #dse-table td:last-child { border-right: none; }
+#dse-table thead th {
+    position: sticky; top: 0; z-index: 2; background: var(--c-table-header-bg); color: var(--c-table-header-text);
+    border-bottom: 1px solid var(--c-border); font-weight: 600; text-align: center; line-height: 1.15;
+    height: calc(var(--dse-row-h, 22px) * 1.8);
+}
+#dse-table .dse-label {
+    position: sticky; left: 0; z-index: 1; background: var(--c-surface); text-align: left;
+    width: var(--dse-label-w, 230px); min-width: var(--dse-label-w, 230px); max-width: var(--dse-label-w, 230px);
+    border-right: 1px solid var(--c-border);
+}
+#dse-table thead th.dse-label { z-index: 3; background: var(--c-table-header-bg); }
+#dse-table .dse-day { width: var(--dse-day-w, 52px); min-width: var(--dse-day-w, 52px); max-width: var(--dse-day-w, 52px); text-align: right; }
+#dse-table .dse-sum {
+    width: var(--dse-sum-w, 78px); min-width: var(--dse-sum-w, 78px); max-width: var(--dse-sum-w, 78px);
+    text-align: right; background: var(--dse-summary-bg, #f8fafc); font-weight: 600;
+}
+#dse-table thead th.dse-sum { background: var(--c-table-header-bg); white-space: normal; }
+#dse-table td.dse-sum-first, #dse-table th.dse-sum-first { border-left: 2px solid var(--c-border); }
+#dse-table .dse-weekend { background: var(--dse-weekend, #eef2f7); }
+#dse-table thead th.dse-weekend { background: var(--dse-weekend, #eef2f7); }
+#dse-table .dse-weekday { display: block; font-weight: 400; font-size: 0.85em; }
+#dse-table tr.dse-section td {
+    background: var(--dse-section-bg, #1e3a5f); color: var(--dse-section-text, #fff); font-weight: 700;
+}
+#dse-table tr.dse-section td.dse-label { background: var(--dse-section-bg, #1e3a5f); }
+#dse-table td.dse-row-error { color: var(--c-text-danger); text-align: left; white-space: normal; }
+#dse-table td.dse-neg { color: var(--c-text-danger); }
+
+.dse-settings-section { font-weight: 700; color: var(--c-text-heading); border-bottom: 1px solid var(--c-border-soft); padding-bottom: 4px; }
+.dse-form { display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: flex-end; }
+.dse-form label { display: flex; flex-direction: column; gap: 2px; font-size: 0.8rem; font-weight: 600; }
+.dse-form input, .dse-form select {
+    padding: 3px 7px; border: 1px solid var(--c-control-border); border-radius: var(--radius-sm); font-size: 0.8rem; font-weight: 400;
+}
+.dse-form input[type=text] { width: 220px; }
+.dse-form select { min-width: 200px; max-width: 360px; }
+.dse-form input[type=number] { width: 90px; }
+.dse-form input[type=color] { width: 54px; height: 28px; padding: 1px; }
+.dse-row-editor { margin-top: 14px; padding: 10px 12px; border: 1px solid var(--c-border-soft); border-radius: var(--radius-md); background: var(--c-surface-alt); }
+
+.dse-row-item { display: flex; align-items: center; gap: 8px; padding: 3px 0; font-size: 0.8rem; border-bottom: 1px solid var(--c-border-soft); }
+.dse-row-item .ri-label { width: 220px; font-weight: 600; }
+.dse-row-item .ri-section { width: 160px; color: var(--c-text-muted); }
+.dse-row-item .ri-source { flex: 1; color: var(--c-text-muted); font-family: monospace; font-size: 0.75rem; }
+.dse-row-item .btn { padding: 1px 7px; font-size: 0.72rem; }

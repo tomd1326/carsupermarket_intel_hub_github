@@ -110,6 +110,7 @@ async function fetchData(force = false) {
         const errEl = document.getElementById('table-error');
         errEl.textContent = 'Failed to load data: ' + e.message;
         errEl.classList.remove('d-none');
+        awsLoginIfExpired(errEl, e.message);
         // Live Update reads this to mark its reload step failed.
         return { ok: false, message: 'Failed to load data: ' + e.message };
     } finally {

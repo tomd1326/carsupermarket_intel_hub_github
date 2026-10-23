@@ -63,7 +63,7 @@ PACKAGES = {'uk_dbt_raw_data': 'raw', 'uk_dbt_transform_data': 'transform', 'uk_
 # Fills the job list the first time the page is opened. "dbt raw" is the
 # Rundeck job; transform and product follow the same pattern - check their
 # commands against Rundeck and edit them on the page if they differ.
-_COMMAND = ('run --select {select} --target {environment} --threads 20 '
+_COMMAND = ('run --select {select} --target {environment} --threads 40 '
             '--vars "{current_date: {current_date}}"')
 DEFAULT_JOBS = [
     {'name': f'dbt {p}', 'project': p, 'task_definition': f'carsupermarket_dbt_{p}_td',
@@ -736,6 +736,13 @@ def _with_threads(command: list, threads: int) -> list:
     return out + ['--threads', str(threads)]
 
 
+def _with_raw_upstream(select: str) -> str:
+    """Put + in front of every __s model in a --select, so the stg tables that
+    read S3 are always rebuilt with it. Without it a __s run only re-reads the
+    stg table as it was last loaded, and new S3 data never reaches it."""
+    return ' '.join('+' + t if re.match(r'^[\w.]+__s\+?$', t) else t for t in select.split())
+
+
 def start_chain(conn, steps: list, user: str, current_date: str = '') -> tuple:
     """Add the steps as one chain and start the first. Each step is
     {job_id, select, full_refresh} or {job_id, command} (a ready token list),
@@ -753,7 +760,7 @@ def start_chain(conn, steps: list, user: str, current_date: str = '') -> tuple:
         if step.get('command'):
             command = list(step['command'])
         else:
-            select = ' '.join(str(step.get('select') or '').split()) or job['default_select']
+            select = _with_raw_upstream(' '.join(str(step.get('select') or '').split()) or job['default_select'])
             command_text = (job['command'].replace('{select}', select).replace('{environment}', env)
                             .replace('{current_date}', current_date))
             try:

@@ -55,6 +55,7 @@ SETTINGS_SECTIONS = [
     ("live-users",          "Live Users",          "Live Users"),
     ("appearance",          "Appearance",          "Appearance"),
     ("sharepoint",          "SharePoint",          "SharePoint Files"),
+    ("ga4-requests",        "GA4 Requests",        "GA4 Requests"),
     ("prod-to-dev",         "Prod To Dev",         "Copy Prod To Dev"),
     ("live-update",         "Live Update",         "Live Update"),
 ]
@@ -358,6 +359,11 @@ _APPEARANCE_INTS = {
     'page_head_pad_x': (0, 60), 'page_head_gap': (0, 40),
     'ap_surface_opacity': (0, 100), 'ap_header_opacity': (0, 100), 'ap_menu_opacity': (0, 100),
     'ap_radius': (0, 30), 'ap_header_shadow': (0, 100),
+    'home_title_size': (14, 80), 'home_title_gap': (0, 120), 'home_logo_size': (20, 240),
+    'home_logo_radius': (0, 120), 'home_logo_gap': (0, 80), 'home_btn_width': (100, 600),
+    'home_btn_height': (30, 200), 'home_btn_font_size': (10, 40), 'home_btn_font_weight': (400, 700),
+    'home_btn_radius': (0, 100), 'home_btn_3d': (0, 100), 'home_btn_3d_edge': (0, 80), 'home_grid_gap': (0, 80), 'home_grid_max_width': (200, 1600),
+    'home_pad_top': (0, 200), 'home_pad_side': (0, 100), 'home_pad_bottom': (0, 30),
 }
 
 
@@ -383,6 +389,19 @@ async def save_appearance(request: Request, user: str = Depends(get_current_user
     # This container uses the new values straight away; others within a minute.
     core.reload_presence_config()
     logger.info("Settings [Appearance] updated by %s", user)
+    return _section_redirect("appearance")
+
+
+@router.post("/settings/section/appearance/reset")
+async def reset_appearance(user: str = Depends(get_current_user)):
+    """Every Appearance setting back to its default (db_utils.SETTINGS_DEFAULTS)."""
+    if user != 'tdrayson':
+        raise HTTPException(status_code=403, detail="Forbidden")
+    keys = set(APPEARANCE_COLOUR_SETTINGS) | set(_APPEARANCE_INTS)
+    with get_database_connection() as conn:
+        save_settings_partial(conn, {k: SETTINGS_DEFAULTS[k] for k in keys})
+    core.reload_presence_config()
+    logger.info("Settings [Appearance] reset to defaults by %s", user)
     return _section_redirect("appearance")
 
 # Sign in to AWS again when the SSO session has expired. Only works where the

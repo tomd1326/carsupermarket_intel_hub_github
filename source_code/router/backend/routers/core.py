@@ -263,7 +263,14 @@ PRESENCE_SETTING_KEYS = ('presence_enabled', 'presence_interval_seconds', 'prese
                          'ap_heading', 'ap_muted', 'ap_border', 'ap_menu_text', 'ap_primary',
                          'ap_primary_hover', 'ap_table_header_bg', 'ap_table_header_text',
                          'ap_surface_opacity', 'ap_header_opacity', 'ap_menu_opacity',
-                         'ap_radius', 'ap_header_shadow')
+                         'ap_radius', 'ap_header_shadow',
+                         'home_page_bg', 'home_title_colour', 'home_btn_bg', 'home_btn_hover_bg',
+                         'home_btn_text', 'home_title_size', 'home_title_gap', 'home_logo_size',
+                         'home_logo_radius', 'home_logo_gap', 'home_btn_width', 'home_btn_height',
+                         'home_btn_font_size', 'home_btn_font_weight', 'home_btn_radius',
+                         'home_btn_3d', 'home_btn_3d_edge',
+                         'home_grid_gap', 'home_grid_max_width', 'home_pad_top', 'home_pad_side',
+                         'home_pad_bottom')
 _PRESENCE_CONFIG: dict = {k: SETTINGS_DEFAULTS[k] for k in PRESENCE_SETTING_KEYS}
 _PRESENCE_LOADED_AT: float = 0.0
 PRESENCE_TTL_SECONDS = 60
