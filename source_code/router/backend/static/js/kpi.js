@@ -766,7 +766,8 @@
         };
         const ownRule = stacked || rowOwnTarget(row) || row.multiply_by ? chartRule : columnRule(rowSource(row), row.metric);
         const seriesRule = i => {
-            const s = (row.series || [])[i];
+            const p = stacked ? plotSeries(row)[i] : null;
+            const s = p && p.s;
             return !s || s.multiply_by || row.pct ? chartRule : columnRule(s.source, s.metric);
         };
         const sets = chart.data.datasets.map((ds, i) => ({ ds, data: full ? full.data[i] : ds.data,
@@ -875,7 +876,9 @@
     let metricBatch = null;   // { items: [], waiters: Map(key -> {index, promise, resolve}) }
 
     // multiplyBy: { source, metric } or null — see Multiplied By in Edit Chart.
-    function fetchMetricData(source, metric, agg, targetMode, current = {}, weightBy = '', multiplyBy = null) {
+    // splitAt: { source, metric, part: 'lower' | 'upper' } - one part of a
+    // series split at a second metric (Split At, kpi.py _custom_data).
+    function fetchMetricData(source, metric, agg, targetMode, current = {}, weightBy = '', multiplyBy = null, splitAt = null) {
         const item = {
             source, metric, agg,
             target_mode: targetMode,
@@ -885,6 +888,7 @@
             weight_by: weightBy || '',
             multiply_source: multiplyBy ? (multiplyBy.source || 'snowflake') : '',
             multiply_metric: multiplyBy ? multiplyBy.metric : '',
+            ...(splitAt ? { split_source: splitAt.source || 'snowflake', split_metric: splitAt.metric, split_part: splitAt.part } : {}),
         };
         if (!metricBatch) {
             metricBatch = { items: [], waiters: new Map() };
@@ -1242,9 +1246,28 @@
         }, Math.max(60, spCheckSeconds) * 1000);
     }
 
+    // Admin View's menu beside Load Data: a reload of just one thing.
+    function toggleLoadMenu(e) {
+        e.stopPropagation();
+        document.getElementById('loadMenuList').classList.toggle('open');
+    }
+    document.addEventListener('click', () => {
+        const list = document.getElementById('loadMenuList');
+        if (list) list.classList.remove('open');
+    });
+    function loadMenu(kind) {
+        document.getElementById('loadMenuList').classList.remove('open');
+        if (kind === 'page') { location.reload(); return; }
+        loadAll(kind === 'all' ? true : kind);
+    }
+
+    // fromButton: true (Load Data: Snowflake and SharePoint), false (a normal
+    // load, using the server's copies), or one of the menu's 'snowflake' /
+    // 'sharepoint' / 'cached'.
     function loadAll(fromButton = false) {
-        loadToken = fromButton ? String(Date.now()) : '';
-        spRefreshToken = loadToken;
+        const token = String(Date.now());
+        loadToken = fromButton === true || fromButton === 'snowflake' ? token : '';
+        spRefreshToken = fromButton === true || fromButton === 'sharepoint' ? token : '';
         loadAtAllowance();
         const btn    = document.getElementById('loadBtn');
         const icon   = document.getElementById('loadIcon');
@@ -1687,23 +1710,38 @@
                 const { ctx, chartArea: a, scales: { x } } = chart;
                 const offset = meta.kind === 'd' ? DayWindow.startIndex() : 0;
                 const count = chart.data.labels.length;
-                // One line per point; several notes on the same week/month share it.
-                const byIndex = new Map();
+                // Week and month columns: the line sits across the column in
+                // proportion to where the note's date falls in the period (a
+                // Monday note near the left of a week, the 15th near the middle
+                // of a month). Days: the centre. Notes on the same date share a line.
+                const slot = count > 1 ? x.getPixelForValue(1) - x.getPixelForValue(0) : x.width;
+                const dayMs = 864e5;
+                const byPx = new Map();
                 notesForRow(meta.rowId).forEach(note => {
-                    const i = notePointIndex(meta.kind, meta.starts, note.date) - offset;
+                    const n = notePointIndex(meta.kind, meta.starts, note.date);
+                    const i = n - offset;
                     if (i < 0 || i >= count) return;
-                    if (!byIndex.has(i)) byIndex.set(i, []);
-                    byIndex.get(i).push(note);
+                    let frac = 0.5;
+                    const start = meta.starts && meta.starts[n];
+                    if (meta.kind !== 'd' && start) {
+                        const s = String(start).slice(0, 10);
+                        const days = meta.kind === 'w' ? 7 : Number(lastDayOfMonthIso(s).slice(8, 10));
+                        const into = Math.round((Date.parse(note.date + 'T00:00:00Z') - Date.parse(s + 'T00:00:00Z')) / dayMs);
+                        frac = Math.min(Math.max((into + 0.5) / days, 0), 1);
+                    }
+                    // Kept inside the column so it never sits on the next one.
+                    const px = Math.round(x.getPixelForValue(i) + (frac - 0.5) * slot * 0.9) + 0.5;
+                    if (!byPx.has(px)) byPx.set(px, []);
+                    byPx.get(px).push(note);
                 });
                 chart.$notePositions = [];
-                if (!byIndex.size) return;
+                if (!byPx.size) return;
                 ctx.save();
                 ctx.strokeStyle = NOTE_COLOUR;
                 ctx.fillStyle = NOTE_COLOUR;
                 ctx.lineWidth = 1.5;
                 ctx.setLineDash([3, 3]);
-                byIndex.forEach((notes, i) => {
-                    const px = Math.round(x.getPixelForValue(i)) + 0.5;
+                byPx.forEach((notes, px) => {
                     ctx.beginPath();
                     ctx.moveTo(px, a.top);
                     ctx.lineTo(px, a.bottom);
@@ -2539,6 +2577,34 @@
         return (row.series || []).map((s, i) => s.colour || theme.colours[i] || SERIES_SPARE_COLOUR);
     }
 
+    // A colour mixed halfway towards white: the default for the part of a
+    // split series above its split point.
+    function lighterColour(hex) {
+        const n = parseInt(String(hex).slice(1), 16);
+        const mix = c => Math.round(c + (255 - c) * 0.5);
+        return '#' + [n >> 16 & 255, n >> 8 & 255, n & 255].map(c => mix(c).toString(16).padStart(2, '0')).join('');
+    }
+    const hasSplit = s => !!(s.split_at && s.split_at.metric);
+    // Name of the part of a split series above its split point.
+    const splitPartName = s => (s.split_at.label || '').trim() || `Above ${metricName(s.split_at.source, s.split_at.metric)}`;
+
+    // The segments a stacked chart draws: one per series, except a series with
+    // Split At, which is two (the part up to the split metric, then the part
+    // above it, stacked straight on top). Theme colours still go by the
+    // series' own position, so splitting one does not recolour the others.
+    function plotSeries(row) {
+        const colours = seriesColours(row);
+        const out = [];
+        (row.series || []).forEach((s, i) => {
+            if (!hasSplit(s)) { out.push({ s, colour: colours[i], name: seriesLabel(s), split: null }); return; }
+            const at = { source: s.split_at.source || 'snowflake', metric: s.split_at.metric };
+            out.push({ s, colour: colours[i], name: seriesLabel(s), split: { ...at, part: 'lower' } });
+            out.push({ s: { ...s, within_below: false }, colour: s.split_at.colour || lighterColour(colours[i]),
+                       name: splitPartName(s), split: { ...at, part: 'upper' } });
+        });
+        return out;
+    }
+
     // The shared column name wins, so renaming it in Settings changes every
     // chart; a label saved on the series before names were shared is next.
     function seriesLabel(s) {
@@ -2558,11 +2624,12 @@
 
     function fetchStackedData(row) {
         const cur = rowCurrent(row);
-        return Promise.all(row.series.map(s => fetchMetricData(s.source || 'snowflake', s.metric, row.agg, 'none', cur,
-                                                                 '', s.multiply_by || null)))
+        const plotted = plotSeries(row);
+        return Promise.all(plotted.map(p => fetchMetricData(p.s.source || 'snowflake', p.s.metric, row.agg, 'none', cur,
+                                                            '', p.s.multiply_by || null, p.split)))
             .then(results => {
                 const bad = results.findIndex(r => r.status !== 'ok');
-                if (bad >= 0) return { ...results[bad], message: `${seriesLabel(row.series[bad])}: ${results[bad].message}` };
+                if (bad >= 0) return { ...results[bad], message: `${plotted[bad].name}: ${results[bad].message}` };
                 const d = {
                     ...results[0],
                     stale_date: results.map(r => r.stale_date).find(Boolean) || null,
@@ -2600,8 +2667,19 @@
         // A series ticked "within the series below" shows only what is left
         // after taking that series off, so the two stack to its full figure.
         const taken = (arr, below) => arr.map((v, i) => v === null || v === undefined || below[i] === null || below[i] === undefined ? v : v - below[i]);
-        const adjusted = (key, pick) => row.series.map((s, i) =>
-            s.within_below && i > 0 ? taken(pick(d.stacked[i]), pick(d.stacked[i - 1])) : pick(d.stacked[i]));
+        // One entry per segment drawn (a split series is two); d.stacked is in
+        // the same order. "Within below" takes off the whole series below,
+        // both parts if it is split.
+        const plotted = plotSeries(row);
+        const add = (a, b) => a.map((v, i) => v === null || v === undefined ? b[i] : (b[i] === null || b[i] === undefined ? v : v + b[i]));
+        const belowWhole = (pick, j) => {
+            const k = plotted[j].split && plotted[j].split.part === 'upper' ? j - 1 : j;
+            return k < j ? add(pick(d.stacked[k]), pick(d.stacked[j])) : pick(d.stacked[j]);
+        };
+        const adjusted = (key, pick) => plotted.map((p, i) => {
+            if (!p.s.within_below || i === 0) return pick(d.stacked[i]);
+            return taken(pick(d.stacked[i]), belowWhole(pick, i - 1));
+        });
         const fmt = pct ? (v => withCommas(v, decimals) + '%') : rowFormatter(row);
         const tickFmt = pct ? (v => v.toLocaleString('en-GB', { maximumFractionDigits: 1 }) + '%') : rowTickFormatter(row);
         // Days after today have no figures yet; their columns stay empty.
@@ -2612,7 +2690,7 @@
             d: { labels: d.dates.map(dateLabel), series: adjusted('d', s => s.d).map(pastOnly), starts: d.dates },
         };
         // Series on the right-hand axis are lines: not in the columns, totals or 100%.
-        const onRight = row.series.map(s => s.axis === 'secondary');
+        const onRight = plotted.map(p => p.s.axis === 'secondary');
         Object.values(periods).forEach(p => {
             p.totals = p.labels.map((_, i) => {
                 const known = p.series.filter((_s, j) => !onRight[j]).map(s => s[i]).filter(v => v !== null && v !== undefined);
@@ -2631,7 +2709,9 @@
             : calcRowRanges(['m', 'w', 'd'].map(k => ({ series: side ? periods[k].series.filter((_s, j) => !onRight[j]) : [periods[k].totals], min: (row.y_min || {})[k], max: (row.y_max || {})[k] })),
                 row.agg, sharedAxisValue(row.y_min), sharedAxisValue(row.y_max));
         const existing = rowCharts[row.id] || [];
-        const opts = { fmt, fullFmt: rowFullFormatter(row, pct), tickFmt, pct, side, colours: seriesColours(row), names: row.series.map(seriesLabel),
+        const opts = { fmt, fullFmt: rowFullFormatter(row, pct), tickFmt, pct, side, colours: plotted.map(p => p.colour), names: plotted.map(p => p.name),
+                       splits: plotted.map(p => (p.split ? p.split.part : null)),
+                       splitNames: plotted.map(p => (p.split ? ((p.s.split_at.lower_label || '').trim() || metricName(p.split.source, p.split.metric)) : null)),
                        transparency: themeById(row.theme).transparency || 0,
                        // A 100% chart has no column totals, so its figures are the segment values.
                        segLabels: !!row.seg_labels || !!row.pct, segPos: row.seg_label_pos || 'center', dataLabels: dataLabelsOn(row) };
@@ -2716,9 +2796,19 @@
                 for (let i = 0; i < chart.data.labels.length; i++) {
                     if (opts.segLabels) {
                         ctx.font = SEG_FONT;
-                        bars.forEach(b => {
+                        bars.forEach((b, n) => {
                             const v = b.ds.data[i], el = b.meta.data[i];
                             if (v === null || v === undefined || !el) return;
+                            // Split At: one value for the whole series (both parts),
+                            // centred over both; the upper part has none of its own.
+                            const lower = bars[n - 1], upper = bars[n + 1];
+                            if (b.ds.$part === 'upper' && lower && lower.ds.$part === 'lower') return;
+                            if (b.ds.$part === 'lower' && upper && upper.ds.$part === 'upper' && upper.meta.data[i]) {
+                                const uv = upper.ds.data[i];
+                                const both = { x: el.x, width: el.width, base: el.base, y: upper.meta.data[i].y };
+                                inside(opts.fmt(v + (uv === null || uv === undefined ? 0 : uv)), both, textOn(b.ds.$hex, opts.transparency));
+                                return;
+                            }
                             inside(opts.fmt(v), el, textOn(b.ds.$hex, opts.transparency));
                         });
                     }
@@ -2798,6 +2888,10 @@
             data,
             backgroundColor: withTransparency(opts.colours[i], opts.transparency),
             $hex: opts.colours[i],   // solid colour, for the segment text
+            // Split At: 'lower' / 'upper' part of one series (the upper part is
+            // always the next dataset), and the name of the lower part's limit.
+            $part: (opts.splits || [])[i] || null,
+            $limitName: (opts.splitNames || [])[i] || null,
             borderWidth: 0,
             borderSkipped: false,
             stack: opts.side ? 'series' + i : 'total',
@@ -2837,7 +2931,19 @@
                         callbacks: {
                             label: c => {
                                 const v = c.parsed.y;
-                                return v === null || isNaN(v) ? null : `${c.dataset.label}: ${opts.fullFmt(v)}`;
+                                if (v === null || isNaN(v)) return null;
+                                // A split series hovers as one: its total, then the two parts.
+                                const ds = c.dataset, sets = c.chart.data.datasets;
+                                const lowerVisible = j => j >= 0 && c.chart.isDatasetVisible(j);
+                                if (ds.$part === 'upper' && lowerVisible(c.datasetIndex - 1)) return null;
+                                if (ds.$part === 'lower' && c.chart.isDatasetVisible(c.datasetIndex + 1)) {
+                                    const up = sets[c.datasetIndex + 1].data[c.dataIndex];
+                                    const upper = up === null || up === undefined || isNaN(up) ? 0 : up;
+                                    return [`${ds.label}: ${opts.fullFmt(v + upper)}`,
+                                            `    ${ds.$limitName}: ${opts.fullFmt(v)}`,
+                                            `    ${sets[c.datasetIndex + 1].label}: ${opts.fullFmt(upper)}`];
+                                }
+                                return `${ds.label}: ${opts.fullFmt(v)}`;
                             },
                             footer: items => {
                                 if (opts.pct || opts.side) return '';
@@ -3155,8 +3261,8 @@
         openVehSetup(row);
         openChartTypeSetup(row);
         // Reopens on the tab used last, for going through several charts
-        // changing the same thing. A new chart starts on Data.
-        showChartTab(row ? chartTab : 'data');
+        // changing the same thing. A new chart starts on Title & Placement.
+        showChartTab(row ? chartTab : 'title');
         document.getElementById('chartModal').classList.add('open');
     }
 
@@ -3611,7 +3717,7 @@
     let seriesDraft = [];   // [{ source, metric, label, colour (null = theme) }]
 
     // ── Edit Chart tabs ──
-    let chartTab = 'data';
+    let chartTab = 'title';
 
     function showChartTab(tab) {
         // Columns is only there on a stacked chart.
@@ -3741,8 +3847,58 @@
                             ${i === last ? 'disabled' : ''}><i class="fas fa-arrow-down"></i></button>
                     <button type="button" class="btn btn-remove-chart" title="Remove series" onclick="seriesDraft.splice(${i}, 1); renderSeriesList()">
                         <i class="fas fa-trash"></i></button>
-                </div>`;
+                </div>${splitRow(s, i, colour)}`;
         }).join('') || '<div class="point-status" style="padding:2px 0 6px;">No series yet.</div>';
+    }
+
+    // Under each series: Split At. Chosen, the series is drawn in two parts -
+    // up to that metric's figure each day, and the part above it stacked on
+    // top in its own (lighter) colour, with its own legend name.
+    function splitRow(s, i, colour) {
+        const on = hasSplit(s);
+        const own = on && s.split_at.colour;
+        const upperColour = own || lighterColour(colour);
+        const at = on ? metricName(s.split_at.source, s.split_at.metric) : '';
+        const name = seriesLabel(s) || 'this series';
+        // Laid out like the bar: the top part above the bottom part.
+        return `
+                <div class="series-split">
+                    <div class="series-split-head">
+                        <span class="series-split-tag">Split ${escHtml(name)} At</span>
+                        <select onchange="onSeriesSplit(${i}, this.value)">${seriesMetricOptions(s.split_at || {}, '(Not Split)')}</select>
+                    </div>
+                    ${on ? `
+                    <div class="series-split-help">Each day, ${escHtml(name)} up to ${escHtml(at)} is the bottom part; anything above it is the top part.</div>
+                    <div class="series-split-grid">
+                        <span class="series-split-col">Part</span><span class="series-split-col">Colour</span>
+                        <span class="series-split-col">Name (Legend And Hover)</span><span></span>
+                        <span class="series-split-tag">Top</span>
+                        <input type="color" value="${escHtml(upperColour)}" class="${own ? 'series-own' : ''}"
+                               title="${own ? 'Own colour - the reset button goes back to a lighter shade of the series colour' : 'A lighter shade of the series colour - pick one to override it'}"
+                               onchange="seriesDraft[${i}].split_at.colour = this.value; renderSeriesList()">
+                        <input type="text" maxlength="60" value="${escHtml(s.split_at.label || '')}" placeholder="${escHtml('Above ' + at)}"
+                               title="Name for the part above ${escHtml(at)}, e.g. Tactical"
+                               oninput="seriesDraft[${i}].split_at.label = this.value">
+                        <button type="button" class="btn btn-edit" title="Back to a lighter shade of the series colour"
+                                onclick="seriesDraft[${i}].split_at.colour = null; renderSeriesList()" ${own ? '' : 'disabled'}><i class="fas fa-undo"></i></button>
+                        <span class="series-split-tag">Bottom</span>
+                        <span class="series-split-swatch" style="background:${escHtml(colour)}" title="The series colour, set on the row above"></span>
+                        <input type="text" maxlength="60" value="${escHtml(s.split_at.lower_label || '')}" placeholder="${escHtml(at)}"
+                               title="Name for the part up to ${escHtml(at)}, e.g. Base + Flex"
+                               oninput="seriesDraft[${i}].split_at.lower_label = this.value">
+                        <span></span>
+                    </div>` : ''}
+                </div>`;
+    }
+
+    function onSeriesSplit(i, key) {
+        const cut = key.indexOf('|');
+        const old = seriesDraft[i].split_at || {};
+        seriesDraft[i].split_at = key
+            ? { source: cut > 0 ? key.slice(0, cut) : 'snowflake', metric: cut > 0 ? key.slice(cut + 1) : key,
+                label: old.label || '', lower_label: old.lower_label || '', colour: old.colour || null }
+            : null;
+        renderSeriesList();
     }
 
     function onSeriesMetric(i, key) {
@@ -3781,6 +3937,10 @@
             ...(s.multiply_by && s.multiply_by.metric ? { multiply_by: s.multiply_by } : {}),
             ...(s.within_below ? { within_below: true } : {}),
             ...(s.axis === 'secondary' ? { axis: 'secondary' } : {}),
+            ...(hasSplit(s) ? { split_at: { source: s.split_at.source || 'snowflake', metric: s.split_at.metric,
+                                            label: String(s.split_at.label || '').trim(),
+                                            lower_label: String(s.split_at.lower_label || '').trim(),
+                                            colour: s.split_at.colour || null } } : {}),
         }));
         if (!series.length) { showChartError('Add at least one series.'); return; }
         if (series.length !== seriesDraft.length) { showChartError('Choose a metric for each series, or remove it.'); return; }

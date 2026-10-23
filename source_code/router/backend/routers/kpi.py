@@ -1682,7 +1682,8 @@ def _custom_data(metric: str, agg: str, source: str, target_mode: str, months: i
                  prefetched: dict | None = None, stored_targets: dict | None = None,
                  after: tuple | None = None, multiply_source: str = "", multiply_metric: str = "",
                  at_values=None, sp_data: dict | None = None,
-                 source_data: dict | None = None) -> dict:
+                 source_data: dict | None = None, split_source: str = "", split_metric: str = "",
+                 split_part: str = "") -> dict:
     """Daily/weekly/monthly series for one metric, plus its N-1 and target.
     current_month / current_week / current_day: also fill the current
     (part-elapsed) month, week or day. Today only has stock figures in
@@ -1707,12 +1708,21 @@ def _custom_data(metric: str, agg: str, source: str, target_mode: str, months: i
     sp_data: _get_sharepoint_data() already built for the whole load.
     source_data: {data source id: {date: {metric: value}}} already read for
     the whole load (Settings > Data Sources); a source missing from it is
-    read here."""
+    read here.
+    split_source / split_metric / split_part: Split At, for a stacked series
+    shown in two parts. Each day, 'lower' is the figure up to the split
+    metric's figure that day and 'upper' is what is above it (0 when below),
+    worked out before the days are added or averaged into weeks and months, so
+    the two parts always add up to the whole. E.g. published adverts split at
+    base + flex slots: the slots fill first, anything above is tactical. A day
+    with no split figure counts entirely as 'lower'."""
     if source == "snowflake":
         metric = metric.upper()
         weight_by = weight_by.upper()
     if multiply_source == "snowflake":
         multiply_metric = multiply_metric.upper()
+    if split_source == "snowflake":
+        split_metric = split_metric.upper()
     error = _validate_metric(source, metric)
     if error:
         return {"status": "error", "message": error}
@@ -1720,6 +1730,12 @@ def _custom_data(metric: str, agg: str, source: str, target_mode: str, months: i
         error = _validate_metric(multiply_source, multiply_metric)
         if error:
             return {"status": "error", "message": f"Multiply by: {error}"}
+    if split_metric:
+        if split_part not in ("lower", "upper"):
+            return {"status": "error", "message": f"Unknown split part: {split_part}"}
+        error = _validate_metric(split_source, split_metric)
+        if error:
+            return {"status": "error", "message": f"Split at: {error}"}
     if agg not in ("sum", "avg"):
         return {"status": "error", "message": f"Unknown agg: {agg}"}
     if weight_by:
@@ -1759,12 +1775,15 @@ def _custom_data(metric: str, agg: str, source: str, target_mode: str, months: i
         target_col = _target_column(metric) if source == "snowflake" else None
         stale_date = None
         sources = {source, multiply_source} if multiply_metric else {source}
+        if split_metric:
+            sources.add(split_source)
         if "snowflake" in sources and prefetched is None:
             # All column names come from the live column list — safe to interpolate
             fetch_start, fetch_end = _ds_fetch_range(today, months, weeks, days, after)
             columns = ([metric] if source == "snowflake" else []) + ([target_col] if target_col else []) \
                 + ([weight_by] if weight_by else []) \
-                + ([multiply_metric] if multiply_metric and multiply_source == "snowflake" else [])
+                + ([multiply_metric] if multiply_metric and multiply_source == "snowflake" else []) \
+                + ([split_metric] if split_metric and split_source == "snowflake" else [])
             prefetched = _fetch_daily_summary(columns, fetch_start, fetch_end)
         sp_by_date = {}
         if "sharepoint" in sources:
@@ -1780,7 +1799,8 @@ def _custom_data(metric: str, agg: str, source: str, target_mode: str, months: i
             entry = _data_source(src_id)
             if entry is not None and src_id not in source_data:
                 fetch_start, fetch_end = _ds_fetch_range(today, months, weeks, days, after)
-                wanted = [m for s, m in ((source, metric), (multiply_source, multiply_metric)) if s == src_id and m]
+                wanted = [m for s, m in ((source, metric), (multiply_source, multiply_metric),
+                                         (split_source, split_metric)) if s == src_id and m]
                 source_data[src_id] = _fetch_data_source(entry, wanted, fetch_start, fetch_end)
 
         # One metric's figure for one day, from whichever source it is in.
@@ -1807,6 +1827,19 @@ def _custom_data(metric: str, agg: str, source: str, target_mode: str, months: i
         else:
             times = lambda v, d: v
             value_at = base_at
+        if split_metric:
+            cap_at = lookup(split_source, split_metric)
+            whole_at = value_at
+
+            def split_value(d):
+                v = whole_at(d)
+                if v is None:
+                    return None
+                cap = cap_at(d)
+                if cap is None:
+                    return v if split_part == "lower" else None
+                return min(v, cap) if split_part == "lower" else max(0.0, v - cap)
+            value_at = split_value
         by_date: dict = {
             d: {
                 't': times(_num(row.get(target_col)), d) if target_col else None,
@@ -1944,7 +1977,15 @@ def kpi_custom_data_batch(request: Request, payload: dict, user: str = Depends(r
         multiply_metric = str(item.get("multiply_metric") or "")
         if multiply_source == "snowflake":
             multiply_metric = multiply_metric.upper()
+        split_source = str(item.get("split_source") or "snowflake")
+        split_metric = str(item.get("split_metric") or "")
+        if split_source == "snowflake":
+            split_metric = split_metric.upper()
+        split_part = item.get("split_part") if item.get("split_part") in ("lower", "upper") else ""
         return {"source": source, "metric": metric, "agg": item.get("agg", "sum"),
+                "split_source": split_source if split_metric and split_part else "",
+                "split_metric": split_metric if split_part else "",
+                "split_part": split_part if split_metric else "",
                 "target_mode": item.get("target_mode", "snowflake"),
                 "current_month": bool(item.get("current_month")),
                 "current_week": bool(item.get("current_week")),
@@ -1965,6 +2006,8 @@ def kpi_custom_data_batch(request: Request, payload: dict, user: str = Depends(r
         for i in items:
             if i["multiply_source"] == "snowflake" and i["multiply_metric"] in live:
                 columns.append(i["multiply_metric"])
+            if i["split_source"] == "snowflake" and i["split_metric"] in live:
+                columns.append(i["split_metric"])
             if i["source"] != "snowflake" or i["metric"] not in live:
                 continue
             columns.append(i["metric"])
@@ -1992,7 +2035,7 @@ def kpi_custom_data_batch(request: Request, payload: dict, user: str = Depends(r
                 stored = get_chart_targets(conn, keys, start, end)
 
         # SharePoint once (and its Load Data check once), before the items use it.
-        used = {i["source"] for i in items} | {i["multiply_source"] for i in items}
+        used = {i["source"] for i in items} | {i["multiply_source"] for i in items} | {i["split_source"] for i in items}
         sp = _get_sharepoint_data(sp_refresh) if "sharepoint" in used else None
         # Autotrader settings and allowance history read once for every item.
         at_values = _at_setting_values() if "autotrader" in used else None
@@ -2001,7 +2044,8 @@ def kpi_custom_data_batch(request: Request, payload: dict, user: str = Depends(r
         # any item needs. One that fails only fails the charts using it.
         wanted = {}
         for i in items:
-            for src_id, met in ((i["source"], i["metric"]), (i["multiply_source"], i["multiply_metric"])):
+            for src_id, met in ((i["source"], i["metric"]), (i["multiply_source"], i["multiply_metric"]),
+                                (i["split_source"], i["split_metric"])):
                 if met and _data_source(src_id) is not None:
                     wanted.setdefault(src_id, []).append(met)
         source_data, source_errors = {}, {}
@@ -2022,7 +2066,9 @@ def kpi_custom_data_batch(request: Request, payload: dict, user: str = Depends(r
     results = []
     for i in items:
         key = json.dumps(i, sort_keys=True)
-        failed = source_errors.get(i["source"]) or (source_errors.get(i["multiply_source"]) if i["multiply_metric"] else None)
+        failed = (source_errors.get(i["source"])
+                  or (source_errors.get(i["multiply_source"]) if i["multiply_metric"] else None)
+                  or (source_errors.get(i["split_source"]) if i["split_metric"] else None))
         if failed:
             built[key] = {"status": "error", "message": failed}
         if key not in built:
@@ -2031,6 +2077,7 @@ def kpi_custom_data_batch(request: Request, payload: dict, user: str = Depends(r
                 i["current_month"], i["current_week"], i["current_day"], "", i["weight_by"],
                 prefetched=prefetched if prefetched is not None else {}, stored_targets=stored, after=after,
                 multiply_source=i["multiply_source"], multiply_metric=i["multiply_metric"],
+                split_source=i["split_source"], split_metric=i["split_metric"], split_part=i["split_part"],
                 at_values=at_values, sp_data=sp, source_data=source_data)
         results.append(built[key])
     out = {"status": "ok", "results": results}
@@ -2282,8 +2329,25 @@ def _validate_stacked_row(row: dict) -> str | None:
     if len(series) > _KPI_SERIES_MAX:
         return f"At most {_KPI_SERIES_MAX} series in a chart"
     for s in series:
-        if not isinstance(s, dict) or set(s) - {"source", "metric", "label", "colour", "multiply_by", "within_below", "axis"}:
+        if not isinstance(s, dict) or set(s) - {"source", "metric", "label", "colour", "multiply_by", "within_below",
+                                                 "axis", "split_at"}:
             return "bad series"
+        # Split At: the series drawn in two parts, up to and above a second
+        # metric's figure each day (see _custom_data). The part above has its
+        # own legend name and colour.
+        split_at = s.get("split_at")
+        if split_at is not None:
+            if not isinstance(split_at, dict) or set(split_at) - {"source", "metric", "label", "lower_label", "colour"}:
+                return "bad series split_at"
+            error = _validate_layout_metric(split_at.get("source", "snowflake"), split_at.get("metric"))
+            if error:
+                return error
+            for split_label in (split_at.get("label", ""), split_at.get("lower_label", "")):
+                if not isinstance(split_label, str) or len(split_label) > 60:
+                    return "Series names must be 60 characters or fewer"
+            split_colour = split_at.get("colour")
+            if split_colour is not None and (not isinstance(split_colour, str) or not re.fullmatch(_HEX_COLOUR, split_colour)):
+                return f"bad colour: {split_colour}"
         if s.get("axis", "primary") not in ("primary", "secondary"):
             return "bad series axis"
         if not isinstance(s.get("within_below", False), bool):
