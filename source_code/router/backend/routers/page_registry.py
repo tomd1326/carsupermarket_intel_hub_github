@@ -37,6 +37,7 @@ PAGES: tuple[Page, ...] = (
     Page('kpi',                 '/kpi',                        'KPI Dashboard',            False),
     Page('weekly_business_review', '/weekly-business-review',  'Weekly Business Review',   False),
     Page('google_ads_campaigns', '/google-ads-campaigns',      'Google Ads Campaigns',     False),
+    Page('dse',                 '/dse',                        'Daily Spend & Enquiries',  False),
     Page('stock_list',          '/stock-list',                 'Stock List',               False),
     Page('cap_lookup',          '/cap-lookup',                 'CAP ID Lookup',            False),
     Page('assess_vehicle',      '/assess-vehicle',             'Assess Vehicle',           False),

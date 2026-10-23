@@ -13,7 +13,7 @@
 </head>
 <body>
     {{ page_header('Settings', user) }}
-    <div class="settings-card{% if active_section in ('sharepoint', 'live-update', 'ai') %} settings-card-wide{% endif %}">
+    <div class="settings-card{% if active_section in ('sharepoint', 'ga4-requests', 'live-update', 'ai') %} settings-card-wide{% endif %}">
 
         <div class="settings-layout">
         {% include '_settings_nav.html' %}
@@ -687,7 +687,7 @@
                         <div class="form-text">Default: 100 (the API maximum)</div></div>
                     <div><label class="form-label mb-1" for="lu-s-threads">dbt Threads</label>
                         <input class="form-control" type="number" id="lu-s-threads" min="1" max="64" style="width: 110px;">
-                        <div class="form-text">Models built at once. Default: 20</div></div>
+                        <div class="form-text">Models built at once. Default: 40</div></div>
                     <div class="mb-4 d-flex align-items-center gap-2">
                         <button type="button" class="btn btn-primary btn-sm" onclick="luSaveSettings()">Save</button>
                         <span class="text-muted small" id="lu-s-note"></span>
@@ -1035,6 +1035,8 @@
             #dbt-steps textarea { font-size: 0.8rem; min-width: 420px; }
             .dbt-model-list { font-size: 0.75rem; color: #6c757d; max-width: 520px; }
             .dbt-warn { color: #b45309; }
+            @keyframes dbt-log-flash { from { background-color: #b7e4c7; } to { background-color: transparent; } }
+            .dbt-log-new { animation: dbt-log-flash 1.5s ease-out; }
         </style>
         <div id="dbt-error" class="alert alert-danger py-2 px-3" style="display:none"></div>
         <p class="form-text mt-0" id="dbt-env-note"></p>
@@ -1080,6 +1082,20 @@
             </div>
         </div>
 
+        <div class="card mb-4" id="dbt-current-card" style="display:none">
+            <div class="card-header fw-semibold d-flex align-items-center gap-2">
+                <span id="dbt-current-title">Current Run</span>
+                <button type="button" class="btn btn-sm btn-outline-danger ms-auto" id="dbt-stop-btn" onclick="dbtStop()">
+                    <i class="fas fa-stop"></i> Stop
+                </button>
+            </div>
+            <div class="card-body dbt-small">
+                <div id="dbt-current-status" class="mb-2"></div>
+                <div id="dbt-current-links" class="mb-2"></div>
+                <pre id="dbt-log" class="small border rounded p-2 mb-0 bg-light" style="white-space: pre-wrap; max-height: 500px; overflow-y: auto;"></pre>
+            </div>
+        </div>
+
         <div class="card mb-4">
             <div class="card-header fw-semibold">Run A Job</div>
             <div class="card-body dbt-small">
@@ -1113,19 +1129,10 @@
                 <input class="form-control" type="date" id="dbt-date" style="width: 180px;">
                 <div class="form-text">Fills {current_date} in the command. Default: today</div>
             </div>
-        </div>
-
-        <div class="card mb-4" id="dbt-current-card" style="display:none">
-            <div class="card-header fw-semibold d-flex align-items-center gap-2">
-                <span id="dbt-current-title">Current Run</span>
-                <button type="button" class="btn btn-sm btn-outline-danger ms-auto" id="dbt-stop-btn" onclick="dbtStop()">
-                    <i class="fas fa-stop"></i> Stop
-                </button>
-            </div>
-            <div class="card-body dbt-small">
-                <div id="dbt-current-status" class="mb-2"></div>
-                <div id="dbt-current-links" class="mb-2"></div>
-                <pre id="dbt-log" class="small border rounded p-2 mb-0 bg-light" style="white-space: pre-wrap; max-height: 500px; overflow-y: auto;"></pre>
+            <div>
+                <label for="dbt-threads" class="form-label mb-1">dbt Threads</label>
+                <input class="form-control" type="number" id="dbt-threads" min="1" max="64" style="width: 110px;" onchange="dbtSaveThreads()">
+                <div class="form-text">For Plan From A Model and Run A Job. Saved on change. Default: 40 <span id="dbt-threads-note"></span></div>
             </div>
         </div>
 
@@ -1395,7 +1402,16 @@
                 await dbtStartAndFollow([{ job_id: job.job_id, select, full_refresh: fr }]);
             }
 
+            async function dbtSaveThreads() {
+                const d = await apiPostJson(BASE_URL + '/api/live-update/settings', {
+                    manual_dbt_threads: document.getElementById('dbt-threads').value,
+                });
+                document.getElementById('dbt-threads-note').textContent = d.status === 'ok' ? '- Saved' : '- ' + d.message;
+            }
+
             async function dbtStartAndFollow(steps) {
+                const threads = document.getElementById('dbt-threads').value;
+                if (threads) steps.forEach(s => { s.threads = threads; });
                 const err = document.getElementById('dbt-error');
                 try {
                     const d = await dbtStart(steps);
@@ -1422,7 +1438,12 @@
                 const add = lines => {
                     if (!lines.length) return;
                     const atEnd = logBox.scrollTop + logBox.clientHeight >= logBox.scrollHeight - 20;
-                    logBox.textContent += (logBox.textContent ? '\n' : '') + lines.join('\n');
+                    lines.forEach(line => {
+                        const row = document.createElement('div');
+                        row.className = 'dbt-log-new';
+                        row.textContent = line || ' ';
+                        logBox.appendChild(row);
+                    });
                     if (atEnd) logBox.scrollTop = logBox.scrollHeight;
                 };
                 try {
@@ -1467,7 +1488,7 @@
             function dbtEditJob(id) {
                 const j = dbtJobs.find(x => x.job_id === id) || { name: '', project: 'raw', task_definition: '',
                     container_name: 'dbt', capacity_provider: 'low_intensity', default_select: '',
-                    command: 'run --select {select} --target {environment} --threads 20', memory_reservation: '',
+                    command: 'run --select {select} --target {environment} --threads 40', memory_reservation: '',
                     snowflake_wh_override: '', sort_order: (Math.max(0, ...dbtJobs.map(x => x.sort_order || 0)) + 10) };
                 document.getElementById('dbt-f-id').value = id || '';
                 document.getElementById('dbt-f-name').value = j.name;
@@ -1536,6 +1557,7 @@
                     document.getElementById('lu-s-workers').value = d.run_settings.nexus_workers;
                     document.getElementById('lu-s-per-page').value = d.run_settings.nexus_per_page;
                     document.getElementById('lu-s-threads').value = d.run_settings.dbt_threads;
+                    document.getElementById('dbt-threads').value = d.run_settings.manual_dbt_threads;
                     const pageSel = document.getElementById('lu-f-page');
                     const keepPage = pageSel.value;
                     pageSel.innerHTML = '<option value="">Choose A Page...</option>' +
@@ -1953,9 +1975,76 @@
                     </div>
                 </div>
             </div>
-            
+
+            <div class="card mb-4">
+                <div class="card-header fw-semibold">Home Page</div>
+                <div class="card-body">
+                    <p class="form-text mt-0">
+                        The logo, title and page buttons on the Home page. The grid width decides how many buttons sit on one row.
+                    </p>
+                    {% set home_colours = [
+                        ('home_page_bg', 'Background', 'dark blue'),
+                        ('home_title_colour', 'Title And Header Text', 'white'),
+                        ('home_btn_bg', 'Button', 'green'),
+                        ('home_btn_hover_bg', 'Button Under The Pointer', 'darker green'),
+                        ('home_btn_text', 'Button Text', 'navy')] %}
+                    <div class="d-flex gap-4 flex-wrap mb-3">
+                        {% for key, label, default in home_colours %}
+                        <div>
+                            <label for="{{ key }}" class="form-label mb-1">{{ label }}</label>
+                            <input class="form-control form-control-color" type="color" id="{{ key }}" name="{{ key }}" value="{{ settings[key] }}">
+                            <div class="form-text">Default: {{ default }}</div>
+                        </div>
+                        {% endfor %}
+                    </div>
+                    {% set home_numbers = [
+                        ('home_title_size', 'Title Size (px)', 14, 80, 'Default: 32'),
+                        ('home_title_gap', 'Space Below Title (px)', 0, 120, 'Default: 48'),
+                        ('home_logo_size', 'Icon Size (px)', 20, 240, 'Default: 80'),
+                        ('home_logo_radius', 'Icon Corner Rounding (px)', 0, 120, 'Default: 16'),
+                        ('home_logo_gap', 'Space Below Icon (px)', 0, 80, 'Default: 20'),
+                        ('home_btn_width', 'Button Width (px)', 100, 600, 'Default: 280'),
+                        ('home_btn_height', 'Button Height (px)', 30, 200, 'Default: 80'),
+                        ('home_btn_font_size', 'Button Text Size (px)', 10, 40, 'Default: 18'),
+                        ('home_btn_font_weight', 'Button Text Boldness', 400, 700, 'Default: 600. 400 = normal, 700 = bold.'),
+                        ('home_btn_radius', 'Button Corner Rounding (px)', 0, 100, 'Default: 8'),
+                        ('home_grid_gap', 'Space Between Buttons (px)', 0, 80, 'Default: 20'),
+                        ('home_grid_max_width', 'Button Grid Width (px)', 200, 1600, 'Default: 600. Wider fits more buttons per row.'),
+                        ('home_pad_top', 'Padding Above Content (px)', 0, 200, 'Default: 40'),
+                        ('home_pad_side', 'Padding Left/Right (px)', 0, 100, 'Default: 16'),
+                        ('home_pad_bottom', 'Padding Below Content (% of screen height)', 0, 30, 'Default: 8')] %}
+                    <div class="d-flex gap-4 flex-wrap mb-3">
+                        <div>
+                            <label for="home_btn_3d" class="form-label mb-1">Button 3D Strength: <span id="home_btn_3d_val">{{ settings.home_btn_3d }}</span></label>
+                            <input class="form-range" type="range" id="home_btn_3d" name="home_btn_3d" min="0" max="100"
+                                   value="{{ settings.home_btn_3d }}" style="width: 260px;"
+                                   oninput="document.getElementById('home_btn_3d_val').textContent = this.value">
+                            <div class="form-text">Default: 0. 0 = flat. Higher gives a deeper raised button that presses down when clicked.</div>
+                        </div>
+                        <div>
+                            <label for="home_btn_3d_edge" class="form-label mb-1">Button 3D Edge Darkness: <span id="home_btn_3d_edge_val">{{ settings.home_btn_3d_edge }}</span></label>
+                            <input class="form-range" type="range" id="home_btn_3d_edge" name="home_btn_3d_edge" min="0" max="80"
+                                   value="{{ settings.home_btn_3d_edge }}" style="width: 260px;"
+                                   oninput="document.getElementById('home_btn_3d_edge_val').textContent = this.value">
+                            <div class="form-text">Default: 35. How dark the bottom edge is. Only used when 3D strength is above 0.</div>
+                        </div>
+                    </div>
+                    <div class="d-flex gap-4 flex-wrap">
+                        {% for key, label, low, high, note in home_numbers %}
+                        <div>
+                            <label for="{{ key }}" class="form-label mb-1">{{ label }}</label>
+                            <input class="form-control" type="number" id="{{ key }}" name="{{ key }}"
+                                   value="{{ settings[key] }}" min="{{ low }}" max="{{ high }}" style="width: 110px;" onclick="this.select()">
+                            <div class="form-text">{{ note }}</div>
+                        </div>
+                        {% endfor %}
+                    </div>
+                </div>
+            </div>
 
             <button type="submit" class="btn btn-primary">Save Appearance</button>
+            <button type="submit" class="btn btn-outline-danger ms-2" formaction="{{ BASE_URL }}/settings/section/appearance/reset" formnovalidate
+                    onclick="return confirm('Reset every Appearance setting, including the Home page, to its default?');">Reset All To Defaults</button>
         </form>
         {% endif %}
 
@@ -2489,8 +2578,14 @@
         </script>
         {% endif %}
 
+        {# ── GA4 Requests ────────────────────────────────────── #}
+        {% if active_section == 'ga4-requests' %}
+        {% include '_settings_ga4_requests.html' %}
+        {% endif %}
+
         </div><!-- /.settings-content -->
         </div><!-- /.settings-layout -->
     </div>
+    <script src="{{ static_url('js/colour_picker.js') }}"></script>
 </body>
 </html>

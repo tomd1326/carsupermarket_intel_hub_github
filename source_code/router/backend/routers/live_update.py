@@ -135,7 +135,7 @@ def _load_recipes(conn) -> list:
 
 # Settings > Live Update > Run Settings. API workers and items per page are
 # the API Requests settings (api_requests reads them for every Nexus pull).
-DEFAULT_DBT_THREADS = 20
+DEFAULT_DBT_THREADS = 40
 
 
 def _setting(conn, key: str, default):
@@ -153,7 +153,8 @@ def _setting(conn, key: str, default):
 def _run_settings(conn) -> dict:
     config = api_requests._load_config(conn, 'nexus')
     return {'nexus_workers': config['nexus_workers'], 'nexus_per_page': config['nexus_per_page'],
-            'dbt_threads': _setting(conn, 'live_update_dbt_threads', DEFAULT_DBT_THREADS)}
+            'dbt_threads': _setting(conn, 'live_update_dbt_threads', DEFAULT_DBT_THREADS),
+            'manual_dbt_threads': _setting(conn, 'manual_dbt_threads', DEFAULT_DBT_THREADS)}
 
 
 def _load_run(conn, run_id: str):
@@ -598,12 +599,14 @@ def lu_config(recipe: str = '', user: str = Depends(get_current_user)):
 @router.post("/api/live-update/settings")
 def lu_save_settings(data: dict, user: str = Depends(get_current_user)):
     """Run Settings: API workers and items per page (shared with Manual API
-    Requests) and the dbt threads Live Update runs with."""
+    Requests), the dbt threads Live Update runs with, and the dbt threads for
+    manual runs (Plan From A Model / Run A Job). Only the fields sent are saved."""
     _admin(user)
+    limits = {'nexus_workers': ('nexus_workers', 10), 'nexus_per_page': ('nexus_per_page', 100),
+              'dbt_threads': ('live_update_dbt_threads', 64), 'manual_dbt_threads': ('manual_dbt_threads', 64)}
     try:
-        values = {'nexus_workers': min(10, max(1, int(data.get('nexus_workers')))),
-                  'nexus_per_page': min(100, max(1, int(data.get('nexus_per_page')))),
-                  'live_update_dbt_threads': min(64, max(1, int(data.get('dbt_threads'))))}
+        values = {key: min(top, max(1, int(data[field])))
+                  for field, (key, top) in limits.items() if data.get(field) not in (None, '')}
     except (TypeError, ValueError):
         return {"status": "error", "message": "Enter whole numbers"}
     with get_database_connection() as conn:

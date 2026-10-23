@@ -15,62 +15,88 @@
         @font-face { font-family: 'DM Sans'; src: url('{{ BASE_URL }}/static/fonts/DMSans-SemiBold.ttf'); font-weight: 600; }
         @font-face { font-family: 'DM Sans'; src: url('{{ BASE_URL }}/static/fonts/DMSans-Bold.ttf');     font-weight: 700; }
         body, button, input, select, textarea { font-family: 'DM Sans', system-ui, sans-serif; }
-        body { background-color: #003c57; color: var(--c-text); }
-        .page-head { background: #003c57; border-bottom-color: transparent; box-shadow: none; }
-        .page-head .page-head-title, .page-head .account-nav { color: #ffffff; }
-        .page-head .account-menu-btn:hover { color: #ffffff; opacity: 0.8; }
+        {# Sizes and colours come from Settings > Appearance > Home Page. #}
+        {% set h = presence_config() %}
+        body { background-color: {{ h.home_page_bg }}; color: var(--c-text); }
+        .page-head { background: {{ h.home_page_bg }}; border-bottom-color: transparent; box-shadow: none; }
+        .page-head .page-head-title, .page-head .account-nav { color: {{ h.home_title_colour }}; }
+        .page-head .account-menu-btn:hover { color: {{ h.home_title_colour }}; opacity: 0.8; }
         .home-container {
             min-height: 80vh;
             display: flex;
             flex-direction: column;
             align-items: center;
             justify-content: center;
-            padding: 40px 16px 8vh;
+            padding: {{ h.home_pad_top }}px {{ h.home_pad_side }}px {{ h.home_pad_bottom }}vh;
         }
         .menu-grid {
             display: flex;
             flex-wrap: wrap;
             justify-content: center;
-            gap: 20px;
-            max-width: 600px;
+            gap: {{ h.home_grid_gap }}px;
+            max-width: {{ h.home_grid_max_width }}px;
         }
         .brand-logo {
-            width: 80px;
-            height: 80px;
-            border-radius: 16px;
-            margin-bottom: 20px;
+            width: {{ h.home_logo_size }}px;
+            height: {{ h.home_logo_size }}px;
+            border-radius: {{ h.home_logo_radius }}px;
+            margin-bottom: {{ h.home_logo_gap }}px;
         }
         .home-title {
-            color: #ffffff;
+            color: {{ h.home_title_colour }};
+            font-size: {{ h.home_title_size }}px;
+            margin-bottom: {{ h.home_title_gap }}px;
             font-weight: 600;
             letter-spacing: -0.3px;
             text-align: center;
         }
         .menu-btn {
-            width: 280px;
-            height: 80px;
-            font-size: 1.1rem;
-            font-weight: 600;
-            border-radius: var(--radius-lg);
+            width: {{ h.home_btn_width }}px;
+            height: {{ h.home_btn_height }}px;
+            font-size: {{ h.home_btn_font_size }}px;
+            font-weight: {{ h.home_btn_font_weight }};
+            border-radius: {{ h.home_btn_radius }}px;
             display: flex;
             align-items: center;
             justify-content: center;
             gap: 12px;
-            background-color: #7ed321;
+            background-color: {{ h.home_btn_bg }};
             border: none;
-            color: #0d3d5f;
+            color: {{ h.home_btn_text }};
         }
         .menu-btn:hover {
-            background-color: #6cba18;
-            color: #0d3d5f;
+            background-color: {{ h.home_btn_hover_bg }};
+            color: {{ h.home_btn_text }};
         }
+        {# 3D look: a solid darker edge under the button, a soft shadow and a light top edge.
+           Pressing moves the button down by the edge depth. Strength 0 = flat. #}
+        {% set s3 = h.home_btn_3d %}
+        {% if s3 > 0 %}
+        {% set depth = (s3 * 10 / 100)|round|int %}
+        .menu-btn {
+            box-shadow:
+                0 {{ depth }}px 0 color-mix(in srgb, {{ h.home_btn_bg }}, black {{ h.home_btn_3d_edge }}%),
+                0 {{ (depth * 1.5)|round|int }}px {{ depth * 2 }}px rgba(0, 0, 0, {{ (s3 * 0.35 / 100)|round(2) }}),
+                inset 0 1px 0 rgba(255, 255, 255, {{ (s3 * 0.5 / 100)|round(2) }});
+            transition: transform 0.08s, box-shadow 0.08s;
+            margin-bottom: {{ depth }}px;
+        }
+        .menu-btn:hover { box-shadow:
+                0 {{ depth }}px 0 color-mix(in srgb, {{ h.home_btn_hover_bg }}, black {{ h.home_btn_3d_edge }}%),
+                0 {{ (depth * 1.5)|round|int }}px {{ depth * 2 }}px rgba(0, 0, 0, {{ (s3 * 0.35 / 100)|round(2) }}),
+                inset 0 1px 0 rgba(255, 255, 255, {{ (s3 * 0.5 / 100)|round(2) }}); }
+        .menu-btn:active {
+            transform: translateY({{ depth }}px);
+            box-shadow: 0 0 0 color-mix(in srgb, {{ h.home_btn_bg }}, black {{ h.home_btn_3d_edge }}%), inset 0 1px 3px rgba(0, 0, 0, 0.25);
+        }
+        {% endif %}
     </style>
 </head>
 <body>
     {{ page_header('Home', user) }}
     <div class="home-container">
         <img src="{{ BASE_URL }}/static/icon.png" alt="CarSupermarket" class="brand-logo">
-        <h2 class="home-title mb-5">CarSupermarket.com<br>{{ site_name() }}</h2>
+        <h2 class="home-title">CarSupermarket.com<br>{{ site_name() }}</h2>
         {# Tiles come from the page registry, filtered to what this user may
            see — the same list the access checks use, so a tile can never be
            shown for a page that would then refuse to open. Add a page in

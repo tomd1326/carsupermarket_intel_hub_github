@@ -255,6 +255,30 @@ SETTINGS_DEFAULTS = {
     'ap_menu_opacity':                  100,
     'ap_radius':                        8,
     'ap_header_shadow':                 6,
+    # Settings > Appearance > Home Page: sizes in pixels, colours '#rrggbb'.
+    'home_page_bg':                     '#003c57',
+    'home_title_colour':                '#ffffff',
+    'home_btn_bg':                      '#7ed321',
+    'home_btn_hover_bg':                '#6cba18',
+    'home_btn_text':                    '#0d3d5f',
+    'home_title_size':                  32,
+    'home_title_gap':                   48,
+    'home_logo_size':                   80,
+    'home_logo_radius':                 16,
+    'home_logo_gap':                    20,
+    'home_btn_width':                   280,
+    'home_btn_height':                  80,
+    'home_btn_font_size':               18,
+    'home_btn_font_weight':             600,
+    'home_btn_radius':                  8,
+    # 3D look of the Home buttons: strength 0 = flat; edge = how dark the bottom edge is (percent black).
+    'home_btn_3d':                      0,
+    'home_btn_3d_edge':                 35,
+    'home_grid_gap':                    20,
+    'home_grid_max_width':              600,
+    'home_pad_top':                     40,
+    'home_pad_side':                    16,
+    'home_pad_bottom':                  8,
     # Settings > User Activity: a session with no request for this long ends as Timed Out.
     'session_timeout_minutes':          30,
     # Force Re-login: whole epoch seconds. Logins before this are signed out on every server.
@@ -271,6 +295,7 @@ APPEARANCE_COLOUR_SETTINGS = {
     'ap_page_bg', 'ap_surface', 'ap_header_bg', 'ap_menu_bg', 'ap_text', 'ap_heading',
     'ap_muted', 'ap_border', 'ap_menu_text', 'ap_primary', 'ap_primary_hover',
     'ap_table_header_bg', 'ap_table_header_text',
+    'home_page_bg', 'home_title_colour', 'home_btn_bg', 'home_btn_hover_bg', 'home_btn_text',
 }
 
 # Per-user bool settings stored as e.g. calc_buying_reqs__buyer, get_stock__buyer.
@@ -425,12 +450,14 @@ def save_settings_partial(conn, values: dict):
         cur.execute(
             "CREATE TABLE IF NOT EXISTS settings (key VARCHAR(100) PRIMARY KEY, value VARCHAR(250))"
         )
-        for key, value in values.items():
-            cur.execute(
-                "INSERT INTO settings (key, value) VALUES (%s, %s) "
-                "ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value",
-                (key, str(value))
-            )
+        # One statement for all keys: a statement per key is one network round
+        # trip each, which is slow on a laptop reaching the database over VPN.
+        psycopg2.extras.execute_values(
+            cur,
+            "INSERT INTO settings (key, value) VALUES %s "
+            "ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value",
+            [(key, str(value)) for key, value in values.items()]
+        )
     conn.commit()
 
 
