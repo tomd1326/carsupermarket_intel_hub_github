@@ -27,6 +27,24 @@
             <i class="fas fa-sync-alt" id="loadIcon"></i> Load Data
         </button>
         {% if kpi_is_admin %}
+        <!-- Admin View: other kinds of reload, for when only one thing changed. -->
+        <div class="load-menu admin-only">
+            <button class="btn btn-load load-menu-btn" type="button" onclick="toggleLoadMenu(event)" title="Other ways to reload" aria-label="Other ways to reload">
+                <i class="fas fa-caret-down"></i>
+            </button>
+            <div class="load-menu-list" id="loadMenuList">
+                <button type="button" onclick="loadMenu('all')"><i class="fas fa-sync-alt"></i> Reload Everything
+                    <span>Snowflake and SharePoint, as Load Data</span></button>
+                <button type="button" onclick="loadMenu('cached')"><i class="fas fa-paint-brush"></i> Redraw Charts
+                    <span>From the data already loaded, no queries</span></button>
+                <button type="button" onclick="loadMenu('snowflake')"><i class="fas fa-snowflake"></i> Reload Snowflake Data
+                    <span>daily_summary and Data Sources tables</span></button>
+                <button type="button" onclick="loadMenu('sharepoint')"><i class="fas fa-file-excel"></i> Check SharePoint Files Now
+                    <span>Download any spreadsheet saved since its copy</span></button>
+                <button type="button" onclick="loadMenu('page')"><i class="fas fa-code"></i> Reload Page (Code Changes)
+                    <span>Fresh HTML, JS and CSS</span></button>
+            </div>
+        </div>
         <!-- Admin View shows the editing buttons; User View hides them to see
              the page as everyone else does. Admin only; remembered per browser. -->
         <div class="view-toggle" role="group" aria-label="View">
@@ -173,18 +191,18 @@
             </div>
             <div class="modal-error" id="chartModalError"></div>
 
-            <!-- Tabs down the left, grouped by what gets changed together: what
-                 is plotted | how stacked columns look | number format and axis
-                 (a format change usually needs the axis changing too) | title
-                 and placement | View Vehicles. The target is not here: it has
-                 its own Targets popup. -->
+            <!-- Tabs down the left, grouped by what gets changed together: title
+                 and placement (what the chart is and where it goes) | what is
+                 plotted | how stacked columns look | number format and axis (a
+                 format change usually needs the axis changing too) | View
+                 Vehicles. The target is not here: it has its own Targets popup. -->
             <div class="chart-modal-body">
             <nav class="chart-tabs">
+                <button type="button" data-tab="title" onclick="showChartTab('title')">Title &amp; Placement</button>
                 <button type="button" data-tab="data" onclick="showChartTab('data')">Data</button>
                 <button type="button" data-tab="columns" class="stacked-only" onclick="showChartTab('columns')">Columns</button>
                 <button type="button" data-tab="labels" onclick="showChartTab('labels')">Number Format</button>
                 <button type="button" data-tab="axis" onclick="showChartTab('axis')">Axis &amp; Target</button>
-                <button type="button" data-tab="title" onclick="showChartTab('title')">Title &amp; Placement</button>
                 <button type="button" data-tab="vehicles" onclick="showChartTab('vehicles')">View Vehicles</button>
             </nav>
             <div class="chart-panes">
