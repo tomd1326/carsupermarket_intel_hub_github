@@ -188,6 +188,30 @@
         </form>
         {% endif %}
 
+        {# ── Email Attachments ───────────────────────────────── #}
+        {% if active_section == 'email-attachments' %}
+        <form method="post" action="{{ BASE_URL }}/settings/section/email-attachments">
+            <div class="card mb-4">
+                <div class="card-header fw-semibold">Inline And Signature Images</div>
+                <div class="card-body">
+                    <div class="form-check mb-3">
+                        <input class="form-check-input" type="checkbox" id="email_attach_skip_inline" name="email_attach_skip_inline"
+                               {% if settings.email_attach_skip_inline %}checked{% endif %}>
+                        <label class="form-check-label" for="email_attach_skip_inline">Skip Inline Images</label>
+                    </div>
+                    <div>
+                        <label for="email_attach_inline_keep_kb" class="form-label mb-1">Keep Inline Images Bigger Than (KB)</label>
+                        <input class="form-control" type="number" id="email_attach_inline_keep_kb" name="email_attach_inline_keep_kb"
+                               value="{{ settings.email_attach_inline_keep_kb }}" min="0" style="width: 110px;">
+                        <div class="form-text">Default: 100. 0 skips every inline image.</div>
+                    </div>
+                    <div class="form-text mt-2">Inline images are pictures shown inside the email body, such as logos in signatures. Real attachments are always saved.</div>
+                </div>
+            </div>
+            <button type="submit" class="btn btn-primary">Save Email Attachments</button>
+        </form>
+        {% endif %}
+
         {# ── AI ──────────────────────────────────────────────── #}
         {% if active_section == 'ai' %}
         <form method="post" action="{{ BASE_URL }}/settings/section/ai">
@@ -1968,9 +1992,10 @@
                             <input class="form-control" type="number" id="presence_drop_off_seconds" name="presence_drop_off_seconds"
                                    value="{{ settings.presence_drop_off_seconds }}" min="15" style="width: 110px;" onclick="this.select()">
                             <div class="form-text" style="max-width: 300px;">
-                                Default: 60. Only used when a tab stops without saying so (crash, lost
+                                Default: 150. Only used when a tab stops without saying so (crash, lost
                                 network); the circle then goes on the next check after this, so up to
-                                this plus one check. At least two checks plus 5 seconds.
+                                this plus one check. At least two checks plus 5 seconds. Keep it well above
+                                a minute: browsers slow checks from tabs left in the background.
                             </div>
                         </div>
                         <div>

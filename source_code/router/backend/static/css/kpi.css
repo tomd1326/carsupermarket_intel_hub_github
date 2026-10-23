@@ -195,6 +195,10 @@
 .at-rows-table { width: 100%; table-layout: fixed; font-size: var(--kpi-at-table-font, 11px); margin-bottom: 6px; }
 .at-rows-table th { max-width: none; padding: 3px 3px; font-size: inherit; line-height: 1.2; }
 .at-rows-table td { padding: 2px 3px; overflow: hidden; }
+/* Column headings stay in view while the popup scrolls, pinned just under the
+   popup's own sticky heading (--at-head-h is set from its height on open).
+   The line under them is a shadow, since a collapsed border scrolls away. */
+.at-rows-table thead th { position: sticky; top: var(--at-head-h, 40px); z-index: 4; background: #fff; box-shadow: 0 1px 0 #94a3b8; }
 .at-rows-table input { width: 100%; box-sizing: border-box; padding: 2px 3px; font-size: inherit; }
 .at-rows-table input[type="date"] { width: 100%; }
 .at-rows-table input[type="number"] { -moz-appearance: textfield; }
@@ -202,7 +206,8 @@
 .at-rows-table input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
 .at-rows-table .btn { padding: 2px 6px; font-size: inherit; }
 .at-rows-table td.at-cpspd, .at-rows-table th.at-cpspd { font-weight: 700; color: #0d3d6e; text-align: right; }
-.at-rows-table tr.at-continued td { color: #64748b; font-style: italic; }
+.at-rows-table .at-period-sum { text-align: right; padding: 2px 4px; }
+.at-rows-table tr.at-continued td {color: #64748b; font-style: italic; }
 .at-rows-table tr.at-month-total td { font-weight: 700; background: #eef2f7; border-top: 1px solid #cbd5e1; border-bottom: 2px solid #94a3b8; }
 .at-rows-table tr.at-month-total td.at-cpspd { color: #0d3d6e; }
 .at-month-toggle { cursor: pointer; }

@@ -4,7 +4,10 @@ from fastapi import APIRouter, Request, Depends, HTTPException
 from fastapi.responses import HTMLResponse
 import calendar
 import json
+import os
+import pickle
 import re
+import tempfile
 import time
 import logging
 import datetime
@@ -931,6 +934,7 @@ def _refresh_daily_summary_columns(token: str) -> None:
     if token and token != _ds_columns_refresh_token:
         _ds_columns_refresh_token = token
         _ds_columns_cache = None
+        _clear_daily_summary_data()
         # Settings > Data Sources tables too: their columns and names.
         _source_columns_cache.clear()
         _source_names_cache.clear()
@@ -1599,10 +1603,62 @@ def _ds_fetch_range(today, months, weeks, days, after=None):
     return fetch_start, fetch_end
 
 
+# daily_summary results, so a page load does not query Snowflake every time.
+# Kept in memory (lasts while a Lambda container stays warm) and, on the local
+# dev server only, in a file too, because the server restarts on every code
+# change and empties memory. Load Data clears both (_refresh_daily_summary_columns).
+_DS_DATA_TTL = 600            # seconds, in memory
+_DS_DATA_FILE_TTL = 3600      # seconds, local file
+_ds_data_cache: dict = {}     # key -> (read at, {date: {COLUMN: value}})
+_IS_LOCAL = not os.getenv("AWS_LAMBDA_FUNCTION_NAME")
+_DS_DATA_FILE = os.path.join(tempfile.gettempdir(), "vle_kpi_daily_summary_cache.pkl")
+
+
+def _clear_daily_summary_data() -> None:
+    _ds_data_cache.clear()
+    if _IS_LOCAL:
+        try:
+            os.remove(_DS_DATA_FILE)
+        except OSError:
+            pass
+
+
+def _ds_file_read() -> dict:
+    try:
+        with open(_DS_DATA_FILE, "rb") as f:
+            return pickle.load(f)
+    except Exception:
+        return {}
+
+
 def _fetch_daily_summary(columns: list, fetch_start, fetch_end) -> dict:
     """{date: {COLUMN: value}} for the given daily_summary columns, in one query.
     Column names must come from the live column list (they are interpolated)."""
     cols = ["DATE"] + [c for c in dict.fromkeys(columns) if c != "DATE"]
+    key = (tuple(sorted(cols)), str(fetch_start), str(fetch_end))
+    now = time.time()
+    cached = _ds_data_cache.get(key)
+    if cached and now - cached[0] < _DS_DATA_TTL:
+        return cached[1]
+    if _IS_LOCAL:
+        cached = _ds_file_read().get(key)
+        if cached and now - cached[0] < _DS_DATA_FILE_TTL:
+            _ds_data_cache[key] = cached
+            return cached[1]
+    out = _query_daily_summary(cols, fetch_start, fetch_end)
+    _ds_data_cache[key] = (now, out)
+    if _IS_LOCAL:
+        stored = {k: v for k, v in _ds_file_read().items() if now - v[0] < _DS_DATA_FILE_TTL}
+        stored[key] = (now, out)
+        try:
+            with open(_DS_DATA_FILE, "wb") as f:
+                pickle.dump(stored, f)
+        except Exception as e:
+            logger.warning("KPI daily summary cache file not saved: %s", e)
+    return out
+
+
+def _query_daily_summary(cols: list, fetch_start, fetch_end) -> dict:
     with SnowflakeClient() as sf:
         rows, names = sf.execute(f"""
             SELECT {', '.join(cols)}
@@ -2255,6 +2311,8 @@ def _validate_stacked_row(row: dict) -> str | None:
         return "bad theme"
     if row.get("column_layout", "stacked") not in ("stacked", "side_by_side"):
         return "bad column_layout"
+    if row.get("seg_label_pos", "center") not in ("center", "start", "end"):
+        return "bad seg_label_pos"
     for flag in ("pct", "seg_labels"):
         if not isinstance(row.get(flag, False), bool):
             return f"bad {flag}"

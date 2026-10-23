@@ -48,7 +48,8 @@ SETTINGS_SECTIONS = [
     ("buying-requirements", "Buying Requirements", "Buying Requirements"),
     ("supplier-evaluator",  "Supplier Evaluator",  "Supplier Stock Evaluator"),
     ("mot-check",           "MOT Check",           "MOT Check"),
-    ("ai",                  "AI",                  "AI"),
+    ("email-attachments",   "Email Attachments",   "Email Attachment Extractor"),
+    ("ai",                 "AI",                  "AI"),
     ("cap-credentials",     "CAP Credentials",     "CAP Credential Override"),
     ("email",               "Email",               "Email"),
     ("live-users",          "Live Users",          "Live Users"),
@@ -181,6 +182,24 @@ def save_mot_check(
         save_settings_partial(conn, {'mot_workers': mot_workers})
     logger.info("Settings [MOT Check] updated by %s", user)
     return _section_redirect("mot-check")
+
+
+@router.post("/settings/section/email-attachments")
+def save_email_attachments(
+    request: Request,
+    email_attach_skip_inline: str = Form(default=""),
+    email_attach_inline_keep_kb: int = Form(...),
+    user: str = Depends(get_current_user),
+):
+    if user != 'tdrayson':
+        raise HTTPException(status_code=403, detail="Forbidden")
+    with get_database_connection() as conn:
+        save_settings_partial(conn, {
+            'email_attach_skip_inline':    1 if email_attach_skip_inline == "on" else 0,
+            'email_attach_inline_keep_kb': max(0, email_attach_inline_keep_kb),
+        })
+    logger.info("Settings [Email Attachments] updated by %s", user)
+    return _section_redirect("email-attachments")
 
 
 @router.post("/settings/ai/refresh-models")
