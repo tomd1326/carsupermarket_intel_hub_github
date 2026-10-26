@@ -112,7 +112,7 @@ def _stored_lookup(vrm: str, mileage: int) -> dict | None:
     a supplier list check the same data: whichever ran last populated these
     tables, and both pages read them back.
     """
-    from list_processor.cap_client import CAPClient
+    from clients.cap_client import CAPClient
     rounded = CAPClient.round_to_nearest_thousand(mileage)
     try:
         with get_vehicle_database_connection() as conn:
@@ -333,8 +333,8 @@ def _warm_for_lookup() -> None:
     def _warm():
         def _apis():
             try:
-                from list_processor.cap_client import CAPClient
-                from list_processor.autotrader_client import AutoTraderClient
+                from clients.cap_client import CAPClient
+                from clients.autotrader_client import AutoTraderClient
                 CAPClient()
                 AutoTraderClient().get_access_token(requests.Session())
             except Exception as e:
@@ -397,8 +397,8 @@ def assess_vehicle_cached(vrm: str, mileage: int, user: str = Depends(require_pa
 
 def _cap_lookup(vrm: str, mileage: int) -> dict:
     """CAP VRM valuation plus the live valuation for the same CAP ID."""
-    from list_processor.cap_client import CAPClient
-    from list_processor.structs import VehicleRow
+    from clients.cap_client import CAPClient
+    from clients.structs import VehicleRow
 
     cap = CAPClient()
     vehicle = VehicleRow(vrm=vrm, mileage=mileage)
@@ -462,7 +462,7 @@ def _at_lookup(vrm: str, mileage: int, spec_confirmed: bool = False) -> dict:
     match to what the Portal displays. Only once confirmed empty should the
     lower base price be shown.
     """
-    from list_processor.autotrader_client import (
+    from clients.autotrader_client import (
         AutoTraderClient, _unwrap_vehicles_result, _valuation_features_payload,
     )
 
@@ -1009,7 +1009,7 @@ def assess_vehicle_image(cap_id: int, date: str = None,
     """
 
     from fastapi.responses import Response
-    from list_processor.cap_client import CAPClient
+    from clients.cap_client import CAPClient
 
     def _serve(content, content_type):
         return Response(
@@ -1076,7 +1076,7 @@ def assess_vehicle_features(vrm: str, mileage: int, user: str = Depends(require_
     """
 
     import requests
-    from list_processor.autotrader_client import (
+    from clients.autotrader_client import (
         AutoTraderClient, _unwrap_vehicles_result, optional_features,
     )
 
@@ -1138,7 +1138,7 @@ def assess_vehicle_save_features(vrm: str, payload: dict,
     """
 
     import requests
-    from list_processor.autotrader_client import AutoTraderClient, _unwrap_vehicles_result
+    from clients.autotrader_client import AutoTraderClient, _unwrap_vehicles_result
 
     key = vrm.strip().upper().replace(' ', '')
     try:
@@ -1259,7 +1259,7 @@ def assess_vehicle_run_spec_check(vrm: str, user: str = Depends(require_page_api
     result needs replacing, the row has to be deleted deliberately.
     """
 
-    from list_processor.spec_check_client import SpecCheckClient, SpecCheckError
+    from clients.spec_check_client import SpecCheckClient, SpecCheckError
 
     key = vrm.strip().upper().replace(' ', '')
 

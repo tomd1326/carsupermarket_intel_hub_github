@@ -9,7 +9,7 @@ import pandas as pd
 
 import requests
 from utils.secrets_manager_client import get_secret
-from list_processor.columns_mapper import BaseColumnsMapper
+from clients.columns_mapper import BaseColumnsMapper
 from utils.rate_limiter import RateLimiter
 from utils.singleton import Singleton
 from utils.cache import cache
@@ -209,6 +209,24 @@ class AutoTraderClient(metaclass=Singleton):
         self._history_backoff_until = 0.0
         self._history_backoff_step = 0.0
         self._history_backoff_lock = threading.Lock()
+
+        # One session per worker thread, same as CAPClient. A single session
+        # shared by every thread was the old behaviour: requests keeps only
+        # 10 connections per host by default, so 40 threads spent most of
+        # their time opening a fresh connection (and a fresh TLS handshake)
+        # that was then thrown away instead of reused.
+        self._local = threading.local()
+
+    @property
+    def _session(self) -> requests.Session:
+        """This thread's session. Every Autotrader URL is on one host, so the
+        pool only needs the one connection each thread uses at a time."""
+        if not hasattr(self._local, 'session'):
+            session = requests.Session()
+            adapter = requests.adapters.HTTPAdapter(pool_connections=1, pool_maxsize=2)
+            session.mount('https://', adapter)
+            self._local.session = session
+        return self._local.session
 
     def get_access_token(self, session) -> str:
         with self.auth_lock:
@@ -723,8 +741,12 @@ class AutoTraderClient(metaclass=Singleton):
                 'vin': '',
             }
 
+    def _process_row_own_session(self, row: dict, column_mapper: BaseColumnsMapper) -> dict:
+        """process_row using this worker thread's own session. The property has
+        to be read inside the worker, not by the thread submitting the work."""
+        return self.process_row(row, self._session, column_mapper)
+
     def process_file(self, input_df: pd.DataFrame, column_mapper: BaseColumnsMapper, max_workers: int = 40, rate_limit: int = 60) -> pd.DataFrame:
-        session = requests.Session()
         processed_rows = []
 
         self.limiter = RateLimiter(rate_limit=rate_limit, time_window=1)
@@ -738,10 +760,22 @@ class AutoTraderClient(metaclass=Singleton):
             self._abort = False
             self._error_log = []
 
+        started = time.time()
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             for index, row in input_df.iterrows():
-                processed_rows.append(executor.submit(self.process_row, (row.to_dict()), session, column_mapper))
+                processed_rows.append(executor.submit(self._process_row_own_session, (row.to_dict()), column_mapper))
             processed_rows = [future.result() for future in processed_rows]
+
+        # Logged so a slow run can be told apart from a rate-limited one: if
+        # the achieved rate sits well under rate_limit, the limiter is not the
+        # ceiling and max_workers is what to change in Settings.
+        elapsed = time.time() - started
+        total_requests = self._vehicles_requests + self._valuations_requests
+        if elapsed > 0:
+            logger.warning(
+                "[AT] %d requests in %.0fs = %.1f/s (limit %d/s, %d workers)",
+                total_requests, elapsed, total_requests / elapsed, rate_limit, max_workers
+            )
 
         processed_rows = [row if row is not None else {} for row in processed_rows]
         processed_df = pd.DataFrame(processed_rows)

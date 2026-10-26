@@ -275,7 +275,7 @@ def save_cap_credentials(
             'cap_override_password':      cap_override_password.strip(),
         })
     # Reset CAPClient singleton so the next task picks up the new creds
-    from list_processor.cap_client import CAPClient
+    from clients.cap_client import CAPClient
     from utils.singleton import Singleton
     Singleton._instances.pop(CAPClient, None)
     logger.info("Settings [CAP Credentials] updated by %s", user)
@@ -1822,7 +1822,7 @@ def update_settings(
     with get_database_connection() as conn:
         save_settings(conn, number_to_buy, max_days_sales, max_dts, min_gpu_m, cap_workers, cap_rate_limit, calc, gs, enable_cars_bought=ecb, kpi_ai_summary=kai, mot_workers=mot_workers, at_workers=at_workers, at_rate_limit=at_rate_limit, valuation_cache_hours=valuation_cache_hours, cap_override_enabled=coe, cap_override_subscriber_id=cap_override_subscriber_id.strip(), cap_override_password=cap_override_password.strip(), user='buyer')
     # Reset CAPClient singleton so the next task picks up the new creds
-    from list_processor.cap_client import CAPClient
+    from clients.cap_client import CAPClient
     from utils.singleton import Singleton
     Singleton._instances.pop(CAPClient, None)
     logger.info(

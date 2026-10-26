@@ -62,8 +62,8 @@ def cap_lookup_progress(request: Request, user: str = Depends(require_page_api('
 
 @router.post("/cap-lookup/process")
 def cap_lookup_process(request: Request, payload: dict, user: str = Depends(require_page_api('cap_lookup'))):
-    from list_processor.cap_client import CAPClient
-    from list_processor.structs import VehicleRow
+    from clients.cap_client import CAPClient
+    from clients.structs import VehicleRow
 
     vrms = [v.strip().upper() for v in (payload.get("vrms") or []) if v.strip()]
     if not vrms:
@@ -208,7 +208,7 @@ def _cap_description(cap, capid: int, reg_date: datetime.date, mileage: int) -> 
     Make, model, derivative and current monthly values from CAPIDValuation.
     Never raises: a failure is returned as 'note' so the valuations still show.
     """
-    from list_processor.structs import VehicleRow
+    from clients.structs import VehicleRow
 
     out = {'make': "", 'model': "", 'derivative': "", 'clean': None, 'retail': None, 'note': ""}
     try:
@@ -238,7 +238,7 @@ def _historic_valuation(request: Request, payload: dict, mileage: int, user: str
     rounded to 1,000 and values rounded to 50; the rest were 100-150 out, most
     likely where the real release day differed.
     """
-    from list_processor.cap_client import CAPClient
+    from clients.cap_client import CAPClient
 
     capid, reg_date, reg_text = _capid_and_reg_date(payload)
     try:
@@ -326,8 +326,8 @@ def _historic_valuation(request: Request, payload: dict, mileage: int, user: str
 @router.post("/cap-lookup/valuation")
 def cap_lookup_valuation(request: Request, payload: dict, user: str = Depends(require_page_api('cap_lookup'))):
     """One CAP valuation, either by VRM + mileage or by CAP ID + registration date + mileage."""
-    from list_processor.cap_client import CAPClient
-    from list_processor.structs import VehicleRow
+    from clients.cap_client import CAPClient
+    from clients.structs import VehicleRow
     from .assess_vehicle import _cap_lookup
 
     mode = payload.get('mode')

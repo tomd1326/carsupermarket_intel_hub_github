@@ -38,8 +38,8 @@ logging.getLogger('asyncio').setLevel(logging.CRITICAL)
 logging.getLogger('multipart').setLevel(logging.CRITICAL)
 logging.getLogger('snowflake').setLevel(logging.WARNING)
 logging.getLogger('filelock').setLevel(logging.WARNING)
-logging.getLogger('list_processor.autotrader_client').setLevel(logging.WARNING)
-logging.getLogger('list_processor.cap_client').setLevel(logging.WARNING)
+logging.getLogger('clients.autotrader_client').setLevel(logging.WARNING)
+logging.getLogger('clients.cap_client').setLevel(logging.WARNING)
 
 # Store SharePoint-file lines, warnings and errors in Aurora for the Logs page.
 # Must come after basicConfig, which clears existing handlers.

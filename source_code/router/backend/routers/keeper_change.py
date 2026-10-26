@@ -425,7 +425,7 @@ def _run_chunk(run_id: str, chunk: int, user: str = None, started_at: str = None
                     slice_start, run_id)
         return
 
-    from list_processor.autotrader_client import AutoTraderClient
+    from clients.autotrader_client import AutoTraderClient
 
     start = time.time()
     results = [None] * len(slice_vrms)
@@ -546,7 +546,7 @@ def _build_row(vrm: str, payload, status) -> list:
     vehicle has no recorded keeper changes), NOT_FOUND (Autotrader does not know
     this VRM), ERROR (the call failed even after the retry).
     """
-    from list_processor.autotrader_client import _unwrap_vehicles_result, keeper_change_dates
+    from clients.autotrader_client import _unwrap_vehicles_result, keeper_change_dates
 
     if status == 404:
         return [vrm, "", "", "", "", "", "NOT_FOUND"]

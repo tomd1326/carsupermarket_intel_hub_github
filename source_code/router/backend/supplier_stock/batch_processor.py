@@ -19,9 +19,9 @@ from concurrent.futures import ThreadPoolExecutor
 
 import pandas as pd
 
-from list_processor.autotrader_client import AutoTraderClient
-from list_processor.cap_client import CAPClient
-from list_processor.columns_mapper import BaseColumnsMapper
+from clients.autotrader_client import AutoTraderClient
+from clients.cap_client import CAPClient
+from clients.columns_mapper import BaseColumnsMapper
 from utils.db_utils import get_vehicle_database_connection
 from utils.vehicle_store import _to_float, _to_int, round_mileage_to_nearest_thousand
 from utils.vehicle_store import (

@@ -4,7 +4,7 @@ import re
 from pydantic import ValidationError
 from typing import Optional, Dict
 import pandas as pd
-from list_processor.structs import VehicleRow
+from clients.structs import VehicleRow
 import logging
 
 
