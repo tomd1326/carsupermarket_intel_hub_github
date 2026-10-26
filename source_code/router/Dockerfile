@@ -25,8 +25,10 @@ ARG LOCAL_ENV
 
 RUN mkdir -p ${BUILD_DIR}
 
+# Dependencies first, application code after. Docker reuses a cached layer only
+# while everything before it is unchanged, so copying the code ahead of the
+# pip install meant every code edit reinstalled every Python package.
 COPY ./pyproject.toml .
-COPY ./backend ${BUILD_DIR}/
 
 # Upgrade pip
 RUN pip3 install --upgrade pip
@@ -46,17 +48,20 @@ RUN pip3 install \
       --target /python_build \
       -r requirements.txt
 
+COPY ./backend ${BUILD_DIR}/
+
 FROM public.ecr.aws/lambda/python:3.12 as run-image
 
 ENV TZ=Europe/London
 
-COPY --from=build-image ${BUILD_DIR}/ ${LAMBDA_TASK_ROOT}/
 COPY --from=build-image /python_build /python_build
-
-COPY backend/ ${LAMBDA_TASK_ROOT}/
 
 ENV PYTHONPATH=.:backend:/python_build
 ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+
+# The slow steps (system libraries and the Chromium download) come before the
+# application code, so a code edit reuses them from the cache instead of
+# reinstalling them. They only depend on /python_build above.
 
 # Install Chromium system dependencies via dnf (install-deps uses apt-get which is unavailable on Amazon Linux)
 RUN dnf install -y \
@@ -87,8 +92,13 @@ RUN dnf install -y \
     libgcc \
     && dnf clean all
 
-# Install Playwright and Chromium
-RUN pip3 install "playwright>=1.44.0" && \
-    python3 -m playwright install chromium
+# Download Chromium with the Playwright in /python_build, which pyproject.toml
+# installs and the app imports at run time (PYTHONPATH above puts it ahead of
+# the system site-packages). A separate `pip3 install playwright` used to
+# install a second copy here that nothing used; the browser has to match the
+# Playwright the app actually runs, which is this one.
+RUN python3 -m playwright install chromium
+
+COPY backend/ ${LAMBDA_TASK_ROOT}/
 
 CMD ["main.handler"]

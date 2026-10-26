@@ -1,10 +1,14 @@
 {% from '_navigation.html' import page_header with context %}
+{# Also the Weekly Business Review page (page_mode 'wbr'): a list of single
+   KPI charts, picked from the KPI page. kpi.js reads PAGE_MODE. #}
+{% set wbr = page_mode == 'wbr' %}
+{% set page_key = 'weekly_business_review' if wbr else 'kpi' %}
 <!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>{{ page_name('kpi') }}</title>
+    <title>{{ page_name(page_key) }}</title>
     <link rel="icon" type="image/png" href="{{ BASE_URL }}/static/icon.png">
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css" rel="stylesheet">
@@ -20,14 +24,23 @@
          page's own styles live in kpi.css. -->
     <link href="{{ static_url('css/kpi.css') }}" rel="stylesheet">
 </head>
-<body>
+<body{% if wbr %} class="wbr-mode"{% endif %}>
     <!-- The shared header row, kept at the top when scrolling: the page's
          buttons and status sit beside the title. -->
-    {% call page_header(page_name('kpi'), user, 'kpi-top-bar') %}
+    {% call page_header(page_name(page_key), user, 'kpi-top-bar') %}
         <button class="btn btn-load" id="loadBtn" onclick="loadAll(true)">
             <i class="fas fa-sync-alt" id="loadIcon"></i> Load Data
         </button>
+        {% if wbr %}
         {% if kpi_is_admin %}
+        <button class="btn btn-edit" onclick="openWbrPicker()">
+            <i class="fas fa-plus"></i> Add Chart From KPI
+        </button>
+        {% endif %}
+        <button class="btn btn-edit" id="slidesBtn" onclick="exportWbrSlides()">
+            <i class="fas fa-file-powerpoint" id="slidesIcon"></i> Export To Google Slides
+        </button>
+        {% elif kpi_is_admin %}
         <!-- Admin View: other kinds of reload, for when only one thing changed. -->
         <div class="load-menu admin-only">
             <button class="btn btn-load load-menu-btn" type="button" onclick="toggleLoadMenu(event)" title="Other ways to reload" aria-label="Other ways to reload">
@@ -69,7 +82,32 @@
         <div class="page-loading"><i class="fas fa-sync-alt spin"></i> <span>Loading<span class="loading-dots"></span></span></div>
         <div id="sectionTabs" class="kpi-tabs" role="tablist"></div>
         <div id="sectionsContainer"></div>
+        {% if wbr %}
+        <!-- The review's charts, in order. Each is one card moved out of its
+             KPI chart row, which stays in the hidden sectionsContainer. -->
+        <div class="wbr-grid" id="wbrGrid"></div>
+        <div class="wbr-empty" id="wbrEmpty" style="display:none;">
+            No charts yet.{% if kpi_is_admin %} Use Add Chart From KPI to add one.{% endif %}
+        </div>
+        {% endif %}
     </div>
+
+    {% if wbr and kpi_is_admin %}
+    <!-- Add Chart From KPI: every KPI chart by section, each period added on its own. -->
+    <div class="modal-overlay" id="wbrPickerModal">
+        <div class="modal-box wbr-picker">
+            <div class="chart-modal-head">
+                <h2>Add Chart From KPI</h2>
+                <button type="button" class="modal-close-x" onclick="closeWbrPicker()" aria-label="Close">&times;</button>
+            </div>
+            <input type="text" class="form-control mb-2" id="wbrPickerSearch" placeholder="Search charts" oninput="renderWbrPicker()">
+            <div class="wbr-picker-list" id="wbrPickerList"></div>
+            <div class="modal-actions">
+                <button type="button" class="btn btn-apply" onclick="closeWbrPicker()">Done</button>
+            </div>
+        </div>
+    </div>
+    {% endif %}
 
     <!-- Popup shown when hovering a chart note's dotted line -->
     <div class="note-tip" id="noteTip"></div>
@@ -1052,6 +1090,10 @@
                     <input type="number" id="setLegendFont" step="1">
                 </div>
                 <div class="modal-field">
+                    <label for="setWbrColumns">Weekly Business Review Charts Per Row</label>
+                    <input type="number" id="setWbrColumns" step="1">
+                </div>
+                <div class="modal-field">
                     <label for="setZoomSize">Chart Popup Opens At</label>
                     <select id="setZoomSize">
                         <option value="0">Small</option>
@@ -1128,6 +1170,8 @@
     // chart's fixed or per-date target in its Targets popup; every other
     // target option is the admin's.
     const IS_ADMIN = {{ 'true' if kpi_is_admin else 'false' }};
+    // 'kpi', or 'wbr' on the Weekly Business Review page.
+    const PAGE_MODE = {{ (page_mode or 'kpi') | tojson }};
     </script>
     <script src="{{ static_url('js/kpi.js') }}"></script>
 </body>

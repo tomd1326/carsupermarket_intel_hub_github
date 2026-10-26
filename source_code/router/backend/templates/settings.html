@@ -440,6 +440,35 @@
         </form>
         {% endif %}
 
+        {# ── Google Slides ───────────────────────────────────── #}
+        {% if active_section == 'google' %}
+        <div class="card mb-4">
+            <div class="card-header fw-semibold">Google Slides</div>
+            <div class="card-body">
+                <p class="form-text mt-0">
+                    The Weekly Business Review page creates its Google Slides decks in this
+                    Google account's My Drive. The website can only reach the decks it creates.
+                    Each environment (local, dev, prod) is connected separately.
+                </p>
+                {% if google.message %}<div class="alert alert-info py-2">{{ google.message }}</div>{% endif %}
+                {% if google.connected %}
+                <p class="mb-3">Connected as <strong>{{ google.email or 'unknown account' }}</strong></p>
+                <div class="d-flex gap-2">
+                    <a class="btn btn-outline-secondary" href="{{ BASE_URL }}/settings/google/connect">Reconnect</a>
+                    <form method="post" action="{{ BASE_URL }}/settings/google/disconnect">
+                        <button type="submit" class="btn btn-outline-danger">Disconnect</button>
+                    </form>
+                </div>
+                {% else %}
+                <p class="mb-3">Not connected.</p>
+                <a class="btn btn-primary" href="{{ BASE_URL }}/settings/google/connect">
+                    <i class="fab fa-google"></i> Connect Google
+                </a>
+                {% endif %}
+            </div>
+        </div>
+        {% endif %}
+
         {# ── Email ───────────────────────────────────────────── #}
         {% if active_section == 'email' %}
         <form method="post" action="{{ BASE_URL }}/settings/section/email">

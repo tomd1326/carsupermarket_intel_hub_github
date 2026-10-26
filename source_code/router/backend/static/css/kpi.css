@@ -579,3 +579,19 @@ body.targets-off.not-admin .targets-btn, body.targets-off.user-view .targets-btn
 .setting-colour { width: 100%; height: 32px; padding: 2px; border: 1px solid #cbd5e1; border-radius: 6px; cursor: pointer; }
 .veh-col-search { width: 100%; padding: 5px 9px; border: 1px solid #cbd5e1; border-radius: 6px; margin-bottom: 6px; font-size: 0.82rem; }
 .veh-col-head { font-size: 0.8rem; font-weight: 700; color: #334155; margin-bottom: 4px; }
+
+/* ── Weekly Business Review (kpi.html in 'wbr' mode) ─────────────────── */
+/* The KPI chart rows are built as usual but kept hidden; each review chart
+   is one of their cards, moved into the grid. */
+body.wbr-mode #sectionTabs, body.wbr-mode #sectionsContainer { display: none; }
+.wbr-grid { display: grid; grid-template-columns: repeat(var(--wbr-columns, 3), minmax(0, 1fr)); gap: 16px; }
+.wbr-item { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.wbr-item-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+.wbr-item-missing { padding: 18px 20px; border: 1px dashed #cbd5e1; border-radius: 10px; color: #64748b; font-size: 0.85rem; }
+.wbr-empty { color: #64748b; padding: 24px 0; }
+.modal-box.wbr-picker { width: 760px; max-width: 95vw; }
+.wbr-picker-list { max-height: 60vh; overflow-y: auto; }
+.wbr-picker-section { font-weight: 700; color: #0f172a; margin: 12px 0 6px; }
+.wbr-picker-row { display: flex; align-items: center; gap: 8px; padding: 5px 0; border-bottom: 1px solid #f1f5f9; font-size: 0.86rem; }
+.wbr-picker-row .wbr-picker-title { flex: 1; min-width: 0; }
+.wbr-picker-row button[disabled] { opacity: 0.45; cursor: default; }

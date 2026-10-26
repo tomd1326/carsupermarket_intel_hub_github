@@ -2,6 +2,7 @@ import logging
 import os
 import re
 import time
+from urllib.parse import parse_qs
 
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import FileResponse, RedirectResponse
@@ -103,7 +104,30 @@ async def page_redirect_handler(request: Request, exc: PageRedirect):
 app.add_exception_handler(PageRedirect, page_redirect_handler)
 app.add_exception_handler(HTTPException, http_exception_handler)
 app.add_exception_handler(Exception, unhandled_exception_handler)
-app.mount("/static", StaticFiles(directory=os.path.join(os.path.dirname(__file__), "static")), name="static")
+
+
+class VersionedStaticFiles(StaticFiles):
+    """Static files, with browsers told to keep versioned ones for a year.
+
+    static_url() in routers/core.py adds ?v=<hash of the file's contents>, so a
+    changed file always gets a new URL. That makes it safe for the browser to
+    keep the old URL's copy without checking back — kpi.js alone is 362 KB, and
+    it was being re-checked on every page load.
+
+    Only URLs that carry a version are cached like this. A plain /static/...
+    reference (the icon, fonts) has nothing to change when the file does, so it
+    keeps the browser's normal behaviour. Errors are never cached.
+    """
+
+    async def get_response(self, path, scope):
+        response = await super().get_response(path, scope)
+        query = parse_qs(scope.get('query_string', b'').decode('latin-1'))
+        if response.status_code == 200 and query.get('v'):
+            response.headers['Cache-Control'] = 'public, max-age=31536000, immutable'
+        return response
+
+
+app.mount("/static", VersionedStaticFiles(directory=os.path.join(os.path.dirname(__file__), "static")), name="static")
 
 @app.get("/favicon.ico", include_in_schema=False)
 async def favicon():

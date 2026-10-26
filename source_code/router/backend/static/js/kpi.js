@@ -108,6 +108,10 @@
         return 'sec-' + name.toLowerCase().replace(/[^a-z0-9]+/g, '-');
     }
 
+    // Weekly Business Review page (kpi.html in 'wbr' mode): a list of single
+    // KPI charts. See the Weekly Business Review block further down.
+    const WBR = typeof PAGE_MODE !== 'undefined' && PAGE_MODE === 'wbr';
+
     // ── Admin View / User View (admin only) ──
     // User View hides the editing buttons (Add Chart, Settings, Notes, Edit
     // Chart, Copy Chart Below). Kept in this browser only.
@@ -125,7 +129,7 @@
         if (layoutLoaded) { renderLayout(); redrawActiveSection(); }
     }
 
-    if (IS_ADMIN) {
+    if (IS_ADMIN && !WBR) {
         let savedView = 'admin';
         try { savedView = localStorage.getItem(PAGE_VIEW_KEY) || 'admin'; } catch (e) {}
         setPageView(savedView);
@@ -148,6 +152,7 @@
             loadCollapsedRows(layoutResp.collapsed_rows || []);
             loadRollingRows(layoutResp.rolling_rows || []);
             myCharts = layoutResp.my_charts || [];
+            wbrItems = layoutResp.wbr_items || [];
             layout = layoutResp.layout || { rows: [] };
             if (layoutResp.settings) settings = layoutResp.settings;
             applyAppearance();
@@ -198,6 +203,7 @@
 
     // ── Layout rendering ─────────────────────────────────────────────────────
     function renderLayout() {
+        if (WBR) { renderWbr(); return; }
         const container = document.getElementById('sectionsContainer');
 
         // Ensure section blocks exist, in order (existing blocks keep their open
@@ -319,6 +325,7 @@
 
     // Shown rows on a tab, in the order that tab draws them.
     function rowsInTab(name) {
+        if (WBR) return shownRows();
         return name === MY_CHARTS ? myChartRows() : shownRows().filter(r => r.section === name);
     }
     function myChartRows() {
@@ -369,6 +376,202 @@
         myCharts = rows;
         renderLayout();
         saveMyCharts(before);
+    }
+
+    // ── Weekly Business Review ──
+    // The review is an ordered list of single charts, each one KPI chart row
+    // and one of its periods: [{ id, ref (row id), period: 'm'|'w'|'d' }],
+    // saved in kpi_layout. Charts are created and edited on the KPI page only.
+    // Each KPI row the review uses is built and loaded once, as on the KPI
+    // page, but kept hidden; the chosen period's card is moved into the grid,
+    // so its targets, notes, popups and day scroller all work unchanged.
+    let wbrItems = [];
+    const wbrItemEls = {};   // item id -> grid cell
+    const WBR_PERIOD_INDEX = { m: 0, w: 1, d: 2 };
+
+    function wbrCard(item) {
+        const canvas = document.getElementById(`cv-${item.ref}-${item.period}`);
+        return canvas ? canvas.closest('.chart-card') : null;
+    }
+
+    // A removed item's card goes back into its hidden row, ready to be used again.
+    function returnWbrCard(itemId) {
+        const cell = wbrItemEls[itemId];
+        const card = cell && cell.querySelector('.chart-card');
+        const rowEl = cell && customRowEls[cell.dataset.ref];
+        if (card && rowEl) rowEl.querySelector('.charts-row').appendChild(card);
+    }
+
+    function renderWbr() {
+        const hidden = document.getElementById('sectionsContainer');
+        const grid = document.getElementById('wbrGrid');
+        shownRows().forEach(row => hidden.appendChild(getRowElement(row)));
+        const live = new Set(wbrItems.map(i => i.id));
+        Object.keys(wbrItemEls).forEach(id => {
+            if (live.has(id)) return;
+            returnWbrCard(id);
+            wbrItemEls[id].remove();
+            delete wbrItemEls[id];
+        });
+        wbrItems.forEach((item, i) => {
+            let cell = wbrItemEls[item.id];
+            if (!cell) {
+                cell = document.createElement('div');
+                cell.className = 'wbr-item';
+                cell.dataset.ref = item.ref;
+                wbrItemEls[item.id] = cell;
+            }
+            const old = cell.querySelector(':scope > .wbr-item-actions');
+            if (old) old.remove();
+            if (IS_ADMIN) {
+                cell.insertAdjacentHTML('afterbegin', `
+                    <div class="wbr-item-actions">
+                        <button type="button" class="chart-title-btn" onclick="moveWbrItem('${item.id}', -1)" ${i === 0 ? 'disabled' : ''}>
+                            <i class="fas fa-arrow-left"></i> Move Left
+                        </button>
+                        <button type="button" class="chart-title-btn" onclick="moveWbrItem('${item.id}', 1)" ${i === wbrItems.length - 1 ? 'disabled' : ''}>
+                            <i class="fas fa-arrow-right"></i> Move Right
+                        </button>
+                        <button type="button" class="chart-title-btn" onclick="removeWbrItem('${item.id}')">
+                            <i class="fas fa-times"></i> Remove
+                        </button>
+                    </div>`);
+            }
+            // The card, unless it is already here (or open in the chart popup).
+            if (!cell.querySelector('.chart-card, .chart-zoom-holder, .wbr-item-missing')) {
+                const card = findRow(item.ref) ? wbrCard(item) : null;
+                if (card) cell.appendChild(card);
+                else cell.insertAdjacentHTML('beforeend', '<div class="wbr-item-missing">This chart has been removed from the KPI page.</div>');
+            }
+            grid.appendChild(cell);
+        });
+        document.getElementById('wbrEmpty').style.display = wbrItems.length ? 'none' : '';
+        setTimeout(resizeAllCharts, 10);
+    }
+
+    async function saveWbrItems() {
+        blockSaveIfLoadFailed();
+        const resp = await fetch(BASE_URL + '/weekly-business-review/items', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ items: wbrItems }),
+        });
+        const json = await resp.json();
+        if (json.status !== 'ok') throw new Error(json.message || 'Save failed');
+    }
+
+    // The page changes straight away and is put back if the save fails.
+    async function changeWbrItems(items, what) {
+        const before = wbrItems;
+        wbrItems = items;
+        renderLayout();
+        try {
+            await saveWbrItems();
+        } catch (err) {
+            if (wbrItems === items) { wbrItems = before; renderLayout(); }
+            document.getElementById('statusText').textContent = `${what} failed: ${err.message}`;
+            return false;
+        }
+        return true;
+    }
+
+    async function addWbrItem(ref, period) {
+        const row = findRow(ref);
+        if (!row || wbrItems.some(i => i.ref === ref && i.period === period)) return;
+        const id = 'w' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+        const ok = await changeWbrItems([...wbrItems, { id, ref, period }], 'Add');
+        renderWbrPicker();
+        if (!ok) return;
+        // Already loaded for another of its periods: redraw now the card has its size.
+        if (customRowData[ref]) renderCustomRow(row, customRowData[ref]);
+        else loadCustomRow(row);
+    }
+
+    function removeWbrItem(id) {
+        changeWbrItems(wbrItems.filter(i => i.id !== id), 'Remove');
+    }
+
+    function moveWbrItem(id, step) {
+        const items = [...wbrItems];
+        const a = items.findIndex(i => i.id === id), b = a + step;
+        if (a < 0 || b < 0 || b >= items.length) return;
+        [items[a], items[b]] = [items[b], items[a]];
+        changeWbrItems(items, 'Move');
+    }
+
+    // Add Chart From KPI: every KPI chart by section, each period on its own.
+    function openWbrPicker() {
+        document.getElementById('wbrPickerSearch').value = '';
+        renderWbrPicker();
+        document.getElementById('wbrPickerModal').classList.add('open');
+    }
+
+    function closeWbrPicker() {
+        document.getElementById('wbrPickerModal').classList.remove('open');
+    }
+
+    function renderWbrPicker() {
+        const list = document.getElementById('wbrPickerList');
+        if (!list) return;
+        const q = document.getElementById('wbrPickerSearch').value.trim().toLowerCase();
+        const have = new Set(wbrItems.map(i => i.ref + '|' + i.period));
+        const html = SECTIONS.map(section => {
+            const rows = layout.rows.filter(r => r.section === section && !r.hidden
+                && (!q || `${rowTitle(r)} ${r.subtitle || ''}`.toLowerCase().includes(q)));
+            if (!rows.length) return '';
+            return `<div class="wbr-picker-section">${escHtml(section)}</div>` + rows.map(r => {
+                const buttons = ['m', 'w', 'd'].map(k => {
+                    const added = have.has(r.id + '|' + k);
+                    return `<button type="button" class="chart-title-btn" ${added ? 'disabled' : ''}
+                                    onclick="addWbrItem('${r.id}', '${k}')">
+                                <i class="fas ${added ? 'fa-check' : 'fa-plus'}"></i> ${PERIOD_NAMES[k]}
+                            </button>`;
+                }).join('');
+                const sub = r.subtitle ? ` <span class="text-muted">- ${escHtml(r.subtitle)}</span>` : '';
+                return `<div class="wbr-picker-row"><span class="wbr-picker-title">${escHtml(rowTitle(r))}${sub}</span>${buttons}</div>`;
+            }).join('');
+        }).join('');
+        list.innerHTML = html || '<div class="text-muted">No charts found.</div>';
+    }
+
+    // One slide per chart, in the review's order. The deck is created in the
+    // Google account connected in Settings > Google. When it is ready the
+    // status line links to it: a link the user clicks is never blocked as a
+    // popup, and they stay on this page to see what happened.
+    function exportWbrSlides() {
+        const status = document.getElementById('statusText');
+        const slides = wbrItems.map(item => {
+            const row = findRow(item.ref);
+            const chart = row && (rowCharts[item.ref] || [])[WBR_PERIOD_INDEX[item.period]];
+            if (!chart) return null;
+            return { title: `${rowTitle(row)} - ${PERIOD_NAMES[item.period]}`, subtitle: row.subtitle || '',
+                     image: chart.toBase64Image('image/png', 1) };
+        }).filter(Boolean);
+        if (!slides.length) { status.textContent = 'Load the charts before exporting.'; return; }
+        const btn = document.getElementById('slidesBtn');
+        const icon = document.getElementById('slidesIcon');
+        btn.disabled = true;
+        icon.className = 'fas fa-spinner fa-spin';
+        status.textContent = `Creating Google Slides (${slides.length} charts)...`;
+        const done = () => {
+            btn.disabled = false;
+            icon.className = 'fas fa-file-powerpoint';
+        };
+        fetch(BASE_URL + '/weekly-business-review/export-slides', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ slides }),
+        })
+            .then(r => r.json())
+            .then(data => {
+                done();
+                if (data.status !== 'ok') { status.textContent = 'Google Slides: ' + data.message; return; }
+                status.innerHTML = `Google Slides created - <a href="${escHtml(data.url)}" target="_blank" rel="noopener">Open Deck</a>`;
+            })
+            .catch(err => {
+                done();
+                status.textContent = 'Google Slides failed: ' + err;
+            });
     }
 
     // The section tab showing. Remembered in this browser only, so each person
@@ -601,6 +804,16 @@
     // Rebuild a row's DOM + charts after a config change.
     // refetch=true when the change affects the data (agg, target); otherwise re-render from cache.
     function rebuildCustomRow(row, refetch) {
+        // On the review the row's cards sit in the grid, so they are redrawn
+        // where they are rather than rebuilt (which would leave two copies).
+        if (WBR) {
+            const day = document.getElementById(`cv-${row.id}-d`);
+            const toggle = day && day.closest('.chart-card').querySelector('.labels-toggle');
+            if (toggle) toggle.querySelectorAll('button').forEach((b, i) => b.classList.toggle('active', (i === 1) === rollingOn(row.id)));
+            if (refetch || !customRowData[row.id]) loadCustomRow(row);
+            else renderCustomRow(row, customRowData[row.id]);
+            return;
+        }
         dropRowElement(row.id);
         renderLayout();
         if (refetch || !customRowData[row.id]) loadCustomRow(row);
@@ -813,6 +1026,11 @@
     // not drawn or loaded.
     // Charts in a section hidden in Settings > Sections are left out the same way.
     function shownRows() {
+        // The review loads only the KPI charts it uses, hidden ones included.
+        if (WBR) {
+            const refs = new Set(wbrItems.map(i => i.ref));
+            return layout.rows.filter(r => refs.has(r.id));
+        }
         return layout.rows.filter(r => !r.hidden && !hiddenSections.has(r.section));
     }
 
@@ -839,6 +1057,8 @@
 
     async function saveLayout(rows) {
         blockSaveIfLoadFailed();
+        // Charts are only changed on the KPI page; the review saves its own list.
+        if (WBR) throw new Error('Change charts on the KPI page');
         const resp = await fetch(BASE_URL + '/kpi/layout', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -1268,7 +1488,7 @@
         const token = String(Date.now());
         loadToken = fromButton === true || fromButton === 'snowflake' ? token : '';
         spRefreshToken = fromButton === true || fromButton === 'sharepoint' ? token : '';
-        loadAtAllowance();
+        if (!WBR) loadAtAllowance();
         const btn    = document.getElementById('loadBtn');
         const icon   = document.getElementById('loadIcon');
         const status = document.getElementById('statusText');
@@ -1278,7 +1498,7 @@
             btn.disabled = false;
             icon.classList.remove('spin');
             setPageLoading(false);
-            status.textContent = IS_ADMIN ? 'No charts yet. Use Add Chart.' : 'No charts yet.';
+            status.textContent = !IS_ADMIN ? 'No charts yet.' : WBR ? 'No charts yet. Use Add Chart From KPI.' : 'No charts yet. Use Add Chart.';
             return;
         }
         btn.disabled = true;
@@ -4306,7 +4526,7 @@
         section_font_px: 'setSectionFont', title_font_px: 'setTitleFont',
         subtitle_font_px: 'setSubtitleFont', period_font_px: 'setPeriodFont',
         toolbar_font_px: 'setToolbarFont', at_font_px: 'setAtFont', at_table_font_px: 'setAtTableFont',
-        legend_font_px: 'setLegendFont', line_label_font_px: 'setLineLabelFont',
+        legend_font_px: 'setLegendFont', line_label_font_px: 'setLineLabelFont', wbr_columns: 'setWbrColumns',
         zoom_size: 'setZoomSize',
         stack_label_dir: 'setStackLabelDir', stack_label_overflow: 'setStackLabelOverflow',
         stack_seg_font_px: 'setStackSegFont', stack_total_font_px: 'setStackTotalFont',
@@ -4338,6 +4558,7 @@
         if (settings.toolbar_font_px) root.setProperty('--kpi-toolbar-font', settings.toolbar_font_px + 'px');
         if (settings.at_font_px) root.setProperty('--kpi-at-font', settings.at_font_px + 'px');
         if (settings.at_table_font_px) root.setProperty('--kpi-at-table-font', settings.at_table_font_px + 'px');
+        if (settings.wbr_columns) root.setProperty('--wbr-columns', settings.wbr_columns);
         // Settings > Targets: Targets button for every user or the admin only.
         // The admin sees it either way, except in User View when it is off.
         document.body.classList.toggle('targets-off', Number(settings.targets_for_all) === 0);
