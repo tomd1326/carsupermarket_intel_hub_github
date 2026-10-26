@@ -7,8 +7,8 @@ from utils.rate_limiter import RateLimiter
 from utils.singleton import Singleton
 from utils.cache import cache
 from utils.secrets_manager_client import get_secret
-from list_processor.structs import VehicleRow
-from list_processor.columns_mapper import BaseColumnsMapper
+from clients.structs import VehicleRow
+from clients.columns_mapper import BaseColumnsMapper
 from typing import Optional, Tuple
 import datetime
 import hashlib
@@ -602,10 +602,22 @@ class CAPClient(metaclass=Singleton):
             self._abort = False
             self._error_log: list = []
 
+        started = time.time()
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             for index, row in input_df.iterrows():
                 processed_rows.append(executor.submit(self.process_row, row, column_mapper))
             processed_rows = [future.result() for future in processed_rows]
+
+        # See the matching log in AutoTraderClient.process_file: an achieved
+        # rate well under rate_limit means max_workers is the ceiling, not the
+        # limiter.
+        elapsed = time.time() - started
+        total_requests = self._vrm_requests + self._monthly_requests + self._live_requests
+        if elapsed > 0:
+            logger.warning(
+                "[CAP] %d requests in %.0fs = %.1f/s (limit %d/s, %d workers)",
+                total_requests, elapsed, total_requests / elapsed, rate_limit, max_workers
+            )
 
         processed_rows = [row if row is not None else {} for row in processed_rows]
         processed_df = pd.DataFrame(processed_rows)

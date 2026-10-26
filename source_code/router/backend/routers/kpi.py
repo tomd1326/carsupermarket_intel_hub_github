@@ -3078,7 +3078,7 @@ def kpi_at_allowance(request: Request, user: str = Depends(require_page_api('kpi
     away, plus the published / capped / unpublished counts from the latest day
     in daily_summary (the first Autotrader pull of that morning)."""
     import requests
-    from list_processor.autotrader_client import AutoTraderClient
+    from clients.autotrader_client import AutoTraderClient
     result = {"status": "ok"}
     try:
         result["capacity"] = AutoTraderClient().get_car_van_advert_allowance(requests.Session())

@@ -17,12 +17,12 @@ import pandas as pd
 from utils.lambda_http import LambdaRequestsManager
 from utils.s3_tools import upload_file, download_file
 from utils.db_utils import (get_database_connection, get_settings)
-from list_processor.autotrader_client import AutoTraderClient
-from list_processor.batch_processor import process_file_with_cache
-from list_processor.cap_client import CAPClient
-from list_processor.columns_mapper import get_columns_mapper
-from list_processor.motability_client import MotabilityFetchClient
-from list_processor.onelink_client import OneLinkFetchClient
+from clients.autotrader_client import AutoTraderClient
+from clients.cap_client import CAPClient
+from clients.columns_mapper import get_columns_mapper
+from supplier_stock.batch_processor import process_file_with_cache
+from supplier_stock.motability_client import MotabilityFetchClient
+from supplier_stock.onelink_client import OneLinkFetchClient
 from utils.secrets_manager_client import get_secret
 from utils.file_handler import read_dataframe_file, write_dataframe_file
 
