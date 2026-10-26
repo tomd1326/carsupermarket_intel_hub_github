@@ -1,7 +1,9 @@
 """Supplier stock evaluator tasks: upload, elaborate, downloads, enterprise email, stock fetch."""
 import asyncio
 import base64
+import contextlib
 import tempfile
+import threading
 import traceback
 
 from fastapi import APIRouter, Request, Form, Depends, HTTPException
@@ -260,27 +262,60 @@ def download_error_log(task_id: str, user: str = Depends(require_page_api('tasks
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.get("/error-log/{task_id}")
-def view_error_log(task_id: str, user: str = Depends(require_page_api('tasks'))):
-    """Returns the task's API error log as JSON rows for the popup table."""
-    if user != 'tdrayson':
-        raise HTTPException(status_code=403)
+@router.get("/task-log/{task_id}")
+def view_task_log(task_id: str, user: str = Depends(require_page_api('tasks'))):
+    """Everything about one run, for the Log button: the stage-by-stage
+    progress, and the API error table that used to have its own button.
+
+    Fetched when the button is pressed, never included in /api/tasks-json —
+    that is polled every couple of seconds for 25 rows at a time.
+    """
     with get_database_connection() as conn:
+        _ensure_progress_columns(conn)
         with conn.cursor() as cursor:
-            cursor.execute("SELECT error_log_s3 FROM tasks WHERE task_id = %s", (task_id,))
+            cursor.execute(
+                "SELECT progress_log, status, message, error_log_s3 FROM tasks WHERE task_id = %s",
+                (task_id,)
+            )
             row = cursor.fetchone()
-    if not row or not row[0]:
-        raise HTTPException(status_code=404, detail="No error log for this task")
+    if not row:
+        raise HTTPException(status_code=404, detail="No such task")
+
+    progress_log, status, message, error_log_s3 = row
+    result = {
+        "task_id": task_id,
+        "status": status,
+        "message": message,
+        "stages": progress_log or '',
+        "errors": {"columns": [], "rows": []},
+        "error_count": 0,
+        "errors_withheld": False,
+    }
+
+    if not error_log_s3:
+        return result
+
+    # The API error detail stays admin-only, as it did when it had its own
+    # button. Everyone else sees the stages and that errors happened.
+    if user != 'tdrayson':
+        result["errors_withheld"] = True
+        return result
 
     import boto3, csv, io as _io
-    s3 = boto3.client('s3', region_name='eu-west-1')
     try:
-        body = s3.get_object(Bucket=s3_bucketname, Key=row[0])['Body'].read().decode('utf-8', errors='replace')
+        body = boto3.client('s3', region_name='eu-west-1').get_object(
+            Bucket=s3_bucketname, Key=error_log_s3
+        )['Body'].read().decode('utf-8', errors='replace')
+        reader = csv.DictReader(_io.StringIO(body))
+        rows = list(reader)
+        result["errors"] = {"columns": reader.fieldnames or [], "rows": rows}
+        result["error_count"] = len(rows)
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        # The stages are the main thing — still return them if S3 is unhappy.
+        logger.warning(f"task-log: could not read error log for task {task_id}: {e}")
+        result["errors"] = {"columns": [], "rows": [], "error": str(e)}
 
-    reader = csv.DictReader(_io.StringIO(body))
-    return {"columns": reader.fieldnames or [], "rows": list(reader)}
+    return result
 
 
 @router.get("/delete-task/{task_id}")
@@ -460,20 +495,159 @@ async def enterprise_email_start_task(
 _supplier_fetch_lock = asyncio.Lock()
 
 
+# ── Live progress log ────────────────────────────────────────────────────────
+# Every stage of a Get Stock run, kept so the page can show the current step as
+# it happens AND the whole run afterwards from the Log button.
+#
+# Stage lines are held in memory and written by a background thread, because
+# the point of this is to call _set_progress 30 times a run instead of 6 and a
+# write to Aurora costs roughly 250ms from a desk. Blocking the fetch on each
+# one would add more time than the browser fetch itself takes. Nothing in the
+# run ever waits for a log write; _flush_progress() at the end makes sure the
+# last lines land before the task is marked finished.
+_PROGRESS_FLUSH_SECONDS = 1.5
+
+# The fetch clients whose own stage logging is shown on the page. Both already
+# log every step with elapsed times; nothing in them needed changing.
+_FETCH_LOGGERS = (
+    'supplier_stock.motability_client',
+    'supplier_stock.onelink_client',
+)
+
+# The enrichment phase: the cache hit/miss split, the per-API request counts
+# and the requests-per-second lines, and the database write row counts. Two
+# elaborations running at once would put each other's lines in both logs — the
+# same overlap that already clashes over the shared client request counters,
+# so it is not a new limitation.
+_ELABORATE_LOGGERS = (
+    'supplier_stock.batch_processor',
+    'clients.autotrader_client',
+    'clients.cap_client',
+)
+
+_progress_pending: dict = {}      # task_id -> [line, ...] not yet written
+_progress_latest: dict = {}       # task_id -> newest line, for the status display
+_progress_lock = threading.Lock()
+_progress_thread = None
+_progress_columns_ready = False
+
+
+def _ensure_progress_columns(conn) -> None:
+    """Add the progress columns once per process, not on every write. The flag
+    is only set after the commit, so a failure here is retried next time."""
+    global _progress_columns_ready
+    if _progress_columns_ready:
+        return
+    with conn.cursor() as cursor:
+        cursor.execute("ALTER TABLE tasks ADD COLUMN IF NOT EXISTS progress_message TEXT")
+        cursor.execute("ALTER TABLE tasks ADD COLUMN IF NOT EXISTS progress_log TEXT")
+    conn.commit()
+    _progress_columns_ready = True
+
+
 def _set_progress(task_id, message):
-    """Write a live progress line to the task so the UI can show each step of a
-    Get Stock run as it happens. Best-effort — never let logging break the fetch."""
+    """Record a stage of a run. Returns immediately — the line is written by
+    the background flusher, or by _flush_progress at the end of the run."""
+    line = f"{_uk_now().strftime('%H:%M:%S')}  {str(message)[:500]}"
+    with _progress_lock:
+        _progress_pending.setdefault(task_id, []).append(line)
+        _progress_latest[task_id] = str(message)[:500]
+    _start_progress_thread()
+
+
+def _flush_progress(task_id=None) -> None:
+    """Write pending stage lines to the tasks table. Called on a timer by the
+    background thread, and with a task_id at the end of a run, which also drops
+    that run's entries so they do not pile up for the life of the process."""
+    with _progress_lock:
+        if task_id is None:
+            batch = {tid: lines for tid, lines in _progress_pending.items() if lines}
+            _progress_pending.clear()
+            latest = {tid: _progress_latest.get(tid) for tid in batch}
+        else:
+            lines = _progress_pending.pop(task_id, [])
+            batch = {task_id: lines} if lines else {}
+            # Called for one task, which only happens when that run has
+            # finished — its latest line is no longer needed.
+            latest = {task_id: _progress_latest.pop(task_id, None)}
+
+    if not batch:
+        return
     try:
         with get_database_connection() as conn:
+            _ensure_progress_columns(conn)
             with conn.cursor() as cursor:
-                cursor.execute("ALTER TABLE tasks ADD COLUMN IF NOT EXISTS progress_message TEXT")
-                cursor.execute(
-                    "UPDATE tasks SET progress_message = %s WHERE task_id = %s",
-                    (str(message)[:500], task_id)
-                )
+                for tid, lines in batch.items():
+                    cursor.execute(
+                        "UPDATE tasks SET progress_message = %s, "
+                        "progress_log = COALESCE(progress_log, '') || %s WHERE task_id = %s",
+                        (latest.get(tid), '\n'.join(lines) + '\n', tid)
+                    )
             conn.commit()
     except Exception as e:
-        logger.warning(f"_set_progress failed for task {task_id}: {e}")
+        # Put the lines back so the next flush retries them rather than losing
+        # the log, but never let this break the run.
+        with _progress_lock:
+            for tid, lines in batch.items():
+                _progress_pending.setdefault(tid, [])[:0] = lines
+        logger.warning(f"_flush_progress failed: {e}")
+
+
+def _progress_flusher() -> None:
+    while True:
+        time.sleep(_PROGRESS_FLUSH_SECONDS)
+        _flush_progress()
+
+
+def _start_progress_thread() -> None:
+    global _progress_thread
+    if _progress_thread is not None and _progress_thread.is_alive():
+        return
+    with _progress_lock:
+        if _progress_thread is not None and _progress_thread.is_alive():
+            return
+        _progress_thread = threading.Thread(
+            target=_progress_flusher, name='progress-flusher', daemon=True
+        )
+        _progress_thread.start()
+
+
+class _ProgressLogHandler(logging.Handler):
+    """Forwards a logger's records into one task's progress log.
+
+    The supplier fetch clients already log every stage they go through with
+    elapsed times — launching the browser, the login page, the cookie popup,
+    the CSRF token, the CSV export request. Catching those records is what puts
+    them on the page, and means a stage added to a client later shows up
+    without this file changing.
+    """
+
+    def __init__(self, task_id):
+        super().__init__(level=logging.INFO)
+        self.task_id = task_id
+
+    def emit(self, record):
+        try:
+            _set_progress(self.task_id, record.getMessage())
+        except Exception:
+            pass
+
+
+@contextlib.contextmanager
+def _forward_logs_to_task(task_id, logger_names):
+    """Send the named loggers' records to this task's progress log while the
+    block runs. Safe only where one run happens at a time, or two runs' stages
+    would land in both logs — the supplier fetch holds _supplier_fetch_lock,
+    which is what makes it safe there."""
+    handler = _ProgressLogHandler(task_id)
+    targets = [logging.getLogger(name) for name in logger_names]
+    for lg in targets:
+        lg.addHandler(handler)
+    try:
+        yield
+    finally:
+        for lg in targets:
+            lg.removeHandler(handler)
 
 
 @router.post("/api/fetch-supplier-stock")
@@ -576,6 +750,8 @@ async def _fetch_supplier_stock_internal(data: dict):
 
     supplier_label = 'Motability' if supplier == 'motability' else '1link'
 
+    # One fetch at a time, which is what makes forwarding the clients' own
+    # stage logging to this task safe — see _forward_logs_to_task.
     async with _supplier_fetch_lock:
         last_exc = None
         input_df = None
@@ -583,23 +759,24 @@ async def _fetch_supplier_stock_internal(data: dict):
             try:
                 attempt_note = '' if attempt == 1 else f' (attempt {attempt}/{_FETCH_MAX_ATTEMPTS})'
                 _set_progress(task_id, f'Logging in to {supplier_label} and fetching stock list…{attempt_note}')
-                if supplier == 'motability':
-                    client = MotabilityFetchClient(
-                        username=secrets['MOTABILITY_ID'],
-                        password=secrets['MOTABILITY_PASSWORD'],
-                    )
-                    input_df = client.fetch_dataframe()
-                    if not include_preview:
-                        type_col = input_df.columns[1] if len(input_df.columns) > 1 else None
-                        if type_col is not None:
-                            input_df = input_df[input_df[type_col] != 'Preview']
-                else:
-                    client = OneLinkFetchClient(
-                        username=secrets['1LINK_ID'],
-                        password=secrets['1LINK_PASSWORD'],
-                    )
-                    input_df = client.fetch_dataframe()
-                    input_df = _drop_1link_lcv_rows(input_df)
+                with _forward_logs_to_task(task_id, _FETCH_LOGGERS):
+                    if supplier == 'motability':
+                        client = MotabilityFetchClient(
+                            username=secrets['MOTABILITY_ID'],
+                            password=secrets['MOTABILITY_PASSWORD'],
+                        )
+                        input_df = client.fetch_dataframe()
+                        if not include_preview:
+                            type_col = input_df.columns[1] if len(input_df.columns) > 1 else None
+                            if type_col is not None:
+                                input_df = input_df[input_df[type_col] != 'Preview']
+                    else:
+                        client = OneLinkFetchClient(
+                            username=secrets['1LINK_ID'],
+                            password=secrets['1LINK_PASSWORD'],
+                        )
+                        input_df = client.fetch_dataframe()
+                        input_df = _drop_1link_lcv_rows(input_df)
                 _set_progress(task_id, f'Fetched {len(input_df)} vehicles from {supplier_label}')
                 break
             except Exception as e:
@@ -721,24 +898,33 @@ async def elaborate_task(data: dict):
                     prev_row = cursor.fetchone()
             prev_task_created = prev_row[0] if prev_row else None
 
-            processed_df, reductions, api_error_log, aurora_cache_hits = process_file_with_cache(
-                input_df=input_df,
-                columns_mapper=columns_mapper,
-                supplier_id=task['supplier_id'],
-                supplier_name=task['supplier_name'],
-                is_snapshot=is_snapshot,
-                at_client=autotrader,
-                cap_client=cap_client,
-                cap_workers=cap_workers,
-                cap_rate_limit=cap_rate_limit,
-                at_workers=at_workers,
-                at_rate_limit=at_rate_limit,
-                prev_task_created=prev_task_created,
-                valuation_cache_hours=valuation_cache_hours,
-            )
+            _set_progress(data['task_id'], f'Enriching {total_rows} vehicles with CAP & Autotrader data…')
+            _set_progress(data['task_id'], f'CAP: {cap_workers} workers, {cap_rate_limit}/s | '
+                                           f'Autotrader: {at_workers} workers, {at_rate_limit}/s | '
+                                           f'cache {valuation_cache_hours}h')
+            with _forward_logs_to_task(data['task_id'], _ELABORATE_LOGGERS):
+                processed_df, reductions, api_error_log, aurora_cache_hits = process_file_with_cache(
+                    input_df=input_df,
+                    columns_mapper=columns_mapper,
+                    supplier_id=task['supplier_id'],
+                    supplier_name=task['supplier_name'],
+                    is_snapshot=is_snapshot,
+                    at_client=autotrader,
+                    cap_client=cap_client,
+                    cap_workers=cap_workers,
+                    cap_rate_limit=cap_rate_limit,
+                    at_workers=at_workers,
+                    at_rate_limit=at_rate_limit,
+                    prev_task_created=prev_task_created,
+                    valuation_cache_hours=valuation_cache_hours,
+                )
+            if api_error_log:
+                _set_progress(data['task_id'], f'{len(api_error_log)} API errors — see the API Errors tab of this log')
+            _set_progress(data['task_id'], 'Building the spreadsheet…')
             write_dataframe_file(processed_df, tmp_out)
 
             s3_location = f'applications/pricing/uk-vehicle-list-evaluator/{env}/elaborated/{data["task_id"]}.xlsx'
+            _set_progress(data['task_id'], 'Uploading the spreadsheet…')
             upload_file(tmp_out, s3_bucketname, s3_location)
 
             error_log_s3 = None
@@ -793,6 +979,14 @@ async def elaborate_task(data: dict):
                 error_log_s3 = error_log_key
             except Exception as _e:
                 logger.warning(f"Failed to write error log to S3: {_e}")
+
+        if status == 'success':
+            _set_progress(data['task_id'], f'Finished in {execution_time:.0f}s' if execution_time else 'Finished')
+        else:
+            _set_progress(data['task_id'], f'Failed: {message}')
+        # Write the buffered stage lines before the row is marked finished, so
+        # the Log button never shows a run missing its last steps.
+        _flush_progress(data['task_id'])
 
         progress_final = None if status == 'success' else f'Error: {message}'
         with get_database_connection() as conn:

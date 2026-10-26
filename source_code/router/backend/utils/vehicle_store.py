@@ -9,6 +9,13 @@ logger = logging.getLogger(__name__)
 
 VALUATION_TTL_HOURS = 36
 
+# Rows per round trip for the bulk writes below. execute_values defaults to
+# 100, which on a 5,000 vehicle supplier file meant roughly 250 round trips
+# across the five writes — about 63 seconds at the ~250ms it costs to reach
+# Aurora from a desk. These rows are small (no raw API responses are stored),
+# so a far larger page is comfortably within the statement size limit.
+WRITE_PAGE_SIZE = 1000
+
 
 def round_mileage_to_nearest_thousand(mileage: int) -> int:
     """CAP valuations are bucketed per 1000 miles, so the valuation cache is
@@ -636,6 +643,7 @@ def ensure_vehicles_exist(conn, vrms: list[str]) -> None:
             cur,
             "INSERT INTO vehicles (vrm) VALUES %s ON CONFLICT (vrm) DO NOTHING",
             [(vrm,) for vrm in vrms],
+            page_size=WRITE_PAGE_SIZE,
         )
 
 
@@ -686,6 +694,7 @@ def upsert_vehicles(conn, vehicles: list[dict]) -> None:
                 cap_registration_date       = COALESCE(vehicles.cap_registration_date, EXCLUDED.cap_registration_date)
             """,
             rows,
+            page_size=WRITE_PAGE_SIZE,
         )
 
 
@@ -728,6 +737,7 @@ def insert_valuations(conn, valuations: list[dict]) -> None:
             VALUES %s
             """,
             rows,
+            page_size=WRITE_PAGE_SIZE,
         )
 
 
@@ -892,6 +902,7 @@ def insert_listings(conn, listings: list[dict]) -> None:
             VALUES %s
             """,
             rows,
+            page_size=WRITE_PAGE_SIZE,
         )
 
 
@@ -934,6 +945,7 @@ def upsert_supplier_status(conn, statuses: list[dict]) -> None:
             """,
             rows,
             template="(%s, %s, %s, %s, %s, NULL, NULL, NULL)",
+            page_size=WRITE_PAGE_SIZE,
         )
 
 
