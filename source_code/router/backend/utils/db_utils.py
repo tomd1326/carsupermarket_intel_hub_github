@@ -11,6 +11,7 @@ from contextlib import contextmanager
 from botocore.exceptions import UnauthorizedSSOTokenError
 from fastapi import HTTPException
 from utils.secrets_manager_client import get_secret
+from utils.ddl_once import once_per_database
 
 logger = logging.getLogger(__name__)
 
@@ -498,6 +499,7 @@ def get_database_connection():
 # Generic key/value store, JSONB values. Created on first save (same pattern as
 # the settings table) so no migration script is needed in dev or prod.
 
+@once_per_database
 def _ensure_user_preferences_table(conn) -> None:
     with conn.cursor() as cur:
         cur.execute(
@@ -1143,6 +1145,7 @@ def upsert_user(conn, username: str, pwd_hash: str) -> None:
     conn.commit()
 
 
+@once_per_database
 def _ensure_user_detail_columns(conn) -> None:
     """Name and email columns, added on first use. db/13_user_details.sql is
     the same change for running by hand."""
@@ -1202,6 +1205,7 @@ def _password_links_present(conn) -> bool:
     return tables > 0 and columns > 0
 
 
+@once_per_database
 def _ensure_password_links(conn) -> None:
     """Create the table and the users.activated column on first use. Every
     existing user stays activated (the column defaults to TRUE). The ALTER only
@@ -1409,6 +1413,7 @@ def remove_user(conn, username: str) -> None:
 #
 # The '__configured__' key is not a page — see page_registry.CONFIGURED_MARKER.
 
+@once_per_database
 def _ensure_user_page_access_table(conn) -> None:
     with conn.cursor() as cur:
         cur.execute(
@@ -1511,6 +1516,7 @@ def delete_user_and_access(conn, username: str) -> None:
 # A page with no row uses the label in page_registry. Lives in the PROD pricer
 # DB, like the KPI layout, so every environment shows the same names.
 
+@once_per_database
 def _ensure_page_names_table(conn) -> None:
     with conn.cursor() as cur:
         cur.execute(
@@ -1636,6 +1642,7 @@ def get_vehicle_database_connection():
 
 # ── 0% finance subsidy rates ──────────────────────────────────────────────────
 
+@once_per_database
 def _ensure_subsidy_rate_tables(conn) -> None:
     """Create the subsidy rate tables if they are not there yet.
 
@@ -1768,6 +1775,7 @@ def delete_subsidy_schedule(conn, schedule_id: int) -> None:
 # the aggregate across campaigns and the All-events total are all derived at read
 # time — see the schema file for why.
 
+@once_per_database
 def _ensure_chart_targets_table(conn) -> None:
     with conn.cursor() as cur:
         cur.execute(
@@ -1979,6 +1987,7 @@ def get_chart_target_overview(conn, key_prefix: str) -> list:
 # is the schema; the table is created on first use. Removing a campaign leaves
 # its chart_targets rows alone, so its targets return if it is added again.
 
+@once_per_database
 def _ensure_ga4_campaigns_table(conn) -> None:
     with conn.cursor() as cur:
         cur.execute(

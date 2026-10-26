@@ -13,6 +13,8 @@ import io
 import re
 from decimal import Decimal
 
+from utils.ddl_once import once_per_database
+
 # Flex (Autotrader's "Bonus Advert Allowance") is 10% of the base slots,
 # rounded to the nearest whole slot. Invoices do not show it, so it is fixed
 # here; the adjustment email rows in Settings carry their own Flex %.
@@ -144,7 +146,11 @@ def parse_invoice(pdf_bytes: bytes) -> dict:
 
 # ── Aurora (prod pricer cluster, alongside kpi_layout) ──────────────────────
 
+@once_per_database
 def _ensure_tables(cur) -> None:
+    # Commits its own setup, unlike the rest of this module which leaves the
+    # commit to the caller: once_per_database records the database as done
+    # when this returns, so the tables must really exist by then.
     cur.execute("""
         CREATE TABLE IF NOT EXISTS at_invoices (
             invoice_number VARCHAR(30) PRIMARY KEY,
@@ -169,6 +175,7 @@ def _ensure_tables(cur) -> None:
     # Added after the first imports: NULL on those until they are imported again.
     cur.execute("ALTER TABLE at_invoices ADD COLUMN IF NOT EXISTS ppc_clicks INTEGER")
     cur.execute("ALTER TABLE at_invoices ADD COLUMN IF NOT EXISTS dealer_id VARCHAR(20)")
+    cur.connection.commit()
 
 
 def _overlap_message(cur, invoice: dict) -> str | None:

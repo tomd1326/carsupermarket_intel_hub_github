@@ -43,11 +43,11 @@ def tasks_json(page: int = 1, page_size: int = 25, user: str = Depends(require_p
         raise HTTPException(status_code=401)
     offset = (page - 1) * page_size
     with get_database_connection() as conn:
+        _ensure_progress_columns(conn)
         with conn.cursor() as cursor:
             cursor.execute("SELECT COUNT(*) FROM tasks")
             total_tasks = cursor.fetchone()[0]
         with conn.cursor() as cursor:
-            cursor.execute("ALTER TABLE tasks ADD COLUMN IF NOT EXISTS progress_message TEXT")
             cursor.execute(
                 "SELECT t.task_id, t.created, t.status, t.filename, t.total_rows, t.reductions, t.execution_time, t.message, s.supplier_name, t.uploaded_by, t.source, t.error_log_s3, t.aurora_cache_hits, t.progress_message "
                 "FROM tasks t LEFT JOIN suppliers s ON t.supplier_id = s.supplier_id "
@@ -533,14 +533,19 @@ _progress_columns_ready = False
 
 
 def _ensure_progress_columns(conn) -> None:
-    """Add the progress columns once per process, not on every write. The flag
-    is only set after the commit, so a failure here is retried next time."""
+    """Add the tasks columns added since the table was created, once per
+    process. /api/tasks-json used to run an ALTER TABLE on every poll — every
+    2 seconds during a Get Stock run — which cost a round trip each time and
+    locked the table the running task was writing to. The flag is only set
+    after the commit, so a failure here is retried next time."""
     global _progress_columns_ready
     if _progress_columns_ready:
         return
     with conn.cursor() as cursor:
         cursor.execute("ALTER TABLE tasks ADD COLUMN IF NOT EXISTS progress_message TEXT")
         cursor.execute("ALTER TABLE tasks ADD COLUMN IF NOT EXISTS progress_log TEXT")
+        cursor.execute("ALTER TABLE tasks ADD COLUMN IF NOT EXISTS error_log_s3 TEXT")
+        cursor.execute("ALTER TABLE tasks ADD COLUMN IF NOT EXISTS aurora_cache_hits INTEGER")
     conn.commit()
     _progress_columns_ready = True
 
@@ -990,10 +995,8 @@ async def elaborate_task(data: dict):
 
         progress_final = None if status == 'success' else f'Error: {message}'
         with get_database_connection() as conn:
+            _ensure_progress_columns(conn)
             with conn.cursor() as cursor:
-                cursor.execute("ALTER TABLE tasks ADD COLUMN IF NOT EXISTS error_log_s3 TEXT")
-                cursor.execute("ALTER TABLE tasks ADD COLUMN IF NOT EXISTS aurora_cache_hits INTEGER")
-                cursor.execute("ALTER TABLE tasks ADD COLUMN IF NOT EXISTS progress_message TEXT")
                 cursor.execute(
                     "UPDATE tasks SET status = %s, message = %s, total_rows = %s, execution_time = %s, s3_location = %s, reductions = %s, error_log_s3 = %s, aurora_cache_hits = %s, progress_message = %s WHERE task_id = %s",
                     (status, message, total_rows, execution_time, s3_location if status == 'success' else None, reductions if status == 'success' else None, error_log_s3, aurora_cache_hits if status == 'success' else None, progress_final, data['task_id']),

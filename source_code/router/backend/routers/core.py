@@ -6,6 +6,7 @@ Importing this module loads users from Aurora (same behaviour as the old
 monolithic router.py import).
 """
 import datetime
+import hashlib
 import logging
 import os
 import time
@@ -86,8 +87,14 @@ def static_url(path: str) -> str:
 
     Without this, browsers keep serving a cached buying_requirements.js/.css
     after a deploy — a change looks like it "did nothing" until the user knows
-    to hard-reload. The stamp is the file's modification time, so any edit
+    to hard-reload. The stamp is a hash of the file's contents, so any edit
     produces a new URL and the browser refetches automatically.
+
+    A content hash rather than the modification time: main.py tells browsers
+    to keep a versioned file for a year without asking again, which is only
+    safe if the stamp is guaranteed to change whenever the file does. A
+    modification time depends on how the build copied the file; the contents
+    do not.
 
     Usage in a template:  {{ static_url('css/buying_requirements.css') }}
     """
@@ -95,7 +102,8 @@ def static_url(path: str) -> str:
     version = _static_version_cache.get(rel)
     if version is None:
         try:
-            version = str(int(os.path.getmtime(os.path.join(_static_dir, *rel.split('/')))))
+            with open(os.path.join(_static_dir, *rel.split('/')), 'rb') as f:
+                version = hashlib.md5(f.read(), usedforsecurity=False).hexdigest()[:12]
         except OSError:
             version = '0'
         # In Lambda the bundle is immutable, so caching the lookup is safe.
@@ -499,9 +507,11 @@ def require_page(page_key: str):
     return _dependency
 
 
-def require_page_api(page_key: str):
+def require_page_api(*page_keys: str):
     """Dependency for data/download endpoints. 401 when signed out, 403 when
     signed in without access — matching what the endpoints already returned.
+    With several page keys, access to any one of them is enough (the KPI chart
+    endpoints also serve the Weekly Business Review page).
 
     Every endpoint gets its page's permission, including the four default
     tools: a URL can be requested directly, so being reachable only from a
@@ -511,8 +521,8 @@ def require_page_api(page_key: str):
         user = get_current_user(request)
         if not user:
             raise HTTPException(status_code=401)
-        if not user_can(user, page_key):
-            logger.info("Access denied (api): %s -> %s", user, page_key)
+        if not any(user_can(user, key) for key in page_keys):
+            logger.info("Access denied (api): %s -> %s", user, ", ".join(page_keys))
             raise HTTPException(status_code=403)
         return user
     return _dependency

@@ -47,6 +47,7 @@ from botocore.exceptions import BotoCoreError, ClientError
 from fastapi import APIRouter, Depends, HTTPException
 
 from utils.db_utils import get_database_connection
+from utils.ddl_once import once_per_database
 from .core import get_current_user, ADMIN_USERNAME
 
 logger = logging.getLogger(__name__)
@@ -130,6 +131,7 @@ def _now():
 # Storage
 # ---------------------------------------------------------------------------
 
+@once_per_database
 def _ensure_tables(conn) -> None:
     with conn.cursor() as cur:
         cur.execute(
