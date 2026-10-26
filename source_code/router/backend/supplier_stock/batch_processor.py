@@ -14,6 +14,7 @@ full API calls so the evaluator always produces a result.
 
 import datetime
 import logging
+import time
 import traceback
 from concurrent.futures import ThreadPoolExecutor
 
@@ -133,6 +134,7 @@ def _write_to_db(supplier_id: int, supplier_name: str, vehicle_rows, api_results
                 'asking_price': vrow.asking_price,
             })
 
+        write_started = time.time()
         with get_vehicle_database_connection() as conn:
             if vehicles_to_upsert:
                 upsert_vehicles(conn, vehicles_to_upsert)
@@ -154,9 +156,15 @@ def _write_to_db(supplier_id: int, supplier_name: str, vehicle_rows, api_results
                 mark_removals(conn, supplier_id, active_vrms)
             conn.commit()
 
+        # Timed so a slow write shows up as a number rather than a hunch. The
+        # row total against the elapsed time is what says whether the rows per
+        # round trip (WRITE_PAGE_SIZE in vehicle_store) is set sensibly.
+        total_written = (len(vehicles_to_upsert) + len(valuations_to_insert)
+                         + len(listings_to_insert) + len(statuses_to_upsert))
         logger.info(
-            'DB write complete for supplier %s: %d vehicles, %d valuations, %d listings',
-            supplier_name, len(vehicles_to_upsert), len(valuations_to_insert), len(listings_to_insert),
+            'DB write complete for supplier %s in %.1fs: %d vehicles, %d valuations, %d listings, %d rows total',
+            supplier_name, time.time() - write_started, len(vehicles_to_upsert),
+            len(valuations_to_insert), len(listings_to_insert), total_written,
         )
     except Exception:
         logger.error('DB write failed for supplier %s — results still returned: %s', supplier_name, traceback.format_exc())
