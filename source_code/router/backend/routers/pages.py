@@ -61,8 +61,8 @@ def home(request: Request, user: str = Depends(get_current_user)):
             # round trip on its first use.
             try:
                 import requests as _requests
-                from list_processor.cap_client import CAPClient
-                from list_processor.autotrader_client import AutoTraderClient
+                from clients.cap_client import CAPClient
+                from clients.autotrader_client import AutoTraderClient
                 CAPClient()
                 AutoTraderClient().get_access_token(_requests.Session())
             except Exception as e:

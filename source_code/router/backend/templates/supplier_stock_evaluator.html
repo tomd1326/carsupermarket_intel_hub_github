@@ -40,6 +40,10 @@
         .table thead th { font-size: 0.875rem; vertical-align: middle; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; border: none !important; }
         .table > thead { border-color: transparent !important; }
         .table tbody td { font-size: 0.875rem; vertical-align: middle; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        /* The actions column holds buttons, not text. Clipping it to an
+           ellipsis hides a whole button rather than shortening a word, so it
+           keeps the nowrap (buttons stay on one line) but never clips. */
+        .table tbody td:last-child { overflow: visible; text-overflow: clip; }
         .status-label {
             padding: 2px 8px;
             color: white;
@@ -51,6 +55,22 @@
         .status-created { background-color: #777777; }
         .status-pending { background-color: #b79011; }
         .status-error { background-color: #c71829; }
+
+        /* The run log popup: the stage list reads like the server log, so it
+           keeps its own line breaks and a fixed-width font. */
+        .task-log-stages {
+            margin: 0;
+            max-height: 60vh;
+            overflow: auto;
+            font-family: ui-monospace, Consolas, "Courier New", monospace;
+            font-size: 0.82rem;
+            line-height: 1.5;
+            white-space: pre-wrap;
+            background-color: #f8f9fa;
+            border: 1px solid #dee2e6;
+            border-radius: 6px;
+            padding: 10px 12px;
+        }
 
         .countdown-label {
             margin-right: 10px;
@@ -70,9 +90,9 @@
             animation: row-flash 1.4s ease-out forwards;
         }
         /* The page-level nowrap/ellipsis rules would clip the error detail text */
-        #errorLogModal .table tbody td,
-        #errorLogModal .table thead th { overflow: visible; text-overflow: clip; white-space: nowrap; }
-        #errorLogModal .table tbody td { font-size: 0.8rem; }
+        #taskLogModal .table tbody td,
+        #taskLogModal .table thead th { overflow: visible; text-overflow: clip; white-space: nowrap; }
+        #taskLogModal .table tbody td { font-size: 0.8rem; }
     </style>
 </head>
 <body>
@@ -154,7 +174,10 @@
                 {% if user == 'tdrayson' %}<col class="admin-only" style="width:6%">{% endif %}
                 <col style="width:4%">
                 <col style="width:7%">
-                <col style="width:8%">
+                <!-- Actions: Download, View vehicles, Log (two icons when the
+                     run had API errors) and Delete. The Filename column above
+                     has no fixed width, so it absorbs whatever is taken here. -->
+                <col style="width:12%">
             </colgroup>
             <thead>
                 <tr>
@@ -205,9 +228,7 @@
                         {% else %}
                             <a href="#" class="btn btn-secondary btn-sm disabled" aria-disabled="true"><i class="fa fa-download"></i></a>
                         {% endif %}
-                        {% if user == 'tdrayson' and task.get('error_log_s3') %}
-                            <a href="#" class="btn btn-outline-warning btn-sm admin-only" title="View API error log" onclick="showErrorLog({{ task.task_id }}); return false;"><i class="fa fa-exclamation-triangle"></i></a>
-                        {% endif %}
+                        <a href="#" class="btn btn-sm {% if task.get('error_log_s3') %}btn-outline-danger{% else %}btn-outline-secondary{% endif %}" title="{% if task.get('error_log_s3') %}View log — this run had API errors{% else %}View log{% endif %}" onclick="showTaskLog({{ task.task_id }}); return false;"><i class="fa fa-list-ul"></i></a>
                         {% if task.status in ('pending', 'created') %}
                             <a href="#" class="btn btn-outline-danger btn-sm" title="Delete task" onclick="deleteTask({{ task.task_id }}); return false;"><i class="fa fa-trash"></i></a>
                         {% endif %}
@@ -240,15 +261,35 @@
         </div>
     </div>
 
-    <div class="modal fade" id="errorLogModal" tabindex="-1" aria-hidden="true">
+    <!-- One log per run: the stages it went through, and the API errors that
+         used to have their own button. The API Errors tab carries a count so a
+         run with errors is obvious without reading the stages. -->
+    <div class="modal fade" id="taskLogModal" tabindex="-1" aria-hidden="true">
         <div class="modal-dialog modal-xl modal-dialog-scrollable">
             <div class="modal-content">
                 <div class="modal-header">
-                    <h5 class="modal-title">API error log <span class="text-muted fw-normal" id="errorLogSubtitle"></span></h5>
+                    <h5 class="modal-title">Run Log <span class="text-muted fw-normal" id="taskLogSubtitle"></span></h5>
                     <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
                 </div>
                 <div class="modal-body">
-                    <div id="errorLogBody"></div>
+                    <ul class="nav nav-tabs" id="taskLogTabs">
+                        <li class="nav-item">
+                            <button class="nav-link active" id="taskLogStagesTab" data-bs-toggle="tab"
+                                    data-bs-target="#taskLogStagesPane" type="button">Progress</button>
+                        </li>
+                        <li class="nav-item">
+                            <button class="nav-link" id="taskLogErrorsTab" data-bs-toggle="tab"
+                                    data-bs-target="#taskLogErrorsPane" type="button">API Errors</button>
+                        </li>
+                    </ul>
+                    <div class="tab-content pt-3">
+                        <div class="tab-pane fade show active" id="taskLogStagesPane">
+                            <pre id="taskLogStages" class="task-log-stages"></pre>
+                        </div>
+                        <div class="tab-pane fade" id="taskLogErrorsPane">
+                            <div id="taskLogErrors"></div>
+                        </div>
+                    </div>
                 </div>
             </div>
         </div>
@@ -289,11 +330,11 @@
             } else {
                 html += `<a href="#" class="btn btn-secondary btn-sm disabled" aria-disabled="true"><i class="fa fa-download"></i></a>`;
             }
-            {% if user == 'tdrayson' %}
-            if (task.error_log_s3) {
-                html += ` <a href="#" class="btn btn-outline-warning btn-sm admin-only" title="View API error log" onclick="showErrorLog(${task.task_id}); return false;"><i class="fa fa-exclamation-triangle"></i></a>`;
-            }
-            {% endif %}
+            // Red when the run had API errors, so it stands out in the list
+            // without a second icon changing the button's width.
+            const logStyle = task.error_log_s3 ? 'btn-outline-danger' : 'btn-outline-secondary';
+            const logTitle = task.error_log_s3 ? 'View log — this run had API errors' : 'View log';
+            html += ` <a href="#" class="btn btn-sm ${logStyle}" title="${logTitle}" onclick="showTaskLog(${task.task_id}); return false;"><i class="fa fa-list-ul"></i></a>`;
             if (task.status === 'pending' || task.status === 'created') {
                 html += ` <a href="#" class="btn btn-outline-danger btn-sm" title="Delete task" onclick="deleteTask(${task.task_id}); return false;"><i class="fa fa-trash"></i></a>`;
             }
@@ -436,81 +477,121 @@
             }
         }
 
-        let _errorLogModal = null;
+        let _taskLogModal = null;
 
-        async function showErrorLog(taskId) {
-            const body = document.getElementById('errorLogBody');
-            const subtitle = document.getElementById('errorLogSubtitle');
-            subtitle.textContent = `— task ${taskId}`;
-            body.innerHTML = '<div class="text-muted"><i class="fa fa-spinner fa-spin me-2"></i>Loading…</div>';
+        // One log per run: the stages on one tab, the API errors on another.
+        // Fetched on click, never carried in the task list polling.
+        async function showTaskLog(taskId) {
+            const stages = document.getElementById('taskLogStages');
+            const errors = document.getElementById('taskLogErrors');
+            const errorsTab = document.getElementById('taskLogErrorsTab');
+            document.getElementById('taskLogSubtitle').textContent = `— task ${taskId}`;
+            stages.textContent = 'Loading…';
+            errors.innerHTML = '';
+            errorsTab.textContent = 'API Errors';
 
-            if (!_errorLogModal) {
-                _errorLogModal = new bootstrap.Modal(document.getElementById('errorLogModal'));
+            if (!_taskLogModal) {
+                _taskLogModal = new bootstrap.Modal(document.getElementById('taskLogModal'));
             }
-            _errorLogModal.show();
+            _taskLogModal.show();
 
+            let data;
             try {
-                const resp = await fetch(`{{ BASE_URL }}/error-log/${taskId}`);
+                const resp = await fetch(`{{ BASE_URL }}/task-log/${taskId}`);
                 if (!resp.ok) {
                     const detail = await resp.json().catch(() => ({}));
-                    body.innerHTML = '';
-                    const p = document.createElement('div');
-                    p.className = 'text-danger';
-                    p.textContent = detail.detail || `Failed to load error log (${resp.status})`;
-                    body.appendChild(p);
+                    stages.textContent = detail.detail || `Failed to load log (${resp.status})`;
                     return;
                 }
-                const data = await resp.json();
-                if (!data.rows.length) {
-                    body.innerHTML = '<div class="text-muted">No errors recorded for this task.</div>';
-                    return;
-                }
-
-                const wrapper = document.createElement('div');
-                wrapper.style.overflowX = 'auto';
-                const table = document.createElement('table');
-                table.className = 'table table-sm table-striped mb-0';
-
-                const thead = document.createElement('thead');
-                const headRow = document.createElement('tr');
-                for (const col of data.columns) {
-                    const th = document.createElement('th');
-                    th.textContent = col;
-                    headRow.appendChild(th);
-                }
-                thead.appendChild(headRow);
-                table.appendChild(thead);
-
-                const tbody = document.createElement('tbody');
-                for (const row of data.rows) {
-                    const tr = document.createElement('tr');
-                    for (const col of data.columns) {
-                        const td = document.createElement('td');
-                        td.textContent = row[col] == null ? '' : row[col];
-                        if (col === 'detail') {
-                            td.style.whiteSpace = 'normal';
-                            td.style.minWidth = '260px';
-                        }
-                        tr.appendChild(td);
-                    }
-                    tbody.appendChild(tr);
-                }
-                table.appendChild(tbody);
-                wrapper.appendChild(table);
-
-                body.innerHTML = '';
-                const count = document.createElement('div');
-                count.className = 'text-muted mb-2';
-                count.textContent = `${data.rows.length} error${data.rows.length === 1 ? '' : 's'}`;
-                body.appendChild(count);
-                body.appendChild(wrapper);
+                data = await resp.json();
             } catch (e) {
+                stages.textContent = 'Failed to load log: ' + e;
+                return;
+            }
+
+            stages.textContent = data.stages
+                ? data.stages
+                : 'No progress was recorded for this run. Runs from before the log was added show nothing here.';
+
+            _renderTaskLogErrors(data, errors, errorsTab);
+        }
+
+        function _renderTaskLogErrors(data, body, tab) {
+            if (data.errors_withheld) {
+                tab.innerHTML = 'API Errors <span class="badge bg-warning text-dark">!</span>';
+                body.innerHTML = '<div class="text-muted">This run had API errors. Only an administrator can see the detail.</div>';
+                return;
+            }
+            const cols = (data.errors && data.errors.columns) || [];
+            const rows = (data.errors && data.errors.rows) || [];
+            if (data.errors && data.errors.error) {
                 body.innerHTML = '';
                 const p = document.createElement('div');
                 p.className = 'text-danger';
-                p.textContent = 'Failed to load error log: ' + e;
+                p.textContent = 'Could not load the API error detail: ' + data.errors.error;
                 body.appendChild(p);
+                return;
             }
+            if (!rows.length) {
+                body.innerHTML = '<div class="text-muted">No API errors for this run.</div>';
+                return;
+            }
+
+            tab.innerHTML = `API Errors <span class="badge bg-danger">${rows.length}</span>`;
+
+            const wrapper = document.createElement('div');
+            wrapper.style.overflowX = 'auto';
+            const table = document.createElement('table');
+            table.className = 'table table-sm table-striped mb-0';
+
+            const thead = document.createElement('thead');
+            const headRow = document.createElement('tr');
+            for (const col of cols) {
+                const th = document.createElement('th');
+                th.textContent = col;
+                headRow.appendChild(th);
+            }
+            thead.appendChild(headRow);
+            table.appendChild(thead);
+
+            const tbody = document.createElement('tbody');
+            for (const row of rows) {
+                const tr = document.createElement('tr');
+                for (const col of cols) {
+                    const td = document.createElement('td');
+                    td.textContent = row[col] == null ? '' : row[col];
+                    if (col === 'detail') {
+                        td.style.whiteSpace = 'normal';
+                        td.style.minWidth = '260px';
+                    }
+                    tr.appendChild(td);
+                }
+                tbody.appendChild(tr);
+            }
+            table.appendChild(tbody);
+            wrapper.appendChild(table);
+
+            body.innerHTML = '';
+
+            // Count on the left, Download CSV on the right. Hundreds of rows
+            // are far easier to work through in a spreadsheet than in this
+            // scrolling table.
+            const head = document.createElement('div');
+            head.className = 'd-flex align-items-center justify-content-between mb-2';
+
+            const count = document.createElement('div');
+            count.className = 'text-muted';
+            count.textContent = `${rows.length} error${rows.length === 1 ? '' : 's'}`;
+            head.appendChild(count);
+
+            const dl = document.createElement('a');
+            dl.className = 'btn btn-outline-primary btn-sm';
+            dl.href = `{{ BASE_URL }}/download-error-log/${data.task_id}`;
+            dl.innerHTML = '<i class="fa fa-download me-1"></i>Download CSV';
+            head.appendChild(dl);
+
+            body.appendChild(head);
+            body.appendChild(wrapper);
         }
 
         function _bindDownloadBtns() {

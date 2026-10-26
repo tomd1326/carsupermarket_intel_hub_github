@@ -19,7 +19,7 @@ from utils.db_utils import (get_database_connection, get_settings)
 from utils.snowflake_client import SnowflakeClient
 from utils.sharepoint_client import SharePointClient
 from utils import sharepoint_sources
-from list_processor.cap_client import CAPClient
+from clients.cap_client import CAPClient
 from utils.file_handler import read_dataframe_file, write_dataframe_file
 
 from .core import (BASE_URL, _S3_ENV, templates, s3_bucketname, _track,
@@ -849,7 +849,7 @@ def _enrich_cap_ids(rows: list[dict], workers: int = 25) -> list[dict]:
 
     def _lookup_one(r):
         try:
-            from list_processor.structs import VehicleRow
+            from clients.structs import VehicleRow
             resp = cap.vrm_valuation(VehicleRow(vrm=r['vrm'], mileage=1000))
             raw = resp.get('capid')
             cap_id = int(raw) if raw and raw != 'Not Found' else None
