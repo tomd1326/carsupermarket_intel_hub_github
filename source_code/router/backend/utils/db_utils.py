@@ -277,7 +277,7 @@ SETTINGS_DEFAULTS = {
     'home_btn_3d_edge':                 35,
     'home_grid_gap':                    20,
     'home_grid_max_width':              600,
-    'home_pad_top':                     40,
+    'home_pad_top':                     120,
     'home_pad_side':                    16,
     'home_pad_bottom':                  8,
     # Settings > User Activity: a session with no request for this long ends as Timed Out.
