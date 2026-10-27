@@ -150,6 +150,8 @@
             if (layoutResp.status !== 'ok') throw new Error(layoutResp.message || 'no layout returned');
             if (layoutResp.sections) SECTIONS = layoutResp.sections;
             hiddenSections = new Set(layoutResp.hidden_sections || []);
+            sectionSources = layoutResp.section_sources || {};
+            sectionCompanies = layoutResp.section_companies || {};
             loadCollapsedRows(layoutResp.collapsed_rows || []);
             loadRollingRows(layoutResp.rolling_rows || []);
             myCharts = layoutResp.my_charts || [];
@@ -1374,6 +1376,18 @@
 
     // Sections hidden in Settings > Sections: no tab, charts not loaded.
     let hiddenSections = new Set();
+    // { section: source id } from Settings > Sections: that section's charts
+    // can only use that data source.
+    let sectionSources = {};
+    // { section: company } from Settings > Sections, for sections that are not
+    // Carsupermarket.com. All-charts notes show only on their company's charts.
+    let sectionCompanies = {};
+    const COMPANIES = { carsupermarket: 'Carsupermarket.com', bcb: 'BCB' };
+    const NOTE_COMPANIES = { ...COMPANIES, both: 'Both' };
+
+    function sectionCompany(section) {
+        return sectionCompanies[section] || 'carsupermarket';
+    }
 
     function findRow(id) {
         return layout.rows.find(r => r.id === id);
@@ -2328,8 +2342,13 @@
         return starts.findIndex(s => s <= date && date < addDaysIso(s, 7));
     }
 
+    // A note picked for one chart shows on that chart; an all-charts note on
+    // every chart in its company's sections (no company = Carsupermarket.com).
     function notesForRow(rowId) {
-        return chartNotes.filter(n => !n.row_id || n.row_id === rowId);
+        const row = findRow(rowId);
+        const company = sectionCompany(row ? row.section : null);
+        return chartNotes.filter(n => n.row_id ? n.row_id === rowId
+            : ['both', company].includes(n.company || 'carsupermarket'));
     }
 
     // meta = { rowId, kind: 'd'|'w'|'m', starts: first date of each point }.
@@ -2459,6 +2478,7 @@
         document.getElementById('noteDate').value = new Date().toISOString().slice(0, 10);
         document.getElementById('noteTitle').value = '';
         document.getElementById('noteText').value = '';
+        document.getElementById('noteCompany').value = 'carsupermarket';
         noteRowOptions('');
     }
 
@@ -2472,6 +2492,7 @@
         document.getElementById('noteDate').value = note.date;
         document.getElementById('noteTitle').value = note.title;
         document.getElementById('noteText').value = note.text || '';
+        document.getElementById('noteCompany').value = note.company || 'carsupermarket';
         noteRowOptions(note.row_id);
     }
 
@@ -2482,7 +2503,7 @@
             return;
         }
         const scope = n => {
-            if (!n.row_id) return 'All charts';
+            if (!n.row_id) return `All charts - ${NOTE_COMPANIES[n.company || 'carsupermarket']}`;
             const row = findRow(n.row_id);
             return row ? rowTitle(row) : '(chart removed)';
         };
@@ -2527,6 +2548,7 @@
             title: document.getElementById('noteTitle').value.trim(),
             text: document.getElementById('noteText').value.trim(),
             row_id: document.getElementById('noteRow').value || null,
+            company: document.getElementById('noteCompany').value,
         };
         if (!note.date) { showNotesError('Choose a date.'); return; }
         if (!note.title) { showNotesError('Enter a title.'); return; }
@@ -3672,12 +3694,37 @@
         return `<optgroup label="${escHtml(sourceLabel(source))}">${options}</optgroup>`;
     }
 
+    // While the chart popup is open: the data source its section is locked
+    // to (Settings > Sections), or null for any.
+    let metricSourceLock = null;
+
     // Every source in the metric lists, in order: the built-in ones, then
-    // each Settings > Data Sources table in the order added.
-    function metricSources() {
+    // each Settings > Data Sources table in the order added. Only the locked
+    // one while the chart popup is on a locked section.
+    function metricSources(all = false) {
         const sources = ['snowflake', 'sharepoint', 'autotrader'];
         metricsCatalogue.forEach(m => { if (!sources.includes(m.source)) sources.push(m.source); });
-        return sources;
+        return metricSourceLock && !all ? sources.filter(s => s === metricSourceLock) : sources;
+    }
+
+    // Section changed in the chart popup: the metric lists follow its lock.
+    function onChartSectionChange() {
+        fillPositionOptions();
+        const lock = sectionSources[document.getElementById('sectionSelect').value] || null;
+        if (lock === metricSourceLock) return;
+        metricSourceLock = lock;
+        const refill = (id, blank) => {
+            const el = document.getElementById(id);
+            const value = el.value;
+            el.innerHTML = blank + allMetricGroups();
+            el.value = value;
+        };
+        refill('metricSelect', '');
+        refill('divideSelect', '<option value="">(nothing - plain chart)</option>');
+        refill('multiplySelect', '<option value="">(nothing)</option>');
+        renderPlusLists();
+        renderSeriesList();
+        onMetricChange();
     }
 
     function sourceLabel(source) {
@@ -3806,6 +3853,11 @@
         document.getElementById('removeChartBtn').style.display = row ? '' : 'none';
         // Cleared first so the last chart's weighting is not carried over.
         document.getElementById('weightSelect').innerHTML = '';
+        // The section the chart opens in (as set on sectionSelect below) sets
+        // which data sources the metric lists offer.
+        const openSection = row ? row.section
+            : (activeSection && SECTIONS.includes(activeSection) ? activeSection : SECTIONS[0]);
+        metricSourceLock = sectionSources[openSection] || null;
 
         // Metric list. Can be changed on an existing chart (e.g. a copy pointed
         // at another metric); the chart then uses the new metric's targets.
@@ -3903,11 +3955,13 @@
 
     // ── View Vehicles setup in the Edit Chart popup ──
     // vehDraft is the chart's setting as edited:
-    // { table, date_column ('' = off), filters, date_mode: 'range'|'snapshot' }.
+    // { table, date_column ('' = off), filters, date_mode: 'range'|'snapshot',
+    //   columns: [names] or absent = every column set for the table in Settings }.
     // The chosen table's columns load after the popup opens; until then the
     // saved values still show, so saving early keeps them.
     let vehDraft = { table: '', date_column: '', filters: [], date_mode: 'range' };
     let vehColumns = null;   // [{ column, type }] of the vehicle table, or null while loading
+    let vehViewColumns = null;   // the table's Settings columns [{ column, label, ... }], or null while loading
     let vehTable = '';
 
     // Operators offered for each kind of column, as [operator, label]. The
@@ -3965,11 +4019,13 @@
     // default or first configured one), fills the table dropdown, and re-renders.
     function loadVehChartColumns(table) {
         vehColumns = null;
+        vehViewColumns = null;
         document.getElementById('vehTableHint').textContent = 'Loading the table columns...';
         renderVehSetup();
         return fetchVehicleColumns(table).then(resp => {
             if (!chartModalState) return;
             vehColumns = resp.columns;
+            vehViewColumns = (resp.view && resp.view.columns) || [];
             vehTable = resp.table;
             vehDraft.table = vehDraft.table || resp.table;
             const tables = resp.tables.length ? resp.tables : [resp.table];
@@ -3978,16 +4034,44 @@
             select.innerHTML = list.map(t => `<option value="${escHtml(t)}">${escHtml(t)}</option>`).join('');
             select.value = vehDraft.table;
             document.getElementById('vehTableHint').textContent =
-                'The columns the list shows are set per table in Settings. The clicked day, week or month is matched on the date column.';
+                'Column headings and formats are set per table in Settings. The clicked day, week or month is matched on the date column.';
             renderVehSetup();
         }).catch(err => {
             document.getElementById('vehTableHint').textContent = 'Could not read the vehicle table: ' + err.message;
         });
     }
 
+    // A different table has different columns, so its list starts all ticked.
     function onVehChartTableChange() {
         vehDraft.table = document.getElementById('vehChartTableSelect').value;
+        delete vehDraft.columns;
         loadVehChartColumns(vehDraft.table);
+    }
+
+    // The Columns Shown tick list: the table's Settings columns in their
+    // Settings order. A ticked column that has since gone from Settings is
+    // still listed, so it is not dropped without being seen.
+    function renderVehColumnList() {
+        const list = document.getElementById('vehColumnList');
+        if (!vehViewColumns) { list.innerHTML = '<span class="modal-hint">Loading...</span>'; return; }
+        const chosen = vehDraft.columns;
+        const names = vehViewColumns.map(c => c.column);
+        const gone = (chosen || []).filter(n => !names.includes(n)).map(n => ({ column: n, label: `${n} (not in Settings)` }));
+        const all = [...vehViewColumns, ...gone];
+        list.innerHTML = all.length ? all.map(c => `<label title="${escHtml(c.column)}">
+                <input type="checkbox" value="${escHtml(c.column)}" ${!chosen || chosen.includes(c.column) ? 'checked' : ''}
+                       onchange="onVehColumnTick()"> ${escHtml(c.label || c.column)}</label>`).join('')
+            : '<span class="modal-hint">No columns are set for this table in Settings yet.</span>';
+    }
+
+    function onVehColumnTick() {
+        vehDraft.columns = [...document.querySelectorAll('#vehColumnList input:checked')].map(el => el.value);
+    }
+
+    function setAllVehColumns(on) {
+        if (on) delete vehDraft.columns;
+        else vehDraft.columns = [];
+        renderVehColumnList();
     }
 
     // Options for a column select, keeping a saved column that is not in the
@@ -4012,6 +4096,8 @@
         document.getElementById('vehDateMode').value = vehDraft.date_mode || 'range';
         document.getElementById('vehDateModeField').style.display = vehDraft.date_column ? '' : 'none';
         document.getElementById('vehFiltersField').style.display = vehDraft.date_column ? '' : 'none';
+        document.getElementById('vehColumnsField').style.display = vehDraft.date_column ? '' : 'none';
+        renderVehColumnList();
 
         vehDraft.filters.forEach(fitFilterToKind);
         document.getElementById('vehFilterList').innerHTML = vehDraft.filters.map((f, i) => {
@@ -4115,8 +4201,14 @@
             if (!f.column) throw new Error('Choose a column for each View Vehicles filter, or remove it.');
             if (!VEH_NO_VALUE_OPS.includes(f.op) && !f.value) throw new Error(`Enter a value for the ${f.column} filter.`);
         });
+        // Every Settings column ticked is saved as no list, so columns added in
+        // Settings later show on this chart too.
+        let columns = vehDraft.columns;
+        if (columns && vehViewColumns && vehViewColumns.every(c => columns.includes(c.column))
+            && columns.every(n => vehViewColumns.some(c => c.column === n))) columns = undefined;
+        if (columns && !columns.length) throw new Error('Tick at least one View Vehicles column.');
         return { table: vehDraft.table || undefined, date_column: vehDraft.date_column,
-                 filters, date_mode: vehDraft.date_mode === 'snapshot' ? 'snapshot' : 'range' };
+                 filters, date_mode: vehDraft.date_mode === 'snapshot' ? 'snapshot' : 'range', columns };
     }
 
     // Adding: a new metric resets the defaults to suit it. Editing: the
@@ -4221,6 +4313,7 @@
 
     function closeChartModal() {
         chartModalState = null;
+        metricSourceLock = null;
         document.getElementById('chartModal').classList.remove('open');
     }
 
@@ -5988,7 +6081,7 @@
             + `chart legend ${lim('legend_font_px')} px (the series names above stacked charts), `
             + 'and the size the magnifier opens a chart popup at. '
             + 'Applies to the KPI page for everyone.';
-        sectionDraft = SECTIONS.map(name => ({ name, from: name, hidden: hiddenSections.has(name) }));
+        sectionDraft = SECTIONS.map(sectionDraftItem);
         loadChartDraft();
         renderSectionDraft();
         loadVehColumnDraft();
@@ -6838,13 +6931,21 @@
     }
 
     // ── Sections (edited in the Settings popup) ──────────────────────────────
-    // Each item is { name, from, hidden }: `from` is the name it had when the
-    // popup opened (null for a new one), so the server can carry charts across
-    // a rename; hidden = no tab and its charts not loaded, but kept.
+    // Each item is { name, from, hidden, source }: `from` is the name it had
+    // when the popup opened (null for a new one), so the server can carry
+    // charts across a rename; hidden = no tab and its charts not loaded, but
+    // kept; source = the one data source its charts may use (null = any).
     let sectionDraft = [];
+
+    function sectionDraftItem(name) {
+        return { name, from: name, hidden: hiddenSections.has(name), source: sectionSources[name] || null,
+                 company: sectionCompany(name) };
+    }
 
     function renderSectionDraft() {
         const last = sectionDraft.length - 1;
+        const sourceOptions = s => '<option value="">Any Data Source</option>' + metricSources(true).map(src =>
+            `<option value="${escHtml(src)}" ${src === s.source ? 'selected' : ''}>${escHtml(sourceLabel(src))}</option>`).join('');
         document.getElementById('sectionList').innerHTML = sectionDraft.map((s, i) => {
             const charts = chartDraft.filter(c => c.sec === s).length;
             const removeTitle = charts ? 'Move or remove its charts first' : 'Remove section';
@@ -6853,6 +6954,11 @@
                     <input type="text" maxlength="60" value="${escHtml(s.name)}"
                            oninput="sectionDraft[${i}].name = this.value">
                     <span class="section-count">${charts} chart${charts === 1 ? '' : 's'}</span>
+                    <select title="Charts in this section can only use this data source"
+                            onchange="sectionDraft[${i}].source = this.value || null">${sourceOptions(s)}</select>
+                    <select class="section-company" title="Which company this section is for (chart notes follow it)"
+                            onchange="sectionDraft[${i}].company = this.value">${Object.entries(COMPANIES).map(([k, label]) =>
+                        `<option value="${k}" ${k === (s.company || 'carsupermarket') ? 'selected' : ''}>${label}</option>`).join('')}</select>
                     <button type="button" class="btn btn-edit" title="${s.hidden ? 'Show Section' : 'Hide Section'}"
                             onclick="toggleSectionHidden(${i})">
                         <i class="fas ${s.hidden ? 'fa-eye-slash' : 'fa-eye'}"></i></button>
@@ -6875,7 +6981,7 @@
     }
 
     function addSectionDraft() {
-        sectionDraft.push({ name: '', from: null, hidden: false });
+        sectionDraft.push({ name: '', from: null, hidden: false, source: null, company: 'carsupermarket' });
         renderSectionDraft();
         renderChartDraft();
         const inputs = document.querySelectorAll('#sectionList input');
@@ -7003,13 +7109,15 @@
     function sectionsChanged() {
         return sectionDraft.length !== SECTIONS.length
             || sectionDraft.some((s, i) => s.from !== SECTIONS[i] || s.name.trim() !== SECTIONS[i]
-                || !!s.hidden !== hiddenSections.has(SECTIONS[i]));
+                || !!s.hidden !== hiddenSections.has(SECTIONS[i])
+                || (s.source || null) !== (sectionSources[SECTIONS[i]] || null)
+                || (s.company || 'carsupermarket') !== sectionCompany(SECTIONS[i]));
     }
 
     // `holdOn`: saved section names to keep for now, because charts are still
     // saved in them until the chart moves are saved (see saveSectionsAndCharts).
     async function saveSections(holdOn = []) {
-        const items = sectionDraft.map(s => ({ name: s.name.trim(), from: s.from, hidden: !!s.hidden }))
+        const items = sectionDraft.map(s => ({ name: s.name.trim(), from: s.from, hidden: !!s.hidden, source: s.source || null, company: s.company || 'carsupermarket' }))
             .concat(holdOn.map(name => ({ name, from: name })));
         const resp = await fetch(BASE_URL + '/kpi/sections', {
             method: 'POST',
@@ -7020,7 +7128,10 @@
         SECTIONS = resp.sections;
         layout = resp.layout;
         hiddenSections = new Set(resp.hidden_sections || []);
+        sectionSources = resp.section_sources || {};
+        sectionCompanies = resp.section_companies || {};
         renderLayout();
+        redrawAllCharts();   // all-charts notes follow the section's company
         // A section shown again has charts not drawn yet.
         shownRows().forEach(row => {
             if (!rowCharts[row.id]) {
@@ -7035,7 +7146,7 @@
             if (!keep.has(el.id)) el.remove();
         });
         // Saved: the popup's list now starts from the saved names.
-        sectionDraft = SECTIONS.map(name => ({ name, from: name, hidden: hiddenSections.has(name) }));
+        sectionDraft = SECTIONS.map(sectionDraftItem);
         loadChartDraft();
         renderSectionDraft();
     }
@@ -7049,9 +7160,10 @@
         if (sectionsChanged()) {
             const kept = new Set(sectionDraft.map(s => s.from));
             keep = SECTIONS.filter(name => !kept.has(name) && layout.rows.some(r => r.section === name));
-            const finalNames = sectionDraft.map(s => ({ name: s.name.trim(), hidden: !!s.hidden }));
+            const finalNames = sectionDraft.map(s => ({ name: s.name.trim(), hidden: !!s.hidden, source: s.source || null,
+                                                        company: s.company || 'carsupermarket' }));
             await saveSections(keep);
-            if (keep.length) sectionDraft = finalNames.map(f => ({ name: f.name, from: f.name, hidden: f.hidden }));
+            if (keep.length) sectionDraft = finalNames.map(f => ({ ...f, from: f.name }));
         }
         if (chartsChanged(plan)) await saveChartPlan(plan);
         if (keep.length) await saveSections();

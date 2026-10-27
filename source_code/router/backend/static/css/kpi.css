@@ -168,6 +168,11 @@
     background: #fff; color: #0f172a;
 }
 .section-item .btn { padding: 3px 9px; font-size: 0.78rem; }
+.section-item select {
+    width: 190px; padding: 5px 6px; border: 1px solid #cbd5e1; border-radius: 6px;
+    background: #fff; color: #0f172a; font-size: 0.8rem;
+}
+.section-item select.section-company { width: 150px; }
 .section-item.is-hidden input { color: #94a3b8; }
 .section-item .section-count { font-size: 0.76rem; color: #64748b; width: 62px; text-align: right; }
 .chart-list-section { font-size: 0.78rem; font-weight: 700; color: #64748b; margin: 10px 0 4px; }
@@ -371,6 +376,13 @@
     width: 100%; min-width: 0; padding: 5px 8px; border: 1px solid #cbd5e1; border-radius: 6px; background: #fff; font-size: 0.82rem;
 }
 .veh-filter .btn { padding: 3px 9px; font-size: 0.78rem; }
+/* Columns Shown tick list (Edit Chart > View Vehicles). */
+.veh-col-links { display: flex; gap: 12px; font-size: 0.76rem; margin-bottom: 4px; }
+.veh-col-list {
+    display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 2px 12px; max-height: 220px; overflow: auto;
+    border: 1px solid #cbd5e1; border-radius: 6px; padding: 6px 8px; background: #fff;
+}
+.veh-col-list label { display: flex; gap: 6px; align-items: center; font-size: 0.82rem; font-weight: 400; color: #0f172a; }
 /* Quick filters above the vehicle list (popup) and their setup rows (Settings). */
 .veh-quick { display: none; flex-wrap: wrap; gap: 10px; align-items: flex-end; margin-top: 12px; }
 .veh-quick.show { display: flex; }

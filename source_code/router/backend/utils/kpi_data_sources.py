@@ -144,6 +144,19 @@ def references(obj, source_id: str) -> int:
     return 0
 
 
+def sources_used(obj) -> set:
+    """Every source a chart (or any part of one) reads its figures from, read
+    the same way as references(). A calculated target's reference is left
+    out: it only sets the target line, not the chart's figures."""
+    if isinstance(obj, dict):
+        source = obj.get("source", "snowflake" if "metric" in obj else None)
+        own = {source} if source else set()
+        return own.union(*(sources_used(v) for k, v in obj.items() if k != "target_calc"))
+    if isinstance(obj, list):
+        return set().union(*(sources_used(v) for v in obj))
+    return set()
+
+
 def fetch_sql(entry: dict, metrics: list, start, end) -> tuple[str, list]:
     """SQL and bound values reading `metrics` for one entry from start to end.
     The table and column names must already have been checked against the

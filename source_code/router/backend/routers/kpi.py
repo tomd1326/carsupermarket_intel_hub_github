@@ -2671,8 +2671,10 @@ def _validate_target_calc(row: dict) -> str | None:
     return None
 
 
-def _validate_layout(layout: dict, sections: list) -> str | None:
-    """Return an error message if the layout payload is invalid, else None."""
+def _validate_layout(layout: dict, sections: list, locks: dict | None = None) -> str | None:
+    """Return an error message if the layout payload is invalid, else None.
+    locks: {section: source id} from Settings > Sections; every chart in a
+    locked section must read only that source."""
     rows = layout.get("rows") if isinstance(layout, dict) else None
     if not isinstance(rows, list):
         return "layout.rows must be a list"
@@ -2683,6 +2685,10 @@ def _validate_layout(layout: dict, sections: list) -> str | None:
             return f"bad row type: {row.get('type')}"
         if row.get("section") not in sections:
             return f"bad section: {row.get('section')}"
+        locked = (locks or {}).get(row["section"])
+        if locked and kds.sources_used(row) - {locked}:
+            return (f"Charts in {row['section']} can only use its locked data source "
+                    f"(Settings > Sections): {row.get('title') or row.get('metric')}")
         error = _validate_layout_metric(row.get("source", "snowflake"), row.get("metric"))
         if error:
             return error
@@ -2911,6 +2917,7 @@ def kpi_layout_get(request: Request, user: str = Depends(require_page_api(*_KPI_
             'layout', 'settings', 'notes', 'themes', 'metric_names', 'metric_formats',
             'derived_names', 'hidden_sections', _AT_PERIODS_KEY, _AT_PPC_KEY,
             _COLLAPSED_KEY, _ROLLING_KEY, _MY_CHARTS_KEY, _WBR_ITEMS_KEY, _WBR_DECK_KEY,
+            _SECTION_SOURCES_KEY, _SECTION_COMPANIES_KEY,
         ])
         layout = stored.get('layout') or KPI_DEFAULT_LAYOUT
         settings = _kpi_settings(stored.get('settings'))
@@ -2939,11 +2946,19 @@ def kpi_layout_get(request: Request, user: str = Depends(require_page_api(*_KPI_
     except Exception as e:
         logger.warning("Autotrader settings read failed: %s", e)
         at_periods, at_ppc_periods = [], []
+    try:
+        section_sources = _section_locks(sections, stored.get(_SECTION_SOURCES_KEY) or {})
+    except Exception as e:
+        logger.warning("Section data source read failed: %s", e)
+        section_sources = {}
     return {"status": "ok", "layout": layout, "sections": sections, "settings": settings,
             "setting_limits": KPI_SETTING_LIMITS, "notes": notes, "themes": themes,
             "metric_names": metric_names, "metric_formats": metric_formats, "derived_names": derived_names,
             "at_periods": at_periods, "at_ppc_periods": at_ppc_periods,
             "hidden_sections": [s for s in (stored.get('hidden_sections') or []) if s in sections],
+            "section_sources": section_sources,
+            "section_companies": {s: c for s, c in (stored.get(_SECTION_COMPANIES_KEY) or {}).items()
+                                  if s in sections and c in _COMPANIES},
             "collapsed_rows": (stored.get(_COLLAPSED_KEY) or {}).get(user, []),
             "rolling_rows": (stored.get(_ROLLING_KEY) or {}).get(user, []),
             "my_charts": (stored.get(_MY_CHARTS_KEY) or {}).get(user, []),
@@ -3032,7 +3047,10 @@ def _validate_notes(notes) -> str | None:
         row_id = note.get("row_id")
         if row_id is not None and (not isinstance(row_id, str) or len(row_id) > 40):
             return "bad note row_id"
-        if set(note) - {"id", "date", "title", "text", "row_id"}:
+        # Which company's charts an all-charts note shows on; none = Carsupermarket.com.
+        if note.get("company", _DEFAULT_COMPANY) not in (*_COMPANIES, "both"):
+            return "bad note company"
+        if set(note) - {"id", "date", "title", "text", "row_id", "company"}:
             return "Unknown note field"
     return None
 
@@ -3060,7 +3078,7 @@ def kpi_layout_save(request: Request, payload: dict, user: str = Depends(require
     layout = (payload or {}).get("layout")
     try:
         sections = _kpi_sections(_read_kpi_layout_value('layout') or KPI_DEFAULT_LAYOUT)
-        err = _validate_layout(layout or {}, sections)
+        err = _validate_layout(layout or {}, sections, _section_locks(sections))
         if err:
             return {"status": "error", "message": err}
         _write_kpi_layout_value('layout', layout)
@@ -3546,6 +3564,31 @@ def _kpi_sections(layout: dict) -> list:
     return sections
 
 
+_SECTION_SOURCES_KEY = 'section_sources'
+# Which company a section's charts are for (Settings > Sections), so chart
+# notes can apply to one company or both. Only non-default ones are stored.
+# The two companies are fixed here because notes and sections both key on them.
+_SECTION_COMPANIES_KEY = 'section_companies'
+_COMPANIES = ("carsupermarket", "bcb")
+_DEFAULT_COMPANY = "carsupermarket"
+
+
+def _known_source_ids() -> set:
+    return {sid for sid, _, _ in kds.BUILT_IN} | {s["id"] for s in _stored_data_sources()}
+
+
+def _section_locks(sections: list, stored=None) -> dict:
+    """{section: source id} set in Settings > Sections, for sections that
+    still exist and sources that still exist. stored: the saved value if
+    already read."""
+    if stored is None:
+        stored = _read_kpi_layout_value(_SECTION_SOURCES_KEY)
+    if not isinstance(stored, dict):
+        return {}
+    known = _known_source_ids()
+    return {s: v for s, v in stored.items() if s in sections and v in known}
+
+
 def _section_slug(name: str) -> str:
     """Matches sectionDomId in kpi.js, so two names never share a page element."""
     return re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")
@@ -3565,8 +3608,10 @@ def kpi_sections_save(request: Request, payload: dict, user: str = Depends(requi
     if len(items) > 50:
         return {"status": "error", "message": "At most 50 sections"}
     # hidden: sections hidden in Settings > Sections (kept, with their charts,
-    # but not shown as tabs and their charts not loaded).
-    names, renames, slugs, hidden = [], {}, set(), []
+    # but not shown as tabs and their charts not loaded). source: the one data
+    # source the section's charts may use (null = any).
+    names, renames, slugs, hidden, locks, companies = [], {}, set(), [], {}, {}
+    known = _known_source_ids()
     for item in items:
         if not isinstance(item, dict):
             return {"status": "error", "message": "bad section"}
@@ -3583,6 +3628,16 @@ def kpi_sections_save(request: Request, payload: dict, user: str = Depends(requi
         names.append(name)
         if item.get("hidden") is True:
             hidden.append(name)
+        source = item.get("source")
+        if source is not None:
+            if source not in known:
+                return {"status": "error", "message": f"The data source for {name} no longer exists - reload the page"}
+            locks[name] = source
+        company = item.get("company") or _DEFAULT_COMPANY
+        if company not in _COMPANIES:
+            return {"status": "error", "message": "bad section company"}
+        if company != _DEFAULT_COMPANY:
+            companies[name] = company
         old = item.get("from")
         if old is not None:
             if not isinstance(old, str):
@@ -3602,11 +3657,17 @@ def kpi_sections_save(request: Request, payload: dict, user: str = Depends(requi
                     "message": f"Move or remove the charts in {', '.join(in_use)} before removing it"}
         new_rows = [{**r, "section": renames.get(r.get("section"), r.get("section"))} for r in rows]
         new_layout = {**layout, "rows": new_rows}
-        _write_kpi_layout_values({'layout': new_layout, 'sections': names, 'hidden_sections': hidden})
+        # A section locked while it holds charts on another source is refused.
+        err = _validate_layout(new_layout, names, locks)
+        if err:
+            return {"status": "error", "message": err}
+        _write_kpi_layout_values({'layout': new_layout, 'sections': names, 'hidden_sections': hidden,
+                                  _SECTION_SOURCES_KEY: locks, _SECTION_COMPANIES_KEY: companies})
     except Exception as e:
         logger.error(f"KPI sections save failed: {e}")
         return {"status": "error", "message": str(e)}
-    return {"status": "ok", "sections": names, "layout": new_layout, "hidden_sections": hidden}
+    return {"status": "ok", "sections": names, "layout": new_layout, "hidden_sections": hidden,
+            "section_sources": locks, "section_companies": companies}
 
 
 @router.post("/kpi/settings")
@@ -3869,14 +3930,21 @@ def _validate_vehicle_view(view) -> str | None:
 
 
 def _validate_row_vehicles(vehicles) -> str | None:
-    """A chart's View Vehicles setting: its table, date column, filters and
-    whether the list is a date range or a single-day snapshot. An absent table
-    falls back to the default table, and an absent date_mode to a range, so
-    charts saved before this feel no change."""
+    """A chart's View Vehicles setting: its table, date column, filters,
+    whether the list is a date range or a single-day snapshot, and which of the
+    table's Settings columns it shows. An absent table falls back to the
+    default table, an absent date_mode to a range, and absent columns to every
+    Settings column, so charts saved before this feel no change."""
     if vehicles is None:
         return None
-    if not isinstance(vehicles, dict) or set(vehicles) - {"table", "date_column", "filters", "date_mode"}:
+    if not isinstance(vehicles, dict) or set(vehicles) - {"table", "date_column", "filters", "date_mode", "columns"}:
         return "bad vehicles setting"
+    columns = vehicles.get("columns")
+    if columns is not None:
+        if not isinstance(columns, list) or not columns or len(columns) > 300:
+            return "Tick at least one View Vehicles column"
+        if any(not isinstance(c, str) or not re.fullmatch(_IDENTIFIER, c) for c in columns) or len(set(columns)) != len(columns):
+            return "bad View Vehicles columns"
     table = vehicles.get("table")
     if table is not None and (not isinstance(table, str) or not re.fullmatch(rf"{_IDENTIFIER}\.{_IDENTIFIER}", table)):
         return "bad vehicle table"
@@ -4035,12 +4103,16 @@ def kpi_vehicles(request: Request, row_id: str, start: str, end: str,
         if not live:
             return {"status": "error", "message": f"Table {table} was not found"}
 
-        # Ticked columns that have since gone from the table are left out
-        # rather than failing the whole list.
-        shown = [c for c in view["columns"] if c["column"] in live]
-        missing = [c["column"] for c in view["columns"] if c["column"] not in live]
+        # The chart's own ticked columns (none saved = every Settings column),
+        # in Settings order. Ticked columns that have since gone from the table
+        # are left out rather than failing the whole list.
+        chosen = vehicles.get("columns")
+        wanted = [c for c in view["columns"] if chosen is None or c["column"] in chosen]
+        shown = [c for c in wanted if c["column"] in live]
+        missing = [c["column"] for c in wanted if c["column"] not in live]
         if not shown:
-            return {"status": "error", "message": f"No View Vehicles columns are set up for {table} - set them in Settings"}
+            return {"status": "error", "message": f"None of this chart's View Vehicles columns are set up for {table} - "
+                                                  "tick some in Edit Chart, or set them in Settings"}
         date_col = vehicles["date_column"]
         if date_col not in live:
             return {"status": "error", "message": f"Date column {date_col} is not in {table}"}

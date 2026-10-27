@@ -471,7 +471,7 @@
             <div class="modal-grid">
                 <div class="modal-field">
                     <label for="sectionSelect">Section</label>
-                    <select id="sectionSelect" onchange="fillPositionOptions()"></select>
+                    <select id="sectionSelect" onchange="onChartSectionChange()"></select>
                 </div>
                 <div class="modal-field">
                     <label for="positionSelect">Position In Section</label>
@@ -635,7 +635,7 @@
             <div class="modal-field" id="vehCopyField">
                 <label for="vehCopySelect">Copy View Vehicles Setup From</label>
                 <select id="vehCopySelect" onchange="copyVehSetup(this.value)"></select>
-                <div class="modal-hint">Copies that chart's table, date column, dates and filters.</div>
+                <div class="modal-hint">Copies that chart's table, date column, dates, columns and filters.</div>
             </div>
             <div class="modal-field">
                 <label for="vehChartTableSelect">Vehicle Table</label>
@@ -654,6 +654,15 @@
                     <option value="snapshot">Snapshot - the single last day only</option>
                 </select>
                 <div class="modal-hint">Use Snapshot for stock levels (one row per vehicle per day), so a week or month does not return every vehicle times every day.</div>
+            </div>
+            <div class="modal-field" id="vehColumnsField">
+                <label>Columns Shown</label>
+                <div class="veh-col-links">
+                    <a href="#" onclick="setAllVehColumns(true); return false;">Tick All</a>
+                    <a href="#" onclick="setAllVehColumns(false); return false;">Untick All</a>
+                </div>
+                <div class="veh-col-list" id="vehColumnList"></div>
+                <div class="modal-hint">The columns this chart's list shows, from those set for the table in Settings. With all ticked, columns added in Settings later show too.</div>
             </div>
             <div class="modal-field" id="vehFiltersField">
                 <label>Filters (All Must Match)</label>
@@ -698,6 +707,14 @@
                 <div class="modal-field">
                     <label for="noteRow">Show On</label>
                     <select id="noteRow"></select>
+                </div>
+                <div class="modal-field">
+                    <label for="noteCompany" title="Which company's charts an All Charts note shows on">Applies To</label>
+                    <select id="noteCompany">
+                        <option value="carsupermarket">Carsupermarket.com</option>
+                        <option value="bcb">BCB</option>
+                        <option value="both">Both</option>
+                    </select>
                 </div>
                 <div class="modal-field span-2">
                     <label for="noteTitle">Title</label>
