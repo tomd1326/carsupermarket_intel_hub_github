@@ -192,8 +192,8 @@ SETTINGS_DEFAULTS = {
     # Set-password links (Settings > User Accounts > Password Links): hours a
     # link works for, and the address each environment's links start with.
     'password_link_hours':              48,
-    'password_link_base_prod':          'https://uk-vle.aramis-group.eu/dev',
-    'password_link_base_dev':           'https://ceywu383w7.execute-api.us-east-2.amazonaws.com/dev',
+    'password_link_base_prod':          'https://uk-intel-hub.aramis-group.eu',
+    'password_link_base_dev':           'https://dev-uk-intel-hub.aramis-group.eu',
     # The email the Users page opens in Outlook. Placeholders: {first_name}, {link}, {expires}.
     # The sign-off name is Outlook's own default signature, added when the email opens.
     'password_email_subject_activate':  'Your Vehicle List Evaluator Account',
