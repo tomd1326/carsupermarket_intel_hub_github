@@ -149,7 +149,7 @@ variable "api_gateway_custom_domain_name_dev" {
 variable "api_gateway_custom_domain_name_prod" {
   type        = string
   description = "api gateway custom domain name for development"
-  default     = "uk-vle.aramis-group.eu"
+  default     = "uk-intel-hub.aramis-group.eu"
 }
 
 # -------------------------------------------------
