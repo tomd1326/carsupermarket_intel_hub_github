@@ -30,6 +30,7 @@ from zoneinfo import ZoneInfo
 from fastapi import APIRouter, Depends, HTTPException
 
 from utils.db_utils import get_database_connection, save_settings_partial
+from utils.ddl_once import once_per_database
 from utils.snowflake_client import SnowflakeClient
 from .core import get_current_user, ADMIN_USERNAME
 from . import api_requests, dbt_runs
@@ -71,6 +72,7 @@ def _iso(d):
 # Storage
 # ---------------------------------------------------------------------------
 
+@once_per_database
 def _ensure_tables(conn) -> None:
     with conn.cursor() as cur:
         cur.execute(

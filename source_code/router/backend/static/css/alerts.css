@@ -1,0 +1,21 @@
+/* The alerts bell in the page header (alerts.js, templates/_navigation.html). */
+.alerts-bell { position: relative; display: inline-flex; align-items: center; margin-right: 10px; }
+.alerts-bell[hidden] { display: none; }
+.alerts-bell-btn { position: relative; border: none; background: none; color: #444746; font-size: 1.05rem; padding: 6px 8px;
+                   border-radius: 50%; cursor: pointer; line-height: 1; }
+.alerts-bell-btn:hover { background: rgba(0, 0, 0, 0.06); }
+.alerts-bell-count { position: absolute; top: 0; right: 0; min-width: 16px; height: 16px; padding: 0 4px; border-radius: 8px;
+                     background: #d93025; color: #fff; font-size: 10px; font-weight: 700; line-height: 16px; text-align: center; }
+.alerts-bell-count[hidden] { display: none; }
+.alerts-panel { position: absolute; right: 0; top: calc(100% + 6px); z-index: 1100; width: 340px; max-height: 70vh; overflow-y: auto;
+                background: #fff; border-radius: 10px; box-shadow: 0 4px 16px rgba(0, 0, 0, 0.18); padding: 6px 0; }
+.alerts-panel[hidden] { display: none; }
+.alerts-panel-head { display: flex; align-items: center; justify-content: space-between; padding: 6px 14px 8px;
+                     font-weight: 600; font-size: 0.9rem; border-bottom: 1px solid #eef0f2; }
+.alerts-read-all { border: none; background: none; color: #1a73e8; font-size: 0.8rem; cursor: pointer; padding: 0; }
+.alerts-item { display: block; padding: 9px 14px; color: #1f1f1f; text-decoration: none; font-size: 0.85rem; border-bottom: 1px solid #f3f4f6; }
+.alerts-item:hover { background: #f1f3f4; color: #1f1f1f; }
+.alerts-item.unread { background: #e8f0fe; }
+.alerts-item-text { display: block; overflow-wrap: anywhere; }
+.alerts-item-time { display: block; margin-top: 2px; font-size: 0.75rem; color: #5f6368; }
+.alerts-empty { padding: 12px 14px; color: #5f6368; font-size: 0.85rem; }

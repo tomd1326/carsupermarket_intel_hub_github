@@ -338,9 +338,10 @@ class AutoTraderClient(metaclass=Singleton):
         on this client do — makes that impossible.
 
         Not cached by the shared @cache decorator: it cannot express "expire 24
-        hours after the fetch" (MemoryCache ignores `ex` entirely, and the Redis
-        path re-sets the expiry on every read, so a VRM that keeps being asked
-        for never ages out). _history_cached / _history_store below do that.
+        hours after the fetch", because the decorator re-sets the expiry on
+        every read (for both the memory and the Redis cache), so a VRM that
+        keeps being asked for never ages out. _history_cached / _history_store
+        below do that.
         """
         params = {
             'advertiserId': self.advertiser_id,

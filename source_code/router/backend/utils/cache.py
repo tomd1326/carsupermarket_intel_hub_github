@@ -5,6 +5,8 @@ from abc import abstractmethod
 from redis import Redis, ConnectionPool
 import os
 import json
+import threading
+import time
 
 
 class CacheInterface(metaclass=Singleton):
@@ -38,14 +40,43 @@ class RedisCache(CacheInterface):
 
 
 class MemoryCache(CacheInterface):
+    """In-process cache, honouring `ex` (seconds) the way Redis does.
+
+    It used to ignore `ex`, so the ex=24h on the Autotrader calls did nothing
+    and every response from a 5,000 vehicle run stayed in memory for the life
+    of the process. One instance is shared by every decorated function and is
+    hit from up to 40 worker threads at once, hence the lock.
+    """
+
+    # Expired entries are cleared out at most this often, on a set, so the
+    # sweep does not run on every one of thousands of writes in a run.
+    _SWEEP_SECONDS = 300
+
     def __init__(self):
-        self.cache = {}
+        self.cache = {}  # key -> (value, expires_at or None)
+        self._lock = threading.Lock()
+        self._last_sweep = time.monotonic()
 
     def get(self, key):
-        return self.cache.get(key)
+        with self._lock:
+            entry = self.cache.get(key)
+            if entry is None:
+                return None
+            value, expires_at = entry
+            if expires_at is not None and time.monotonic() >= expires_at:
+                del self.cache[key]
+                return None
+            return value
 
     def set(self, key, value, ex=None):
-        self.cache[key] = value
+        now = time.monotonic()
+        with self._lock:
+            self.cache[key] = (value, now + ex if ex else None)
+            if now - self._last_sweep >= self._SWEEP_SECONDS:
+                self._last_sweep = now
+                expired = [k for k, (_, exp) in self.cache.items() if exp is not None and now >= exp]
+                for k in expired:
+                    del self.cache[k]
 
 
 def cache(client_class: type = MemoryCache, ex=None, ignore_args=None):

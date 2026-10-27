@@ -36,6 +36,11 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
+# The Weekly Business Review page shows KPI charts (kpi.js in its 'wbr' mode),
+# so its users can read the KPI chart endpoints. Changes stay the admin's, or
+# KPI users' for targets.
+_KPI_PAGES = ('kpi', 'weekly_business_review')
+
 
 GA4_CAMPAIGN_EVENTS = [
     "Apply-Finance_Lead",
@@ -1178,7 +1183,7 @@ def _data_source_uses(source_id: str) -> int:
 
 
 @router.get("/kpi/data-sources/tables")
-def kpi_data_source_tables(request: Request, user: str = Depends(require_page_api('kpi'))):
+def kpi_data_source_tables(request: Request, user: str = Depends(require_page_api(*_KPI_PAGES))):
     """The tables that can be added. Read only when the Add or edit form
     opens, as listing every table takes a few seconds. Admin only."""
     if not is_admin(user):
@@ -1191,7 +1196,7 @@ def kpi_data_source_tables(request: Request, user: str = Depends(require_page_ap
 
 
 @router.get("/kpi/data-sources/columns")
-def kpi_data_source_columns(request: Request, table: str, user: str = Depends(require_page_api('kpi'))):
+def kpi_data_source_columns(request: Request, table: str, user: str = Depends(require_page_api(*_KPI_PAGES))):
     """One table's columns, read live so new columns show straight away. Admin only."""
     if not is_admin(user):
         return {"status": "error", "message": "Only the admin can change the data sources"}
@@ -1204,7 +1209,7 @@ def kpi_data_source_columns(request: Request, table: str, user: str = Depends(re
 
 
 @router.get("/kpi/data-sources")
-def kpi_data_sources_get(request: Request, user: str = Depends(require_page_api('kpi'))):
+def kpi_data_sources_get(request: Request, user: str = Depends(require_page_api(*_KPI_PAGES))):
     """The built-in sources and the saved data sources, with how many places
     use each. Admin only."""
     if not is_admin(user):
@@ -1226,7 +1231,7 @@ def kpi_data_sources_get(request: Request, user: str = Depends(require_page_api(
 
 
 @router.post("/kpi/data-sources")
-def kpi_data_source_save(request: Request, payload: dict, user: str = Depends(require_page_api('kpi'))):
+def kpi_data_source_save(request: Request, payload: dict, user: str = Depends(require_page_api(*_KPI_PAGES))):
     """Adds a data source, or saves changes to one (by its id). Admin only."""
     if not is_admin(user):
         return {"status": "error", "message": "Only the admin can change the data sources"}
@@ -1276,7 +1281,7 @@ def kpi_data_source_save(request: Request, payload: dict, user: str = Depends(re
 
 
 @router.delete("/kpi/data-sources")
-def kpi_data_source_delete(request: Request, id: str, user: str = Depends(require_page_api('kpi'))):
+def kpi_data_source_delete(request: Request, id: str, user: str = Depends(require_page_api(*_KPI_PAGES))):
     """Removes a data source no chart uses. Admin only."""
     if not is_admin(user):
         return {"status": "error", "message": "Only the admin can change the data sources"}
@@ -1308,7 +1313,7 @@ KPI_DEFAULT_LAYOUT = {"rows": []}
 
 
 @router.get("/kpi/metrics")
-def kpi_metrics(request: Request, user: str = Depends(require_page_api('kpi'))):
+def kpi_metrics(request: Request, user: str = Depends(require_page_api(*_KPI_PAGES))):
     live_cols = _get_daily_summary_columns()
     metrics = []
     for col in _snowflake_metric_columns():
@@ -1398,6 +1403,30 @@ KPI_DEFAULT_SETTINGS = {
     "at_table_font_px": 11,  # Settings > Autotrader rows table
     "legend_font_px": 10,   # series names in the legend above stacked charts
     "zoom_size": 0,         # chart popup (magnifier) opens at: 0 small, 1 medium, 2 large, 3 full screen
+    "wbr_columns": 3,       # Weekly Business Review charts side by side
+    "wbr_notes": 1,         # 1 = notes drawn on the Weekly Business Review charts, 0 = hidden
+    # Weekly Business Review slides (wbr_deck.js). Off: everyone sees the grid;
+    # the admin can still build the slides from the page's Slides View button.
+    # The window every review month / week chart opens on, around the current
+    # month / week, and how far back its scroller reaches. The review loads
+    # scroll + 1 months / weeks back and `after` forward, not the KPI amounts.
+    "wbr_months_before": 3,
+    "wbr_months_after": 3,
+    "wbr_months_scroll": 12,
+    "wbr_weeks_before": 8,
+    "wbr_weeks_after": 4,
+    "wbr_weeks_scroll": 26,
+    "wbr_slide_gridlines": 0,     # 1 = grid squares drawn on slides while editing
+    # Comments (routers/wbr_comments.py): discussion threads on review charts.
+    "wbr_comments_on": 0,             # 1 = comment buttons shown and comments allowed
+    "wbr_comments_show_resolved": 0,  # 1 = resolved threads listed by default
+    "wbr_slides_on": 0,
+    "wbr_grid_cols": 24,          # snap-to grid across a slide
+    "wbr_grid_rows": 12,          # and down it (under the title)
+    "wbr_snap": 1,                # 1 = moved / resized items snap to the grid
+    "wbr_slide_border_px": 1,     # line round each slide
+    "wbr_slide_title_px": 28,
+    "wbr_slide_subtitle_px": 16,
     # Line thickness in px on line charts. Halves allowed, so these are the
     # only settings that are not whole numbers (see _clamp_setting).
     "main_line_px": 2.5,     # the chart's own line
@@ -1413,6 +1442,7 @@ KPI_COLOUR_SETTINGS = {
     "main_line_colour": "#0d3d6e",
     "n1_line_colour": "#6b7280",
     "target_line_colour": "#e53e3e",
+    "wbr_slide_border_colour": "#cbd5e1",
 }
 _KPI_HALF_SETTINGS = {"main_line_px", "n1_line_px", "target_line_px"}
 
@@ -1443,6 +1473,25 @@ KPI_SETTING_LIMITS = {
     "at_table_font_px": (8, 16),
     "legend_font_px": (8, 24),
     "zoom_size": (0, 3),
+    "wbr_columns": (1, 4),
+    "wbr_notes": (0, 1),
+    # Scroll + 1 is the months / weeks loaded, so at most the KPI limits (24 / 104).
+    "wbr_months_before": (0, 23),
+    "wbr_months_after": (0, 12),
+    "wbr_months_scroll": (1, 23),
+    "wbr_weeks_before": (0, 103),
+    "wbr_weeks_after": (0, 26),
+    "wbr_weeks_scroll": (1, 103),
+    "wbr_slide_gridlines": (0, 1),
+    "wbr_comments_on": (0, 1),
+    "wbr_comments_show_resolved": (0, 1),
+    "wbr_slides_on": (0, 1),
+    "wbr_grid_cols": (4, 48),
+    "wbr_grid_rows": (4, 36),
+    "wbr_snap": (0, 1),
+    "wbr_slide_border_px": (0, 10),
+    "wbr_slide_title_px": (12, 60),
+    "wbr_slide_subtitle_px": (10, 40),
     "main_line_px": (0.5, 8),
     "n1_line_px": (0.5, 8),
     "target_line_px": (0.5, 8),
@@ -1580,7 +1629,7 @@ def kpi_custom_data(request: Request, metric: str, agg: str = "sum", source: str
                     refresh: str = "",
                     sp_refresh: str = "",
                     weight_by: str = "",
-                    user: str = Depends(require_page_api('kpi'))):
+                    user: str = Depends(require_page_api(*_KPI_PAGES))):
     """One chart's data. The page now uses /kpi/custom-data-batch; kept for
     single requests. See _custom_data."""
     _refresh_daily_summary_columns(refresh)
@@ -1951,7 +2000,7 @@ def _custom_data(metric: str, agg: str, source: str, target_mode: str, months: i
 
 
 @router.post("/kpi/custom-data-batch")
-def kpi_custom_data_batch(request: Request, payload: dict, user: str = Depends(require_page_api('kpi'))):
+def kpi_custom_data_batch(request: Request, payload: dict, user: str = Depends(require_page_api(*_KPI_PAGES))):
     """Every chart's data for one page load in a single request. payload:
     {items: [{source, metric, agg, target_mode, current_month, current_week,
     current_day, weight_by}], months, weeks, days, refresh, sp_refresh}.
@@ -2094,7 +2143,7 @@ def kpi_custom_data_batch(request: Request, payload: dict, user: str = Depends(r
 
 @router.get("/kpi/metric-target")
 def kpi_get_metric_target(request: Request, source: str, metric: str,
-                          user: str = Depends(require_page_api('kpi'))):
+                          user: str = Depends(require_page_api(*_KPI_PAGES))):
     """What is stored for one metric: the fixed figure and a summary of the
     imported dates. Read separately from the chart data so the popup shows
     what is stored even for dates no chart is drawing."""
@@ -2188,7 +2237,7 @@ def _target_dates_key(source, metric, row_id) -> tuple[str | None, str | None]:
 
 @router.get("/kpi/target-dates")
 def kpi_get_target_dates(request: Request, source: str = None, metric: str = None, row_id: str = None,
-                         user: str = Depends(require_page_api('kpi'))):
+                         user: str = Depends(require_page_api(*_KPI_PAGES))):
     """Every stored per-date target for a metric (source + metric) or for a
     chart's own target (row_id), oldest first: {rows: [[date, value], ...]}."""
     key, error = _target_dates_key(source, metric, row_id)
@@ -2250,7 +2299,7 @@ async def kpi_save_target_dates(request: Request, user: str = Depends(require_pa
 
 
 @router.get("/kpi/targets/overview")
-def kpi_targets_overview(request: Request, user: str = Depends(require_page_api('kpi'))):
+def kpi_targets_overview(request: Request, user: str = Depends(require_page_api(*_KPI_PAGES))):
     """Every stored KPI target, for the Targets tab in Settings:
     [{kind: fixed|dates|row, source, metric, row_id, count, first, last, value}].
     A fixed figure is one value stored across many dates, so it comes back as
@@ -2436,7 +2485,7 @@ def _validate_themes(themes) -> str | None:
 
 
 @router.post("/kpi/themes")
-def kpi_themes_save(request: Request, payload: dict, user: str = Depends(require_page_api('kpi'))):
+def kpi_themes_save(request: Request, payload: dict, user: str = Depends(require_page_api(*_KPI_PAGES))):
     """The colour themes for multi-series charts. Admin only."""
     if not is_admin(user):
         return {"status": "error", "message": "Only the admin can change the colour themes"}
@@ -2498,7 +2547,7 @@ def _validate_derived_names(names) -> str | None:
 
 
 @router.post("/kpi/derived-names")
-def kpi_derived_names_save(request: Request, payload: dict, user: str = Depends(require_page_api('kpi'))):
+def kpi_derived_names_save(request: Request, payload: dict, user: str = Depends(require_page_api(*_KPI_PAGES))):
     """Settings > Column Names > Derived Column Names. Admin only. Replaces the whole list."""
     if not is_admin(user):
         return {"status": "error", "message": "Only the admin can change column names"}
@@ -2516,7 +2565,7 @@ def kpi_derived_names_save(request: Request, payload: dict, user: str = Depends(
 
 
 @router.post("/kpi/metric-names")
-def kpi_metric_names_save(request: Request, payload: dict, user: str = Depends(require_page_api('kpi'))):
+def kpi_metric_names_save(request: Request, payload: dict, user: str = Depends(require_page_api(*_KPI_PAGES))):
     """The shared column display names. Admin only. Replaces the whole list."""
     if not is_admin(user):
         return {"status": "error", "message": "Only the admin can change column names"}
@@ -2557,7 +2606,7 @@ def _validate_metric_formats(formats) -> str | None:
 
 
 @router.post("/kpi/metric-formats")
-def kpi_metric_formats_save(request: Request, payload: dict, user: str = Depends(require_page_api('kpi'))):
+def kpi_metric_formats_save(request: Request, payload: dict, user: str = Depends(require_page_api(*_KPI_PAGES))):
     """The shared column formats. Admin only. Replaces the whole list."""
     if not is_admin(user):
         return {"status": "error", "message": "Only the admin can change column formats"}
@@ -2855,13 +2904,13 @@ def _kpi_settings(stored: dict | None) -> dict:
 
 
 @router.get("/kpi/layout")
-def kpi_layout_get(request: Request, user: str = Depends(require_page_api('kpi'))):
+def kpi_layout_get(request: Request, user: str = Depends(require_page_api(*_KPI_PAGES))):
     try:
         # Every key the page needs, in one query rather than one per key.
         stored = _read_kpi_layout_values([
             'layout', 'settings', 'notes', 'themes', 'metric_names', 'metric_formats',
             'derived_names', 'hidden_sections', _AT_PERIODS_KEY, _AT_PPC_KEY,
-            _COLLAPSED_KEY, _ROLLING_KEY, _MY_CHARTS_KEY,
+            _COLLAPSED_KEY, _ROLLING_KEY, _MY_CHARTS_KEY, _WBR_ITEMS_KEY, _WBR_DECK_KEY,
         ])
         layout = stored.get('layout') or KPI_DEFAULT_LAYOUT
         settings = _kpi_settings(stored.get('settings'))
@@ -2897,7 +2946,9 @@ def kpi_layout_get(request: Request, user: str = Depends(require_page_api('kpi')
             "hidden_sections": [s for s in (stored.get('hidden_sections') or []) if s in sections],
             "collapsed_rows": (stored.get(_COLLAPSED_KEY) or {}).get(user, []),
             "rolling_rows": (stored.get(_ROLLING_KEY) or {}).get(user, []),
-            "my_charts": (stored.get(_MY_CHARTS_KEY) or {}).get(user, [])}
+            "my_charts": (stored.get(_MY_CHARTS_KEY) or {}).get(user, []),
+            "wbr_items": stored.get(_WBR_ITEMS_KEY) or [],
+            "wbr_deck": stored.get(_WBR_DECK_KEY)}
 
 
 # ── Per-user chart row lists ─────────────────────────────────────────────────
@@ -2933,17 +2984,17 @@ def _save_user_row_list(key: str, user: str, payload: dict, keep_order: bool) ->
 
 
 @router.post("/kpi/collapsed-rows")
-def kpi_collapsed_rows_save(request: Request, payload: dict, user: str = Depends(require_page_api('kpi'))):
+def kpi_collapsed_rows_save(request: Request, payload: dict, user: str = Depends(require_page_api(*_KPI_PAGES))):
     return _save_user_row_list(_COLLAPSED_KEY, user, payload, keep_order=False)
 
 
 @router.post("/kpi/rolling-rows")
-def kpi_rolling_rows_save(request: Request, payload: dict, user: str = Depends(require_page_api('kpi'))):
+def kpi_rolling_rows_save(request: Request, payload: dict, user: str = Depends(require_page_api(*_KPI_PAGES))):
     return _save_user_row_list(_ROLLING_KEY, user, payload, keep_order=False)
 
 
 @router.post("/kpi/my-charts")
-def kpi_my_charts_save(request: Request, payload: dict, user: str = Depends(require_page_api('kpi'))):
+def kpi_my_charts_save(request: Request, payload: dict, user: str = Depends(require_page_api(*_KPI_PAGES))):
     return _save_user_row_list(_MY_CHARTS_KEY, user, payload, keep_order=True)
 
 
@@ -2987,7 +3038,7 @@ def _validate_notes(notes) -> str | None:
 
 
 @router.post("/kpi/notes")
-def kpi_notes_save(request: Request, payload: dict, user: str = Depends(require_page_api('kpi'))):
+def kpi_notes_save(request: Request, payload: dict, user: str = Depends(require_page_api(*_KPI_PAGES))):
     if not is_admin(user):
         return {"status": "error", "message": "Only the admin can change chart notes"}
     notes = (payload or {}).get("notes")
@@ -3003,7 +3054,7 @@ def kpi_notes_save(request: Request, payload: dict, user: str = Depends(require_
 
 
 @router.post("/kpi/layout")
-def kpi_layout_save(request: Request, payload: dict, user: str = Depends(require_page_api('kpi'))):
+def kpi_layout_save(request: Request, payload: dict, user: str = Depends(require_page_api(*_KPI_PAGES))):
     if not is_admin(user):
         return {"status": "error", "message": "Only the admin can change the KPI charts"}
     layout = (payload or {}).get("layout")
@@ -3062,7 +3113,7 @@ def kpi_row_target_save(request: Request, payload: dict, user: str = Depends(req
 
 
 @router.post("/kpi/client-error")
-def kpi_client_error(request: Request, payload: dict, user: str = Depends(require_page_api('kpi'))):
+def kpi_client_error(request: Request, payload: dict, user: str = Depends(require_page_api(*_KPI_PAGES))):
     """Logs an error the KPI page hit in the browser, which would otherwise
     only show in that user's browser console."""
     message = str((payload or {}).get("message", ""))[:1000]
@@ -3072,7 +3123,7 @@ def kpi_client_error(request: Request, payload: dict, user: str = Depends(requir
 
 
 @router.get("/kpi/at-allowance")
-def kpi_at_allowance(request: Request, user: str = Depends(require_page_api('kpi'))):
+def kpi_at_allowance(request: Request, user: str = Depends(require_page_api(*_KPI_PAGES))):
     """Car/Van advert allowance, asked for live from the Autotrader advertisers
     API on every page load and Load Data so a contract change shows straight
     away, plus the published / capped / unpublished counts from the latest day
@@ -3278,7 +3329,7 @@ def _at_allowance_periods(raw: list | None = None) -> list:
 
 
 @router.post("/kpi/at-periods")
-def kpi_at_periods_save(request: Request, payload: dict, user: str = Depends(require_page_api('kpi'))):
+def kpi_at_periods_save(request: Request, payload: dict, user: str = Depends(require_page_api(*_KPI_PAGES))):
     """Save the dated Autotrader allowance rows and PPC cost rows, together.
     Admin only."""
     if not is_admin(user):
@@ -3327,7 +3378,7 @@ def _at_invoice_summary() -> dict:
 
 
 @router.get("/kpi/at-invoices")
-def kpi_at_invoices(request: Request, user: str = Depends(require_page_api('kpi'))):
+def kpi_at_invoices(request: Request, user: str = Depends(require_page_api(*_KPI_PAGES))):
     """The imported invoices, oldest first, and the days they cover."""
     try:
         return _at_invoice_summary()
@@ -3337,7 +3388,7 @@ def kpi_at_invoices(request: Request, user: str = Depends(require_page_api('kpi'
 
 
 @router.get("/kpi/at-invoices/rows")
-def kpi_at_invoice_rows(request: Request, user: str = Depends(require_page_api('kpi'))):
+def kpi_at_invoice_rows(request: Request, user: str = Depends(require_page_api(*_KPI_PAGES))):
     """The Settings rows the imported invoices give: one per change, with
     From and To (see at_invoices.rows_from_lines). Nothing is saved here: the
     page puts them in its rows, then Save saves them."""
@@ -3354,7 +3405,7 @@ def kpi_at_invoice_rows(request: Request, user: str = Depends(require_page_api('
 
 
 @router.post("/kpi/at-invoices/import")
-def kpi_at_invoice_import(request: Request, payload: dict, user: str = Depends(require_page_api('kpi'))):
+def kpi_at_invoice_import(request: Request, payload: dict, user: str = Depends(require_page_api(*_KPI_PAGES))):
     """Import one invoice PDF: {filename, data (base64)}. Admin only. The PDF
     is kept in S3; its lines replace any already stored for that invoice."""
     import base64
@@ -3403,7 +3454,7 @@ def kpi_at_invoice_import(request: Request, payload: dict, user: str = Depends(r
 
 
 @router.post("/kpi/at-invoices/delete")
-def kpi_at_invoice_delete(request: Request, payload: dict, user: str = Depends(require_page_api('kpi'))):
+def kpi_at_invoice_delete(request: Request, payload: dict, user: str = Depends(require_page_api(*_KPI_PAGES))):
     """Delete one imported invoice and its lines: {invoice_number}. Admin only.
     The PDF stays in S3."""
     if not is_admin(user):
@@ -3501,7 +3552,7 @@ def _section_slug(name: str) -> str:
 
 
 @router.post("/kpi/sections")
-def kpi_sections_save(request: Request, payload: dict, user: str = Depends(require_page_api('kpi'))):
+def kpi_sections_save(request: Request, payload: dict, user: str = Depends(require_page_api(*_KPI_PAGES))):
     """Save the section list in order. Each item is {name, from}: `from` is the
     section's name before this edit (null for a new one), so a rename carries
     its charts across. A section left out is removed, which is refused while
@@ -3559,7 +3610,7 @@ def kpi_sections_save(request: Request, payload: dict, user: str = Depends(requi
 
 
 @router.post("/kpi/settings")
-def kpi_settings_save(request: Request, payload: dict, user: str = Depends(require_page_api('kpi'))):
+def kpi_settings_save(request: Request, payload: dict, user: str = Depends(require_page_api(*_KPI_PAGES))):
     """Chart periods, data labels, lines and sizes, shared by everyone. Admin only."""
     if not is_admin(user):
         return {"status": "error", "message": "Only the admin can change the KPI settings"}
@@ -3579,6 +3630,9 @@ def kpi_settings_save(request: Request, payload: dict, user: str = Depends(requi
         return {"status": "error", "message": "Days shown cannot be more than the days available"}
     if int(raw["days_after"]) >= int(raw["days_total"]):
         return {"status": "error", "message": "Days available must be more than the days after today"}
+    for unit in ("months", "weeks"):
+        if int(raw[f"wbr_{unit}_before"]) > int(raw[f"wbr_{unit}_scroll"]):
+            return {"status": "error", "message": f"{unit.title()} before current cannot be more than the {unit} available to scroll back"}
     try:
         _write_kpi_layout_value('settings', settings)
     except Exception as e:
@@ -3909,7 +3963,7 @@ def _json_cell(value):
 
 
 @router.get("/kpi/vehicle-columns")
-def kpi_vehicle_columns(request: Request, table: str = "", user: str = Depends(require_page_api('kpi'))):
+def kpi_vehicle_columns(request: Request, table: str = "", user: str = Depends(require_page_api(*_KPI_PAGES))):
     """Live table list, the saved per-table configs, and the chosen table's
     columns, read when the Settings or Edit Chart popup opens so columns added to
     a table show up straight away. `table` picks which table's columns to return
@@ -3930,7 +3984,7 @@ def kpi_vehicle_columns(request: Request, table: str = "", user: str = Depends(r
 
 
 @router.post("/kpi/vehicle-view")
-def kpi_vehicle_view_save(request: Request, payload: dict, user: str = Depends(require_page_api('kpi'))):
+def kpi_vehicle_view_save(request: Request, payload: dict, user: str = Depends(require_page_api(*_KPI_PAGES))):
     """One table's View Vehicles columns, saved (added or replaced) in the list.
     Admin only."""
     if not is_admin(user):
@@ -3954,7 +4008,7 @@ def kpi_vehicle_view_save(request: Request, payload: dict, user: str = Depends(r
 
 @router.get("/kpi/vehicles")
 def kpi_vehicles(request: Request, row_id: str, start: str, end: str,
-                 user: str = Depends(require_page_api('kpi'))):
+                 user: str = Depends(require_page_api(*_KPI_PAGES))):
     """The vehicles behind one chart point: the chart's own table, date column
     and filters, with that table's Settings columns. A range list covers start
     to end (inclusive); a snapshot list is the single end day, so a weekly or
@@ -4073,7 +4127,7 @@ def kpi_vehicles(request: Request, row_id: str, start: str, end: str,
 
 
 @router.post("/kpi/ai-summary")
-def kpi_ai_summary(request: Request, payload: dict, user: str = Depends(require_page_api('kpi'))):
+def kpi_ai_summary(request: Request, payload: dict, user: str = Depends(require_page_api(*_KPI_PAGES))):
     # Admin only, and only while Settings > AI > Pages > KPI is on. The
     # instructions, knowledge, answer length and temperature are all set in
     # Settings > AI.
@@ -4290,78 +4344,200 @@ def warm_sharepoint_cache() -> None:
     logger.info("Home cache warm (SharePoint files) complete")
 
 
+# ── Weekly Business Review ───────────────────────────────────────────────────
+# The page is kpi.html / kpi.js in 'wbr' mode. Charts are only created on the
+# KPI page; the review is a list of single KPI charts, each one KPI chart row
+# and one of its periods: [{id, ref (KPI row id), period: 'm'|'w'|'d'}], in
+# kpi_layout under 'wbr_items'. Editing a chart on the KPI page changes it here.
+# A month or week chart may also carry show (points drawn) and max (how many
+# points back its slider reaches); without them it draws as on the KPI page.
+_WBR_ITEMS_KEY = 'wbr_items'
+_WBR_ITEMS_MAX = 100
+_WBR_POINTS_MAX = 120
+# The slides (wbr_deck.js): {slides: [{id, title, subtitle, items: [{id, kind:
+# 'chart', ref, period, x, y, w, h, show?, max?}]}]}. x / y / w / h are in
+# grid squares (Settings: wbr_grid_cols x wbr_grid_rows), fractions allowed
+# when snapping is off. Never written until the admin first changes a slide;
+# until then the page shows the grid's charts as slide 1. wbr_items is left as it is.
+_WBR_DECK_KEY = 'wbr_deck'
+_WBR_SLIDES_MAX = 60
+_WBR_SLIDE_ITEMS_MAX = 40
+
+
+def _wbr_titles(item: dict) -> dict:
+    """A review chart's own title / subtitle (blank = the KPI chart's), trimmed."""
+    out = {}
+    for key, limit in (("title", 200), ("subtitle", 300)):
+        text = str(item.get(key) or "").strip()[:limit]
+        if text:
+            out[key] = text
+    return out
+
+
+def _clean_wbr_deck(deck) -> dict:
+    """The deck checked and trimmed to the fields kept. Raises ValueError."""
+    slides = deck.get("slides") if isinstance(deck, dict) else None
+    if not isinstance(slides, list) or len(slides) > _WBR_SLIDES_MAX:
+        raise ValueError(f"slides must be a list of at most {_WBR_SLIDES_MAX}")
+    ids = set()
+
+    def new_id(value):
+        if not isinstance(value, str) or not 0 < len(value) <= 40 or value in ids:
+            raise ValueError("bad or repeated id")
+        ids.add(value)
+        return value
+
+    def number(value, low, high):
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or not low <= value <= high:
+            raise ValueError("bad position")
+        return round(float(value), 2)
+
+    max_cols = KPI_SETTING_LIMITS["wbr_grid_cols"][1]
+    max_rows = KPI_SETTING_LIMITS["wbr_grid_rows"][1]
+    clean = []
+    for slide in slides:
+        if not isinstance(slide, dict):
+            raise ValueError("bad slide")
+        items = slide.get("items") or []
+        if not isinstance(items, list) or len(items) > _WBR_SLIDE_ITEMS_MAX:
+            raise ValueError(f"a slide can hold at most {_WBR_SLIDE_ITEMS_MAX} items")
+        out = {"id": new_id(slide.get("id")), "title": str(slide.get("title") or "")[:200],
+               "subtitle": str(slide.get("subtitle") or "")[:300], "items": []}
+        for item in items:
+            if not isinstance(item, dict) or item.get("kind") != "chart":
+                raise ValueError("bad item")
+            ref, period = item.get("ref"), item.get("period")
+            if not isinstance(ref, str) or not 0 < len(ref) <= 40 or period not in ("m", "w", "d"):
+                raise ValueError("bad item")
+            x, y = number(item.get("x"), 0, max_cols), number(item.get("y"), 0, max_rows)
+            w, h = number(item.get("w"), 0.5, max_cols), number(item.get("h"), 0.5, max_rows)
+            if x + w > max_cols or y + h > max_rows:
+                raise ValueError("an item is off the slide")
+            entry = {"id": new_id(item.get("id")), "kind": "chart", "ref": ref, "period": period,
+                     "x": x, "y": y, "w": w, "h": h}
+            for key in ("show", "max"):
+                value = item.get(key)
+                if value is None:
+                    continue
+                if period == "d" or isinstance(value, bool) or not isinstance(value, int) or not 1 <= value <= _WBR_POINTS_MAX:
+                    raise ValueError(f"{key} must be a whole number from 1 to {_WBR_POINTS_MAX}")
+                entry[key] = value
+            if "show" in entry and "max" in entry and entry["show"] > entry["max"]:
+                raise ValueError("Shown cannot be more than Max")
+            entry.update(_wbr_titles(item))
+            out["items"].append(entry)
+        clean.append(out)
+    return {"slides": clean}
+_WBR_SLIDE_IMAGE_MAX_BYTES = 5 * 1024 * 1024
+
+
 @router.get("/weekly-business-review", response_class=HTMLResponse)
 def weekly_business_review_page(request: Request, user: str = Depends(require_page('weekly_business_review'))):
     _track(request, 'page_view', '/weekly-business-review')
-    return templates.TemplateResponse("weekly_business_review.html", {"request": request, "user": user, "BASE_URL": BASE_URL})
+    return templates.TemplateResponse("kpi.html", {"request": request, "user": user, "BASE_URL": BASE_URL,
+                                                   "kpi_is_admin": is_admin(user), "page_mode": "wbr"})
 
 
-@router.get("/weekly-business-review/data")
-def weekly_business_review_data(request: Request, user: str = Depends(require_page_api('weekly_business_review'))):
-    """Return monthly Net Deliveries B2C (b2c_units): last 3 complete months, current month, next 3 months."""
+@router.post("/weekly-business-review/items")
+def weekly_business_review_items_save(request: Request, payload: dict, user: str = Depends(require_page_api('weekly_business_review'))):
+    """Replace the review's chart list. Admin only."""
+    if not is_admin(user):
+        return {"status": "error", "message": "Only the admin can change the Weekly Business Review charts"}
+    items = (payload or {}).get("items")
+    if not isinstance(items, list) or len(items) > _WBR_ITEMS_MAX:
+        return {"status": "error", "message": f"items must be a list of at most {_WBR_ITEMS_MAX}"}
+    clean, seen = [], set()
+    for item in items:
+        if not isinstance(item, dict):
+            return {"status": "error", "message": "bad item"}
+        item_id, ref, period = item.get("id"), item.get("ref"), item.get("period")
+        if not all(isinstance(v, str) and 0 < len(v) <= 40 for v in (item_id, ref)) or period not in ("m", "w", "d"):
+            return {"status": "error", "message": "bad item"}
+        if item_id in seen or (ref, period) in seen:
+            return {"status": "error", "message": "That chart is already on the review"}
+        seen.update({item_id, (ref, period)})
+        entry = {"id": item_id, "ref": ref, "period": period}
+        for key in ("show", "max"):
+            value = item.get(key)
+            if value is None:
+                continue
+            if period == "d" or isinstance(value, bool) or not isinstance(value, int) or not 1 <= value <= _WBR_POINTS_MAX:
+                return {"status": "error", "message": f"{key} must be a whole number from 1 to {_WBR_POINTS_MAX}"}
+            entry[key] = value
+        if "show" in entry and "max" in entry and entry["show"] > entry["max"]:
+            return {"status": "error", "message": "Shown cannot be more than Max"}
+        entry.update(_wbr_titles(item))
+        clean.append(entry)
     try:
-        today = datetime.date.today()
-        first_of_this_month = today.replace(day=1)
-
-        def _shift_month(d: datetime.date, n: int) -> datetime.date:
-            m = d.month - 1 + n
-            return datetime.date(d.year + m // 12, m % 12 + 1, 1)
-
-        month_firsts = [_shift_month(first_of_this_month, n) for n in range(-3, 4)]
-        # Fetch an extra year back so each displayed month's N-1 (12 months prior) is covered
-        fetch_start = _shift_month(month_firsts[0], -12)
-        fetch_end = month_firsts[-1]
-
-        with SnowflakeClient() as sf:
-            cost_rows, cost_cols = sf.execute("""
-                SELECT MONTH_START, COST_AMOUNT
-                FROM PROD_CARSUPERMARKET_DB.SOURCE_FINANCE.MANAGEMENT_ACCOUNTS
-                WHERE COST_TYPE = 'b2c_units'
-                  AND MONTH_START >= %s AND MONTH_START <= %s
-            """, [str(fetch_start), str(fetch_end)])
-            budget_rows, budget_cols = sf.execute("""
-                SELECT MONTH_YEAR, VALUE
-                FROM PROD_CARSUPERMARKET_DB.SOURCE_FINANCE.BUDGET
-                WHERE ITEM = 'b2c_units'
-                  AND MONTH_YEAR >= %s AND MONTH_YEAR <= %s
-            """, [str(fetch_start), str(fetch_end)])
-
-        cost_col_map = {c.upper(): i for i, c in enumerate(cost_cols)}
-        budget_col_map = {c.upper(): i for i, c in enumerate(budget_cols)}
-
-        def _num(val):
-            try:
-                return round(float(val)) if val is not None else None
-            except (TypeError, ValueError):
-                return None
-
-        actual_by_month: dict[str, float] = {}
-        for r in cost_rows:
-            d = str(r[cost_col_map['MONTH_START']])[:10]
-            actual_by_month[d] = _num(r[cost_col_map['COST_AMOUNT']])
-
-        target_by_month: dict[str, float] = {}
-        for r in budget_rows:
-            d = str(r[budget_col_map['MONTH_YEAR']])[:10]
-            target_by_month[d] = _num(r[budget_col_map['VALUE']])
-
-        month_abbrs = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']
-
-        monthly_labels             = [month_abbrs[mf.month - 1] + ' ' + str(mf.year)[2:] for mf in month_firsts]
-        # Actual only exists up to the current month; N-1 (actual, shifted -12) and
-        # Target (budget) are forward-looking and populated for the full window
-        monthly_b2c_units          = [actual_by_month.get(mf.isoformat()) if mf <= first_of_this_month else None for mf in month_firsts]
-        monthly_b2c_units_ly       = [actual_by_month.get(_shift_month(mf, -12).isoformat()) for mf in month_firsts]
-        monthly_b2c_units_target   = [target_by_month.get(mf.isoformat()) for mf in month_firsts]
-
-        return {
-            "status": "ok",
-            "today": today.isoformat(),
-            "monthly_labels": monthly_labels,
-            "monthly_b2c_units": monthly_b2c_units,
-            "monthly_b2c_units_ly": monthly_b2c_units_ly,
-            "monthly_b2c_units_target": monthly_b2c_units_target,
-        }
+        _write_kpi_layout_value(_WBR_ITEMS_KEY, clean)
     except Exception as e:
-        logger.error(f"Weekly Business Review data failed: {e}")
+        logger.error(f"Weekly Business Review items save failed: {e}")
         return {"status": "error", "message": str(e)}
+    return {"status": "ok"}
+
+
+@router.post("/weekly-business-review/deck")
+def weekly_business_review_deck_save(request: Request, payload: dict, user: str = Depends(require_page_api('weekly_business_review'))):
+    """Replace the review's slides. Admin only."""
+    if not is_admin(user):
+        return {"status": "error", "message": "Only the admin can change the Weekly Business Review slides"}
+    try:
+        deck = _clean_wbr_deck((payload or {}).get("deck"))
+    except ValueError as e:
+        return {"status": "error", "message": str(e)}
+    try:
+        _write_kpi_layout_value(_WBR_DECK_KEY, deck)
+    except Exception as e:
+        logger.error(f"Weekly Business Review slides save failed: {e}")
+        return {"status": "error", "message": str(e)}
+    return {"status": "ok"}
+
+
+@router.post("/weekly-business-review/export-slides")
+def weekly_business_review_export_slides(request: Request, payload: dict, user: str = Depends(require_page_api('weekly_business_review'))):
+    """Create a Google Slides deck, one slide per chart, in the page's order:
+    {slides: [{title, subtitle, image (PNG data URL or base64)}]}. Each PNG goes
+    to S3 first because Slides only takes images by link."""
+    import base64
+    import binascii
+    import boto3
+    from clients.google_slides_client import GoogleSlidesClient, GoogleSlidesError
+
+    slides_in = (payload or {}).get("slides")
+    if not isinstance(slides_in, list) or not slides_in or len(slides_in) > _WBR_ITEMS_MAX:
+        return {"status": "error", "message": "No charts to export"}
+    now = _uk_now()
+    prefix = f"applications/pricing/uk-vehicle-list-evaluator/{_S3_ENV}/weekly_business_review/{now:%Y%m%d_%H%M%S}"
+    s3 = boto3.client("s3", region_name=s3_bucket_region)
+    slides = []
+    for i, s in enumerate(slides_in):
+        s = s if isinstance(s, dict) else {}
+        title = str(s.get("title") or "")[:200]
+        data = str(s.get("image") or "")
+        if data.startswith("data:"):
+            data = data.split(",", 1)[-1]
+        try:
+            png = base64.b64decode(data, validate=True)
+        except (binascii.Error, ValueError):
+            return {"status": "error", "message": f"{title}: the chart image could not be read"}
+        if not png or len(png) > _WBR_SLIDE_IMAGE_MAX_BYTES:
+            return {"status": "error", "message": f"{title}: the chart image is empty, or larger than 5 MB"}
+        key = f"{prefix}_{i + 1:03d}.png"
+        try:
+            s3.put_object(Bucket=s3_bucketname, Key=key, Body=png, ContentType="image/png")
+            image_url = s3.generate_presigned_url(
+                "get_object", Params={"Bucket": s3_bucketname, "Key": key}, ExpiresIn=600)
+        except Exception as e:
+            logger.error(f"Weekly Business Review slide image not saved to S3: {e}")
+            return {"status": "error", "message": f"Chart image not saved: {e}"}
+        slides.append({"title": title, "subtitle": str(s.get("subtitle") or "")[:300], "image_url": image_url})
+
+    try:
+        url = GoogleSlidesClient().create_deck(f"Weekly Business Review {now:%d/%m/%Y}", slides)
+    except GoogleSlidesError as e:
+        return {"status": "error", "message": str(e)}
+    except Exception as e:
+        logger.error(f"Weekly Business Review Google Slides export failed: {e}")
+        return {"status": "error", "message": str(e)}
+    _track(request, 'wbr_export_slides', '/weekly-business-review')
+    return {"status": "ok", "url": url}

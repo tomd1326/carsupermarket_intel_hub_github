@@ -579,3 +579,141 @@ body.targets-off.not-admin .targets-btn, body.targets-off.user-view .targets-btn
 .setting-colour { width: 100%; height: 32px; padding: 2px; border: 1px solid #cbd5e1; border-radius: 6px; cursor: pointer; }
 .veh-col-search { width: 100%; padding: 5px 9px; border: 1px solid #cbd5e1; border-radius: 6px; margin-bottom: 6px; font-size: 0.82rem; }
 .veh-col-head { font-size: 0.8rem; font-weight: 700; color: #334155; margin-bottom: 4px; }
+
+/* ── Weekly Business Review (kpi.html in 'wbr' mode) ─────────────────── */
+/* The KPI chart rows are built as usual but kept hidden; each review chart
+   is one of their cards, moved into the grid. */
+body.wbr-mode #sectionTabs, body.wbr-mode #sectionsContainer { display: none; }
+.wbr-grid { display: grid; grid-template-columns: repeat(var(--wbr-columns, 3), minmax(0, 1fr)); gap: 16px; }
+.wbr-item { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.wbr-item-actions { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+.wbr-item-head { display: flex; flex-direction: column; gap: 6px; }
+.wbr-count { display: inline-flex; align-items: center; gap: 4px; font-size: 0.8rem; color: #475569; margin: 0; }
+.wbr-count input { width: 56px; padding: 1px 4px; font-size: 0.8rem; border: 1px solid #cbd5e1; border-radius: 4px; }
+/* Comments (wbr_comments.js), in the look of Google Slides comments. */
+.wbr-comment-btn.has-comments { color: #1a73e8; font-weight: 600; }
+.wbr-cpanel { position: fixed; top: 0; right: 0; bottom: 0; width: 380px; max-width: 95vw; z-index: 1050; background: #f8fafd;
+              box-shadow: -4px 0 16px rgba(0, 0, 0, 0.12); overflow-y: auto; padding: 12px 14px 24px;
+              font-family: 'Google Sans', Roboto, Arial, sans-serif; color: #1f1f1f; }
+.wbr-cpanel-head { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+.wbr-cpanel-title { flex: 1; min-width: 0; font-size: 1rem; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wbr-cpanel-tools { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 10px; font-size: 0.82rem; color: #444746; }
+.wbr-c-showres { display: inline-flex; align-items: center; gap: 4px; margin: 0; cursor: pointer; }
+.wbr-cpanel-new, .wbr-thread { background: #edf2fa; border-radius: 16px; padding: 14px 16px; margin-bottom: 12px; }
+.wbr-cpanel-new { background: #fff; box-shadow: 0 1px 3px rgba(0, 0, 0, 0.15); }
+.wbr-thread.resolved { opacity: 0.75; }
+.wbr-thread.flash { box-shadow: 0 0 0 2px #1a73e8; }
+.wbr-c + .wbr-c { margin-top: 16px; }
+.wbr-c-head { display: flex; align-items: flex-start; gap: 10px; }
+.wbr-avatar { flex-shrink: 0; width: 34px; height: 34px; border-radius: 50%; color: #fff; display: inline-flex; align-items: center;
+              justify-content: center; font-size: 1rem; font-weight: 500; }
+.wbr-c-who { flex: 1; min-width: 0; }
+.wbr-c-name { font-size: 0.95rem; font-weight: 500; line-height: 1.2; }
+.wbr-c-time { font-size: 0.78rem; color: #444746; }
+.wbr-c-icon { border: none; background: none; color: #444746; padding: 4px 6px; border-radius: 50%; cursor: pointer; line-height: 1; }
+.wbr-c-icon:hover { background: rgba(0, 0, 0, 0.06); }
+.wbr-c-tick { color: #1a73e8; }
+.wbr-c-menu { position: relative; }
+.wbr-c-menu-list { position: absolute; right: 0; top: 100%; z-index: 2; background: #fff; border-radius: 6px; min-width: 110px;
+                   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2); display: flex; flex-direction: column; padding: 4px 0; }
+.wbr-c-menu-list[hidden] { display: none; }
+.wbr-c-menu-list button { border: none; background: none; text-align: left; padding: 6px 14px; font-size: 0.85rem; }
+.wbr-c-menu-list button:hover { background: #f1f3f4; }
+.wbr-c-body { margin-top: 10px; font-size: 0.92rem; line-height: 1.45; overflow-wrap: anywhere; }
+.wbr-mention { color: #1a73e8; }
+.wbr-c-assigned { margin-top: 12px; font-size: 0.8rem; color: #444746; line-height: 1.5; }
+.wbr-c-resolved { font-size: 0.78rem; color: #188038; margin-bottom: 8px; }
+.wbr-c-chart { border: none; background: none; padding: 0; margin-bottom: 8px; font-size: 0.78rem; font-weight: 600; color: #1a73e8; cursor: pointer; text-align: left; }
+.wbr-c-input { width: 100%; box-sizing: border-box; border: 1px solid #c4c7c5; border-radius: 18px; padding: 8px 12px; font-size: 0.88rem;
+               resize: vertical; background: #fff; font-family: inherit; }
+.wbr-c-input:focus { outline: none; border-color: #1a73e8; box-shadow: 0 0 0 1px #1a73e8; }
+.wbr-c-reply { margin-top: 12px; }
+.wbr-c-buttons { display: flex; gap: 6px; margin-top: 8px; }
+.wbr-c-buttons[hidden] { display: none; }
+.wbr-c-assign { display: flex; align-items: center; gap: 6px; margin: 8px 0 0; font-size: 0.82rem; }
+.wbr-c-assign[hidden] { display: none; }
+.wbr-c-none { padding: 8px 2px; }
+.wbr-mention-list { position: absolute; z-index: 3; background: #fff; border-radius: 8px; box-shadow: 0 2px 10px rgba(0, 0, 0, 0.2); padding: 4px 0; }
+.wbr-mention-list[hidden] { display: none; }
+.wbr-mention-opt { display: flex; align-items: center; gap: 8px; padding: 6px 10px; cursor: pointer; font-size: 0.82rem; }
+.wbr-mention-opt.active, .wbr-mention-opt:hover { background: #e8f0fe; }
+.wbr-mention-opt .wbr-avatar { width: 26px; height: 26px; font-size: 0.8rem; }
+.wbr-mention-name { font-weight: 500; }
+.wbr-mention-email { color: #444746; }
+
+.modal-box.wbr-settings { width: 1500px; max-width: 96vw; max-height: 90vh; overflow-y: auto; }
+/* Settings > Budgets: the line names stay put while the months scroll sideways. */
+.wbr-budget-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; margin-bottom: 6px; }
+.wbr-budget-actions { white-space: nowrap; }
+.wbr-budget-actions .btn { padding: 1px 6px; font-size: 0.72rem; }
+.wbr-budget-status { font-size: 0.8rem; color: #64748b; }
+.wbr-budget-add { margin-left: auto; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.wbr-budget-add input { font-size: 0.8rem; padding: 4px 8px; border: 1px solid #cbd5e1; border-radius: 6px; width: 150px; min-width: 0; }
+.wbr-budget-add #wbrBudgetNewLabel { width: 230px; }
+.wbr-budget-msgs { font-size: 0.8rem; color: #166534; margin-bottom: 6px; }
+.wbr-budget-msgs.error { color: #b91c1c; }
+.wbr-budget-wrap { overflow: auto; max-height: 56vh; border: 1px solid #e2e8f0; border-radius: 6px; }
+.wbr-budget-table { border-collapse: separate; border-spacing: 0; font-size: 0.78rem; }
+.wbr-budget-table th { position: sticky; top: 0; z-index: 2; background: var(--c-table-header-bg); color: var(--c-table-header-text);
+    padding: 4px 6px; white-space: nowrap; font-weight: 600; border-bottom: 1px solid #e2e8f0; }
+.wbr-budget-table td { padding: 1px 2px; border-bottom: 1px solid #f1f5f9; white-space: nowrap; }
+.wbr-budget-table .wbr-budget-label { position: sticky; left: 0; z-index: 1; background: #fff; min-width: 230px; max-width: 230px;
+    overflow: hidden; text-overflow: ellipsis; padding-left: 6px; border-right: 1px solid #e2e8f0; }
+.wbr-budget-table th.wbr-budget-label { z-index: 3; background: var(--c-table-header-bg); }
+.wbr-budget-section td { background: #f1f5f9; font-weight: 700; color: #0f172a; padding: 4px 6px; }
+.wbr-budget-section td.wbr-budget-label { background: #f1f5f9; }
+.wbr-budget-map { width: 190px; font-size: 0.75rem; padding: 1px 2px; border: 1px solid #cbd5e1; border-radius: 4px; }
+.wbr-budget-cell { width: 72px; text-align: right; font-size: 0.78rem; padding: 1px 4px; border: 1px solid transparent; border-radius: 3px; background: transparent; }
+.wbr-budget-cell:hover { border-color: #cbd5e1; }
+.wbr-budget-cell:focus { outline: none; border-color: #2563eb; background: #fff; }
+.wbr-budget-cell.changed { background: #fef9c3; }
+.wbr-settings-title { font-weight: 700; color: #0f172a; margin: 14px 0 2px; }
+.wbr-settings-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 4px 14px; }
+.wbr-slide-item-head .chart-day-scroller { margin-left: auto; }
+
+/* Slides (wbr_deck.js): a strip of slides on the left, the slide on the right.
+   Border and title sizes come from Settings (set as variables by wbr_deck.js). */
+.wbr-deck { display: flex; gap: 16px; align-items: flex-start; }
+.wbr-deck-strip { width: 220px; flex-shrink: 0; display: flex; flex-direction: column; gap: 6px; }
+.wbr-strip-slide { display: flex; align-items: center; gap: 6px; padding: 6px 8px; border: 1px solid #e2e8f0; border-radius: 6px; background: #fff; cursor: pointer; font-size: 0.82rem; }
+.wbr-strip-slide.active { border-color: #0d3d6e; box-shadow: 0 0 0 1px #0d3d6e; }
+.wbr-strip-num { color: #64748b; min-width: 16px; }
+.wbr-strip-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wbr-strip-btns { display: flex; gap: 2px; }
+.wbr-strip-btns .chart-title-btn { padding: 1px 4px; }
+.wbr-strip-add { margin-top: 4px; }
+.wbr-deck-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 8px; }
+.wbr-deck-tools { display: flex; flex-direction: column; gap: 6px; }
+.wbr-deck-tools-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: 0.82rem; }
+.wbr-deck-count { color: #475569; }
+.wbr-title-input { width: 220px !important; }
+.wbr-slide { box-sizing: border-box; width: 100%; aspect-ratio: 16 / 9; background: #fff; border: var(--wbr-slide-border, 1px solid #cbd5e1);
+             display: flex; flex-direction: column; padding: 16px 20px; }
+.wbr-slide-head { flex-shrink: 0; margin-bottom: 8px; }
+.wbr-slide-title { font-size: var(--wbr-slide-title, 28px); font-weight: 700; color: #0f172a; line-height: 1.2; }
+.wbr-slide-subtitle { font-size: var(--wbr-slide-subtitle, 16px); color: #64748b; margin-top: 2px; }
+.wbr-slide-body { position: relative; flex: 1; min-height: 0; }
+/* The grid squares, shown to the admin only (Settings > Grid Lines While Editing). */
+.wbr-slide-body.gridlines { background-image: linear-gradient(to right, rgba(15, 23, 42, 0.06) 1px, transparent 1px),
+                                            linear-gradient(to bottom, rgba(15, 23, 42, 0.06) 1px, transparent 1px);
+                          background-size: calc(100% / var(--wbr-cols)) calc(100% / var(--wbr-rows)); }
+.wbr-slide-item { position: absolute; box-sizing: border-box; padding: 4px; display: flex; flex-direction: column; min-width: 0; }
+.wbr-slide-body.editing .wbr-slide-item { outline: 1px dashed transparent; }
+.wbr-slide-body.editing .wbr-slide-item:hover, .wbr-slide-item.selected { outline: 1px dashed #0d3d6e; }
+.wbr-slide-item-head { display: flex; align-items: baseline; gap: 6px; flex-shrink: 0; font-size: var(--kpi-title-font, 14px); font-weight: 600; color: #0f172a; }
+.wbr-slide-body.editing .wbr-slide-item-head { cursor: move; user-select: none; }
+.wbr-slide-item-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.wbr-slide-item-period { font-size: var(--kpi-period-font, 12px); font-weight: 400; color: #64748b; }
+.wbr-slide-item-subtitle { flex-shrink: 0; font-size: var(--kpi-subtitle-font, 12px); color: #64748b; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wbr-slide-plot { position: relative; flex: 1; min-height: 0; }
+.wbr-slide-resize { position: absolute; right: 0; bottom: 0; width: 12px; height: 12px; cursor: nwse-resize;
+                    border-right: 2px solid #0d3d6e; border-bottom: 2px solid #0d3d6e; opacity: 0; }
+.wbr-slide-item:hover .wbr-slide-resize, .wbr-slide-item.selected .wbr-slide-resize { opacity: 1; }
+.wbr-item-missing { padding: 18px 20px; border: 1px dashed #cbd5e1; border-radius: 10px; color: #64748b; font-size: 0.85rem; }
+.wbr-empty { color: #64748b; padding: 24px 0; }
+.modal-box.wbr-picker { width: 760px; max-width: 95vw; }
+.wbr-picker-list { max-height: 60vh; overflow-y: auto; }
+.wbr-picker-section { font-weight: 700; color: #0f172a; margin: 12px 0 6px; }
+.wbr-picker-row { display: flex; align-items: center; gap: 8px; padding: 5px 0; border-bottom: 1px solid #f1f5f9; font-size: 0.86rem; }
+.wbr-picker-row .wbr-picker-title { flex: 1; min-width: 0; }
+.wbr-picker-row button[disabled] { opacity: 0.45; cursor: default; }

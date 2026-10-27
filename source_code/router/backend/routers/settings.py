@@ -29,6 +29,7 @@ from utils.db_utils import (get_database_connection, get_settings, save_settings
                             add_pending_user, mark_user_activated, cancel_password_links,
                             create_password_link, read_inactive_users, widen_settings_values)
 from utils.password_rules import password_error, PASSWORD_RULES_TEXT
+from utils.ddl_once import once_per_database
 
 from . import core
 from .core import (BASE_URL, templates, VALID_USERS, get_current_user, session_config,
@@ -58,6 +59,7 @@ SETTINGS_SECTIONS = [
     ("ga4-requests",        "GA4 Requests",        "GA4 Requests"),
     ("prod-to-dev",         "Prod To Dev",         "Copy Prod To Dev"),
     ("live-update",         "Live Update",         "Live Update"),
+    ("google",              "Google",              "Google Slides"),
 ]
 
 # Sections merged into another; old links land on the new one.
@@ -75,12 +77,18 @@ def _render_section(request: Request, user: str, slug: str):
     section = next((s for s in SETTINGS_SECTIONS if s[0] == slug), None)
     if section is None:
         return RedirectResponse(url=BASE_URL + "/settings-page", status_code=303)
+    google = None
+    if slug == "google":
+        from utils import google_oauth
+        google = google_oauth.status()
+        google["message"] = request.session.pop("google_message", "")
     return templates.TemplateResponse("settings.html", {
         "request": request, "user": user, "BASE_URL": BASE_URL,
         "settings": settings,
         "sections": SETTINGS_SECTIONS,
         "active_section": slug,
         "section_title": section[2],
+        "google": google,
     })
 
 
@@ -280,6 +288,60 @@ def save_cap_credentials(
     Singleton._instances.pop(CAPClient, None)
     logger.info("Settings [CAP Credentials] updated by %s", user)
     return _section_redirect("cap-credentials")
+
+
+# ── Google (Weekly Business Review Slides export) ─────────────────────────────
+# See utils/google_oauth.py. Only the admin can connect or disconnect.
+
+@router.get("/settings/google/connect")
+def google_connect(request: Request, user: str = Depends(get_current_user)):
+    if user != 'tdrayson':
+        raise HTTPException(status_code=403, detail="Forbidden")
+    import secrets
+    from utils import google_oauth
+    state = secrets.token_urlsafe(32)
+    request.session["google_oauth_state"] = state
+    try:
+        return RedirectResponse(url=google_oauth.auth_url(request, state), status_code=303)
+    except google_oauth.GoogleNotConnected as e:
+        request.session["google_message"] = str(e)
+        return RedirectResponse(url=f"{BASE_URL}/settings/section/google", status_code=303)
+
+
+@router.get("/settings/google/callback")
+def google_callback(request: Request, code: str = "", state: str = "", error: str = "",
+                    user: str = Depends(get_current_user)):
+    if user != 'tdrayson':
+        raise HTTPException(status_code=403, detail="Forbidden")
+    from utils import google_oauth
+    expected = request.session.pop("google_oauth_state", None)
+    if error:
+        message = f"Google login cancelled ({error})."
+    elif not expected or state != expected:
+        message = "Google login rejected: the request did not come from this page. Try Connect again."
+    else:
+        try:
+            email = google_oauth.connect(request, code)
+            message = f"Connected as {email}." if email else "Connected."
+            logger.info("Google connected by %s", user)
+        except google_oauth.GoogleNotConnected as e:
+            message = str(e)
+        except Exception as e:
+            logger.error(f"Google connect failed: {e}")
+            message = "Google connect failed - see the server log."
+    request.session["google_message"] = message
+    return RedirectResponse(url=f"{BASE_URL}/settings/section/google", status_code=303)
+
+
+@router.post("/settings/google/disconnect")
+def google_disconnect(request: Request, user: str = Depends(get_current_user)):
+    if user != 'tdrayson':
+        raise HTTPException(status_code=403, detail="Forbidden")
+    from utils import google_oauth
+    google_oauth.disconnect()
+    logger.info("Google disconnected by %s", user)
+    request.session["google_message"] = "Disconnected."
+    return RedirectResponse(url=f"{BASE_URL}/settings/section/google", status_code=303)
 
 
 @router.post("/settings/section/email")
@@ -607,6 +669,7 @@ def _table_key_columns(cur, table: str) -> list:
 # (API Gateway cuts those off at 29s). Each log line is committed to
 # prod_to_dev_jobs as it happens, so whichever Lambda answers the page's poll
 # can show it. Same pattern as the SharePoint refresh jobs.
+@once_per_database
 def _ensure_prod_to_dev_jobs(conn) -> None:
     with conn.cursor() as cur:
         cur.execute(

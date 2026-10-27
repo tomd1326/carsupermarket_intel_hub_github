@@ -34,7 +34,7 @@ def sharepoint_refresh_run(data: dict):
 
 
 @router.get("/api/sharepoint/status")
-def sharepoint_status(keys: str = "", check: bool = False, user: str = Depends(require_page_api('kpi'))):
+def sharepoint_status(keys: str = "", check: bool = False, user: str = Depends(require_page_api('kpi', 'weekly_business_review'))):
     """Status of the given files (comma separated keys) for an open page.
     check=true first runs the normal check for any that are due, which starts
     a download when a file has been saved since its copy. The KPI page is the

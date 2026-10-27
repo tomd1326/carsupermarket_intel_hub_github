@@ -22,6 +22,7 @@ import uuid
 from fastapi import APIRouter, Depends, HTTPException
 
 from utils.db_utils import get_database_connection, save_settings_partial
+from utils.ddl_once import once_per_database
 from utils import nexus_ingest
 from .core import BASE_URL, get_current_user, ADMIN_USERNAME
 
@@ -138,6 +139,7 @@ def _admin(user: str):
         raise HTTPException(status_code=403, detail="Forbidden")
 
 
+@once_per_database
 def _ensure_tables(conn) -> None:
     with conn.cursor() as cur:
         cur.execute(
