@@ -163,3 +163,17 @@ def test_long_rows_leave_out_days_the_table_does_not_have():
 def test_wide_rows_by_date():
     out = kds.rows_to_by_date(SUMMARY, ["ORDERS"], [(datetime.datetime(2026, 10, 1, 0, 0), 12)], ["d", "orders"])
     assert out == {D1: {"ORDERS": 12}}
+
+
+# ── Section data source lock ─────────────────────────────────────────────────
+
+def test_sources_used_finds_every_part_of_a_chart():
+    row = {"metric": "VALUATIONS", "source": "ds_bcb", "divide_by": {"metric": "ORDERS"},
+           "series": [{"metric": "X", "source": "sharepoint"}]}
+    assert kds.sources_used(row) == {"ds_bcb", "snowflake", "sharepoint"}
+
+
+def test_sources_used_ignores_a_calculated_target_reference():
+    row = {"metric": "VALUATIONS", "source": "ds_bcb",
+           "target_calc": {"reference": {"metric": "ORDERS", "source": "snowflake"}}}
+    assert kds.sources_used(row) == {"ds_bcb"}
