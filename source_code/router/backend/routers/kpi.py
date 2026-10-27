@@ -1404,6 +1404,29 @@ KPI_DEFAULT_SETTINGS = {
     "legend_font_px": 10,   # series names in the legend above stacked charts
     "zoom_size": 0,         # chart popup (magnifier) opens at: 0 small, 1 medium, 2 large, 3 full screen
     "wbr_columns": 3,       # Weekly Business Review charts side by side
+    "wbr_notes": 1,         # 1 = notes drawn on the Weekly Business Review charts, 0 = hidden
+    # Weekly Business Review slides (wbr_deck.js). Off: everyone sees the grid;
+    # the admin can still build the slides from the page's Slides View button.
+    # The window every review month / week chart opens on, around the current
+    # month / week, and how far back its scroller reaches. The review loads
+    # scroll + 1 months / weeks back and `after` forward, not the KPI amounts.
+    "wbr_months_before": 3,
+    "wbr_months_after": 3,
+    "wbr_months_scroll": 12,
+    "wbr_weeks_before": 8,
+    "wbr_weeks_after": 4,
+    "wbr_weeks_scroll": 26,
+    "wbr_slide_gridlines": 0,     # 1 = grid squares drawn on slides while editing
+    # Comments (routers/wbr_comments.py): discussion threads on review charts.
+    "wbr_comments_on": 0,             # 1 = comment buttons shown and comments allowed
+    "wbr_comments_show_resolved": 0,  # 1 = resolved threads listed by default
+    "wbr_slides_on": 0,
+    "wbr_grid_cols": 24,          # snap-to grid across a slide
+    "wbr_grid_rows": 12,          # and down it (under the title)
+    "wbr_snap": 1,                # 1 = moved / resized items snap to the grid
+    "wbr_slide_border_px": 1,     # line round each slide
+    "wbr_slide_title_px": 28,
+    "wbr_slide_subtitle_px": 16,
     # Line thickness in px on line charts. Halves allowed, so these are the
     # only settings that are not whole numbers (see _clamp_setting).
     "main_line_px": 2.5,     # the chart's own line
@@ -1419,6 +1442,7 @@ KPI_COLOUR_SETTINGS = {
     "main_line_colour": "#0d3d6e",
     "n1_line_colour": "#6b7280",
     "target_line_colour": "#e53e3e",
+    "wbr_slide_border_colour": "#cbd5e1",
 }
 _KPI_HALF_SETTINGS = {"main_line_px", "n1_line_px", "target_line_px"}
 
@@ -1450,6 +1474,24 @@ KPI_SETTING_LIMITS = {
     "legend_font_px": (8, 24),
     "zoom_size": (0, 3),
     "wbr_columns": (1, 4),
+    "wbr_notes": (0, 1),
+    # Scroll + 1 is the months / weeks loaded, so at most the KPI limits (24 / 104).
+    "wbr_months_before": (0, 23),
+    "wbr_months_after": (0, 12),
+    "wbr_months_scroll": (1, 23),
+    "wbr_weeks_before": (0, 103),
+    "wbr_weeks_after": (0, 26),
+    "wbr_weeks_scroll": (1, 103),
+    "wbr_slide_gridlines": (0, 1),
+    "wbr_comments_on": (0, 1),
+    "wbr_comments_show_resolved": (0, 1),
+    "wbr_slides_on": (0, 1),
+    "wbr_grid_cols": (4, 48),
+    "wbr_grid_rows": (4, 36),
+    "wbr_snap": (0, 1),
+    "wbr_slide_border_px": (0, 10),
+    "wbr_slide_title_px": (12, 60),
+    "wbr_slide_subtitle_px": (10, 40),
     "main_line_px": (0.5, 8),
     "n1_line_px": (0.5, 8),
     "target_line_px": (0.5, 8),
@@ -2868,7 +2910,7 @@ def kpi_layout_get(request: Request, user: str = Depends(require_page_api(*_KPI_
         stored = _read_kpi_layout_values([
             'layout', 'settings', 'notes', 'themes', 'metric_names', 'metric_formats',
             'derived_names', 'hidden_sections', _AT_PERIODS_KEY, _AT_PPC_KEY,
-            _COLLAPSED_KEY, _ROLLING_KEY, _MY_CHARTS_KEY, _WBR_ITEMS_KEY,
+            _COLLAPSED_KEY, _ROLLING_KEY, _MY_CHARTS_KEY, _WBR_ITEMS_KEY, _WBR_DECK_KEY,
         ])
         layout = stored.get('layout') or KPI_DEFAULT_LAYOUT
         settings = _kpi_settings(stored.get('settings'))
@@ -2905,7 +2947,8 @@ def kpi_layout_get(request: Request, user: str = Depends(require_page_api(*_KPI_
             "collapsed_rows": (stored.get(_COLLAPSED_KEY) or {}).get(user, []),
             "rolling_rows": (stored.get(_ROLLING_KEY) or {}).get(user, []),
             "my_charts": (stored.get(_MY_CHARTS_KEY) or {}).get(user, []),
-            "wbr_items": stored.get(_WBR_ITEMS_KEY) or []}
+            "wbr_items": stored.get(_WBR_ITEMS_KEY) or [],
+            "wbr_deck": stored.get(_WBR_DECK_KEY)}
 
 
 # ── Per-user chart row lists ─────────────────────────────────────────────────
@@ -3587,6 +3630,9 @@ def kpi_settings_save(request: Request, payload: dict, user: str = Depends(requi
         return {"status": "error", "message": "Days shown cannot be more than the days available"}
     if int(raw["days_after"]) >= int(raw["days_total"]):
         return {"status": "error", "message": "Days available must be more than the days after today"}
+    for unit in ("months", "weeks"):
+        if int(raw[f"wbr_{unit}_before"]) > int(raw[f"wbr_{unit}_scroll"]):
+            return {"status": "error", "message": f"{unit.title()} before current cannot be more than the {unit} available to scroll back"}
     try:
         _write_kpi_layout_value('settings', settings)
     except Exception as e:
@@ -4303,8 +4349,85 @@ def warm_sharepoint_cache() -> None:
 # KPI page; the review is a list of single KPI charts, each one KPI chart row
 # and one of its periods: [{id, ref (KPI row id), period: 'm'|'w'|'d'}], in
 # kpi_layout under 'wbr_items'. Editing a chart on the KPI page changes it here.
+# A month or week chart may also carry show (points drawn) and max (how many
+# points back its slider reaches); without them it draws as on the KPI page.
 _WBR_ITEMS_KEY = 'wbr_items'
 _WBR_ITEMS_MAX = 100
+_WBR_POINTS_MAX = 120
+# The slides (wbr_deck.js): {slides: [{id, title, subtitle, items: [{id, kind:
+# 'chart', ref, period, x, y, w, h, show?, max?}]}]}. x / y / w / h are in
+# grid squares (Settings: wbr_grid_cols x wbr_grid_rows), fractions allowed
+# when snapping is off. Never written until the admin first changes a slide;
+# until then the page shows the grid's charts as slide 1. wbr_items is left as it is.
+_WBR_DECK_KEY = 'wbr_deck'
+_WBR_SLIDES_MAX = 60
+_WBR_SLIDE_ITEMS_MAX = 40
+
+
+def _wbr_titles(item: dict) -> dict:
+    """A review chart's own title / subtitle (blank = the KPI chart's), trimmed."""
+    out = {}
+    for key, limit in (("title", 200), ("subtitle", 300)):
+        text = str(item.get(key) or "").strip()[:limit]
+        if text:
+            out[key] = text
+    return out
+
+
+def _clean_wbr_deck(deck) -> dict:
+    """The deck checked and trimmed to the fields kept. Raises ValueError."""
+    slides = deck.get("slides") if isinstance(deck, dict) else None
+    if not isinstance(slides, list) or len(slides) > _WBR_SLIDES_MAX:
+        raise ValueError(f"slides must be a list of at most {_WBR_SLIDES_MAX}")
+    ids = set()
+
+    def new_id(value):
+        if not isinstance(value, str) or not 0 < len(value) <= 40 or value in ids:
+            raise ValueError("bad or repeated id")
+        ids.add(value)
+        return value
+
+    def number(value, low, high):
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or not low <= value <= high:
+            raise ValueError("bad position")
+        return round(float(value), 2)
+
+    max_cols = KPI_SETTING_LIMITS["wbr_grid_cols"][1]
+    max_rows = KPI_SETTING_LIMITS["wbr_grid_rows"][1]
+    clean = []
+    for slide in slides:
+        if not isinstance(slide, dict):
+            raise ValueError("bad slide")
+        items = slide.get("items") or []
+        if not isinstance(items, list) or len(items) > _WBR_SLIDE_ITEMS_MAX:
+            raise ValueError(f"a slide can hold at most {_WBR_SLIDE_ITEMS_MAX} items")
+        out = {"id": new_id(slide.get("id")), "title": str(slide.get("title") or "")[:200],
+               "subtitle": str(slide.get("subtitle") or "")[:300], "items": []}
+        for item in items:
+            if not isinstance(item, dict) or item.get("kind") != "chart":
+                raise ValueError("bad item")
+            ref, period = item.get("ref"), item.get("period")
+            if not isinstance(ref, str) or not 0 < len(ref) <= 40 or period not in ("m", "w", "d"):
+                raise ValueError("bad item")
+            x, y = number(item.get("x"), 0, max_cols), number(item.get("y"), 0, max_rows)
+            w, h = number(item.get("w"), 0.5, max_cols), number(item.get("h"), 0.5, max_rows)
+            if x + w > max_cols or y + h > max_rows:
+                raise ValueError("an item is off the slide")
+            entry = {"id": new_id(item.get("id")), "kind": "chart", "ref": ref, "period": period,
+                     "x": x, "y": y, "w": w, "h": h}
+            for key in ("show", "max"):
+                value = item.get(key)
+                if value is None:
+                    continue
+                if period == "d" or isinstance(value, bool) or not isinstance(value, int) or not 1 <= value <= _WBR_POINTS_MAX:
+                    raise ValueError(f"{key} must be a whole number from 1 to {_WBR_POINTS_MAX}")
+                entry[key] = value
+            if "show" in entry and "max" in entry and entry["show"] > entry["max"]:
+                raise ValueError("Shown cannot be more than Max")
+            entry.update(_wbr_titles(item))
+            out["items"].append(entry)
+        clean.append(out)
+    return {"slides": clean}
 _WBR_SLIDE_IMAGE_MAX_BYTES = 5 * 1024 * 1024
 
 
@@ -4333,11 +4456,39 @@ def weekly_business_review_items_save(request: Request, payload: dict, user: str
         if item_id in seen or (ref, period) in seen:
             return {"status": "error", "message": "That chart is already on the review"}
         seen.update({item_id, (ref, period)})
-        clean.append({"id": item_id, "ref": ref, "period": period})
+        entry = {"id": item_id, "ref": ref, "period": period}
+        for key in ("show", "max"):
+            value = item.get(key)
+            if value is None:
+                continue
+            if period == "d" or isinstance(value, bool) or not isinstance(value, int) or not 1 <= value <= _WBR_POINTS_MAX:
+                return {"status": "error", "message": f"{key} must be a whole number from 1 to {_WBR_POINTS_MAX}"}
+            entry[key] = value
+        if "show" in entry and "max" in entry and entry["show"] > entry["max"]:
+            return {"status": "error", "message": "Shown cannot be more than Max"}
+        entry.update(_wbr_titles(item))
+        clean.append(entry)
     try:
         _write_kpi_layout_value(_WBR_ITEMS_KEY, clean)
     except Exception as e:
         logger.error(f"Weekly Business Review items save failed: {e}")
+        return {"status": "error", "message": str(e)}
+    return {"status": "ok"}
+
+
+@router.post("/weekly-business-review/deck")
+def weekly_business_review_deck_save(request: Request, payload: dict, user: str = Depends(require_page_api('weekly_business_review'))):
+    """Replace the review's slides. Admin only."""
+    if not is_admin(user):
+        return {"status": "error", "message": "Only the admin can change the Weekly Business Review slides"}
+    try:
+        deck = _clean_wbr_deck((payload or {}).get("deck"))
+    except ValueError as e:
+        return {"status": "error", "message": str(e)}
+    try:
+        _write_kpi_layout_value(_WBR_DECK_KEY, deck)
+    except Exception as e:
+        logger.error(f"Weekly Business Review slides save failed: {e}")
         return {"status": "error", "message": str(e)}
     return {"status": "ok"}
 
