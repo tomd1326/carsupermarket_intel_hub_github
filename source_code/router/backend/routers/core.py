@@ -30,9 +30,10 @@ def _uk_now() -> datetime.datetime:
     return datetime.datetime.now(tz=ZoneInfo('Europe/London')).replace(tzinfo=None)
 
 
-# The deployed dev site (us-east-2) has moved to dev-uk-intel-hub.aramis-group.eu
-# with no /dev. Prod (eu-west-1) and local still use /dev until they move.
-BASE_URL = os.getenv("BASE_URL", "" if os.getenv("AWS_REGION") == "us-east-2" else "/dev")
+# No base path: dev, prod and local all serve from the root of their domain
+# (dev-uk-intel-hub / uk-intel-hub.aramis-group.eu, http://127.0.0.1:8080/).
+# Old /dev/... page links are redirected in main.py.
+BASE_URL = os.getenv("BASE_URL", "")
 _ENV = 'local' if os.getenv('LOCAL_ENV') == '1' else ('prod' if os.getenv('AWS_REGION') == 'eu-west-1' else 'dev')
 _S3_ENV = 'prod' if os.getenv('AWS_REGION') == 'eu-west-1' else 'dev'
 
