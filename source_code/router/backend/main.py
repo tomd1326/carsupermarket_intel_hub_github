@@ -17,7 +17,7 @@ from utils.lambda_http import LambdaRequestsManager
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.concurrency import run_in_threadpool
 import routers
-from routers.core import PageRedirect
+from routers.core import PageRedirect, BASE_URL
 
 
 app = FastAPI()
@@ -49,6 +49,14 @@ app_log.install()
 
 class BasePathMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
+        # With no base path (the uk-intel-hub domains), send old /dev/... page
+        # links on to the same page without /dev. GET only: a redirect would
+        # drop a POST's form data.
+        if not BASE_URL and request.method == 'GET' and re.match(r'^/dev(/|$)', request.url.path):
+            target = re.sub(r'^/dev', '', request.url.path) or '/'
+            if request.url.query:
+                target += '?' + request.url.query
+            return RedirectResponse(url=target, status_code=301)
         # Re-add the base path to URL path
         new_path = re.sub(r'^/dev', '', request.url.path)
         request.scope['path'] = new_path
@@ -133,7 +141,7 @@ app.mount("/static", VersionedStaticFiles(directory=os.path.join(os.path.dirname
 async def favicon():
     return FileResponse(os.path.join(os.path.dirname(__file__), "static", "icon.png"))
 
-handler = Mangum(app, lifespan="auto", api_gateway_base_path="/dev")
+handler = Mangum(app, lifespan="auto", api_gateway_base_path=BASE_URL or "/")
 lambda_requests_manager = LambdaRequestsManager()
 lambda_requests_manager.init(mangum_handler=handler)
 

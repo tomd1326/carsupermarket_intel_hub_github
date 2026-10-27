@@ -69,6 +69,26 @@ resource "aws_api_gateway_integration" "lambda_integration_1" {
   uri                     = var.aws_lambda_invoke_arn
 }
 
+# {proxy+} does not match the bare root "/", so it needs its own method.
+# Without it the site's own address answers "Missing Authentication Token"
+# instead of reaching the app, which sends "/" on to /login or /home.
+resource "aws_api_gateway_method" "root_method" {
+  rest_api_id   = aws_api_gateway_rest_api.api.id
+  resource_id   = aws_api_gateway_rest_api.api.root_resource_id
+  http_method   = var.api_gateway_method
+  authorization = var.api_gateway_authorization
+}
+
+resource "aws_api_gateway_integration" "root_lambda_integration" {
+  rest_api_id = aws_api_gateway_rest_api.api.id
+  resource_id = aws_api_gateway_method.root_method.resource_id
+  http_method = aws_api_gateway_method.root_method.http_method
+
+  integration_http_method = "POST" # Lambda function do only accept POST
+  type                    = "AWS_PROXY"
+  uri                     = var.aws_lambda_invoke_arn
+}
+
 # -------------------------------------------------
 # -- amazon api gateway deployment and permission
 # -------------------------------------------------
@@ -76,6 +96,7 @@ resource "aws_api_gateway_integration" "lambda_integration_1" {
 resource "aws_api_gateway_deployment" "api_deployment" {
   depends_on = [
     aws_api_gateway_integration.lambda_integration_1,
+    aws_api_gateway_integration.root_lambda_integration,
   ]
 
   rest_api_id = aws_api_gateway_rest_api.api.id
@@ -86,6 +107,7 @@ resource "aws_api_gateway_deployment" "api_deployment" {
       aws_api_gateway_rest_api.api,
       aws_api_gateway_integration.lambda_integration_1,
       aws_api_gateway_resource.parent_resource_name,
+      aws_api_gateway_integration.root_lambda_integration,
     ]))
   }
 

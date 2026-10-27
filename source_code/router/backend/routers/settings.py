@@ -425,7 +425,7 @@ _APPEARANCE_INTS = {
     'home_logo_radius': (0, 120), 'home_logo_gap': (0, 80), 'home_btn_width': (100, 600),
     'home_btn_height': (30, 200), 'home_btn_font_size': (10, 40), 'home_btn_font_weight': (400, 700),
     'home_btn_radius': (0, 100), 'home_btn_3d': (0, 100), 'home_btn_3d_edge': (0, 80), 'home_grid_gap': (0, 80), 'home_grid_max_width': (200, 1600),
-    'home_pad_top': (0, 200), 'home_pad_side': (0, 100), 'home_pad_bottom': (0, 30),
+    'home_pad_top': (0, 600), 'home_pad_side': (0, 100), 'home_pad_bottom': (0, 30),
 }
 
 
