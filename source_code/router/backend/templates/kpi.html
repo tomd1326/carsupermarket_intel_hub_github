@@ -33,10 +33,28 @@
         </button>
         {% if wbr %}
         {% if kpi_is_admin %}
-        <button class="btn btn-edit" onclick="openWbrPicker()">
+        <!-- Admin View / User View, as on the KPI page: User View hides every
+             editing control so the review can be seen as everyone else sees it. -->
+        <div class="view-toggle" role="group" aria-label="View">
+            <button type="button" data-view="admin" onclick="setPageView('admin')">Admin View</button>
+            <button type="button" data-view="user" onclick="setPageView('user')">User View</button>
+        </div>
+        <button class="btn btn-edit admin-only" onclick="openWbrPicker()">
             <i class="fas fa-plus"></i> Add Chart From KPI
         </button>
         {% endif %}
+        {% if kpi_is_admin %}
+        <button class="btn btn-edit" id="wbrViewBtn" onclick="WbrDeck.toggleView()" style="display:none;">
+            <i class="fas fa-th-large"></i> <span id="wbrViewText">Slides View</span>
+        </button>
+        <button class="btn btn-edit admin-only" onclick="openWbrSettings()">
+            <i class="fas fa-cog"></i> Settings
+        </button>
+        {% endif %}
+        <!-- Shown while Settings > Comments is On (wbr_comments.js). -->
+        <button class="btn btn-edit" id="wbrCommentsBtn" onclick="WbrComments.openAll()" style="display:none;">
+            <i class="fas fa-comment"></i> Comments
+        </button>
         <button class="btn btn-edit" id="slidesBtn" onclick="exportWbrSlides()">
             <i class="fas fa-file-powerpoint" id="slidesIcon"></i> Export To Google Slides
         </button>
@@ -89,10 +107,127 @@
         <div class="wbr-empty" id="wbrEmpty" style="display:none;">
             No charts yet.{% if kpi_is_admin %} Use Add Chart From KPI to add one.{% endif %}
         </div>
+        <!-- Slides (wbr_deck.js): shown instead of the grid when Settings >
+             Weekly Business Review Slides is on, or the admin picks Slides View.
+             Each slide draws its own copies of the charts; the grid is untouched. -->
+        <div class="wbr-deck" id="wbrDeck" style="display:none;">
+            <div class="wbr-deck-strip" id="wbrDeckStrip"></div>
+            <div class="wbr-deck-main">
+                <div class="wbr-deck-tools" id="wbrDeckTools"></div>
+                <div class="wbr-slide" id="wbrSlide"></div>
+            </div>
+        </div>
         {% endif %}
     </div>
 
     {% if wbr and kpi_is_admin %}
+    <!-- Weekly Business Review settings (kpi.js openWbrSettings). Saved with the
+         KPI settings (the wbr_* ones), so they apply for everyone. -->
+    <div class="modal-overlay" id="wbrSettingsModal">
+        <div class="modal-box wbr-settings">
+            <div class="chart-modal-head">
+                <h2><i class="fas fa-cog"></i> Settings</h2>
+                <button type="button" class="modal-close-x" onclick="closeWbrSettings()" aria-label="Close">&times;</button>
+            </div>
+            <p class="modal-sub">Applies to every chart on the Weekly Business Review, for everyone.</p>
+            <div class="modal-error" id="wbrSettingsError"></div>
+            <!-- Tabs down the left, as in the KPI Settings popup. One Save covers
+                 every tab; switching tabs keeps what was typed. -->
+            <div class="settings-body">
+            <nav class="settings-tabs">
+                <button type="button" data-tab="wbrTabView" onclick="showWbrSettingsTab(this.dataset.tab)">Chart View</button>
+                <button type="button" data-tab="wbrTabNotes" onclick="showWbrSettingsTab(this.dataset.tab)">Notes</button>
+                <button type="button" data-tab="wbrTabComments" onclick="showWbrSettingsTab(this.dataset.tab)">Comments</button>
+                <button type="button" data-tab="wbrTabSlides" onclick="showWbrSettingsTab(this.dataset.tab)">Slides</button>
+                <button type="button" data-tab="wbrTabBudgets" onclick="showWbrSettingsTab(this.dataset.tab)">Budgets</button>
+            </nav>
+            <div class="settings-panes">
+            <div class="settings-pane" id="wbrTabView">
+            <div class="wbr-settings-title">Chart View</div>
+            <p class="modal-sub">Each month and week chart opens on the months / weeks before and after the current one.
+                The scroller on each chart goes back as far as Available To Scroll Back.</p>
+            <div class="wbr-settings-grid">
+                <div class="modal-field"><label for="setWbrMonthsBefore">Months Before Current</label><input type="number" id="setWbrMonthsBefore" step="1"></div>
+                <div class="modal-field"><label for="setWbrMonthsAfter">Months After Current</label><input type="number" id="setWbrMonthsAfter" step="1"></div>
+                <div class="modal-field"><label for="setWbrMonthsScroll">Months Available To Scroll Back</label><input type="number" id="setWbrMonthsScroll" step="1"></div>
+                <div class="modal-field"><label for="setWbrWeeksBefore">Weeks Before Current</label><input type="number" id="setWbrWeeksBefore" step="1"></div>
+                <div class="modal-field"><label for="setWbrWeeksAfter">Weeks After Current</label><input type="number" id="setWbrWeeksAfter" step="1"></div>
+                <div class="modal-field"><label for="setWbrWeeksScroll">Weeks Available To Scroll Back</label><input type="number" id="setWbrWeeksScroll" step="1"></div>
+                <div class="modal-field"><label for="setWbrColumns">Charts Per Row (Grid)</label><input type="number" id="setWbrColumns" step="1"></div>
+            </div>
+            </div>
+
+            <div class="settings-pane" id="wbrTabNotes">
+            <div class="wbr-settings-title">Notes</div>
+            <p class="modal-sub">Notes are business changes added on the KPI page, drawn as dotted lines on the charts.</p>
+            <div class="wbr-settings-grid">
+                <div class="modal-field"><label for="setWbrNotes">Notes On Charts</label>
+                    <select id="setWbrNotes"><option value="1">Shown</option><option value="0">Hidden</option></select></div>
+            </div>
+            </div>
+
+            <div class="settings-pane" id="wbrTabComments">
+            <div class="wbr-settings-title">Comments</div>
+            <p class="modal-sub">Discussion on a chart, as in Google Slides: anyone who can open this page can comment, reply
+                and @mention someone, which shows on that person's bell at the top of every page.</p>
+            <div class="wbr-settings-grid">
+                <div class="modal-field"><label for="setWbrCommentsOn">Comments</label>
+                    <select id="setWbrCommentsOn"><option value="0">Off</option><option value="1">On</option></select></div>
+                <div class="modal-field"><label for="setWbrCommentsShowResolved">Resolved Comments</label>
+                    <select id="setWbrCommentsShowResolved"><option value="0">Hidden Until Asked For</option><option value="1">Shown</option></select></div>
+            </div>
+            </div>
+
+            <div class="settings-pane" id="wbrTabSlides">
+            <div class="wbr-settings-title">Slides</div>
+            <div class="wbr-settings-grid">
+                <div class="modal-field"><label for="setWbrSlidesOn">Slides</label>
+                    <select id="setWbrSlidesOn"><option value="0">Off (Grid For Everyone)</option><option value="1">On For Everyone</option></select></div>
+                <div class="modal-field"><label for="setWbrGridCols">Grid Columns</label><input type="number" id="setWbrGridCols" step="1"></div>
+                <div class="modal-field"><label for="setWbrGridRows">Grid Rows</label><input type="number" id="setWbrGridRows" step="1"></div>
+                <div class="modal-field"><label for="setWbrSnap">Snap To Grid</label>
+                    <select id="setWbrSnap"><option value="1">On</option><option value="0">Off</option></select></div>
+                <div class="modal-field"><label for="setWbrSlideGridlines">Grid Lines While Editing</label>
+                    <select id="setWbrSlideGridlines"><option value="0">Hidden</option><option value="1">Shown</option></select></div>
+                <div class="modal-field"><label for="setWbrSlideBorderPx">Border (px)</label><input type="number" id="setWbrSlideBorderPx" step="1"></div>
+                <div class="modal-field"><label for="setWbrSlideBorderColour">Border Colour</label><input type="color" id="setWbrSlideBorderColour" class="setting-colour"></div>
+                <div class="modal-field"><label for="setWbrSlideTitlePx">Title Size (px)</label><input type="number" id="setWbrSlideTitlePx" step="1"></div>
+                <div class="modal-field"><label for="setWbrSlideSubtitlePx">Subtitle Size (px)</label><input type="number" id="setWbrSlideSubtitlePx" step="1"></div>
+            </div>
+            </div>
+
+            <!-- Budgets (wbr_budgets.js): monthly budget lines from the old review
+                 sheet's Budget tab. Import saves straight away; edits save with Save. -->
+            <div class="settings-pane" id="wbrTabBudgets">
+            <div class="wbr-budget-bar">
+                <label class="btn btn-edit">
+                    <i class="fas fa-file-upload"></i> Import CSV
+                    <input type="file" id="wbrBudgetFile" accept=".csv,text/csv" hidden onchange="WbrBudgets.importFile(this)">
+                </label>
+                <span class="wbr-budget-status" id="wbrBudgetStatus"></span>
+                <span class="wbr-budget-add">
+                    <input type="text" id="wbrBudgetNewSection" list="wbrBudgetSections" placeholder="Section" maxlength="50">
+                    <datalist id="wbrBudgetSections"></datalist>
+                    <input type="text" id="wbrBudgetNewLabel" placeholder="Line Name" maxlength="200">                    <button type="button" class="btn btn-edit" onclick="WbrBudgets.addLine()"><i class="fas fa-plus"></i> Add Line</button>
+                </span>
+            </div>
+            <p class="modal-sub">Import the Budget tab saved as CSV: one row per line, one column per month. Importing adds or
+                updates lines and months and never deletes any. Type in a cell to change a figure. In Maps To, pick the chart a
+                line is the budget for: on this review only, that chart then shows the line as its target instead of the
+                KPI target (the month's figure, split by days for weeks and days). Changes save with the Save button.</p>
+            <div class="wbr-budget-msgs" id="wbrBudgetMsgs"></div>
+            <div class="wbr-budget-wrap" id="wbrBudgetGrid"></div>
+            </div>
+            </div><!-- /.settings-panes -->
+            </div><!-- /.settings-body -->
+
+            <div class="modal-actions">
+                <button type="button" class="btn btn-edit" onclick="closeWbrSettings()">Cancel</button>
+                <button type="button" class="btn btn-apply" id="wbrSettingsSaveBtn" onclick="saveWbrSettings()">Save</button>
+            </div>
+        </div>
+    </div>
+
     <!-- Add Chart From KPI: every KPI chart by section, each period added on its own. -->
     <div class="modal-overlay" id="wbrPickerModal">
         <div class="modal-box wbr-picker">
@@ -1090,10 +1225,6 @@
                     <input type="number" id="setLegendFont" step="1">
                 </div>
                 <div class="modal-field">
-                    <label for="setWbrColumns">Weekly Business Review Charts Per Row</label>
-                    <input type="number" id="setWbrColumns" step="1">
-                </div>
-                <div class="modal-field">
                     <label for="setZoomSize">Chart Popup Opens At</label>
                     <select id="setZoomSize">
                         <option value="0">Small</option>
@@ -1173,6 +1304,9 @@
     // 'kpi', or 'wbr' on the Weekly Business Review page.
     const PAGE_MODE = {{ (page_mode or 'kpi') | tojson }};
     </script>
+    {% if wbr %}<script src="{{ static_url('js/wbr_deck.js') }}"></script>
+    <script src="{{ static_url('js/wbr_comments.js') }}"></script>
+    {% if kpi_is_admin %}<script src="{{ static_url('js/wbr_budgets.js') }}"></script>{% endif %}{% endif %}
     <script src="{{ static_url('js/kpi.js') }}"></script>
 </body>
 </html>

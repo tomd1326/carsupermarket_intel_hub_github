@@ -129,7 +129,7 @@
         if (layoutLoaded) { renderLayout(); redrawActiveSection(); }
     }
 
-    if (IS_ADMIN && !WBR) {
+    if (IS_ADMIN) {
         let savedView = 'admin';
         try { savedView = localStorage.getItem(PAGE_VIEW_KEY) || 'admin'; } catch (e) {}
         setPageView(savedView);
@@ -145,6 +145,7 @@
             const [layoutResp, metricsResp] = await Promise.all([
                 fetch(BASE_URL + '/kpi/layout').then(r => r.json()),
                 fetch(BASE_URL + '/kpi/metrics').then(r => r.json()),
+                loadWbrBudgetTargets(),
             ]);
             if (layoutResp.status !== 'ok') throw new Error(layoutResp.message || 'no layout returned');
             if (layoutResp.sections) SECTIONS = layoutResp.sections;
@@ -153,6 +154,7 @@
             loadRollingRows(layoutResp.rolling_rows || []);
             myCharts = layoutResp.my_charts || [];
             wbrItems = layoutResp.wbr_items || [];
+            if (WBR && typeof WbrDeck !== 'undefined') WbrDeck.setSaved(layoutResp.wbr_deck || null);
             layout = layoutResp.layout || { rows: [] };
             if (layoutResp.settings) settings = layoutResp.settings;
             applyAppearance();
@@ -180,6 +182,8 @@
             return;
         }
         loadAll();
+        // A link from the alerts bell opens the comment it is about.
+        if (WBR && typeof WbrComments !== 'undefined') WbrComments.openFromLink();
     }
 
     // Stops the page loading, turns saving off, shows the reason in the
@@ -421,32 +425,357 @@
                 cell.dataset.ref = item.ref;
                 wbrItemEls[item.id] = cell;
             }
-            const old = cell.querySelector(':scope > .wbr-item-actions');
+            const old = cell.querySelector(':scope > .wbr-item-head');
             if (old) old.remove();
-            if (IS_ADMIN) {
-                cell.insertAdjacentHTML('afterbegin', `
-                    <div class="wbr-item-actions">
-                        <button type="button" class="chart-title-btn" onclick="moveWbrItem('${item.id}', -1)" ${i === 0 ? 'disabled' : ''}>
-                            <i class="fas fa-arrow-left"></i> Move Left
-                        </button>
-                        <button type="button" class="chart-title-btn" onclick="moveWbrItem('${item.id}', 1)" ${i === wbrItems.length - 1 ? 'disabled' : ''}>
-                            <i class="fas fa-arrow-right"></i> Move Right
-                        </button>
-                        <button type="button" class="chart-title-btn" onclick="removeWbrItem('${item.id}')">
-                            <i class="fas fa-times"></i> Remove
-                        </button>
-                    </div>`);
-            }
+            const actions = isUserView() ? '' : `
+                <div class="wbr-item-actions">
+                    <button type="button" class="chart-title-btn" onclick="moveWbrItem('${item.id}', -1)" ${i === 0 ? 'disabled' : ''}>
+                        <i class="fas fa-arrow-left"></i> Move Left
+                    </button>
+                    <button type="button" class="chart-title-btn" onclick="moveWbrItem('${item.id}', 1)" ${i === wbrItems.length - 1 ? 'disabled' : ''}>
+                        <i class="fas fa-arrow-right"></i> Move Right
+                    </button>
+                    <button type="button" class="chart-title-btn" onclick="removeWbrItem('${item.id}')">
+                        <i class="fas fa-times"></i> Remove
+                    </button>
+                    ${wbrTitleBoxes(item, `setWbrText('${item.id}', KEY, this.value)`)}
+                </div>`;
+            if (actions) cell.insertAdjacentHTML('afterbegin', `<div class="wbr-item-head">${actions}</div>`);
             // The card, unless it is already here (or open in the chart popup).
             if (!cell.querySelector('.chart-card, .chart-zoom-holder, .wbr-item-missing')) {
                 const card = findRow(item.ref) ? wbrCard(item) : null;
                 if (card) cell.appendChild(card);
                 else cell.insertAdjacentHTML('beforeend', '<div class="wbr-item-missing">This chart has been removed from the KPI page.</div>');
             }
+            const row = findRow(item.ref);
+            const card = cell.querySelector('.chart-card');
+            if (row && card) applyWbrTitles(card, item, row);
+            // Month / week scroller in the card's title line, where the KPI
+            // page has the day scroller (shown only when there is more to see).
+            if (card && item.period !== 'd' && !card.querySelector('[data-wbr-scroller]')) {
+                const zoom = card.querySelector('.chart-card-head .chart-zoom-btn');
+                if (zoom) zoom.insertAdjacentHTML('beforebegin', wbrScrollerHtml(item.period));
+            }
+            // Comments button (wbr_comments.js fills it while Comments are on).
+            if (card && typeof WbrComments !== 'undefined' && !card.querySelector('.wbr-comment-slot')) {
+                const zoom = card.querySelector('.chart-card-head .chart-zoom-btn');
+                if (zoom) zoom.insertAdjacentHTML('beforebegin', WbrComments.slotHtml(`chart:${item.ref}|${item.period}`));
+            }
             grid.appendChild(cell);
         });
         document.getElementById('wbrEmpty').style.display = wbrItems.length ? 'none' : '';
+        updateWbrSliders();
+        if (typeof WbrDeck !== 'undefined') WbrDeck.render();
+        if (typeof WbrComments !== 'undefined') WbrComments.refreshButtons();
         setTimeout(resizeAllCharts, 10);
+    }
+
+    // ── Review chart titles ──
+    // A review chart (grid or slide) can have its own title and subtitle;
+    // blank uses the KPI chart's. Only the review shows them: the card's
+    // heading is changed on this page, never the KPI chart itself.
+    function wbrItemTitle(item, row) {
+        return (item.title || '').trim() || rowTitle(row);
+    }
+    function wbrItemSubtitle(item, row) {
+        return (item.subtitle || '').trim() || row.subtitle || '';
+    }
+
+    // Title and Subtitle boxes; onchange has KEY replaced by 'title' / 'subtitle'.
+    function wbrTitleBoxes(item, onchange) {
+        const row = findRow(item.ref);
+        const box = (key, label, width, fallback) => `
+            <label class="wbr-count">${label}
+                <input type="text" style="width:${width}px" maxlength="${key === 'title' ? 200 : 300}"
+                       value="${escHtml(item[key] || '')}" placeholder="${escHtml(fallback || '')}"
+                       onchange="${onchange.replace('KEY', `'${key}'`)}">
+            </label>`;
+        return box('title', 'Title', 170, row ? rowTitle(row) : '')
+            + box('subtitle', 'Subtitle', 170, row ? row.subtitle || '' : '');
+    }
+
+    // The grid card's heading and subtitle line, set to the review's own.
+    function applyWbrTitles(card, item, row) {
+        const h2 = card.querySelector('.chart-card-head h2, h2');
+        if (h2) h2.textContent = wbrItemTitle(item, row);
+        const text = wbrItemSubtitle(item, row);
+        let sub = card.querySelector('.chart-card-subtitle');
+        if (!text) { if (sub) sub.remove(); return; }
+        if (!sub) {
+            sub = document.createElement('div');
+            sub.className = 'chart-card-subtitle';
+            const head = card.querySelector('.chart-card-head');
+            if (head) head.after(sub);
+            else card.prepend(sub);
+        }
+        sub.textContent = text;
+    }
+
+    function setWbrText(id, key, value) {
+        const text = String(value || '').trim().slice(0, key === 'title' ? 200 : 300);
+        changeWbrItems(wbrItems.map(i => {
+            if (i.id !== id) return i;
+            const next = { ...i };
+            if (text) next[key] = text;
+            else delete next[key];
+            return next;
+        }), 'Change');
+    }
+
+    // ── Review chart windows ──
+    // Every month chart on the review shows the same window: Settings
+    // wbr_months_before months before the current month to wbr_months_after
+    // after it (weeks likewise). A scroller on each chart, styled as the KPI
+    // page's day scroller, moves every chart of that period together. The
+    // review loads wbr_months_scroll months back (sendMetricBatch), which is
+    // as far as the scroller goes; when the window holds everything loaded,
+    // there is no scroller.
+    const wbrShift = { m: 0, w: 0 };   // points moved from the usual window (negative = earlier)
+    const WBR_WINDOW_KEYS = { m: ['wbr_months_before', 'wbr_months_after'], w: ['wbr_weeks_before', 'wbr_weeks_after'] };
+
+    // { start, end } drawn, lo / hi the range end can move over, home the
+    // usual end. null when everything loaded is drawn (or not the review).
+    function wbrWindow(k, starts, today) {
+        if (!WBR || (k !== 'm' && k !== 'w') || !starts || !starts.length) return null;
+        const n = starts.length;
+        const [beforeKey, afterKey] = WBR_WINDOW_KEYS[k];
+        const after = Math.max(0, Number(settings[afterKey]) || 0);
+        const size = Math.max(0, Number(settings[beforeKey]) || 0) + after + 1;
+        if (size >= n) return null;
+        let cur = n - 1;
+        if (today) {
+            const found = starts.map(s => String(s).slice(0, 10)).filter(s => s <= today).length - 1;
+            if (found >= 0) cur = found;
+        }
+        const lo = size - 1, hi = n - 1;
+        const home = Math.min(Math.max(cur + after, lo), hi);
+        const end = Math.min(Math.max(home + wbrShift[k], lo), hi);
+        return { start: end - size + 1, end, lo, hi, home, size, n };
+    }
+
+    const wbrStarts = (d, k) => (k === 'm' ? d.monthly_starts : d.weekly_starts);
+
+    // Index in the loaded data of a review chart's first drawn point.
+    function wbrStart(rowId, kind) {
+        const d = customRowData[rowId];
+        const r = d && wbrWindow(kind, wbrStarts(d, kind), d.today);
+        return r ? r.start : 0;
+    }
+
+    // The row's data with each month/week series cut to the review window.
+    function wbrSliceData(row, d) {
+        const out = { ...d };
+        const cuts = {};
+        [['m', 'monthly_'], ['w', 'weekly_']].forEach(([k, prefix]) => {
+            const r = wbrWindow(k, wbrStarts(d, k), d.today);
+            if (!r) return;
+            const cut = a => a.slice(r.start, r.end + 1);
+            cuts[k] = cut;
+            Object.keys(d).forEach(key => {
+                if (key.startsWith(prefix) && Array.isArray(d[key])) out[key] = cut(d[key]);
+            });
+        });
+        if (d.stacked && (cuts.m || cuts.w)) {
+            out.stacked = d.stacked.map(s => ({ ...s, m: cuts.m && s.m ? cuts.m(s.m) : s.m,
+                                                     w: cuts.w && s.w ? cuts.w(s.w) : s.w }));
+        }
+        return out;
+    }
+
+    // The window for period k from any loaded chart (they all load the same periods).
+    function wbrCurrentWindow(k) {
+        const d = Object.values(customRowData).find(x => x && wbrStarts(x, k));
+        return d ? wbrWindow(k, wbrStarts(d, k), d.today) : null;
+    }
+
+    // Same markup and classes as the KPI day scroller (DayWindow.scrollerHtml),
+    // with its own data- names so the day scroller's handlers leave it alone.
+    function wbrScrollerHtml(k) {
+        return `
+            <div class="chart-day-scroller" data-wbr-scroller="${k}" style="display:none;">
+                <button type="button" class="chart-day-step" data-wbr-prev="${k}" title="Earlier">
+                    <i class="fas fa-chevron-left"></i>
+                </button>
+                <div class="chart-day-track" data-wbr-track="${k}">
+                    <div class="chart-day-thumb" data-wbr-thumb></div>
+                </div>
+                <button type="button" class="chart-day-step" data-wbr-next="${k}" title="Later">
+                    <i class="fas fa-chevron-right"></i>
+                </button>
+                <button type="button" class="chart-day-latest" data-wbr-home="${k}" title="Back to the usual window">Current</button>
+            </div>`;
+    }
+
+    function updateWbrSliders() {
+        ['m', 'w'].forEach(k => {
+            const r = wbrCurrentWindow(k);
+            document.querySelectorAll(`[data-wbr-scroller="${k}"]`).forEach(el => {
+                if (!r) { el.style.display = 'none'; return; }
+                el.style.display = '';
+                const thumb = el.querySelector('[data-wbr-thumb]');
+                thumb.style.left = (r.start / r.n * 100) + '%';
+                thumb.style.width = (r.size / r.n * 100) + '%';
+                el.querySelector('[data-wbr-prev]').disabled = r.end <= r.lo;
+                el.querySelector('[data-wbr-next]').disabled = r.end >= r.hi;
+            });
+        });
+    }
+
+    // Move every chart of period k so its window ends at point `end`.
+    function wbrSlideTo(k, end) {
+        const r = wbrCurrentWindow(k);
+        if (!r) return;
+        const target = Math.min(Math.max(end, r.lo), r.hi);
+        if (target === r.end) return;
+        wbrShift[k] = target - r.home;
+        shownRows().forEach(row => { if (customRowData[row.id]) renderCustomRow(row, customRowData[row.id]); });
+        updateWbrSliders();
+    }
+
+    if (WBR) {
+        document.addEventListener('click', event => {
+            const prev = event.target.closest('[data-wbr-prev]');
+            const next = event.target.closest('[data-wbr-next]');
+            const home = event.target.closest('[data-wbr-home]');
+            const k = (prev || next || home) && (prev || next || home).getAttribute(prev ? 'data-wbr-prev' : next ? 'data-wbr-next' : 'data-wbr-home');
+            if (!k) return;
+            const r = wbrCurrentWindow(k);
+            if (!r) return;
+            wbrSlideTo(k, home ? r.home : r.end + (prev ? -1 : 1));
+        });
+        // Dragging the thumb, as on the day scroller: the thumb keeps the
+        // point under the pointer; clicking the bare track centres it there.
+        let wbrDrag = null;
+        const trackToEnd = (k, track, clientX, grab) => {
+            const r = wbrCurrentWindow(k);
+            if (!r) return null;
+            const rect = track.getBoundingClientRect();
+            const thumbWidth = rect.width * (r.size / r.n);
+            const usable = Math.max(1, rect.width - thumbWidth);
+            const fraction = Math.min(Math.max((clientX - rect.left - grab) / usable, 0), 1);
+            return Math.round(fraction * (r.n - r.size)) + r.size - 1;
+        };
+        document.addEventListener('pointerdown', event => {
+            const track = event.target.closest('[data-wbr-track]');
+            if (!track) return;
+            const k = track.dataset.wbrTrack;
+            const thumb = track.querySelector('[data-wbr-thumb]');
+            const rect = thumb.getBoundingClientRect();
+            const grab = event.target === thumb ? event.clientX - rect.left : rect.width / 2;
+            wbrDrag = { k, track, grab };
+            track.classList.add('dragging');
+            track.setPointerCapture(event.pointerId);
+            const end = trackToEnd(k, track, event.clientX, grab);
+            if (end !== null) wbrSlideTo(k, end);
+            event.preventDefault();
+            event.stopPropagation();
+        }, true);
+        document.addEventListener('pointermove', event => {
+            if (!wbrDrag) return;
+            const end = trackToEnd(wbrDrag.k, wbrDrag.track, event.clientX, wbrDrag.grab);
+            if (end !== null) wbrSlideTo(wbrDrag.k, end);
+        });
+        const endDrag = () => {
+            if (!wbrDrag) return;
+            wbrDrag.track.classList.remove('dragging');
+            wbrDrag = null;
+        };
+        document.addEventListener('pointerup', endDrag);
+        document.addEventListener('pointercancel', endDrag);
+    }
+
+    // ── Review Settings popup (admin) ──
+    // The wbr_* settings, saved with the KPI settings so they apply for everyone.
+    const WBR_SETTING_INPUTS = {
+        wbr_months_before: 'setWbrMonthsBefore', wbr_months_after: 'setWbrMonthsAfter', wbr_months_scroll: 'setWbrMonthsScroll',
+        wbr_weeks_before: 'setWbrWeeksBefore', wbr_weeks_after: 'setWbrWeeksAfter', wbr_weeks_scroll: 'setWbrWeeksScroll',
+        wbr_columns: 'setWbrColumns', wbr_notes: 'setWbrNotes',
+        wbr_comments_on: 'setWbrCommentsOn', wbr_comments_show_resolved: 'setWbrCommentsShowResolved',
+        wbr_slides_on: 'setWbrSlidesOn', wbr_grid_cols: 'setWbrGridCols', wbr_grid_rows: 'setWbrGridRows',
+        wbr_snap: 'setWbrSnap', wbr_slide_gridlines: 'setWbrSlideGridlines',
+        wbr_slide_border_px: 'setWbrSlideBorderPx', wbr_slide_border_colour: 'setWbrSlideBorderColour',
+        wbr_slide_title_px: 'setWbrSlideTitlePx', wbr_slide_subtitle_px: 'setWbrSlideSubtitlePx',
+    };
+    // Changing these changes what is loaded, so the charts are fetched again.
+    const WBR_LOAD_SETTINGS = ['wbr_months_after', 'wbr_months_scroll', 'wbr_weeks_after', 'wbr_weeks_scroll'];
+
+    // The popup reopens on the tab last used this visit.
+    let wbrSettingsTab = 'wbrTabView';
+
+    function showWbrSettingsTab(id) {
+        wbrSettingsTab = id;
+        if (id === 'wbrTabBudgets' && typeof WbrBudgets !== 'undefined') WbrBudgets.open();
+        document.querySelectorAll('#wbrSettingsModal .settings-pane').forEach(p => p.classList.toggle('active', p.id === id));
+        document.querySelectorAll('#wbrSettingsModal .settings-tabs > button').forEach(b => b.classList.toggle('active', b.dataset.tab === id));
+    }
+
+    function openWbrSettings() {
+        Object.entries(WBR_SETTING_INPUTS).forEach(([name, id]) => {
+            const input = document.getElementById(id);
+            input.value = settings[name];
+            const limits = settingLimits[name];
+            if (limits) { input.min = limits[0]; input.max = limits[1]; }
+        });
+        document.getElementById('wbrSettingsError').classList.remove('show');
+        if (typeof WbrBudgets !== 'undefined') WbrBudgets.reset();
+        showWbrSettingsTab(wbrSettingsTab);
+        document.getElementById('wbrSettingsModal').classList.add('open');
+    }
+
+    function closeWbrSettings() {
+        document.getElementById('wbrSettingsModal').classList.remove('open');
+    }
+
+    async function saveWbrSettings() {
+        const next = { ...settings };
+        Object.entries(WBR_SETTING_INPUTS).forEach(([name, id]) => {
+            next[name] = readSettingInput(document.getElementById(id));
+        });
+        const errorBox = document.getElementById('wbrSettingsError');
+        const fail = message => { errorBox.textContent = message; errorBox.classList.add('show'); };
+        for (const [name, value] of Object.entries(next)) {
+            const limits = settingLimits[name];
+            if (name in WBR_SETTING_INPUTS && limits && !(value >= limits[0] && value <= limits[1])) {
+                const label = document.querySelector(`label[for="${WBR_SETTING_INPUTS[name]}"]`);
+                return fail(`${label ? label.textContent : name} must be from ${limits[0]} to ${limits[1]}.`);
+            }
+        }
+        if (next.wbr_months_before > next.wbr_months_scroll) return fail('Months Before Current cannot be more than the months available to scroll back.');
+        if (next.wbr_weeks_before > next.wbr_weeks_scroll) return fail('Weeks Before Current cannot be more than the weeks available to scroll back.');
+        const btn = document.getElementById('wbrSettingsSaveBtn');
+        btn.disabled = true;
+        try {
+            blockSaveIfLoadFailed();
+            // Budget edits first: if they fail, nothing else is saved and the popup stays open.
+            // Then the charts' budget targets are read again, so a new mapping or figure shows on Save.
+            if (typeof WbrBudgets !== 'undefined' && await WbrBudgets.save()) await loadWbrBudgetTargets();
+            const resp = await fetch(BASE_URL + '/kpi/settings', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ settings: next }),
+            }).then(r => r.json());
+            if (resp.status !== 'ok') throw new Error(resp.message || 'save failed');
+            const reload = WBR_LOAD_SETTINGS.some(k => Number(resp.settings[k]) !== Number(settings[k]));
+            settings = resp.settings;
+            applyAppearance();
+            wbrShift.m = 0;
+            wbrShift.w = 0;
+            closeWbrSettings();
+            if (reload) loadAll();
+            else {
+                shownRows().forEach(row => { if (customRowData[row.id]) renderCustomRow(row, customRowData[row.id]); });
+                renderLayout();
+            }
+        } catch (err) {
+            fail('Save failed: ' + err.message);
+        } finally {
+            btn.disabled = false;
+        }
+    }
+
+    // Every chart on the review: the grid's and the slides' own copies.
+    function wbrAllCharts() {
+        return Object.values(rowCharts).flat().concat(typeof WbrDeck !== 'undefined' ? WbrDeck.charts() : []);
     }
 
     async function saveWbrItems() {
@@ -476,6 +805,8 @@
     }
 
     async function addWbrItem(ref, period) {
+        // Slides view: onto the slide showing; a chart may be on any number of slides.
+        if (typeof WbrDeck !== 'undefined' && WbrDeck.active()) { WbrDeck.addChart(ref, period); return; }
         const row = findRow(ref);
         if (!row || wbrItems.some(i => i.ref === ref && i.period === period)) return;
         const id = 'w' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
@@ -514,7 +845,8 @@
         const list = document.getElementById('wbrPickerList');
         if (!list) return;
         const q = document.getElementById('wbrPickerSearch').value.trim().toLowerCase();
-        const have = new Set(wbrItems.map(i => i.ref + '|' + i.period));
+        const deck = typeof WbrDeck !== 'undefined' && WbrDeck.active();
+        const have = new Set(deck ? [] : wbrItems.map(i => i.ref + '|' + i.period));
         const html = SECTIONS.map(section => {
             const rows = layout.rows.filter(r => r.section === section && !r.hidden
                 && (!q || `${rowTitle(r)} ${r.subtitle || ''}`.toLowerCase().includes(q)));
@@ -544,7 +876,8 @@
             const row = findRow(item.ref);
             const chart = row && (rowCharts[item.ref] || [])[WBR_PERIOD_INDEX[item.period]];
             if (!chart) return null;
-            return { title: `${rowTitle(row)} - ${PERIOD_NAMES[item.period]}`, subtitle: row.subtitle || '',
+            return { title: item.title ? wbrItemTitle(item, row) : `${rowTitle(row)} - ${PERIOD_NAMES[item.period]}`,
+                     subtitle: wbrItemSubtitle(item, row),
                      image: chart.toBase64Image('image/png', 1) };
         }).filter(Boolean);
         if (!slides.length) { status.textContent = 'Load the charts before exporting.'; return; }
@@ -898,7 +1231,9 @@
     // The daily charts the day window moves: only the popup's while a daily
     // chart is open in it, so the page's charts do not move with it.
     function dayWindowCharts() {
-        return zoomOnDaily() ? [zoomChart()] : Object.values(rowCharts).map(charts => charts[2]);
+        if (zoomOnDaily()) return [zoomChart()];
+        const slides = WBR && typeof WbrDeck !== 'undefined' ? WbrDeck.charts() : [];
+        return Object.values(rowCharts).map(charts => charts[2]).concat(slides);
     }
 
     function redrawDayWindow() {
@@ -966,7 +1301,8 @@
         const stacked = isStacked(row);
         const full = chart.$dayFull;
         const labels = full ? full.labels : chart.data.labels;
-        const starts = k === 'm' ? (d.monthly_starts || []) : k === 'w' ? (d.weekly_starts || []) : d.dates;
+        const starts = k === 'm' ? (d.monthly_starts || []).slice(wbrStart(row.id, k))
+            : k === 'w' ? (d.weekly_starts || []).slice(wbrStart(row.id, k)) : d.dates;
         // Rounding: a figure from one column takes that column's Decimals
         // (Settings > Column Names), times 100 when its format is "% from a
         // decimal"; a figure worked out from several columns (divided, added,
@@ -1028,7 +1364,9 @@
     function shownRows() {
         // The review loads only the KPI charts it uses, hidden ones included.
         if (WBR) {
-            const refs = new Set(wbrItems.map(i => i.ref));
+            // The grid's charts and every slide's.
+            const refs = new Set(wbrItems.map(i => i.ref)
+                .concat(typeof WbrDeck !== 'undefined' ? WbrDeck.refs() : []));
             return layout.rows.filter(r => refs.has(r.id));
         }
         return layout.rows.filter(r => !r.hidden && !hiddenSections.has(r.section));
@@ -1052,7 +1390,7 @@
     }
 
     function resizeAllCharts() {
-        Object.values(rowCharts).flat().forEach(c => c && c.resize());
+        (WBR ? wbrAllCharts() : Object.values(rowCharts).flat()).forEach(c => c && c.resize());
     }
 
     async function saveLayout(rows) {
@@ -1138,11 +1476,13 @@
                 items: batch.items,
                 refresh: loadToken,
                 sp_refresh: spRefreshToken,
-                months: settings.months,
-                weeks: settings.weeks,
+                // The review loads its own range: back as far as its scroller
+                // reaches, forward as far as its window shows.
+                months: WBR ? Number(settings.wbr_months_scroll) + 1 : settings.months,
+                weeks: WBR ? Number(settings.wbr_weeks_scroll) + 1 : settings.weeks,
                 days: settings.days_total,
-                months_after: settings.months_after,
-                weeks_after: settings.weeks_after,
+                months_after: WBR ? settings.wbr_months_after : settings.months_after,
+                weeks_after: WBR ? settings.wbr_weeks_after : settings.weeks_after,
                 days_after: settings.days_after,
             }),
         })
@@ -1565,6 +1905,63 @@
         return text.startsWith('-') ? '-£' + text.slice(1) : '£' + text;
     }
 
+    // ── Budget targets (review only) ──
+    // Settings > Budgets can map a budget line to a chart. On the review, that
+    // chart's target becomes the budget: each month's figure as it is; for a
+    // Sum chart a day gets its month's figure / days in the month and a week
+    // the total of its days; for an Average, % or divided chart a day gets
+    // its month's figure and a week the average of its days. A % budget line
+    // (stored as 60 for 60%) is divided by 100 on a "from a decimal" chart.
+    // Stacked charts keep their own targets. The KPI page never loads these.
+    let wbrBudgetTargets = {};   // chart id -> { values: { 'YYYY-MM': number } }
+
+    async function loadWbrBudgetTargets() {
+        if (!WBR) return;
+        try {
+            const resp = await fetch(BASE_URL + '/weekly-business-review/budget-targets').then(r => r.json());
+            wbrBudgetTargets = resp.status === 'ok' ? resp.targets || {} : {};
+        } catch (err) {
+            // Charts then show their KPI targets, as before budgets existed.
+            console.warn('Budget targets did not load', err);
+            wbrBudgetTargets = {};
+        }
+    }
+
+    function wbrBudgetData(row, d) {
+        const budget = WBR && wbrBudgetTargets[row.id];
+        if (!budget) return d;
+        const sum = row.agg === 'sum' && !row.pct && !row.divide_by;
+        const scale = budget.is_percent && fmtRow(row).fmt === 'pct100' ? 0.01 : 1;
+        const monthOf = iso => budget.values[iso.slice(0, 7)];
+        const daysIn = iso => Number(lastDayOfMonthIso(iso.slice(0, 8) + '01').slice(8, 10));
+        const perDay = iso => {
+            const v = monthOf(iso);
+            if (v === null || v === undefined) return null;
+            return (sum ? v / daysIn(iso) : v) * scale;
+        };
+        const addDays = (iso, n) => {
+            const t = new Date(iso + 'T00:00:00Z');
+            t.setUTCDate(t.getUTCDate() + n);
+            return t.toISOString().slice(0, 10);
+        };
+        const week = monday => {
+            const days = [0, 1, 2, 3, 4, 5, 6].map(n => perDay(addDays(monday, n)));
+            if (days.some(v => v === null)) return null;
+            const total = days.reduce((a, b) => a + b, 0);
+            return sum ? total : total / 7;
+        };
+        const month = first => {
+            const v = monthOf(first);
+            return v === null || v === undefined ? null : v * scale;
+        };
+        return {
+            ...d,
+            values_target: d.dates.map(perDay),
+            weekly_values_target: (d.weekly_starts || []).map(week),
+            monthly_values_target: (d.monthly_starts || []).map(month),
+        };
+    }
+
     // A divided chart shown as a Percentage (x 100) is already a %, so the
     // "from a decimal" Label Format would times it by 100 a second time
     // (0.5 showing as 5,000%). Read it as "already a %" instead.
@@ -1774,7 +2171,27 @@
         customRowData[row.id] = d;
         if (!document.getElementById(`cv-${row.id}-m`)) return;   // row removed meanwhile
         kpiDates = d.dates;
-        if (isStacked(row)) { renderStackedRow(row, d); return; }
+        // The review draws only each month/week chart's window; the full data
+        // stays in customRowData.
+        const loaded = d;
+        if (WBR) { d = wbrSliceData(row, d); updateWbrSliders(); }
+        const existing = rowCharts[row.id] || [];
+        rowCharts[row.id] = buildRowCharts(row, d, ['m', 'w', 'd'].map((k, i) => ({
+            k, canvasId: `cv-${row.id}-${k}`, existing: existing[i], first: k === 'd' ? 0 : wbrStart(row.id, k) })));
+        updateDayTitles();
+        DayWindow.updateScrollers();
+        // Slides draw their own copies of the row's charts (wbr_deck.js).
+        if (WBR && typeof WbrDeck !== 'undefined') WbrDeck.rowLoaded(row, loaded);
+    }
+
+    // A row's charts, one per target: { k: 'm'|'w'|'d', canvasId, existing
+    // (chart to replace), first (index in the loaded data of the first point
+    // drawn, for the point popup) }. Returns the charts in the targets' order.
+    // The ranges always come from all three periods, so a chart drawn on its
+    // own is scaled as it is on the KPI page.
+    function buildRowCharts(row, d, targets) {
+        if (isStacked(row)) return buildStackedCharts(row, d, targets);
+        d = wbrBudgetData(row, d);
         // 7-day average on the daily chart only; the cached data is kept as
         // loaded so switching back needs no reload.
         if (rollingOn(row.id)) {
@@ -1797,23 +2214,18 @@
         const ranges = calcRowRanges(rangeSpecs(d, row.y_min, row.y_max), row.agg,
             sharedAxisValue(row.y_min), sharedAxisValue(row.y_max));
 
-        const existing = rowCharts[row.id] || [];
-        const cm = buildMetricChart(`cv-${row.id}-m`, d.monthly_labels, d.monthly_values,
-            d.monthly_values_n1, d.monthly_values_target || nulls(d.monthly_labels),
-            existing[0], { ...opts, range: ranges[0],
-                notes: { rowId: row.id, kind: 'm', starts: d.monthly_starts || [] } });
-        const cw = buildMetricChart(`cv-${row.id}-w`, d.weekly_labels, d.weekly_values,
-            d.weekly_values_n1, d.weekly_values_target || nulls(d.weekly_labels),
-            existing[1], { ...opts, n1Labels: d.weekly_n1_labels, range: ranges[1],
-                notes: { rowId: row.id, kind: 'w', starts: d.weekly_starts || [] } });
-        const cd = buildMetricChart(`cv-${row.id}-d`, dailyLabels, valuesPast,
-            d.values_n1, d.values_target || nulls(d.dates),
-            existing[2], { ...opts, range: ranges[2], day: true,
-                notes: { rowId: row.id, kind: 'd', starts: d.dates } });
-        rowCharts[row.id] = [cm, cw, cd];
-
-        updateDayTitles();
-        DayWindow.updateScrollers();
+        return targets.map(({ k, canvasId, existing, first }) => {
+            const notes = (starts) => ({ rowId: row.id, kind: k, starts, first: first || 0 });
+            if (k === 'm') return buildMetricChart(canvasId, d.monthly_labels, d.monthly_values,
+                d.monthly_values_n1, d.monthly_values_target || nulls(d.monthly_labels),
+                existing, { ...opts, range: ranges[0], notes: notes(d.monthly_starts || []) });
+            if (k === 'w') return buildMetricChart(canvasId, d.weekly_labels, d.weekly_values,
+                d.weekly_values_n1, d.weekly_values_target || nulls(d.weekly_labels),
+                existing, { ...opts, n1Labels: d.weekly_n1_labels, range: ranges[1], notes: notes(d.weekly_starts || []) });
+            return buildMetricChart(canvasId, dailyLabels, valuesPast,
+                d.values_n1, d.values_target || nulls(d.dates),
+                existing, { ...opts, range: ranges[2], day: true, notes: notes(d.dates) });
+        });
     }
 
     // The month/week/day series and axis limits that set a row's ranges. Day
@@ -1927,6 +2339,8 @@
         return {
             id: 'chartNotes',
             afterDatasetsDraw(chart) {
+                // Notes can be turned off for the whole Weekly Business Review.
+                if (WBR && Number(settings.wbr_notes) === 0) { chart.$notePositions = []; return; }
                 const { ctx, chartArea: a, scales: { x } } = chart;
                 const offset = meta.kind === 'd' ? DayWindow.startIndex() : 0;
                 const count = chart.data.labels.length;
@@ -2202,7 +2616,8 @@
             .map(f => `<span>${escHtml(f.label)}: <b>${f.v === null || f.v === undefined || isNaN(f.v) ? '-' : escHtml(fmt(f.v))}</b></span>`)
             .join('');
 
-        renderPointCalc(row, meta.kind, index, figures);
+        // A review chart or slide may draw a window of the loaded points.
+        renderPointCalc(row, meta.kind, meta.kind === 'd' ? index : index + (meta.first || 0), figures);
 
         const button = document.getElementById('viewVehiclesBtn');
         button.style.display = row.vehicles ? '' : 'none';
@@ -2880,7 +3295,8 @@
         };
     }
 
-    function renderStackedRow(row, d) {
+    // Targets and return as buildRowCharts.
+    function buildStackedCharts(row, d, targets) {
         const side = row.column_layout === 'side_by_side';
         const pct = !!row.pct && !side;
         const decimals = row.decimals || 0;
@@ -2923,22 +3339,21 @@
         const rightRanges = onRight.some(Boolean)
             ? calcRowRanges(['m', 'w', 'd'].map(k => ({ series: periods[k].series.filter((_s, j) => onRight[j]) })), 'sum')
             : null;
-        const targets = stackedTargets(row, d, periods);
+        const targets_ = stackedTargets(row, d, periods);
         const ranges = pct
             ? ['m', 'w', 'd'].map(() => ({ yMin: 0, yMax: 100, unit: 20 }))
             : calcRowRanges(['m', 'w', 'd'].map(k => ({ series: side ? periods[k].series.filter((_s, j) => !onRight[j]) : [periods[k].totals], min: (row.y_min || {})[k], max: (row.y_max || {})[k] })),
                 row.agg, sharedAxisValue(row.y_min), sharedAxisValue(row.y_max));
-        const existing = rowCharts[row.id] || [];
         const opts = { fmt, fullFmt: rowFullFormatter(row, pct), tickFmt, pct, side, colours: plotted.map(p => p.colour), names: plotted.map(p => p.name),
                        splits: plotted.map(p => (p.split ? p.split.part : null)),
                        splitNames: plotted.map(p => (p.split ? ((p.s.split_at.lower_label || '').trim() || metricName(p.split.source, p.split.metric)) : null)),
                        transparency: themeById(row.theme).transparency || 0,
                        // A 100% chart has no column totals, so its figures are the segment values.
                        segLabels: !!row.seg_labels || !!row.pct, segPos: row.seg_label_pos || 'center', dataLabels: dataLabelsOn(row) };
-        rowCharts[row.id] = ['m', 'w', 'd'].map((k, i) => buildStackedChart(`cv-${row.id}-${k}`, periods[k], targets[k], existing[i],
-            { ...opts, range: ranges[i], rightRange: rightRanges && rightRanges[i], onRight, day: k === 'd', notes: { rowId: row.id, kind: k, starts: periods[k].starts } }));
-        updateDayTitles();
-        DayWindow.updateScrollers();
+        const at = { m: 0, w: 1, d: 2 };
+        return targets.map(({ k, canvasId, existing, first }) => buildStackedChart(canvasId, periods[k], targets_[k], existing,
+            { ...opts, range: ranges[at[k]], rightRange: rightRanges && rightRanges[at[k]], onRight, day: k === 'd',
+              notes: { rowId: row.id, kind: k, starts: periods[k].starts, first: first || 0 } }));
     }
 
     // Dark text on light segments, white on dark ones (text never takes the
@@ -4526,7 +4941,7 @@
         section_font_px: 'setSectionFont', title_font_px: 'setTitleFont',
         subtitle_font_px: 'setSubtitleFont', period_font_px: 'setPeriodFont',
         toolbar_font_px: 'setToolbarFont', at_font_px: 'setAtFont', at_table_font_px: 'setAtTableFont',
-        legend_font_px: 'setLegendFont', line_label_font_px: 'setLineLabelFont', wbr_columns: 'setWbrColumns',
+        legend_font_px: 'setLegendFont', line_label_font_px: 'setLineLabelFont',
         zoom_size: 'setZoomSize',
         stack_label_dir: 'setStackLabelDir', stack_label_overflow: 'setStackLabelOverflow',
         stack_seg_font_px: 'setStackSegFont', stack_total_font_px: 'setStackTotalFont',
@@ -6677,7 +7092,8 @@
     }
 
     async function saveSettings() {
-        const next = {};
+        // Settings not in this popup (the Weekly Business Review's) are kept as they are.
+        const next = { ...settings };
         for (const [name, id] of Object.entries(SETTING_INPUTS)) {
             next[name] = readSettingInput(document.getElementById(id));
         }

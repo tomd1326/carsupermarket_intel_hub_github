@@ -51,6 +51,19 @@
     {% if user_name %}
     {% set ud = user_details(user_name) %}
     <div class="account-nav">
+        {# Alerts bell (alerts.js): @mentions and replies on Weekly Business
+           Review comments. Stays hidden for anyone who has never had an alert. #}
+        <link href="{{ static_url('css/alerts.css') }}" rel="stylesheet">
+        <span class="alerts-bell" data-base="{{ BASE_URL }}" hidden>
+            <button type="button" class="alerts-bell-btn" aria-label="Alerts" title="Alerts">
+                <i class="fas fa-bell" aria-hidden="true"></i><span class="alerts-bell-count" hidden></span>
+            </button>
+            <div class="alerts-panel" hidden>
+                <div class="alerts-panel-head"><span>Alerts</span><button type="button" class="alerts-read-all">Mark All Read</button></div>
+                <div class="alerts-list"></div>
+            </div>
+        </span>
+        <script src="{{ static_url('js/alerts.js') }}" defer></script>
         {{ live_users(user_name) }}
         <span class="account-menu">
             <button type="button" class="account-menu-btn" aria-expanded="false">
