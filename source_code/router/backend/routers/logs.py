@@ -72,8 +72,12 @@ def _like(text: str) -> str:
 
 def _where(source: str, level: str, page: str, task: str, q: str,
            date_from: str, date_to: str, min_duration_ms: Optional[int],
-           failed_only: bool, table: str = ''):
+           failed_only: bool, table: str = '', since_minutes: Optional[int] = None):
     clauses, params = [], []
+    if since_minutes:
+        # The KPI page's Log popup: only the last N minutes.
+        clauses.append("logged_at >= NOW() - make_interval(mins => %s)")
+        params.append(since_minutes)
     if table:
         clauses.append("tables ILIKE %s")
         params.append(_like(table))
@@ -118,11 +122,13 @@ def _valid_date(value: str) -> str:
 def logs_data(request: Request, source: str = '', level: str = '', page: str = '', task: str = '',
               q: str = '', date_from: str = '', date_to: str = '',
               min_duration_ms: Optional[int] = None, failed_only: bool = False, table: str = '',
-              sort: str = 'newest', offset: int = 0, user: str = Depends(_api_admin)):
+              sort: str = 'newest', offset: int = 0, since_minutes: Optional[int] = None,
+              user: str = Depends(_api_admin)):
+    since = since_minutes if since_minutes and 0 < since_minutes <= 60 * 24 * 365 else None
     where, params = _where(source, level, page, task, q.strip()[:200],
                            _valid_date(date_from), _valid_date(date_to),
                            min_duration_ms if min_duration_ms and min_duration_ms > 0 else None,
-                           failed_only, table.strip()[:100])
+                           failed_only, table.strip()[:100], since)
     order = "duration_ms DESC NULLS LAST, id DESC" if sort == 'duration' else "id DESC"
     with get_database_connection() as conn:
         app_log._ensure_table(conn)

@@ -267,7 +267,9 @@ function segmentHitsBox(x1, y1, x2, y2, box) {
 // subtitle, if given, sits under the title in smaller grey text (no-legend cards only).
 // headExtra is the page's own HTML for the title line, before the scroller (no-legend cards only).
 // headEnd is the page's own HTML at the far right of the title line, after the scroller (no-legend cards only).
-function chartCardHtml({ canvasId, titleId = '', title = '', subtitle = '', legendId = '', dayScroller = false, legend = true, headExtra = '', headEnd = '' }) {
+// aboveChart is the page's own HTML on a line of its own just above the chart,
+// e.g. a control that belongs with the chart's legend (no-legend cards only).
+function chartCardHtml({ canvasId, titleId = '', title = '', subtitle = '', legendId = '', dayScroller = false, legend = true, headExtra = '', headEnd = '', aboveChart = '' }) {
     if (!legend) {
         return `
         <div class="chart-card">
@@ -278,6 +280,7 @@ function chartCardHtml({ canvasId, titleId = '', title = '', subtitle = '', lege
                 ${headEnd}
             </div>
             ${subtitle ? `<div class="chart-card-subtitle">${escHtml(subtitle)}</div>` : ''}
+            ${aboveChart}
             <div class="chart-wrap">
                 <canvas id="${canvasId}"></canvas>
             </div>

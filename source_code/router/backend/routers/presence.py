@@ -84,6 +84,15 @@ def _page_label(path: str) -> str:
     return path
 
 
+def _tab_lines(labels: list) -> list:
+    """One line per place a person has open, A-Z, shown one under another in
+    the hover. Several windows on the same place show once, with how many."""
+    counts = {}
+    for label in labels:
+        counts[label] = counts.get(label, 0) + 1
+    return [f"{label} ({n} windows)" if n > 1 else label for label, n in sorted(counts.items())]
+
+
 # Sent with every heartbeat so open pages pick up Settings > Live Users
 # changes on their next check, without a reload.
 _DISPLAY_KEYS = ('presence_interval_seconds', 'presence_max_circles', 'presence_circle_size',
@@ -118,6 +127,14 @@ async def presence_heartbeat(request: Request):
     page = str(body.get('page', ''))
     if not _PAGE_RE.match(page):
         raise HTTPException(status_code=400)
+    # Where the tab is within its page, e.g. the KPI tab open. Shown to the admin only.
+    detail = ' '.join(str(body.get('detail') or '').split())[:100]
+    # Seconds since this tab's last click or keypress; None if not sent.
+    try:
+        idle = body.get('idle_seconds')
+        idle_seconds = min(max(int(idle), 0), 86400) if idle is not None else None
+    except (TypeError, ValueError):
+        idle_seconds = None
 
     config = presence_config()
     display = {k: config[k] for k in _DISPLAY_KEYS}
@@ -128,16 +145,27 @@ async def presence_heartbeat(request: Request):
     all_pages = is_admin(user) and page == _HOME_PAGE
     with get_database_connection() as conn:
         rows = touch_page_presence(conn, tab_id, seq, request.session.get('session_id', ''), user, _ENV,
-                                   page, config['presence_drop_off_seconds'], only_user, all_pages)
+                                   page, config['presence_drop_off_seconds'], only_user, all_pages, detail,
+                                   idle_seconds)
+    admin = is_admin(user)
     users = []
-    for username, first, last, pages in rows:
+    for username, first, last, pages, details, active_ago in rows:
         full_name = ' '.join(p for p in ((first or '').strip(), (last or '').strip()) if p)
+        # One (page, detail) per open tab. Details (e.g. the KPI tab open) go
+        # to the admin only.
+        tabs = list(zip(pages or [], details or []))
         users.append({
             "username": username,
             "initials": _initials(username, first, last),
             "name": full_name or username,
             # Only on Home: everywhere else everyone listed is on this page.
-            "pages": sorted({_page_label(p) for p in pages or []}) if all_pages else None,
+            "pages": _tab_lines([_page_label(p) + (f" - {d}" if admin and d else '') for p, d in tabs])
+                     if all_pages else None,
+            # Elsewhere, for the admin: the part of this page each tab has open.
+            "sections": _tab_lines([d for p, d in tabs if p == page and d])
+                        if admin and not all_pages else None,
+            # For the admin: seconds since their last click or keypress in any tab.
+            "active_ago": max(0, active_ago) if admin and active_ago is not None else None,
         })
     # The viewer's own circle first, the way Google shows it.
     users.sort(key=lambda u: u["username"] != user)

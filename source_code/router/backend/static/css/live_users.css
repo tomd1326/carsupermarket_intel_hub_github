@@ -75,4 +75,5 @@ button.live-user {
 .live-users-list-pages {
     font-size: 0.8rem;
     color: #64748b;
+    white-space: pre-line;   /* one open page or tab per line */
 }

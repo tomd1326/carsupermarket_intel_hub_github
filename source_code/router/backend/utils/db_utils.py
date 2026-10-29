@@ -1019,11 +1019,15 @@ def _ensure_page_presence_table(conn) -> None:
             )
             """
         )
-        # seq and left_tab came after the first version of the table.
+        # seq, left_tab and detail came after the first version of the table.
+        # detail: where the tab is within its page, e.g. the KPI tab open.
         cur.execute(
             "ALTER TABLE page_presence "
             "ADD COLUMN IF NOT EXISTS seq      INTEGER NOT NULL DEFAULT 0, "
-            "ADD COLUMN IF NOT EXISTS left_tab BOOLEAN NOT NULL DEFAULT FALSE"
+            "ADD COLUMN IF NOT EXISTS left_tab BOOLEAN NOT NULL DEFAULT FALSE, "
+            "ADD COLUMN IF NOT EXISTS detail   VARCHAR(100) NOT NULL DEFAULT '', "
+            # The tab's last click or keypress (heartbeats keep coming while idle).
+            "ADD COLUMN IF NOT EXISTS last_active_at TIMESTAMP"
         )
         cur.execute("CREATE INDEX IF NOT EXISTS idx_page_presence_page ON page_presence (environment, page)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_page_presence_last_seen ON page_presence (last_seen_at)")
@@ -1033,13 +1037,19 @@ def _ensure_page_presence_table(conn) -> None:
 
 def touch_page_presence(conn, tab_id: str, seq: int, session_id: str, username: str, environment: str,
                         page: str, drop_off_seconds: int, only_user: str | None = None,
-                        all_pages: bool = False) -> list:
-    """Record that this tab is on `page`, then return who else is on it.
+                        all_pages: bool = False, detail: str = '',
+                        idle_seconds: int | None = None) -> list:
+    """Record that this tab is on `page` (and `detail` within it, e.g. the KPI
+    tab open), then return who else is on it. idle_seconds: time since the
+    tab's last click or keypress (None: not known, the stored time is kept).
 
-    Returns [(username, first_name, last_name, pages)], one entry per person
-    however many tabs they have open, seen within drop_off_seconds. pages is
-    every page that person has open. only_user limits the list to that one
-    person. all_pages lists people on any page, not just this one.
+    Returns [(username, first_name, last_name, pages, details, active_ago)],
+    one entry per person however many tabs they have open, seen within
+    drop_off_seconds. pages and details are one item per open tab, in the
+    same order, so each detail stays with its page. active_ago is seconds
+    since their last click or keypress in any of those tabs (None if none
+    sent). only_user limits the list to that one person. all_pages lists
+    people on any page, not just this one.
 
     seq goes up by one with every message a tab sends. A message only counts
     if its seq is higher than the last one stored, so a heartbeat that arrives
@@ -1051,23 +1061,28 @@ def touch_page_presence(conn, tab_id: str, seq: int, session_id: str, username: 
         # (the session cookie itself cannot be withdrawn once sent).
         cur.execute(
             """
-            INSERT INTO page_presence (tab_id, session_id, username, environment, page, last_seen_at, seq, left_tab)
-            SELECT %s, %s, %s, %s, %s, NOW(), %s, FALSE
+            INSERT INTO page_presence (tab_id, session_id, username, environment, page, last_seen_at, seq, left_tab,
+                                       detail, last_active_at)
+            SELECT %s, %s, %s, %s, %s, NOW(), %s, FALSE, %s, NOW() - (INTERVAL '1 second' * %s)
             WHERE NOT EXISTS (
                 SELECT 1 FROM user_sessions WHERE session_id = %s AND logout_at IS NOT NULL
             )
             ON CONFLICT (tab_id) DO UPDATE
-                SET page = EXCLUDED.page, last_seen_at = NOW(), seq = EXCLUDED.seq, left_tab = FALSE
+                SET page = EXCLUDED.page, last_seen_at = NOW(), seq = EXCLUDED.seq, left_tab = FALSE,
+                    detail = EXCLUDED.detail,
+                    last_active_at = COALESCE(EXCLUDED.last_active_at, page_presence.last_active_at)
                 WHERE page_presence.username = EXCLUDED.username
                   AND EXCLUDED.seq > page_presence.seq
             """,
-            (tab_id, session_id, username, environment, page, seq, session_id),
+            (tab_id, session_id, username, environment, page, seq, detail, idle_seconds, session_id),
         )
         # Rows from tabs that closed without saying so.
         cur.execute("DELETE FROM page_presence WHERE last_seen_at < NOW() - INTERVAL '1 hour'")
         cur.execute(
             """
-            SELECT p.username, MAX(u.first_name), MAX(u.last_name), ARRAY_AGG(DISTINCT p.page)
+            SELECT p.username, MAX(u.first_name), MAX(u.last_name),
+                   ARRAY_AGG(p.page ORDER BY p.page, p.detail), ARRAY_AGG(p.detail ORDER BY p.page, p.detail),
+                   EXTRACT(EPOCH FROM NOW() - MAX(p.last_active_at))::INTEGER
             FROM page_presence p
             LEFT JOIN users u ON u.username = p.username
             WHERE p.environment = %s
@@ -1081,9 +1096,9 @@ def touch_page_presence(conn, tab_id: str, seq: int, session_id: str, username: 
             (environment, all_pages, page, drop_off_seconds, only_user, only_user),
         )
         rows = [
-            (u, ADMIN_DETAILS[u]['first_name'], ADMIN_DETAILS[u]['last_name'], pages) if u in ADMIN_DETAILS
-            else (u, f, l, pages)
-            for u, f, l, pages in cur.fetchall()
+            (u, ADMIN_DETAILS[u]['first_name'], ADMIN_DETAILS[u]['last_name'], pages, details, ago) if u in ADMIN_DETAILS
+            else (u, f, l, pages, details, ago)
+            for u, f, l, pages, details, ago in cur.fetchall()
         ]
     conn.commit()
     return rows

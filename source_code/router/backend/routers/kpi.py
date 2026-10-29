@@ -3891,6 +3891,19 @@ def _clear_shared_columns() -> None:
         logger.warning("Shared column cache clear failed: %s", e)
 
 
+def _drop_shared_columns(names: list) -> None:
+    """Forgets the shared copy for these tables (and/or the table list), so the
+    next read goes to Snowflake: Refresh Columns after a dbt run adds columns."""
+    try:
+        with get_database_connection() as conn:
+            _shared_columns_table(conn)
+            with conn.cursor() as cur:
+                cur.execute("DELETE FROM snowflake_column_cache WHERE table_name = ANY(%s)", (names,))
+            conn.commit()
+    except Exception as e:
+        logger.warning("Shared column cache drop failed for %s: %s", names, e)
+
+
 def _vehicle_table_columns(table: str) -> list:
     """[(column, data_type)] of SCHEMA.TABLE in table order; [] if it does not exist.
     Read from the shared Aurora copy when it is under 10 minutes old."""
@@ -4067,14 +4080,23 @@ def _json_cell(value):
 
 
 @router.get("/kpi/vehicle-columns")
-def kpi_vehicle_columns(request: Request, table: str = "", user: str = Depends(require_page_api(*_KPI_PAGES))):
+def kpi_vehicle_columns(request: Request, table: str = "", list_only: bool = False, refresh: bool = False,
+                        user: str = Depends(require_page_api(*_KPI_PAGES))):
     """Live table list, the saved per-table configs, and the chosen table's
     columns, read when the Settings or Edit Chart popup opens so columns added to
     a table show up straight away. `table` picks which table's columns to return
-    (defaults to the first saved config, or the default table)."""
+    (defaults to the first saved config, or the default table). list_only: just
+    the table list and saved configs, for Settings to open with no table chosen.
+    refresh (admin): read the table list and columns from Snowflake now rather
+    than the 10-minute shared copy."""
     try:
         stored = _read_kpi_layout_value('vehicle_view')
         views = _vehicle_views(stored)
+        if refresh and is_admin(user):
+            _drop_shared_columns([_VEHICLE_TABLES_CACHE_KEY] + ([table] if table else []))
+        if list_only:
+            tables = _vehicle_tables() if is_admin(user) else []
+            return {"status": "ok", "view": None, "views": views, "table": "", "tables": tables, "columns": []}
         table = table or (views[0]["table"] if views else _VEHICLE_TABLE_DEFAULT)
         view = _vehicle_view_for_table(stored, table)
         columns = _vehicle_table_columns(table)
@@ -4111,13 +4133,15 @@ def kpi_vehicle_view_save(request: Request, payload: dict, user: str = Depends(r
 
 
 @router.get("/kpi/vehicles")
-def kpi_vehicles(request: Request, row_id: str, start: str, end: str,
+def kpi_vehicles(request: Request, row_id: str, start: str, end: str, count_only: bool = False,
                  user: str = Depends(require_page_api(*_KPI_PAGES))):
     """The vehicles behind one chart point: the chart's own table, date column
     and filters, with that table's Settings columns. A range list covers start
     to end (inclusive); a snapshot list is the single end day, so a weekly or
     monthly point on a per-vehicle-per-day table (stock) returns one day rather
-    than every vehicle times every day."""
+    than every vehicle times every day. count_only returns just how many
+    vehicles the list would hold (same table, dates and filters), for the
+    chart point popup."""
     try:
         start_date = datetime.date.fromisoformat(start)
         end_date = datetime.date.fromisoformat(end)
@@ -4165,6 +4189,15 @@ def kpi_vehicles(request: Request, row_id: str, start: str, end: str,
                 return {"status": "error", "message": str(e)}
             where.append(sql)
             params.extend(values)
+
+        if count_only:
+            with SnowflakeClient() as sf:
+                counted, _ = sf.execute(f"""
+                    SELECT COUNT(*)
+                    FROM {_VEHICLE_DB}.{table}
+                    WHERE {' AND '.join(where)}
+                """, params)
+            return {"status": "ok", "count": int(counted[0][0]) if counted else 0}
 
         select_cols = ", ".join(c["column"] for c in shown)
         # Grey-out check, read whether or not its columns are shown: one extra
