@@ -17,13 +17,17 @@ CREATE TABLE IF NOT EXISTS page_presence (
     page          VARCHAR(200) NOT NULL,  -- path after BASE_URL, e.g. '/kpi'
     last_seen_at  TIMESTAMP    NOT NULL DEFAULT NOW(),
     seq           INTEGER      NOT NULL DEFAULT 0,      -- per-tab message number; lower ones are ignored
-    left_tab      BOOLEAN      NOT NULL DEFAULT FALSE   -- tab closed/hidden; kept so its seq still counts
+    left_tab      BOOLEAN      NOT NULL DEFAULT FALSE,  -- tab closed/hidden; kept so its seq still counts
+    detail        VARCHAR(100) NOT NULL DEFAULT '',     -- where in the page, e.g. the KPI tab open
+    last_active_at TIMESTAMP                            -- the tab's last click or keypress
 );
 
--- For a table created before seq/left_tab existed.
+-- For a table created before seq/left_tab/detail/last_active_at existed.
 ALTER TABLE page_presence
     ADD COLUMN IF NOT EXISTS seq      INTEGER NOT NULL DEFAULT 0,
-    ADD COLUMN IF NOT EXISTS left_tab BOOLEAN NOT NULL DEFAULT FALSE;
+    ADD COLUMN IF NOT EXISTS left_tab BOOLEAN NOT NULL DEFAULT FALSE,
+    ADD COLUMN IF NOT EXISTS detail   VARCHAR(100) NOT NULL DEFAULT '',
+    ADD COLUMN IF NOT EXISTS last_active_at TIMESTAMP;
 
 CREATE INDEX IF NOT EXISTS idx_page_presence_page      ON page_presence (environment, page);
 CREATE INDEX IF NOT EXISTS idx_page_presence_last_seen ON page_presence (last_seen_at);

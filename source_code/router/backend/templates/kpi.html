@@ -92,6 +92,13 @@
         <button class="btn btn-edit admin-only" onclick="openChartModal(null)">
             <i class="fas fa-plus"></i> Add Chart
         </button>
+        {% if not wbr %}
+        <!-- Admin only: the KPI page's Snowflake queries, errors and slow requests. -->
+        <button class="btn btn-edit admin-only" onclick="openKpiLog()"
+                title="Snowflake queries, errors and slow requests from the KPI page only">
+            <i class="fas fa-list"></i> Log
+        </button>
+        {% endif %}
         {% endif %}
         <span class="status-text" id="statusText"></span>
     {% endcall %}
@@ -263,6 +270,10 @@
                 </button>
                 <span class="point-status" id="pointStatus"></span>
                 <div class="spacer" style="flex:1;"></div>
+                <button type="button" class="btn btn-edit" id="vehiclesColumnsBtn" onclick="openVehColumnSettings()" style="display:none;"
+                        title="Rename, reorder and format this table's columns in Settings">
+                    <i class="fas fa-cog"></i> Edit Columns
+                </button>
                 <button type="button" class="btn btn-csv" id="vehiclesCsvBtn" onclick="downloadVehiclesCsv()" style="display:none;">
                     <i class="fas fa-download"></i> CSV
                 </button>
@@ -693,6 +704,49 @@
         </div>
     </div>
 
+    {% if kpi_is_admin and not wbr %}
+    <!-- Admin only: the Logs page's entries for the KPI page (queries, errors,
+         SharePoint, slow requests), read from /logs/data with page=kpi. -->
+    <div class="modal-overlay" id="kpiLogModal">
+        <div class="modal-box kpi-log-modal">
+            <div class="chart-modal-head">
+                <h2><i class="fas fa-list"></i> KPI Log</h2>
+                <button type="button" class="modal-close-x" onclick="closeKpiLog()" aria-label="Close">&times;</button>
+            </div>
+            <div class="kpi-log-filters">
+                <label>Time
+                    <select id="kpiLogSince" onchange="loadKpiLog(0)">
+                        <option value="15">Last 15 Minutes</option><option value="60" selected>Last Hour</option>
+                        <option value="240">Last 4 Hours</option><option value="1440">Last 24 Hours</option>
+                        <option value="10080">Last 7 Days</option><option value="">Everything Kept</option>
+                    </select></label>
+                <label>Source
+                    <select id="kpiLogSource" onchange="loadKpiLog(0)">
+                        <option value="">All</option><option value="snowflake">Snowflake</option>
+                        <option value="app">App</option><option value="request">Slow Requests</option>
+                        <option value="sharepoint">SharePoint</option>
+                    </select></label>
+                <label>Level
+                    <select id="kpiLogLevel" onchange="loadKpiLog(0)">
+                        <option value="">All</option><option value="INFO">Info</option>
+                        <option value="WARNING">Warning</option><option value="ERROR">Error</option>
+                    </select></label>
+                <button type="button" class="btn btn-edit" onclick="loadKpiLog(0)"><i class="fas fa-sync-alt"></i> Refresh</button>
+                <span class="point-status" id="kpiLogStatus"></span>
+                <div class="spacer" style="flex:1;"></div>
+                <a class="btn btn-edit" href="{{ BASE_URL }}/logs?page=kpi" target="_blank">Open Full Log</a>
+            </div>
+            <div class="kpi-log-wrap">
+                <table class="vehicles-table" id="kpiLogTable"></table>
+            </div>
+            <div class="kpi-log-paging">
+                <button type="button" class="btn btn-edit" id="kpiLogNewer" onclick="pageKpiLog(-1)">Newer</button>
+                <button type="button" class="btn btn-edit" id="kpiLogOlder" onclick="pageKpiLog(1)">Older</button>
+            </div>
+        </div>
+    </div>
+    {% endif %}
+
     <!-- Chart notes: dated notes drawn as a dotted line on the charts -->
     <div class="modal-overlay" id="notesModal">
         <div class="modal-box notes-modal">
@@ -906,6 +960,10 @@
                  one sub-section at a time (listed under Charts in the menu on the left). -->
             <div class="settings-pane" id="setGroupCharts">
             <div class="chart-subpane" id="chartSubList">
+            <div class="veh-col-links">
+                <a href="#" onclick="setAllChartsHidden(false); return false;">Show All</a>
+                <a href="#" onclick="setAllChartsHidden(true); return false;">Hide All</a>
+            </div>
             <div id="chartList"></div>
             <div class="modal-hint">
                 Untick Show to hide a chart without deleting it; tick it again to bring it back.
@@ -1183,7 +1241,13 @@
             <div class="settings-pane" id="setGroupVehicles">
             <div class="modal-field">
                 <label for="vehTableSelect">Vehicle Table</label>
-                <select id="vehTableSelect" onchange="onVehTableChange()"></select>
+                <div style="display:flex; gap:8px; align-items:center;">
+                    <select id="vehTableSelect" onchange="onVehTableChange()" style="flex:1;"></select>
+                    <button type="button" class="btn btn-edit" id="vehRefreshColsBtn" onclick="refreshVehColumns()" disabled
+                            title="Read this table's columns from Snowflake now - use after a dbt run adds columns">
+                        <i class="fas fa-sync-alt"></i> Refresh Columns
+                    </button>
+                </div>
                 <div class="modal-hint">Each chart picks its own table in Edit Chart. Set up one table's columns here, Save, then switch to the next - each table is saved separately.</div>
             </div>
             <div class="modal-field">
@@ -1205,6 +1269,9 @@
             <div class="veh-cols">
                 <div>
                     <div class="veh-col-head" id="vehShownHead">Shown, In Order</div>
+                    <div class="veh-col-links">
+                        <a href="#" onclick="removeAllVehColumns(); return false;">Remove All</a>
+                    </div>
                     <div class="veh-col-list" id="vehShownList"></div>
                 </div>
                 <div>

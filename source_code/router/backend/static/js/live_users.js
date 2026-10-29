@@ -29,6 +29,21 @@
     let timer = null;
     let stopped = false;
 
+    // Last click or keypress in this tab (opening the page counts), sent with
+    // each heartbeat so the admin can see how long since someone did anything.
+    let lastActive = Date.now();
+    ['pointerdown', 'keydown'].forEach(type =>
+        document.addEventListener(type, () => { lastActive = Date.now(); }, { capture: true, passive: true }));
+
+    function agoText(seconds) {
+        if (seconds === null || seconds === undefined) return '';
+        if (seconds < 60) return 'Active just now';
+        const mins = Math.floor(seconds / 60);
+        if (mins < 60) return 'Active ' + mins + ' min ago';
+        const hours = Math.floor(mins / 60);
+        return 'Active ' + hours + ' hr ' + (mins % 60) + ' min ago';
+    }
+
     // Same colour for a person every time, on every page.
     function colourFor(username) {
         let h = 0;
@@ -92,7 +107,10 @@
             name.textContent = u.username === me ? u.name + ' (You)' : u.name;
             const where = document.createElement('div');
             where.className = 'live-users-list-pages';
-            where.textContent = u.pages ? u.pages.join(', ') : 'On This Page';
+            // One line per open place (the class keeps the line breaks).
+            where.textContent = (u.pages ? u.pages.join('\n')
+                : u.sections && u.sections.length ? u.sections.join('\n') : 'On This Page')
+                + (agoText(u.active_ago) ? '\n' + agoText(u.active_ago) : '');
             text.append(name, where);
             row.appendChild(text);
             list.appendChild(row);
@@ -114,7 +132,12 @@
         const others = users.filter(u => u.username !== me);
         const shown = others.length > maxCircles ? others.slice(0, maxCircles - 1) : others;
         // On Home the server sends the pages each person has open.
-        const here = u => u.pages ? u.name + ' - ' + u.pages.join(', ') : u.name + ' is here';
+        // Elsewhere, for the admin, the part of this page they have open. One
+        // line each under the name, so several open tabs are listed separately.
+        // For the admin, the last line is how long since their last click or keypress.
+        const lines = u => u.pages || (u.sections && u.sections.length ? u.sections : null);
+        const ago = u => (agoText(u.active_ago) ? '\n' + agoText(u.active_ago) : '');
+        const here = u => (lines(u) ? u.name + '\n' + lines(u).join('\n') : u.name + ' is here') + ago(u);
         own.concat(shown).forEach(u => box.appendChild(circle(u.initials, here(u), colourFor(u.username))));
         const rest = others.slice(shown.length);
         if (rest.length) {
@@ -147,7 +170,11 @@
             const resp = await fetch(heartbeatUrl, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ tab_id: tabId, seq: mySeq, page: page }),
+                // detail: where in the page this tab is, set by the page itself
+                // (window.livePresenceDetail, e.g. the KPI tab open).
+                body: JSON.stringify({ tab_id: tabId, seq: mySeq, page: page,
+                                       detail: String(window.livePresenceDetail || '').slice(0, 100),
+                                       idle_seconds: Math.round((Date.now() - lastActive) / 1000) }),
                 credentials: 'same-origin',
             });
             if (superseded()) return;
@@ -189,6 +216,9 @@
         if (stopped) return;
         if (document.visibilityState === 'visible') beat();
     });
+    // The page changed where this tab is (e.g. another KPI tab): check in now,
+    // so the admin sees it on their next refresh rather than a full interval later.
+    document.addEventListener('live-users-detail', () => { if (!stopped) beat(); });
     window.addEventListener('pagehide', leave);
     // Back/Forward can restore this page from the browser's memory after the
     // leave above; check in again so the circle comes back.
