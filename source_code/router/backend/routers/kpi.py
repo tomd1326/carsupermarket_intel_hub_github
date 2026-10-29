@@ -1127,10 +1127,16 @@ def _checked_data_source(entry: dict) -> dict:
 
 def _data_source_metrics(entry: dict) -> list:
     """The metric names a data source offers: a wide table's number columns,
-    or every name in a long table's name column, as stored (case kept)."""
+    or every name in a long or records table's name column, as stored (case
+    kept), in the source's saved Value Order."""
     _checked_data_source(entry)
     if entry["shape"] == "wide":
         return kds.wide_metric_columns(entry, _source_columns(entry["table"]))
+    return kds.order_names(_data_source_names(entry), entry.get("name_order"))
+
+
+def _data_source_names(entry: dict) -> list:
+    """Every name in a long or records table's name column, A-Z (cached)."""
     cached = _source_names_cache.get(entry["id"])
     if cached and time.time() - cached[0] < _SOURCE_META_TTL:
         return cached[1]
@@ -1145,8 +1151,14 @@ def _data_source_metrics(entry: dict) -> list:
                 FROM {_VEHICLE_DB}.{entry['table']}
                 WHERE {split} IS NOT NULL
                 ORDER BY 1
+                LIMIT {kds.NAMES_MAX + 1}
             """)
         names = [str(r[0]) for r in rows]
+        if len(names) > kds.NAMES_MAX:
+            # Saved before the check in kpi_data_source_save: offer no metrics
+            # rather than freeze the page, until the source is edited.
+            logger.warning(f"Data source {entry['id']}: {split} has over {kds.NAMES_MAX} names, none offered")
+            names = []
         _source_names_cache[entry["id"]] = (time.time(), names)
         return names
 
@@ -1218,10 +1230,12 @@ def kpi_data_sources_get(request: Request, user: str = Depends(require_page_api(
         layout = _read_kpi_layout_value('layout') or {}
         sources = _stored_data_sources()
         uses = {s["id"]: kds.references(layout, s["id"]) for s in sources}
+        # Metric counts are left at 0 here: the page counts them from the
+        # metric list it already has. Working them out here meant reading
+        # daily_summary's columns and every SharePoint KPI file, which made
+        # this tab take many seconds to open.
         built_in = kds.built_in_sources(
-            {"snowflake": len(_snowflake_metric_columns()),
-             "sharepoint": len(_sharepoint_metric_columns()),
-             "autotrader": len([c for c in _AT_METRICS if c not in _AT_HIDDEN_METRICS])},
+            {},
             {s: kds.references(layout, s) for s in KPI_SOURCES},
             sharepoint_sources.sources_of_type(sharepoint_sources.KPI_FILE_TYPE, enabled_only=False))
     except Exception as e:
@@ -1268,6 +1282,14 @@ def kpi_data_source_save(request: Request, payload: dict, user: str = Depends(re
                 return {"status": "error", "message":
                         f"{table} has more than one row for some dates. Choose One Row Per Date Per Name, "
                         "or a table with one row per date"}
+        else:
+            s = entry["split_column"]
+            with SnowflakeClient() as sf:
+                rows, _ = sf.execute(f"SELECT COUNT(DISTINCT {s}) FROM {_VEHICLE_DB}.{table}")
+            if rows and rows[0][0] > kds.NAMES_MAX:
+                return {"status": "error", "message":
+                        f"{s} has {rows[0][0]:,} different values, so each would be its own metric. "
+                        f"Choose a name column with at most {kds.NAMES_MAX} (e.g. a status column)"}
         entry = kds.clean_entry(entry)
         saved = [entry if s["id"] == entry["id"] else s for s in sources]
         if entry not in saved:
@@ -1359,6 +1381,8 @@ def kpi_metrics(request: Request, user: str = Depends(require_page_api(*_KPI_PAG
                 "source_name": entry["name"],
                 "column": col,
                 "description": f"From {entry['table']}",
+                # Stacked charts draw this source's series in its Value Order.
+                "ordered": bool(entry.get("name_order")),
                 "suggested_agg": _guess_agg(col),
                 "has_n1": True,
                 "has_target": False,
@@ -3780,7 +3804,13 @@ def _vehicle_view_for_table(stored, table: str) -> dict:
 
 
 def _vehicle_tables() -> list:
-    """Every table and view in the PRODUCT_ schemas, as SCHEMA.TABLE."""
+    """Every table and view in the PRODUCT_ schemas, as SCHEMA.TABLE. Listing
+    them takes a few seconds and this runs every time Settings or Edit Chart
+    opens, so the list is kept in the shared Aurora copy for 10 minutes (Load
+    Data clears it). A table built just now can take up to that long to show."""
+    cached = _read_shared_columns(_VEHICLE_TABLES_CACHE_KEY)
+    if cached is not None:
+        return [c[0] for c in cached]
     # Snowflake's LIKE has no default escape character, so the escape must be
     # named: without ESCAPE, 'PRODUCT\_%' looks for a literal backslash and
     # matches nothing, leaving the picker with only the table already chosen.
@@ -3791,7 +3821,10 @@ def _vehicle_tables() -> list:
             WHERE table_schema LIKE %s ESCAPE '!'
             ORDER BY table_schema, table_name
         """, ["PRODUCT!_%"])
-    return [f"{r[0]}.{r[1]}" for r in rows]
+    tables = [f"{r[0]}.{r[1]}" for r in rows]
+    if tables:
+        _write_shared_columns(_VEHICLE_TABLES_CACHE_KEY, [(t, "") for t in tables])
+    return tables
 
 
 # Column lists shared by every Lambda container through Aurora. Each container
@@ -3800,6 +3833,9 @@ def _vehicle_tables() -> list:
 # behind it takes 1-2.5 s (Logs page, 2026-10-20). Load Data clears it.
 _SHARED_COLUMNS_TTL = 600  # seconds
 _shared_columns_ready = False
+# The PRODUCT_ table list is kept in the same shared copy under this name (not
+# a valid SCHEMA.TABLE, so it can never clash with a real table).
+_VEHICLE_TABLES_CACHE_KEY = "__PRODUCT_TABLES__"
 
 
 def _shared_columns_table(conn) -> None:

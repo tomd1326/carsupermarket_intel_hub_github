@@ -1403,6 +1403,7 @@ def page_names_page(request: Request, user: str = Depends(get_current_user)):
         "site_name_key": core.SITE_NAME_KEY, "site_name_default": core.SITE_NAME_DEFAULT,
         "category_prefix": core.CATEGORY_PREFIX,
         "order_prefix": core.ORDER_PREFIX,
+        "hidden_prefix": core.HIDDEN_PREFIX,
         "categories_in_use": _categories_in_order(stored),
         "sections": SETTINGS_SECTIONS, "active_section": "page_names",
     })
@@ -1431,6 +1432,8 @@ async def save_page_names_route(request: Request, user: str = Depends(get_curren
         order = _order_number(form, f"order__{page.key}")
         if order is not None:
             names[core.ORDER_PREFIX + page.key] = str(order)
+        if form.get(f"hidden__{page.key}"):
+            names[core.HIDDEN_PREFIX + page.key] = '1'
     # Category order: the boxes on the page are catorder__<n> (category name in
     # catname__<n>). Categories with no number, or new ones typed in this save,
     # go after the numbered ones.
@@ -1503,7 +1506,8 @@ def page_access_page(request: Request, user: str = Depends(get_current_user)):
 
     return templates.TemplateResponse("page_access.html", {
         "request": request, "user": user, "BASE_URL": BASE_URL,
-        "pages": PAGES, "users": users, "access": access,
+        # Pages hidden on Settings > Page Names get no column.
+        "pages": core.visible_pages(), "users": users, "access": access,
         "admin_user": ADMIN_USERNAME,
         "sections": SETTINGS_SECTIONS, "active_section": "page_access",
     })
@@ -1547,6 +1551,9 @@ def save_page_access(
         # Only write rows that changed, so granted_at/granted_by keep showing
         # when each person's access was last really changed. A user never
         # saved before counts as having the defaults, the same as the grid shows.
+        # Hidden pages have no column on the grid, so nothing arrives for them:
+        # keep whatever each user already had, ready for when they are unhidden.
+        hidden = ALL_PAGE_KEYS - {p.key for p in core.visible_pages()}
         changed = {}
         for u, keys in submitted.items():
             rows = stored.get(u)
@@ -1554,6 +1561,7 @@ def save_page_access(
                 current = set(DEFAULT_PAGE_KEYS)
             else:
                 current = rows & ALL_PAGE_KEYS
+            keys = keys | (current & hidden)
             if keys != current:
                 changed[u] = keys
         set_page_access_many(conn, changed, granted_by=user)

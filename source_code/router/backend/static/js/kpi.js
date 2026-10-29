@@ -142,9 +142,12 @@
         document.getElementById('loadIcon').classList.add('spin');
         document.getElementById('loadBtn').disabled = true;
         try {
+            // After Ctrl+Shift+R the metric list kept from before the reload
+            // is used, so only the layout (a quick database read) is fetched.
+            const keptMetrics = keptReloadMetrics();
             const [layoutResp, metricsResp] = await Promise.all([
                 fetch(BASE_URL + '/kpi/layout').then(r => r.json()),
-                fetch(BASE_URL + '/kpi/metrics').then(r => r.json()),
+                keptMetrics ? { metrics: keptMetrics } : fetch(BASE_URL + '/kpi/metrics').then(r => r.json()),
                 loadWbrBudgetTargets(),
             ]);
             if (layoutResp.status !== 'ok') throw new Error(layoutResp.message || 'no layout returned');
@@ -183,7 +186,7 @@
             showLayoutError('Charts could not be shown', err);
             return;
         }
-        loadAll();
+        if (!restoreReloadData()) loadAll();
         // A link from the alerts bell opens the comment it is about.
         if (WBR && typeof WbrComments !== 'undefined') WbrComments.openFromLink();
     }
@@ -1889,6 +1892,56 @@
             });
     }
 
+    // Ctrl+Shift+R: reload the page for code changes (template, JS, CSS) but
+    // draw the charts from the data already loaded, with no chart queries. The
+    // data is kept in this tab's sessionStorage for the one reload. Load Data
+    // or its menu re-reads Snowflake and SharePoint when that is wanted.
+    const RELOAD_DATA_KEY = 'kpiReloadData';
+    const RELOAD_DATA_MAX_AGE_MS = 30 * 60 * 1000;
+    document.addEventListener('keydown', e => {
+        if (!(e.ctrlKey || e.metaKey) || !e.shiftKey || e.code !== 'KeyR') return;
+        e.preventDefault();
+        try {
+            sessionStorage.setItem(RELOAD_DATA_KEY, JSON.stringify({ at: Date.now(), path: location.pathname,
+                                                                     data: customRowData, metrics: metricsCatalogue }));
+        } catch (err) {
+            sessionStorage.removeItem(RELOAD_DATA_KEY);   // too big to keep: a normal load instead
+        }
+        location.reload();
+    });
+
+    // What Ctrl+Shift+R kept for this page, or null (none, another page, or too old).
+    function keptReloadState() {
+        let kept = null;
+        try { kept = JSON.parse(sessionStorage.getItem(RELOAD_DATA_KEY) || 'null'); } catch (err) { kept = null; }
+        return kept && kept.path === location.pathname && Date.now() - kept.at <= RELOAD_DATA_MAX_AGE_MS ? kept : null;
+    }
+
+    function keptReloadMetrics() {
+        const kept = keptReloadState();
+        return kept && Array.isArray(kept.metrics) && kept.metrics.length ? kept.metrics : null;
+    }
+
+    // True when the charts were drawn from data kept by Ctrl+Shift+R.
+    function restoreReloadData() {
+        const kept = keptReloadState();
+        sessionStorage.removeItem(RELOAD_DATA_KEY);
+        if (!kept) return false;
+        Object.assign(customRowData, kept.data || {});
+        const rows = shownRows();
+        // A chart with nothing kept (e.g. one added since) is fetched as usual.
+        if (!rows.length || rows.some(row => !customRowData[row.id])) return false;
+        if (!WBR) loadAtAllowance();
+        rows.forEach(row => renderCustomRow(row, customRowData[row.id]));
+        setPageLoading(false);
+        // init() spun and disabled Load Data for the load; no loadAll runs to
+        // undo that here, so do it now.
+        document.getElementById('loadBtn').disabled = false;
+        document.getElementById('loadIcon').classList.remove('spin');
+        document.getElementById('statusText').textContent = 'Redrawn from the data already loaded - Load Data re-reads Snowflake and SharePoint';
+        return true;
+    }
+
     // Redraw every row from its last response, e.g. after the window or label
     // angle changes, which need no new data.
     function renderAllFromCache() {
@@ -3231,8 +3284,74 @@
     // position, so a series keeps its colour when others are added after it.
     function seriesColours(row) {
         const theme = themeById(row.theme);
-        return (row.series || []).map((s, i) => s.colour || theme.colours[i] || SERIES_SPARE_COLOUR);
+        return orderedSeries(row.series || []).map((s, i) => s.colour || themeColourAt(theme, i));
     }
+
+    // A stacked chart's series with those from a data source that has a
+    // Value Order (Settings > Data Sources) put into that order, in the
+    // places those series take up; every other series stays where it is.
+    function orderedSeries(series) {
+        const rank = s => {
+            const m = metricsByKey[metricKey(s.source || 'snowflake', s.metric)];
+            return m && m.ordered ? metricsCatalogue.indexOf(m) : -1;
+        };
+        const slots = series.map((s, i) => (rank(s) >= 0 ? i : -1)).filter(i => i >= 0);
+        const sorted = slots.map(i => series[i]).sort((a, b) => rank(a) - rank(b));
+        const out = series.slice();
+        slots.forEach((slot, k) => { out[slot] = sorted[k]; });
+        return out;
+    }
+
+    // The theme's colour for series i. Past the last colour the theme goes
+    // round again in Office's own shades of it (as Excel charts do), so a long
+    // stack keeps distinct colours instead of turning grey. Each round is
+    // [lightness times, lightness plus]: darker 40%, lighter 20%, darker 20%,
+    // lighter 40%, darker 50%, lighter 30%, darker 30%, lighter 50%.
+    const THEME_ROUNDS = [[0.6, 0], [0.8, 0.2], [0.8, 0], [0.6, 0.4], [0.5, 0], [0.7, 0.3], [0.7, 0], [0.5, 0.5]];
+
+    function themeColourAt(theme, i) {
+        const colours = theme.colours || [];
+        if (!colours.length) return SERIES_SPARE_COLOUR;
+        const base = colours[i % colours.length];
+        const round = Math.floor(i / colours.length);
+        if (!round) return base;
+        const [mul, add] = THEME_ROUNDS[(round - 1) % THEME_ROUNDS.length];
+        return shadeLightness(base, mul, add);
+    }
+
+    // hex with its HSL lightness set to lightness * mul + add.
+    function shadeLightness(hex, mul, add) {
+        const n = parseInt(String(hex).slice(1), 16);
+        const [r, g, b] = [n >> 16 & 255, n >> 8 & 255, n & 255].map(c => c / 255);
+        const max = Math.max(r, g, b), min = Math.min(r, g, b), d = max - min;
+        let l = (max + min) / 2;
+        const s = d === 0 ? 0 : d / (1 - Math.abs(2 * l - 1));
+        let h = 0;
+        if (d) {
+            if (max === r) h = ((g - b) / d) % 6;
+            else if (max === g) h = (b - r) / d + 2;
+            else h = (r - g) / d + 4;
+        }
+        h = (h * 60 + 360) % 360;
+        l = Math.min(1, Math.max(0, l * mul + add));
+        const c = (1 - Math.abs(2 * l - 1)) * s;
+        const x = c * (1 - Math.abs((h / 60) % 2 - 1));
+        const m = l - c / 2;
+        const [r1, g1, b1] = h < 60 ? [c, x, 0] : h < 120 ? [x, c, 0] : h < 180 ? [0, c, x]
+            : h < 240 ? [0, x, c] : h < 300 ? [x, 0, c] : [c, 0, x];
+        return '#' + [r1, g1, b1].map(v => Math.round((v + m) * 255).toString(16).padStart(2, '0')).join('');
+    }
+
+    // The top three Office chart themes (their six accent colours), offered
+    // by Settings > Colour Themes > Add Office Themes.
+    const OFFICE_THEMES = [
+        { id: 'office', name: 'Office',
+          colours: ['#156082', '#e97132', '#196b24', '#0f9ed5', '#a02b93', '#4ea72e'] },
+        { id: 'office-2013', name: 'Office 2013 - 2022',
+          colours: ['#4472c4', '#ed7d31', '#a5a5a5', '#ffc000', '#5b9bd5', '#70ad47'] },
+        { id: 'office-2007', name: 'Office 2007 - 2010',
+          colours: ['#4f81bd', '#c0504d', '#9bbb59', '#8064a2', '#4bacc6', '#f79646'] },
+    ];
 
     // A colour mixed halfway towards white: the default for the part of a
     // split series above its split point.
@@ -3252,7 +3371,7 @@
     function plotSeries(row) {
         const colours = seriesColours(row);
         const out = [];
-        (row.series || []).forEach((s, i) => {
+        orderedSeries(row.series || []).forEach((s, i) => {
             if (!hasSplit(s)) { out.push({ s, colour: colours[i], name: seriesLabel(s), split: null }); return; }
             const at = { source: s.split_at.source || 'snowflake', metric: s.split_at.metric };
             out.push({ s, colour: colours[i], name: seriesLabel(s), split: { ...at, part: 'lower' } });
@@ -3719,7 +3838,9 @@
             el.innerHTML = blank + allMetricGroups();
             el.value = value;
         };
-        refill('metricSelect', '');
+        const keepKey = document.getElementById('metricSelect').value;
+        const keepSource = keepKey.slice(0, keepKey.indexOf('|'));
+        renderMetricSelect(fillMetricSourceSelect(metricSources().includes(keepSource) ? keepSource : null), keepKey);
         refill('divideSelect', '<option value="">(nothing - plain chart)</option>');
         refill('multiplySelect', '<option value="">(nothing)</option>');
         renderPlusLists();
@@ -3738,6 +3859,34 @@
     // Every source's group of options, built by group(source).
     function allMetricGroups(group = metricGroupHtml) {
         return metricSources().map(group).join('');
+    }
+
+    // Edit Chart's Table list, then its Metric list showing only that table's
+    // metrics. keepKey: the metric to show chosen (a saved chart's), which is
+    // kept in the list even if it has gone from the table.
+    function fillMetricSourceSelect(source) {
+        const sources = metricSources().filter(s => metricsCatalogue.some(m => m.source === s));
+        if (source && !sources.includes(source)) sources.unshift(source);
+        const select = document.getElementById('metricSourceSelect');
+        select.innerHTML = sources.map(s => `<option value="${escHtml(s)}">${escHtml(sourceLabel(s))}</option>`).join('');
+        select.value = source && sources.includes(source) ? source : (sources[0] || '');
+        return select.value;
+    }
+
+    function renderMetricSelect(source, keepKey = '') {
+        const select = document.getElementById('metricSelect');
+        select.innerHTML = metricGroupHtml(source);
+        if (keepKey && !metricsByKey[keepKey] && keepKey.startsWith(source + '|')) {
+            select.insertAdjacentHTML('afterbegin',
+                `<option value="${escHtml(keepKey)}">${escHtml(keepKey.slice(source.length + 1))}</option>`);
+        }
+        if (keepKey && [...select.options].some(o => o.value === keepKey)) select.value = keepKey;
+        filterMetricSelect(document.getElementById('metricSearch').value);
+    }
+
+    function onMetricSourceChange() {
+        renderMetricSelect(document.getElementById('metricSourceSelect').value);
+        onMetricChange();
     }
 
     // Edit Chart's metric search: hides the options that do not contain the
@@ -3861,14 +4010,12 @@
 
         // Metric list. Can be changed on an existing chart (e.g. a copy pointed
         // at another metric); the chart then uses the new metric's targets.
+        // Table first, then that table's metrics. A saved metric that has gone
+        // from its table stays in the list for this chart.
         const metricSelect = document.getElementById('metricSelect');
-        metricSelect.innerHTML = allMetricGroups();
         document.getElementById('metricSearch').value = '';
-        if (row && !metricsByKey[metricKey(rowSource(row), row.metric)]) {
-            // The column has gone from the list; keep it showing for this chart.
-            metricSelect.insertAdjacentHTML('afterbegin',
-                `<option value="${escHtml(metricKey(rowSource(row), row.metric))}">${escHtml(row.metric)}</option>`);
-        }
+        renderMetricSelect(fillMetricSourceSelect(row ? rowSource(row) : null),
+                           row ? metricKey(rowSource(row), row.metric) : '');
 
         // Divide-by list: the same metrics, plus "nothing" for a plain chart.
         // Unlike the metric it can change later — a ratio chart's target is
@@ -4022,7 +4169,10 @@
         vehViewColumns = null;
         document.getElementById('vehTableHint').textContent = 'Loading the table columns...';
         renderVehSetup();
-        return fetchVehicleColumns(table).then(resp => {
+        // Greyed until the table list and its columns have arrived.
+        const tableSelect = document.getElementById('vehChartTableSelect');
+        tableSelect.disabled = true;
+        return fetchVehicleColumns(table).finally(() => { tableSelect.disabled = false; }).then(resp => {
             if (!chartModalState) return;
             vehColumns = resp.columns;
             vehViewColumns = (resp.view && resp.view.columns) || [];
@@ -4462,9 +4612,11 @@
     function openChartTypeSetup(row) {
         const stacked = !!row && isStacked(row);
         document.getElementById('chartTypeSelect').value = stacked ? 'stacked' : 'line';
-        seriesDraft = stacked ? JSON.parse(JSON.stringify(row.series || [])) : [];
+        // Shown in the order the chart draws them (data source Value Orders applied).
+        seriesDraft = stacked ? JSON.parse(JSON.stringify(orderedSeries(row.series || []))) : [];
         // The name box shows the shared column name.
         seriesDraft.forEach(s => { s.label = seriesBoxName(s); });
+        fillAddAllSources();
         document.getElementById('themeSelect').innerHTML = themes.map(t =>
             `<option value="${escHtml(t.id)}">${escHtml(t.name)}</option>`).join('');
         document.getElementById('themeSelect').value = stacked && row.theme ? row.theme : (themes[0] ? themes[0].id : '');
@@ -4541,7 +4693,7 @@
                 <span>Metric</span><span>Multiplied By</span><span>Legend Name</span>
                 <span></span><span></span><span></span><span></span><span></span><span></span><span></span></div>` : '';
         document.getElementById('seriesList').innerHTML = head + seriesDraft.map((s, i) => {
-            const themeColour = theme.colours[i] || SERIES_SPARE_COLOUR;
+            const themeColour = themeColourAt(theme, i);
             const colour = s.colour || themeColour;
             return `
                 <div class="series-row">
@@ -4647,6 +4799,33 @@
 
     function addSeries() {
         seriesDraft.push({ source: 'snowflake', metric: '', label: '', colour: null });
+        renderSeriesList();
+    }
+
+    // Add All From...: one series for every metric of the chosen data source
+    // (e.g. one per valuation status), skipping ones already in the list.
+    // Same limit as the server's (_KPI_SERIES_MAX).
+    const SERIES_MAX = 12;
+
+    function fillAddAllSources() {
+        const select = document.getElementById('addAllSource');
+        const sources = metricSources().filter(s => metricsCatalogue.some(m => m.source === s));
+        select.innerHTML = '<option value="">Add All From...</option>'
+            + sources.map(s => `<option value="${escHtml(s)}">${escHtml(sourceLabel(s))}</option>`).join('');
+    }
+
+    function addAllSeries(source) {
+        document.getElementById('addAllSource').value = '';
+        if (!source) return;
+        const have = new Set(seriesDraft.map(s => metricKey(s.source || 'snowflake', s.metric)));
+        const fresh = metricsCatalogue.filter(m => m.source === source && !have.has(metricKey(m.source, m.column)));
+        const room = SERIES_MAX - seriesDraft.length;
+        fresh.slice(0, Math.max(room, 0)).forEach(m => {
+            const series = { source: m.source, metric: m.column, label: '', colour: null };
+            series.label = seriesBoxName(series);
+            seriesDraft.push(series);
+        });
+        if (fresh.length > room) showChartError(`Only ${SERIES_MAX} series fit in a chart: ${fresh.length - Math.max(room, 0)} not added.`);
         renderSeriesList();
     }
 
@@ -6126,6 +6305,9 @@
                                oninput="themeDraft[${i}].transparency = this.value"> %
                     </label>
                     <span class="theme-uses">${n} chart${n === 1 ? '' : 's'}</span>
+                    <button type="button" class="btn btn-edit" onclick="applyThemeToAll(${i})"
+                            title="${themes.some(x => x.id === t.id) ? 'Use this theme on every stacked chart' : 'Save the settings first, then apply it'}"
+                            ${themes.some(x => x.id === t.id) ? '' : 'disabled'}>Apply To All Charts</button>
                     <button type="button" class="btn btn-remove-chart" title="Delete theme" onclick="removeThemeDraft(${i})"
                             ${themeDraft.length === 1 ? 'disabled' : ''}><i class="fas fa-trash"></i></button>
                 </div>`;
@@ -6135,6 +6317,31 @@
     function addThemeDraft() {
         themeDraft.push({ id: 't' + Date.now().toString(36), name: 'New theme', colours: ['#2a78d6', '#eb6834', '#1baf7a'] });
         renderThemeDraft();
+    }
+
+    // Adds whichever of the Office themes the list does not have yet.
+    function addOfficeThemes() {
+        const have = new Set(themeDraft.map(t => t.id));
+        const fresh = OFFICE_THEMES.filter(t => !have.has(t.id));
+        if (themeDraft.length + fresh.length > 30) { alert('At most 30 colour themes: delete some first.'); return; }
+        fresh.forEach(t => themeDraft.push(JSON.parse(JSON.stringify(t))));
+        renderThemeDraft();
+    }
+
+    // Sets a saved theme on every stacked chart, and saves the layout.
+    async function applyThemeToAll(i) {
+        const t = themeDraft[i];
+        const charts = layout.rows.filter(isStacked);
+        if (!charts.length || !confirm(`Use "${t.name}" on all ${charts.length} stacked chart${charts.length === 1 ? '' : 's'}?`)) return;
+        const rows = layout.rows.map(r => (isStacked(r) ? { ...r, theme: t.id } : r));
+        try {
+            await saveLayout(rows);
+            layout.rows = rows;
+            redrawStackedFromCache();
+            renderThemeDraft();
+        } catch (err) {
+            alert('Could not apply the theme: ' + err.message);
+        }
     }
 
     function removeThemeDraft(i) {
@@ -6365,7 +6572,10 @@
         try {
             const resp = await fetch(BASE_URL + '/kpi/data-sources').then(r => r.json());
             if (resp.status !== 'ok') throw new Error(resp.message || 'The data sources could not be read');
-            dsState.builtIn = resp.built_in || [];
+            // Counted here from the metric list loaded with the page (the
+            // server leaves them at 0 so this tab opens quickly).
+            dsState.builtIn = (resp.built_in || []).map(s => ({
+                ...s, metrics: metricsCatalogue.filter(m => m.source === s.id).length }));
             dsState.sources = resp.sources || [];
             dsState.uses = resp.uses || {};
         } catch (err) {
@@ -6482,7 +6692,9 @@
             const uses = dsState.uses[s.id] || 0;
             const detail = s.shape === 'long'
                 ? `${s.table} - one row per date per ${s.split_column}, figures from ${s.value_column}`
-                : `${s.table} - one row per date`;
+                : s.shape === 'records'
+                    ? `${s.table} - one row per record, counted per date by ${s.split_column}`
+                    : `${s.table} - one row per date`;
             const used = uses ? ` - used in ${uses} place${uses === 1 ? '' : 's'}` : '';
             return `<div class="ds-row">
                 <strong>${escHtml(s.name)}</strong>
@@ -6523,9 +6735,54 @@
         fillDsSelect('dsTable', dsState.tables || [], '', '(choose a table)');
     }
 
+    // Value Order: the name column's values for the source being edited, in
+    // their saved order (the metric list already comes back in it). A new
+    // source has no values until it is saved.
+    function renderDsOrder() {
+        const el = document.getElementById('dsOrderList');
+        const s = dsState.editId && dsState.sources.find(x => x.id === dsState.editId);
+        const same = s && s.table === document.getElementById('dsTable').value
+            && s.split_column === document.getElementById('dsSplit').value;
+        if (!same) {
+            dsState.order = null;
+            el.innerHTML = '<div class="modal-hint">Save the data source, then edit it to set the order of its values.</div>';
+            return;
+        }
+        if (!dsState.order) dsState.order = metricsCatalogue.filter(m => m.source === s.id).map(m => m.column);
+        const last = dsState.order.length - 1;
+        el.innerHTML = dsState.order.map((n, i) => `
+            <div class="ds-order-row">
+                <span>${escHtml(metricName(s.id, n))}</span>
+                <button type="button" class="btn btn-sm btn-edit" title="Send to the top of this list (bottom of the stack)" onclick="sendDsOrder(${i}, 0)"
+                        ${i === 0 ? 'disabled' : ''}><i class="fas fa-angle-double-up"></i></button>
+                <button type="button" class="btn btn-sm btn-edit" title="Move down the stack" onclick="moveDsOrder(${i}, -1)"
+                        ${i === 0 ? 'disabled' : ''}><i class="fas fa-arrow-up"></i></button>
+                <button type="button" class="btn btn-sm btn-edit" title="Move up the stack" onclick="moveDsOrder(${i}, 1)"
+                        ${i === last ? 'disabled' : ''}><i class="fas fa-arrow-down"></i></button>
+                <button type="button" class="btn btn-sm btn-edit" title="Send to the bottom of this list (top of the stack)" onclick="sendDsOrder(${i}, ${last})"
+                        ${i === last ? 'disabled' : ''}><i class="fas fa-angle-double-down"></i></button>
+            </div>`).join('') || '<div class="modal-hint">No values found.</div>';
+    }
+
+    // Takes value i out and puts it at position to (0 = first, the bottom of the stack).
+    function sendDsOrder(i, to) {
+        if (!dsState.order || i === to) return;
+        const [n] = dsState.order.splice(i, 1);
+        dsState.order.splice(to, 0, n);
+        renderDsOrder();
+    }
+
+    function moveDsOrder(i, step) {
+        const j = i + step;
+        if (!dsState.order || j < 0 || j >= dsState.order.length) return;
+        [dsState.order[i], dsState.order[j]] = [dsState.order[j], dsState.order[i]];
+        renderDsOrder();
+    }
+
     async function editDataSource(id) {
         const s = dsState.sources.find(x => x.id === id);
         if (!s) return;
+        dsState.order = null;
         document.getElementById('dataSourceForm').style.display = '';
         document.getElementById('dataSourceOpenBtn').style.display = 'none';
         dsState.editId = id;
@@ -6564,8 +6821,10 @@
     // keep: the entry being edited, whose columns are chosen; otherwise the
     // usual names (DT / DATE, EVENT_NAME) are picked where the table has them.
     function renderDataSourceColumns(keep = null) {
-        const long = document.getElementById('dsShape').value === 'long';
-        document.querySelectorAll('#setGroupDataSources .ds-long-only').forEach(el => { el.style.display = long ? '' : 'none'; });
+        const shape = document.getElementById('dsShape').value;
+        // Name column: long and records tables. Value column: long tables only.
+        document.querySelectorAll('#setGroupDataSources .ds-long-only').forEach(el => { el.style.display = shape !== 'wide' ? '' : 'none'; });
+        document.querySelectorAll('#setGroupDataSources .ds-value-only').forEach(el => { el.style.display = shape === 'long' ? '' : 'none'; });
         const cols = dsState.columns;
         const dates = cols.filter(c => DS_DATE_TYPES.includes(c.type)).map(c => c.column);
         const numbers = cols.filter(c => DS_NUMBER_TYPES.includes(c.type)).map(c => c.column);
@@ -6578,9 +6837,13 @@
         fillDsSelect('dsDate', dates, pick('dsDate', dates, 'date_column', ['DT', 'DATE']), '(choose the date column)');
         const date = current('dsDate');
         const names = all.filter(c => c !== date);
-        fillDsSelect('dsSplit', names, pick('dsSplit', names, 'split_column', ['EVENT_NAME']), '(choose the name column)');
+        // No first-column fallback here: that is often an id column, one name per row.
+        const splitWanted = keep ? keep.split_column
+            : (names.includes(current('dsSplit')) ? current('dsSplit') : ['EVENT_NAME'].find(g => names.includes(g)) || '');
+        fillDsSelect('dsSplit', names, splitWanted, '(choose the name column)');
         const values = numbers.filter(c => c !== date && c !== current('dsSplit'));
         fillDsSelect('dsValue', values, pick('dsValue', values, 'value_column', ['EVENT_VOLUME']), '(choose the value column)');
+        renderDsOrder();
     }
 
     // Reads the metric lists again, e.g. after a data source is added.
@@ -6593,17 +6856,16 @@
     }
 
     async function saveDataSource() {
-        const long = document.getElementById('dsShape').value === 'long';
+        const shape = document.getElementById('dsShape').value;
         const entry = {
             name: document.getElementById('dsName').value.trim(),
             table: document.getElementById('dsTable').value,
-            shape: long ? 'long' : 'wide',
+            shape,
             date_column: document.getElementById('dsDate').value,
         };
-        if (long) {
-            entry.split_column = document.getElementById('dsSplit').value;
-            entry.value_column = document.getElementById('dsValue').value;
-        }
+        if (shape !== 'wide') entry.split_column = document.getElementById('dsSplit').value;
+        if (shape === 'long') entry.value_column = document.getElementById('dsValue').value;
+        if (shape !== 'wide' && dsState.order && dsState.order.length) entry.name_order = dsState.order;
         if (dsState.editId) entry.id = dsState.editId;
         showDataSourceError('');
         setDataSourceBusy(`Checking ${entry.table || 'the table'} and saving...`);
@@ -6625,6 +6887,9 @@
         closeDataSourceForm();
         await loadDataSourcesTab();
         await reloadMetricsCatalogue();
+        // A changed Value Order changes the stacks: their data is fetched in
+        // draw order, so fetch again rather than redraw from the old data.
+        if (entry.name_order) loadAll();
     }
 
     async function deleteDataSource(id) {
@@ -6727,9 +6992,15 @@
             };
             renderGreyRules();
             renderVehQuickFilters();
+            // Tables already set up (saved columns) listed apart from the rest,
+            // which are only for setting up a new one.
             const select = document.getElementById('vehTableSelect');
-            const tables = resp.tables.includes(resp.table) ? resp.tables : [resp.table, ...resp.tables];
-            select.innerHTML = tables.map(t => `<option value="${escHtml(t)}">${escHtml(t)}</option>`).join('');
+            const configured = [...new Set((resp.views || []).map(v => v.table))].sort();
+            if (!configured.includes(resp.table) && !resp.tables.includes(resp.table)) configured.unshift(resp.table);
+            const others = resp.tables.filter(t => !configured.includes(t));
+            const options = list => list.map(t => `<option value="${escHtml(t)}">${escHtml(t)}</option>`).join('');
+            select.innerHTML = (configured.length ? `<optgroup label="Already Set Up">${options(configured)}</optgroup>` : '')
+                + (others.length ? `<optgroup label="Set Up A New Table">${options(others)}</optgroup>` : '');
             select.value = resp.table;
             renderVehColumnDraft();
         } catch (err) {

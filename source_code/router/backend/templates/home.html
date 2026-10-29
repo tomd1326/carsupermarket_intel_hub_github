@@ -27,11 +27,15 @@
             align-items: center;
             padding: {{ h.home_pad_top }}px {{ h.home_pad_side }}px {{ h.home_pad_bottom }}vh;
         }
+        {# A grid, not a wrapping row: the block of buttons is centred under the
+           title, but each row fills from the left, so a short last row lines
+           up with the rows above instead of sitting in the middle. #}
         .menu-grid {
-            display: flex;
-            flex-wrap: wrap;
+            display: grid;
+            grid-template-columns: repeat(auto-fill, {{ h.home_btn_width }}px);
             justify-content: center;
             gap: {{ h.home_grid_gap }}px;
+            width: 100%;
             max-width: {{ h.home_grid_max_width }}px;
         }
         .brand-logo {

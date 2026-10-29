@@ -1157,18 +1157,33 @@ const BASE_URL = window.BASE_URL;
             });
         }
 
-        function openVehicleModal(dimKey, label, period) {
+        // Top bar Search VRM (Enter): the popup with just that vehicle's rows,
+        // from everything loaded, whatever the filters and lens. An exact
+        // match first; failing that, every VRM containing the text.
+        function searchVrm() {
+            const box = document.getElementById('vrm-search');
+            const q = box.value.replace(/\s+/g, '').toUpperCase();
+            if (!q) return;
+            const norm = r => String(r.vrm || '').replace(/\s+/g, '').toUpperCase();
+            let rows = allRows.filter(r => norm(r) === q);
+            if (!rows.length) rows = allRows.filter(r => norm(r).includes(q));
+            openVehicleModal(null, null, null, { rows, heading: 'VRM', label: box.value.trim().toUpperCase() });
+        }
+
+        // override: { rows, heading, label } to show given rows (Search VRM)
+        // rather than a summary group's.
+        function openVehicleModal(dimKey, label, period, override = null) {
             closeVehicleModal();
-            modalRows = rowsForSummaryGroup(dimKey, label, period);
+            modalRows = override ? override.rows : rowsForSummaryGroup(dimKey, label, period);
             modalSortKey = 'description';
             modalSortDir = 1;
             modalVrmQuery = '';   // each open starts showing the whole group
 
             const dim = SUMMARY_DIMENSIONS.find(d => d.key === dimKey);
-            const heading = dim
+            const heading = override ? override.heading : dim
                 ? (dim.key === '__period' ? slicerHeadingApplied('period') : dim.heading)
                 : '';
-            let shownLabel = label === GRAND_TOTAL_LABEL
+            let shownLabel = override ? override.label : label === GRAND_TOTAL_LABEL
                 ? 'Grand Total'
                 : (dimKey === '__period' ? periodDisplayLabel(label) : label);
             // From an expanded sub-row: name both the group and the period, so
@@ -1718,6 +1733,10 @@ const BASE_URL = window.BASE_URL;
         let fetchStartIso = null;
         let periodDefaulted = false;
         function defaultPeriodFilter(today) {
+            // A page left open past midnight: the new day can start a new
+            // period, so the selection is reset to the default for today
+            // rather than staying on yesterday's periods.
+            if (periodDefaulted && todayIso && today && today !== todayIso) periodDefaulted = false;
             todayIso = today;
             // Only set once per page load — a manual refresh must not stomp a
             // user's own period selection. Switching granularity resets it
@@ -2223,7 +2242,19 @@ const BASE_URL = window.BASE_URL;
             }
         }
 
-        function refreshData() { load(true); }
+        // Refresh Data starts clean: every filter cleared and the period back to
+        // today's default, so nobody is left looking at a filter set earlier
+        // (e.g. in a tab left open overnight) and taking it for the full figures.
+        // The Lens / View / Group By buttons show their staged choice; Refresh
+        // also commits it, so the figures always match what the buttons show.
+        function refreshData() {
+            SLICERS.forEach(s => slicerSel[s.key].clear());
+            periodDefaulted = false;
+            lensApplied = lensPending;
+            viewApplied = viewPending;
+            granularityApplied = granularityPending;
+            load(true);
+        }
 
         document.querySelectorAll('#lens-toggle button').forEach(b =>
             b.addEventListener('click', () => setLens(b.dataset.lens)));

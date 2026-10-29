@@ -92,7 +92,7 @@
    popups (3vh, not 10vh). */
 #chartModal { padding-top: 3vh; }
 .modal-box.chart-modal { width: 1100px; max-width: 97vw; max-height: 95vh; display: flex; flex-direction: column; }
-.chart-modal-body { display: flex; gap: 22px; min-height: 0; flex: 1; }
+.chart-modal-body { display: flex; gap: 22px; min-height: 0; flex: 1; margin-top: 14px; }
 .chart-tabs { display: flex; flex-direction: column; gap: 4px; width: 170px; flex: none; }
 .chart-tabs button {
     text-align: left; padding: 8px 12px; border: 1px solid transparent; border-radius: 8px;
@@ -376,10 +376,15 @@
     width: 100%; min-width: 0; padding: 5px 8px; border: 1px solid #cbd5e1; border-radius: 6px; background: #fff; font-size: 0.82rem;
 }
 .veh-filter .btn { padding: 3px 9px; font-size: 0.78rem; }
-/* Columns Shown tick list (Edit Chart > View Vehicles). */
+/* Columns Shown tick list (Edit Chart > View Vehicles). By id: the Settings
+   column lists share the .veh-col-list class but are one row per column, and
+   this grid squeezed their rows into 200px cells on top of each other. */
 .veh-col-links { display: flex; gap: 12px; font-size: 0.76rem; margin-bottom: 4px; }
-.veh-col-list {
+#vehColumnList {
+    /* height auto: not the Settings lists' fixed 340px, which stretched a
+       short list's rows apart; rows packed at the top. */
     display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 2px 12px; max-height: 220px; overflow: auto;
+    height: auto; align-content: start;
     border: 1px solid #cbd5e1; border-radius: 6px; padding: 6px 8px; background: #fff;
 }
 .veh-col-list label { display: flex; gap: 6px; align-items: center; font-size: 0.82rem; font-weight: 400; color: #0f172a; }
@@ -534,6 +539,9 @@
    label in it (Settings > Appearance, "Top bar size"); padding is in
    em so it grows with the text. */
 .kpi-top-bar { position: sticky; top: 0; z-index: 100; }
+/* Settings > Data Sources > Value Order: one row per value, with arrows. */
+.ds-order-row { display: flex; align-items: center; gap: 6px; padding: 2px 0; font-size: 0.85rem; }
+.ds-order-row span { min-width: 220px; }
 /* Load Data's menu (Admin View): a caret beside the button, opening a list. */
 .load-menu { position: relative; display: inline-block; margin-left: -6px; }
 .load-menu-btn { padding-left: 8px; padding-right: 8px; }
@@ -546,6 +554,10 @@
 .load-menu-list button i { width: 1.2em; color: #475569; }
 .load-menu-list button span { display: block; margin-left: 1.6em; font-size: 0.75rem; font-weight: 400; color: #64748b; }
 .kpi-top-bar .btn { font-size: var(--kpi-toolbar-font, 0.88rem); line-height: 1.3; padding: 0.45em 1em; }
+/* Load Data and its caret: one fixed height (one text line + padding +
+   border), so the caret, which holds only an icon, matches the button. */
+.kpi-top-bar #loadBtn, .kpi-top-bar .load-menu-btn {
+    height: calc(2.2em + 2px); display: inline-flex; align-items: center; gap: 0.35em; }
 .kpi-top-bar .view-toggle button { font-size: var(--kpi-toolbar-font, 0.88rem); line-height: 1.3; padding: 0.3em 0.9em; }
 .kpi-top-bar .status-text, .kpi-top-bar .account-nav { font-size: var(--kpi-toolbar-font, 0.88rem); }        /* Data Labels On / Off on each chart row: the same switch, sized to the
    row's other buttons. Its own class, since setPageView() resets every
