@@ -63,7 +63,8 @@
                     </div>
                     <table class="table table-sm table-bordered pn-table mb-0">
                         <thead class="table-light">
-                            <tr><th>Default Name</th><th>Name Shown</th><th>Menu Category</th><th>Menu Order</th></tr>
+                            <tr><th>Default Name</th><th>Name Shown</th><th>Menu Category</th><th>Menu Order</th>
+                                <th title="Hidden from the home page, the menu and Page Access, and only you can open it. Everyone's access is kept for when you untick it">Hidden</th></tr>
                         </thead>
                         <tbody>
                             {% for page in pages %}
@@ -87,6 +88,10 @@
                                     <input type="number" class="form-control form-control-sm"
                                            name="order__{{ page.key }}" min="1" max="999" step="1"
                                            value="{{ stored.get(order_prefix ~ page.key, '') }}">
+                                </td>
+                                <td class="text-center" style="width: 80px;">
+                                    <input type="checkbox" class="form-check-input" name="hidden__{{ page.key }}" value="1"
+                                           {% if stored.get(hidden_prefix ~ page.key) == '1' %}checked{% endif %}>
                                 </td>
                             </tr>
                             {% endfor %}
