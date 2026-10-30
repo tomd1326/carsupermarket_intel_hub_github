@@ -39,6 +39,8 @@ let cellRules = [];
 let sortCol = null;
 let sortAsc = true;
 let shownRows = [];
+let appearance = { font_size: 12, auto_width: true };
+let autoWidths = {};
 const activeFilters = {};
 const FILTER_DROPDOWN_OVER = 15;
 const BLANK_KEY = '__BLANK__';
@@ -81,6 +83,8 @@ async function fetchData(force = false) {
         }
         customFilters = data.filters || [];
         cellRules = data.cell_rules || [];
+        appearance = data.appearance || appearance;
+        await applyAppearance();
         buildHeader();
         buildCustomFilters();
         setStatus('done');
@@ -121,39 +125,54 @@ async function fetchData(force = false) {
 /* ── Live Update (admin only) ────────────────────────────────────────────── */
 const LIVE_UPDATE_RECIPE = 'apex_missing_finance';
 
+// The start form and the run's steps/logs are in separate boxes, so the last
+// run stays readable from the Log button after the popup closes itself.
+const LU_OPTS = { reload: true, onDone: () => fetchData(true), closeModal: 'liveUpdateModal', logButton: 'lu-log-btn' };
+
 function liveUpdateBox() {
     return document.getElementById('live-update-box');
 }
 
+function liveUpdateModal() {
+    return bootstrap.Modal.getOrCreateInstance(document.getElementById('liveUpdateModal'));
+}
+
 function followLiveUpdate(runId) {
-    liveUpdateFollow(BASE_URL, runId, liveUpdateBox(), { onDone: () => fetchData(true) });
+    liveUpdateFollow(BASE_URL, runId, liveUpdateBox(), LU_OPTS);
+}
+
+function openLiveUpdateLog() {
+    document.getElementById('live-update-start').innerHTML = '';
+    liveUpdateModal().show();
 }
 
 async function openLiveUpdate() {
-    const modal = bootstrap.Modal.getOrCreateInstance(document.getElementById('liveUpdateModal'));
-    modal.show();
+    liveUpdateModal().show();
     const box = liveUpdateBox();
+    const start = document.getElementById('live-update-start');
     if (box.dataset.luRun) return;   // a run is already showing
     try {
         const cfg = await apiGetJson(BASE_URL + '/api/live-update/config?recipe=' + LIVE_UPDATE_RECIPE);
-        if (cfg.open_run_id) { followLiveUpdate(cfg.open_run_id); return; }
+        if (cfg.open_run_id) { start.innerHTML = ''; followLiveUpdate(cfg.open_run_id); return; }
         const recipe = (cfg.recipes || []).find(r => r.recipe_key === LIVE_UPDATE_RECIPE);
         if (!recipe) throw new Error('the Apex Missing Finance recipe is missing - add it in Settings > Live Update');
-        box.innerHTML = `<p class="mb-2">Pulls <strong>${recipe.endpoints.join('</strong> and <strong>')}</strong> from Apex for
+        box.innerHTML = '';
+        start.innerHTML = `<p class="mb-2">Pulls <strong>${recipe.endpoints.join('</strong> and <strong>')}</strong> from Apex for
             the last <input type="number" id="lu-lookback" min="1" max="720" value="${recipe.lookback_hours}" style="width:60px"> hours,
-            rebuilds the tables up to this report in PROD, checks each step, then reloads the table here.</p>
+            rebuilds the tables up to this report in PROD, checks each step, then reloads the table here.
+            The popup closes when it has finished cleanly; Log shows it again.</p>
             <button class="btn btn-primary btn-sm" id="lu-go"><i class="fas fa-bolt me-1"></i>Start Live Update</button>`;
         document.getElementById('lu-go').onclick = async () => {
             const lookback = document.getElementById('lu-lookback').value;
+            start.innerHTML = '';
             try {
-                await liveUpdateStart(BASE_URL, LIVE_UPDATE_RECIPE, box,
-                                      { lookback, reload: true, onDone: () => fetchData(true) });
+                await liveUpdateStart(BASE_URL, LIVE_UPDATE_RECIPE, box, { ...LU_OPTS, lookback });
             } catch (e) {
                 box.insertAdjacentHTML('beforeend', `<div class="text-danger mt-2">Could not start: ${luEsc(e.message)}</div>`);
             }
         };
     } catch (e) {
-        box.innerHTML = `<div class="text-danger">Could not load Live Update: ${luEsc(e.message)}</div>`;
+        start.innerHTML = `<div class="text-danger">Could not load Live Update: ${luEsc(e.message)}</div>`;
     }
 }
 
@@ -268,6 +287,88 @@ function sortRows(rows) {
     });
 }
 
+/* ── Font size and column widths ─────────────────────────────────────────── */
+// The text a cell shows, as fillCell writes it, for measuring.
+function cellText(c, v) {
+    const dp = Number.isInteger(c.decimals) ? c.decimals : 0;
+    switch (c.format) {
+        case 'gbp':    return fmtGBP(v, dp);
+        case 'number': return v == null ? '—' : Number(v).toLocaleString('en-GB', { minimumFractionDigits: dp, maximumFractionDigits: dp });
+        case 'pct':    return v == null ? '—' : (Number(v) * 100).toFixed(dp) + '%';
+        case 'date':   return fmtDate(v);
+        case 'status': return statusText(v);
+        case 'link':   return c.label || 'Open';
+        default:       return v == null || v === '' ? '—' : String(v);
+    }
+}
+
+let measureCtx = null;
+function textWidth(text, px, weight) {
+    if (!measureCtx) measureCtx = document.createElement('canvas').getContext('2d');
+    const family = getComputedStyle(document.getElementById('amf-table')).fontFamily;
+    measureCtx.font = `${weight} ${px}px ${family}`;
+    return measureCtx.measureText(text).width;
+}
+
+// Narrowest width that fits the heading on the two lines the header row has.
+function headerWidth(text, px) {
+    const words = text.split(/\s+/).filter(Boolean);
+    const full = textWidth(text, px, 600);
+    let w = Math.max(...words.map(t => textWidth(t, px, 600)), full / 2);
+    const space = textWidth(' ', px, 600);
+    for (let tries = 0; tries < 20; tries++) {
+        let lines = 1, line = 0;
+        words.forEach(t => {
+            const tw = textWidth(t, px, 600);
+            if (line && line + space + tw > w) { lines++; line = tw; } else line += (line ? space : 0) + tw;
+        });
+        if (lines <= 2) return w;
+        w += px;
+    }
+    return full;
+}
+
+// Each column as wide as its longest value or heading at the chosen size,
+// plus the cell padding (6px each side), border and the sort arrow.
+function computeAutoWidths() {
+    const px = appearance.font_size;
+    const arrow = textWidth(' ▼', px * 0.65, 400);
+    autoWidths = {};
+    viewColumns.forEach(c => {
+        let cells;
+        if (c.format === 'link') {
+            cells = textWidth(cellText(c, null), px * 0.9, 400) + 14;   // button padding and border
+        } else {
+            const seen = new Set();
+            cells = 0;
+            allRows.forEach(r => {
+                const t = cellText(c, val(r, c.column));
+                if (seen.has(t)) return;
+                seen.add(t);
+                cells = Math.max(cells, textWidth(t, px, 400));
+            });
+        }
+        const head = headerWidth(c.label || c.column, px) + (c.format === 'link' ? 0 : arrow);
+        autoWidths[c.column] = Math.min(Math.ceil(Math.max(cells, head)) + 15, 600);
+    });
+}
+
+async function applyAppearance() {
+    const px = appearance.font_size;
+    document.getElementById('amf-table').style.fontSize = px + 'px';
+    if (!appearance.auto_width) return;
+    // Measured in the page font, so wait for both weights to load first.
+    if (document.fonts) {
+        await Promise.all([document.fonts.load(`400 ${px}px 'DM Sans'`), document.fonts.load(`600 ${px}px 'DM Sans'`)])
+            .catch(() => {});
+    }
+    computeAutoWidths();
+}
+
+function columnWidth(c) {
+    return appearance.auto_width && autoWidths[c.column] ? autoWidths[c.column] : (c.width || DEFAULT_WIDTH);
+}
+
 function buildHeader() {
     const colgroup = document.getElementById('amf-cols');
     const headRow = document.getElementById('amf-head');
@@ -276,11 +377,13 @@ function buildHeader() {
     let total = 0;
     viewColumns.forEach(c => {
         const col = document.createElement('col');
-        col.style.width = (c.width || DEFAULT_WIDTH) + 'px';
-        total += c.width || DEFAULT_WIDTH;
+        col.style.width = columnWidth(c) + 'px';
+        total += columnWidth(c);
         colgroup.appendChild(col);
         const th = document.createElement('th');
         th.title = c.column;
+        if (c.format === 'link') th.className = 'col-center';
+        else if (['gbp', 'number', 'pct'].includes(c.format)) th.className = 'col-right';
         th.appendChild(document.createTextNode(c.label || c.column));
         if (c.format !== 'link') {
             const arrow = document.createElement('span');
@@ -514,6 +617,9 @@ async function openSettings() {
             }),
         });
         liveColumns = resp.columns;
+        const ap = resp.appearance || appearance;
+        document.getElementById('amfFontSize').value = ap.font_size;
+        document.getElementById('amfAutoWidth').checked = ap.auto_width;
         filterDraft = (resp.filters || []).map(f => ({ ...f }));
         hardFilterDraft = (resp.hard_filters || []).map(f => ({ ...f }));
         cellRuleDraft = (resp.cell_rules || []).map(r => ({ ...r }));
@@ -542,6 +648,8 @@ async function saveSettings() {
                 value: NO_VALUE_OPS.includes(f.operator) ? '' : (f.value || '').trim() })),
             cell_rules: cellRuleDraft.map(r => ({ column: r.column, operator: r.operator,
                 value: NO_VALUE_OPS.includes(r.operator) ? '' : (r.value || '').trim(), colour: r.colour })),
+            appearance: { font_size: parseInt(document.getElementById('amfFontSize').value, 10) || 12,
+                          auto_width: document.getElementById('amfAutoWidth').checked },
         };
         const resp = await fetch(API + '/settings', {
             method: 'POST',

@@ -51,7 +51,10 @@
         #amf-table td:first-child { border-left: 1px solid #b0b0b0; }
         #amf-table td.col-right  { text-align: right; }
         #amf-table td.col-center { text-align: center; padding-left: 2px; padding-right: 2px; text-overflow: clip; }
-        .apex-link { font-size: 11px; padding: 1px 6px; border: 1px solid #0d6efd; border-radius: 3px; color: #0d6efd; text-decoration: none; display: inline-block; }
+        /* Headers follow their column's cells: numbers right, link buttons centred. */
+        #amf-table thead th.col-right  { text-align: right; }
+        #amf-table thead th.col-center { text-align: center; cursor: default; }
+        .apex-link { font-size: 0.9em; padding: 1px 6px; border: 1px solid #0d6efd; border-radius: 3px; color: #0d6efd; text-decoration: none; display: inline-block; }
         .apex-link:hover { background: #0d6efd; color: #fff; }
         .sort-arrow { opacity: 0.35; font-size: 0.65em; margin-left: 2px; }
         #row-count { white-space: nowrap; }
@@ -66,6 +69,10 @@
             <button class="btn btn-outline-primary btn-sm" onclick="openLiveUpdate()"
                     title="Pull the latest from Apex and rebuild the tables behind this report">
                 <i class="fas fa-bolt me-1"></i>Live Update
+            </button>
+            <button id="lu-log-btn" class="btn btn-outline-secondary btn-sm" onclick="openLiveUpdateLog()" style="display:none"
+                    title="Show the steps and logs of the last Live Update">
+                <i class="fas fa-list me-1"></i>Log
             </button>
             <button class="btn btn-outline-secondary btn-sm" onclick="openSettings()">
                 <i class="fas fa-cog me-1"></i>Settings
@@ -119,6 +126,13 @@
                         <i class="fas fa-sync-alt spin" aria-hidden="true"></i> Loading settings...
                     </div>
                     <div id="settings-content" class="d-none">
+                    <h6 class="settings-section">Appearance</h6>
+                    <div class="d-flex align-items-center gap-3 mb-4 small">
+                        <label class="d-flex align-items-center gap-2 mb-0">Font Size (Pixels)
+                            <input type="number" id="amfFontSize" min="8" max="24" class="form-control form-control-sm" style="width:70px"></label>
+                        <label class="form-check mb-0"><input type="checkbox" id="amfAutoWidth" class="form-check-input">
+                            <span class="form-check-label">Fit Column Widths To Their Longest Value (Off = The Widths Set Below)</span></label>
+                    </div>
                     <h6 class="settings-section">Columns</h6>
                     <p class="text-muted small mb-2">Columns of <strong>PRODUCT_SALES_PERFORMANCE.MISSING_FINANCE_AMOUNTS</strong>.
                         The heading box sets the name shown on the page; a link column's heading is also its button text.</p>
@@ -160,6 +174,7 @@
                     <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
                 </div>
                 <div class="modal-body">
+                    <div id="live-update-start"></div>
                     <div id="live-update-box"></div>
                     <div class="form-text mt-2">Closing this popup does not stop the run. Leaving the page pauses it
                         until you open Live Update here or in Settings again.</div>

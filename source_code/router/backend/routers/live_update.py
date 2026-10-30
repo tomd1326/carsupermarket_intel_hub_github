@@ -48,8 +48,14 @@ STUCK_MINUTES = 5
 # Fills the recipe list the first time it is opened.
 DEFAULT_RECIPES = [
     {'recipe_key': 'apex_missing_finance', 'name': 'Apex Missing Finance', 'source': 'nexus',
-     'endpoints': ['invoices', 'invoices/invoice-finance-amounts'],
-     'target_model': 'missing_finance_amounts__p', 'lookback_hours': 3},
+     # Only for finance fixed on an order in Apex, so only finance amounts are
+     # pulled. New orders and status changes wait for the scheduled run.
+     'endpoints': ['invoices/invoice-finance-amounts'],
+     'target_model': 'missing_finance_amounts__p', 'lookback_hours': 3,
+     'page_path': '/reports/apex-missing-finance',
+     # On the path but not needed for a finance fix: vehicles__c only takes the
+     # subsidy rate for estimated_subsidy, which the report does not show.
+     'skip_models': ['finance_subsidy_rate__c', 'sales__c', 'vehicles__c']},
 ]
 
 FINISHED = ('done', 'failed', 'stopped')
@@ -109,6 +115,8 @@ def _ensure_tables(conn) -> None:
         cur.execute("ALTER TABLE live_update_recipes ADD COLUMN IF NOT EXISTS target_models TEXT[]")
         # The page the recipe updates; its name links there on Settings.
         cur.execute("ALTER TABLE live_update_recipes ADD COLUMN IF NOT EXISTS page_path VARCHAR(200)")
+        # Models on the path that the target does not need from this data.
+        cur.execute("ALTER TABLE live_update_recipes ADD COLUMN IF NOT EXISTS skip_models TEXT[]")
         cur.execute("UPDATE live_update_recipes SET page_path = '/reports/apex-missing-finance' "
                     "WHERE recipe_key = 'apex_missing_finance' AND page_path IS NULL")
         cur.execute("SELECT COUNT(*) FROM live_update_recipes")
@@ -122,7 +130,7 @@ def _ensure_tables(conn) -> None:
 
 
 _RECIPE_COLS = ['recipe_key', 'name', 'source', 'endpoints', 'target_model', 'lookback_hours', 'sort_order',
-                'target_models', 'page_path']
+                'target_models', 'page_path', 'skip_models']
 _RUN_COLS = ['run_id', 'recipe_key', 'name', 'status', 'stage', 'message', 'since', 'plan', 'steps',
              'api_job_id', 'dbt_chain_id', 'dbt_started_at', 'stop_requested', 'created_by', 'created_at',
              'stage_at', 'finished_at']
@@ -131,13 +139,14 @@ _RUN_COLS = ['run_id', 'recipe_key', 'name', 'status', 'stage', 'message', 'sinc
 def _load_recipes(conn) -> list:
     with conn.cursor() as cur:
         cur.execute(f"SELECT {', '.join(_RECIPE_COLS)} FROM live_update_recipes ORDER BY sort_order, name")
-        return [dict(zip(_RECIPE_COLS, r), endpoints=list(r[3] or []), targets=list(r[7] or [r[4]]))
+        return [dict(zip(_RECIPE_COLS, r), endpoints=list(r[3] or []), targets=list(r[7] or [r[4]]),
+                     skip_models=list(r[9] or []))
                 for r in cur.fetchall()]
 
 
 # Settings > Live Update > Run Settings. API workers and items per page are
 # the API Requests settings (api_requests reads them for every Nexus pull).
-DEFAULT_DBT_THREADS = 40
+DEFAULT_DBT_THREADS = 50
 
 
 def _setting(conn, key: str, default):
@@ -156,7 +165,8 @@ def _run_settings(conn) -> dict:
     config = api_requests._load_config(conn, 'nexus')
     return {'nexus_workers': config['nexus_workers'], 'nexus_per_page': config['nexus_per_page'],
             'dbt_threads': _setting(conn, 'live_update_dbt_threads', DEFAULT_DBT_THREADS),
-            'manual_dbt_threads': _setting(conn, 'manual_dbt_threads', DEFAULT_DBT_THREADS)}
+            'manual_dbt_threads': _setting(conn, 'manual_dbt_threads', DEFAULT_DBT_THREADS),
+            'one_dbt_job': _setting(conn, 'live_update_one_dbt_job', 'false') == 'true'}
 
 
 def _load_run(conn, run_id: str):
@@ -252,6 +262,26 @@ def _same_folder(stage_url: str, path: str) -> bool:
     return bool(a) and (a == b or a.startswith(b + '/'))
 
 
+def _raw_select(step: dict) -> str:
+    names = [m['name'] for m in step['models']]
+    tables = [n for n in names if n.endswith('__s')]
+    return ' '.join(f"+{n}" for n in tables) if tables else ' '.join(names)
+
+
+def _one_step(steps: list) -> dict:
+    """Every step as one dbt run in the last project's job. That project
+    holds the earlier ones as packages, so one container builds the lot and
+    dbt starts each model as soon as its own parents are done (the two raw
+    tables at once, then compute) instead of waiting for a whole project."""
+    last = steps[-1]
+    parts = []
+    for s in steps:
+        parts.append(_raw_select(s) if s['project'] == 'raw' else ' '.join(m['name'] for m in s['models']))
+    return {'project': last['project'], 'job_id': last['job_id'], 'job_name': last['job_name'],
+            'label': 'All Projects', 'select': ' '.join(parts), 'plus': True,
+            'models': [m for s in steps for m in s['models']]}
+
+
 def build_plan(conn, recipe: dict) -> dict:
     """The endpoints and dbt steps a recipe runs. `errors` lists anything that
     stops it running (e.g. an endpoint no model reads)."""
@@ -262,6 +292,8 @@ def build_plan(conn, recipe: dict) -> dict:
     target = ', '.join(targets)
     errors, warnings, endpoints, chosen = [], [], [], set()
     no_updated_at = set(_setting(conn, 'nexus_no_updated_at', []))
+    # A raw __s table is never skipped: it is always run as "+x__s".
+    skip = {n for n in recipe.get('skip_models') or [] if not n.endswith('__s')} - set(targets)
     missing = [t for t in targets if t not in models]
     for t in missing:
         errors.append(f"{t} is not in the model list. " + dbt_runs.OUT_OF_DATE)
@@ -285,7 +317,7 @@ def build_plan(conn, recipe: dict) -> dict:
                 path_models = down & upstream
                 if not path_models:
                     errors.append(f"{route} does not feed {target}: none of the models reading it lead there")
-                chosen |= path_models
+                chosen |= path_models - skip
                 # The table to check the pulled rows reached: the raw model
                 # furthest along that is a stored table (the __s one).
                 raw = sorted((n for n in path_models if models[n]['project'] == 'raw'
@@ -303,19 +335,52 @@ def build_plan(conn, recipe: dict) -> dict:
         for m in s['models']:
             m['is_target'] = m['name'] in targets
         if s['project'] == 'raw':
-            # The raw project holds only raw models, so "stg_x+" runs the
-            # endpoint's stg model and everything after it there (dedup view,
-            # __s table), including models added since the list was checked.
-            starts = sorted({n for e in endpoints for n in e['models'] if models[n]['project'] == 'raw'})
-            if starts:
-                s['select'] = ' '.join(f"{n}+" for n in starts)
-                s['plus'] = True
+            # "+x__s" runs each raw table with everything before it (stg
+            # table, dedup view), so new S3 files always reach it.
+            s['select'] = _raw_select(s)
+            s['plus'] = True
+    if len(steps) > 1 and _setting(conn, 'live_update_one_dbt_job', 'false') == 'true':
+        steps = [_one_step(steps)]
     checked = lineage.get('checked_at')
     old = (lineage['source'] != 'recheck'
            or (checked and _now() - checked > datetime.timedelta(days=LINEAGE_WARN_DAYS)))
-    return {'recipe_key': recipe['recipe_key'], 'target': target, 'targets': targets, 'endpoints': endpoints,
+    return {'recipe_key': recipe['recipe_key'], 'source': recipe['source'], 'target': target,
+            'targets': targets, 'skip_models': sorted(skip), 'endpoints': endpoints,
             'steps': steps, 'errors': errors, 'warnings': warnings,
             'lineage': dbt_runs._lineage_info(lineage), 'lineage_old': bool(old)}
+
+
+def _dbt_ui_steps(plan: dict) -> list:
+    out = []
+    for i, s in enumerate(plan['steps']):
+        detail = ', '.join(m['name'] for m in s['models'])
+        if s.get('plus'):
+            detail = f"--select {s['select']} (planned: {detail})"
+        out.append({'key': f"dbt:{i}", 'label': f"dbt {s.get('label') or s['project'].title()} "
+                                                f"({len(s['models'])} Models)",
+                    'detail': detail, 'status': 'waiting', 'chain_pos': i})
+    return out
+
+
+def _replan_for_rows(conn, run: dict, results: dict) -> None:
+    """Rebuild only what the endpoints that brought back rows feed: an
+    endpoint with nothing changed leaves its models as they are."""
+    plan = run['plan']
+    with_rows = [e['route'] for e in plan['endpoints'] if (results.get(e['route']) or {}).get('rows')]
+    if len(with_rows) == len(plan['endpoints']):
+        return
+    new = build_plan(conn, {'recipe_key': plan['recipe_key'], 'source': plan.get('source') or 'nexus',
+                            'targets': plan['targets'], 'skip_models': plan.get('skip_models') or [],
+                            'endpoints': with_rows})
+    conn.rollback()
+    if new['errors'] or not new['steps']:
+        return
+    # Keep the skipped endpoints listed so the data check reports them.
+    new['endpoints'] += [e for e in plan['endpoints'] if e['route'] not in with_rows]
+    steps = [s for s in run['steps'] if not s['key'].startswith('dbt:')]
+    at = next(i for i, s in enumerate(steps) if s['key'] == 'check_api') + 1
+    run['steps'] = steps[:at] + _dbt_ui_steps(new) + steps[at:]
+    run['plan'] = new
 
 
 def _initial_steps(plan: dict, since: str, reload: bool) -> list:
@@ -324,12 +389,7 @@ def _initial_steps(plan: dict, since: str, reload: bool) -> list:
              for e in plan['endpoints']]
     steps.append({'key': 'check_api', 'label': 'Check The Pull',
                   'detail': 'Every endpoint worked and at least one returned rows', 'status': 'waiting'})
-    for i, s in enumerate(plan['steps']):
-        detail = ', '.join(m['name'] for m in s['models'])
-        if s.get('plus'):
-            detail = f"--select {s['select']} (planned: {detail})"
-        steps.append({'key': f"dbt:{i}", 'label': f"dbt {s['project'].title()} ({len(s['models'])} Models)",
-                      'detail': detail, 'status': 'waiting', 'chain_pos': i})
+    steps += _dbt_ui_steps(plan)
     steps.append({'key': 'check_data', 'label': 'Check The New Data Reached Snowflake',
                   'detail': 'Newest updated_at in each raw table is at least the newest pulled',
                   'status': 'waiting'})
@@ -392,13 +452,14 @@ def _after_api(conn, run: dict, job: dict) -> None:
             _finish(conn, run, 'failed', msg)
             return
         _set_step(run, 'check_api', 'done', f"{total} rows across {len(routes)} endpoint(s)")
+        _replan_for_rows(conn, run, results)
         plan = run['plan']
         threads = _setting(conn, 'live_update_dbt_threads', DEFAULT_DBT_THREADS)
         conn.rollback()
         # A + step may run more models than planned, so only "at least" is checked.
         steps = [{'job_id': s['job_id'], 'select': s['select'], 'threads': threads,
                   ('expected_min' if s.get('plus') else 'expected_models'): len(s['models']),
-                  'label': f"Live Update {s['project']}"} for s in plan['steps']]
+                  'label': f"Live Update {s.get('label') or s['project']}"} for s in plan['steps']]
         today = datetime.datetime.now(UK).strftime('%Y-%m-%d')
         try:
             chain_id, _ = dbt_runs.start_chain(conn, steps, run['created_by'], today)
@@ -408,8 +469,8 @@ def _after_api(conn, run: dict, job: dict) -> None:
         _set_step(run, 'dbt:0', 'running')
         with conn.cursor() as cur:
             cur.execute("UPDATE live_update_runs SET stage = 'dbt', stage_at = NOW(), dbt_chain_id = %s, "
-                        "dbt_started_at = NOW(), steps = %s WHERE run_id = %s",
-                        (chain_id, json.dumps(run['steps']), run['run_id']))
+                        "dbt_started_at = NOW(), steps = %s, plan = %s WHERE run_id = %s",
+                        (chain_id, json.dumps(run['steps']), json.dumps(plan), run['run_id']))
         conn.commit()
         run.update(stage='dbt', dbt_chain_id=chain_id)
     except Exception as e:
@@ -611,6 +672,8 @@ def lu_save_settings(data: dict, user: str = Depends(get_current_user)):
                   for field, (key, top) in limits.items() if data.get(field) not in (None, '')}
     except (TypeError, ValueError):
         return {"status": "error", "message": "Enter whole numbers"}
+    if data.get('one_dbt_job') is not None:
+        values['live_update_one_dbt_job'] = 'true' if data['one_dbt_job'] else 'false'
     with get_database_connection() as conn:
         conn.rollback()
         save_settings_partial(conn, values)
@@ -699,6 +762,10 @@ def lu_save_recipe(data: dict, user: str = Depends(get_current_user)):
     if not isinstance(raw_targets, list):
         raw_targets = re.split(r'[\s,]+', str(raw_targets or data.get('target_model') or ''))
     targets = list(dict.fromkeys(t.strip() for t in raw_targets if t and t.strip()))
+    raw_skip = data.get('skip_models')
+    if not isinstance(raw_skip, list):
+        raw_skip = re.split(r'[\s,]+', str(raw_skip or ''))
+    skip_models = list(dict.fromkeys(t.strip() for t in raw_skip if t and t.strip()))
     page_path = str(data.get('page_path') or '').strip()
     if page_path and page_path not in {p['path'] for p in _pages()}:
         return {"status": "error", "message": f"Unknown page: {page_path}"}
@@ -721,7 +788,7 @@ def lu_save_recipe(data: dict, user: str = Depends(get_current_user)):
         if not targets:
             return {"status": "error", "message": "Enter at least one table to update"}
         known_models = dbt_runs.load_lineage(conn)['models']
-        bad = [t for t in targets if t not in known_models]
+        bad = [t for t in targets + skip_models if t not in known_models]
         if bad:
             return {"status": "error", "message": f"Not in the model list: {', '.join(bad)}"}
         target = targets[0]
@@ -733,15 +800,16 @@ def lu_save_recipe(data: dict, user: str = Depends(get_current_user)):
         with conn.cursor() as cur:
             if key:
                 cur.execute("UPDATE live_update_recipes SET name = %s, endpoints = %s, target_model = %s, "
-                            "target_models = %s, lookback_hours = %s, page_path = %s WHERE recipe_key = %s",
-                            (name, endpoints, target, targets, lookback, page_path, key))
+                            "target_models = %s, lookback_hours = %s, page_path = %s, skip_models = %s "
+                            "WHERE recipe_key = %s",
+                            (name, endpoints, target, targets, lookback, page_path, skip_models, key))
             else:
                 key = _slug(name) or str(uuid.uuid4())[:8]
                 cur.execute("INSERT INTO live_update_recipes (recipe_key, name, source, endpoints, target_model,"
-                            " target_models, lookback_hours, page_path, sort_order) "
-                            "SELECT %s, %s, 'nexus', %s, %s, %s, %s, %s, "
+                            " target_models, lookback_hours, page_path, skip_models, sort_order) "
+                            "SELECT %s, %s, 'nexus', %s, %s, %s, %s, %s, %s, "
                             " COALESCE(MAX(sort_order), 0) + 10 FROM live_update_recipes ON CONFLICT DO NOTHING",
-                            (key, name, endpoints, target, targets, lookback, page_path))
+                            (key, name, endpoints, target, targets, lookback, page_path, skip_models))
                 if cur.rowcount != 1:
                     conn.rollback()
                     return {"status": "error", "message": f"A recipe called {name} already exists"}
@@ -758,6 +826,34 @@ def lu_delete_recipe(data: dict, user: str = Depends(get_current_user)):
         with conn.cursor() as cur:
             cur.execute("DELETE FROM live_update_recipes WHERE recipe_key = %s", (str(data.get('recipe_key') or ''),))
         conn.commit()
+    return {"status": "ok"}
+
+
+@router.post("/api/live-update/recipes/reset")
+def lu_reset_recipe(data: dict, user: str = Depends(get_current_user)):
+    """Put a default recipe back to its bare minimum: only its own endpoints
+    and target, so nothing else (e.g. vehicles__s) is rebuilt."""
+    _admin(user)
+    key = str(data.get('recipe_key') or '')
+    r = next((x for x in DEFAULT_RECIPES if x['recipe_key'] == key), None)
+    if not r:
+        return {"status": "error", "message": "Only a default recipe can be reset"}
+    with get_database_connection() as conn:
+        conn.rollback()
+        _ensure_tables(conn)
+        with conn.cursor() as cur:
+            cur.execute("INSERT INTO live_update_recipes (recipe_key, name, source, endpoints, target_model,"
+                        " target_models, lookback_hours, page_path, skip_models)"
+                        " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s) "
+                        "ON CONFLICT (recipe_key) DO UPDATE SET name = EXCLUDED.name, source = EXCLUDED.source,"
+                        " endpoints = EXCLUDED.endpoints, target_model = EXCLUDED.target_model,"
+                        " target_models = EXCLUDED.target_models, lookback_hours = EXCLUDED.lookback_hours,"
+                        " page_path = EXCLUDED.page_path, skip_models = EXCLUDED.skip_models",
+                        (key, r['name'], r['source'], r['endpoints'], r['target_model'], [r['target_model']],
+                         r['lookback_hours'], r.get('page_path'), r.get('skip_models') or []))
+        save_settings_partial(conn, {'live_update_dbt_threads': DEFAULT_DBT_THREADS})
+        conn.commit()
+    logger.info("Live Update recipe %s reset by %s", key, user)
     return {"status": "ok"}
 
 

@@ -46,6 +46,7 @@ AMF_DEFAULT_COLUMNS = [
     {"column": "SALES_ADVISOR_USER_NAME", "label": "Sales Advisor", "format": "text", "decimals": 0, "width": 120},
     {"column": "INVOICE_URL", "label": "Invoice", "format": "link", "decimals": 0, "width": 62},
     {"column": "ORDER_URL", "label": "Order", "format": "link", "decimals": 0, "width": 58},
+    {"column": "VEHICLE_URL", "label": "Vehicle", "format": "link", "decimals": 0, "width": 62},
     {"column": "ISSUE", "label": "Issue", "format": "text", "decimals": 0, "width": 130},
     {"column": "FINANCE_COMPANY_NAME", "label": "Finance Company", "format": "text", "decimals": 0, "width": 140},
     {"column": "FINANCE_TYPE", "label": "Finance Type", "format": "text", "decimals": 0, "width": 70},
@@ -80,6 +81,26 @@ def _columns_saved() -> list:
 
 def _filters_saved() -> list:
     return kpi._read_kpi_layout_value('amf_filters') or []
+
+
+# Table text size in pixels, and whether each column is sized to its longest
+# value at that size (off = the widths set per column are used).
+AMF_DEFAULT_APPEARANCE = {"font_size": 12, "auto_width": True}
+
+
+def _appearance_saved() -> dict:
+    saved = kpi._read_kpi_layout_value('amf_appearance')
+    return {**AMF_DEFAULT_APPEARANCE, **(saved if isinstance(saved, dict) else {})}
+
+
+def _validate_appearance(a) -> str | None:
+    if not isinstance(a, dict) or set(a) != {"font_size", "auto_width"}:
+        return "Bad appearance settings"
+    if not isinstance(a["font_size"], int) or not 8 <= a["font_size"] <= 24:
+        return "Font size must be a whole number from 8 to 24"
+    if not isinstance(a["auto_width"], bool):
+        return "Bad fit column widths setting"
+    return None
 
 
 def _hard_filters_saved() -> list:
@@ -158,6 +179,7 @@ def amf_columns(request: Request, user: str = Depends(require_page_api(PAGE_KEY)
         live = _live_columns()
         result = {"status": "ok", "view": _columns_saved(), "filters": _filters_saved(),
                   "hard_filters": _hard_filters_saved(), "cell_rules": _cell_rules_saved(), "table": _AMF_TABLE,
+                  "appearance": _appearance_saved(),
                   "columns": [{"column": c, "type": t} for c, t in live]}
     except Exception as e:
         logger.error(f"Apex missing finance columns failed: {e}")
@@ -173,12 +195,15 @@ def amf_settings_save(request: Request, payload: dict, user: str = Depends(requi
     payload = payload or {}
     columns, filters = payload.get("columns"), payload.get("filters")
     hard_filters, cell_rules = payload.get("hard_filters"), payload.get("cell_rules")
+    appearance = payload.get("appearance", _appearance_saved())
     try:
         live = {c for c, _ in _live_columns()}
         err = (_validate_stock_columns(columns) or _validate_stock_filters(filters)
-               or _validate_hard_filters(hard_filters, live) or _validate_cell_rules(cell_rules, live))
+               or _validate_hard_filters(hard_filters, live) or _validate_cell_rules(cell_rules, live)
+               or _validate_appearance(appearance))
         if err:
             return {"status": "error", "message": err}
+        kpi._write_kpi_layout_value('amf_appearance', appearance)
         kpi._write_kpi_layout_value('amf_columns', columns)
         kpi._write_kpi_layout_value('amf_filters', filters)
         kpi._write_kpi_layout_value('amf_hard_filters', hard_filters)
@@ -200,6 +225,7 @@ def amf_data(request: Request, force: bool = False, user: str = Depends(require_
         filters = _filters_saved()
         hard_filters = _hard_filters_saved()
         cell_rules = _cell_rules_saved()
+        appearance = _appearance_saved()
         live = {c for c, _ in _live_columns()}
         if not live:
             return {"status": "error", "message": f"Table {_AMF_TABLE} was not found"}
@@ -228,4 +254,4 @@ def amf_data(request: Request, force: bool = False, user: str = Depends(require_
         logger.error(f"Apex missing finance data failed: {e}")
         return {"status": "error", "message": str(e)}
     return {"status": "ok", "view": view, "filters": filters, "cell_rules": cell_rules, "columns": cache["columns"],
-            "rows": cache["rows"], "missing": missing, "cached_at": cache["cached_at"]}
+            "rows": cache["rows"], "missing": missing, "cached_at": cache["cached_at"], "appearance": appearance}

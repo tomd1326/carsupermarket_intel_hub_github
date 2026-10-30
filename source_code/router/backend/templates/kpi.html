@@ -630,7 +630,9 @@
                     <div class="agg-options">
                         <label><input type="checkbox" id="pctInput" onchange="onPctChange()"> Each Column As 100%</label>
                         <label><input type="checkbox" id="segLabelsInput"> Values In Segments</label>
+                        <label><input type="checkbox" id="n1LineInput"> N-1 Line</label>
                     </div>
+                    <div class="modal-hint">The N-1 line shows only on a chart with one series that is not split or on 100%.</div>
                     <div class="modal-hint">Each series' own colour is set in its row on the Data tab.</div>
                 </div>
                 <div class="modal-field">
@@ -656,6 +658,9 @@
                 <label for="vehChartTableSelect">Vehicle Table</label>
                 <select id="vehChartTableSelect" onchange="onVehChartTableChange()"></select>
                 <div class="modal-hint" id="vehTableHint"></div>
+                <button type="button" class="btn btn-sm btn-edit" style="margin-top: 6px;" onclick="openVehSettingsFromChart()"
+                        title="Closes this chart without saving and opens Settings > View Vehicles on this table">
+                    <i class="fas fa-cog"></i> Table Settings</button>
             </div>
             <div class="modal-field">
                 <label for="vehDateSelect">Date Column</label>

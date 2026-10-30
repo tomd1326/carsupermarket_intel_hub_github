@@ -8,6 +8,12 @@
 // onDone runs once, when the run has finished without failing, only if the
 // run has a "Reload The Report Data" step. It must resolve to true when the
 // reload worked, or false / { ok: false, message } when it did not.
+//
+// Report-page popups also pass:
+//   closeModal: id of the popup to close when the run (and reload) ended
+//               cleanly. A failed or stopped run leaves it open to read.
+//   logButton:  id of a button shown once a run has ended, which reopens the
+//               popup on that run's steps and logs.
 
 const LU_STATUS = {
     waiting: ['Waiting', 'text-muted'], running: ['Running', 'text-primary'], done: ['Done', 'text-success'],
@@ -171,6 +177,16 @@ async function liveUpdateFollow(baseUrl, runId, box, opts = {}) {
         luRender(box, run, null);
         apiPostJson(`${baseUrl}/api/live-update/run/${runId}/reload`, { ok, message }).catch(() => {});
     }
+    luAfterRun(run, opts);
     if (opts.onFinished) opts.onFinished(run);
     return run;
+}
+
+function luAfterRun(run, opts) {
+    const logBtn = opts.logButton && document.getElementById(opts.logButton);
+    if (logBtn) logBtn.style.display = '';
+    const reload = run && run.steps.find(s => s.key === 'reload');
+    const clean = run && (run.status === 'done' || run.status === 'warning') && (!reload || reload.status === 'done');
+    const modalEl = opts.closeModal && document.getElementById(opts.closeModal);
+    if (clean && modalEl && window.bootstrap) bootstrap.Modal.getOrCreateInstance(modalEl).hide();
 }

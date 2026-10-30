@@ -1196,6 +1196,49 @@ def read_user_details(conn) -> dict:
     return details
 
 
+# ── User roles (e.g. 'buyer': listed in the Cars Bought Buyer dropdown) ─────
+# A table of its own rather than a users column, so the sign-in queries on
+# users never change and an environment without the table still signs in.
+
+USER_ROLES = ('buyer',)
+
+
+@once_per_database
+def _ensure_user_roles_table(conn) -> None:
+    with conn.cursor() as cur:
+        cur.execute(
+            "CREATE TABLE IF NOT EXISTS user_roles ("
+            "username VARCHAR(100) NOT NULL, role VARCHAR(30) NOT NULL, "
+            "PRIMARY KEY (username, role))"
+        )
+    conn.commit()
+
+
+def read_role_users(conn, role: str, ensure: bool = True) -> set:
+    """Usernames holding this role. ensure=False reads only (prod from local
+    or dev): a database without the table gives an empty set."""
+    if ensure:
+        _ensure_user_roles_table(conn)
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT username FROM user_roles WHERE role = %s", (role,))
+            return {r[0] for r in cur.fetchall()}
+    except psycopg2.ProgrammingError:      # no user_roles table on that database
+        conn.rollback()
+        return set()
+
+
+def set_user_role(conn, username: str, role: str, on: bool) -> None:
+    _ensure_user_roles_table(conn)
+    with conn.cursor() as cur:
+        if on:
+            cur.execute("INSERT INTO user_roles (username, role) VALUES (%s, %s) ON CONFLICT DO NOTHING",
+                        (username, role))
+        else:
+            cur.execute("DELETE FROM user_roles WHERE username = %s AND role = %s", (username, role))
+    conn.commit()
+
+
 # ── Set-password links (account activation and password reset) ──────────────
 # One table for both kinds of link: purpose 'activate' (new account with no
 # password yet) or 'reset'. Only a hash of the token is stored, so a copy of the
