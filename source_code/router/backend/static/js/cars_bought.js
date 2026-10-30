@@ -7,6 +7,7 @@ let suppliers = [];
 let rows = [];          // vehicle rows being edited
 let batchMeta = {};     // source, filename, s3_key, supplier_id
 let buyerCfg = {buyers: [], lock_buyer: false, me: ''};
+let capChecked = new Set();   // VRMs CAP has been asked about in this batch
 
 const $ = id => document.getElementById(id);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[c]));
@@ -26,7 +27,7 @@ function busy(text) {
 }
 
 function msg(html, cls) {
-    $('srcMsg').innerHTML = html ? `<div class="alert alert-${cls || 'info'} py-2 mb-0">${html}</div>` : '';
+    $('srcMsg').innerHTML = html ? `<div class="alert alert-${cls || 'info'} py-2 mb-0 mt-2">${html}</div>` : '';
 }
 
 /* ── Columns ───────────────────────────────────────────── */
@@ -53,12 +54,51 @@ function vehicleText(r) {
     if (r.from_evaluator) tags.push(`<span class="tag tag-ev" title="Seen ${esc(r.evaluator_seen_at || '')}">Evaluator: ${esc(r.evaluator_supplier)}${r.evaluator_list_price != null ? ' ' + gbp(r.evaluator_list_price) : ''}</span>`);
     if (r.already_bought) tags.push(`<span class="tag tag-warn">Already Bought ${esc(r.already_bought)}</span>`);
     if (r.fees && r.fees.length) tags.push(`<span class="tag tag-info" title="${esc(r.fees.map(f => `${f.description}: ${f.gross ?? f.net}`).join('\n'))}">${r.fees.length} Fee${r.fees.length > 1 ? 's' : ''}</span>`);
-    if (!r.cap_id) tags.push('<span class="tag tag-info">CAP Looked Up On Submit</span>');
+    if (!r.cap_id) tags.push(capChecked.has(r.vrm) ? '<span class="tag tag-warn">No CAP Match</span>'
+                                                   : '<span class="tag tag-info">Press Look Up CAP</span>');
+    const src = sourceLabel(r);
+    if (src) tags.push(`<span class="tag tag-src">${src}</span>`);
+    const d = diffs(r);
+    if (d.length) tags.push(`<span class="tag tag-diff" title="${esc(d.map(x => `${x.label}: shown ${x.shown}, manual check ${x.manual}`).join('\n'))}">`
+        + `Differs From Manual Check (${d.map(x => x.label).join(', ')})</span>`
+        + `<button class="btn btn-sm btn-outline-danger row-check-btn ms-1" data-usemanual="${rows.indexOf(r)}">Use Manual</button>`);
     return html + (tags.length ? `<div>${tags.join('')}</div>` : '');
+}
+
+// Where the CAP and Autotrader figures shown came from.
+function sourceLabel(r) {
+    const age = h => h == null ? '' : h < 1 ? ', Under 1h Old' : `, ${Math.round(h)}h Old`;
+    if (r.cap_source === 'manual') return 'CAP & AT: Manual Check';
+    if (r.cap_source === 'typed') return 'CAP ID: Typed In';
+    if (r.cap_source === 'evaluator') return `CAP & AT: Evaluator${age(r.evaluator_age_hours)}`;
+    if (r.cap_source === 'live') return 'CAP: Live Lookup' + (r.at_retail_valuation != null ? ' / AT: Evaluator' : '');
+    return '';
+}
+
+// Fields where the figures shown differ from the row's manual check.
+function diffs(r) {
+    const m = r.manual;
+    if (!m || r.cap_source === 'manual') return [];
+    const out = [];
+    const money = (k, label) => {
+        if (m[k] != null && r[k] != null && Math.abs(num(r[k]) - num(m[k])) >= 1) out.push({key: k, label, shown: gbp(r[k]), manual: gbp(m[k])});
+    };
+    if (m.cap_id && r.cap_id && String(m.cap_id) !== String(r.cap_id)) out.push({key: 'cap_id', label: 'CAP ID', shown: r.cap_id, manual: m.cap_id});
+    if (m.derivative && r.derivative && m.derivative.trim().toLowerCase() !== String(r.derivative).trim().toLowerCase())
+        out.push({key: 'derivative', label: 'Derivative', shown: r.derivative, manual: m.derivative});
+    money('cap_clean', 'CAP Clean');
+    money('at_retail_valuation', 'AT Valuation');
+    return out;
 }
 
 function renderRows() {
     $('vehBody').innerHTML = rows.map((r, i) => {
+        const diffKeys = new Set(diffs(r).map(x => x.key));
+        const valueCell = (k, first) => {
+            const d = diffKeys.has(k);
+            const title = d ? ` title="Manual check: ${esc(gbp(r.manual[k]))}"` : '';
+            return `<td class="text-end${first ? ' group-start' : ''}${d ? ' is-diff' : ''}"${title}>${gbp(r[k])}${d ? `<div class="small">Manual ${gbp(r.manual[k])}</div>` : ''}</td>`;
+        };
         const money = MONEY_COLS.map(([k, , g]) =>
             `<td class="${g ? 'group-start' : ''}"><input class="form-control num" data-i="${i}" data-k="${k}" value="${r[k] ?? ''}"></td>`).join('');
         const custom = customFields.map((f, j) => {
@@ -71,12 +111,14 @@ function renderRows() {
             <td><input class="form-control vrm" data-i="${i}" data-k="vrm" value="${esc(r.vrm)}"></td>
             <td><input class="form-control mil" data-i="${i}" data-k="mileage" value="${r.mileage ?? ''}"></td>
             <td class="desc">${vehicleText(r)}</td>
-            <td><input class="form-control capid" data-i="${i}" data-k="cap_id" value="${r.cap_id ?? ''}"></td>
+            <td><input class="form-control capid${diffKeys.has('cap_id') ? ' is-diff' : ''}" data-i="${i}" data-k="cap_id" value="${r.cap_id ?? ''}"
+                ${diffKeys.has('cap_id') ? `title="Manual check: ${esc(r.manual.cap_id)}"` : ''}></td>
             ${money}
-            <td class="text-end group-start">${gbp(r.at_retail_valuation)}</td>
-            <td class="text-end">${gbp(r.cap_clean)}</td>
+            ${valueCell('at_retail_valuation', true)}
+            ${valueCell('cap_clean', false)}
             ${custom}
-            <td><button class="btn btn-sm btn-outline-danger" data-del="${i}" title="Remove"><i class="fas fa-times"></i></button></td>
+            <td class="text-nowrap"><button class="btn btn-sm btn-outline-primary" data-check="${i}" title="Manual check: live CAP and Autotrader for this car"><i class="fas fa-sync-alt"></i></button>
+                <button class="btn btn-sm btn-outline-danger" data-del="${i}" title="Remove"><i class="fas fa-times"></i></button></td>
         </tr>`;
     }).join('');
     renderTotals();
@@ -170,14 +212,22 @@ $('vehBody').addEventListener('input', e => {
         rows[i].custom[el.dataset.c] = el.value;
     } else if (el.dataset.k) {
         rows[i][el.dataset.k] = el.dataset.k === 'vrm' ? el.value.toUpperCase().replace(/\s+/g, '') : el.value;
+        if (el.dataset.k === 'cap_id') rows[i].cap_source = el.value ? 'typed' : null;
     }
     renderTotals();
 });
 $('vehBody').addEventListener('click', e => {
-    const b = e.target.closest('[data-del]');
-    if (!b) return;
-    rows.splice(+b.dataset.del, 1);
-    renderRows();
+    const del = e.target.closest('[data-del]');
+    if (del) { rows.splice(+del.dataset.del, 1); renderRows(); return; }
+    const chk = e.target.closest('[data-check]');
+    if (chk) { runLookup('manual', [rows[+chk.dataset.check]]); return; }
+    const use = e.target.closest('[data-usemanual]');
+    if (use) {
+        const r = rows[+use.dataset.usemanual];
+        LOOKUP_FIELDS.forEach(k => { if (r.manual[k] != null && r.manual[k] !== '') r[k] = r.manual[k]; });
+        r.cap_source = 'manual';
+        renderRows();
+    }
 });
 ['bNet', 'bVat', 'bGross'].forEach(id => $(id).addEventListener('input', renderTotals));
 $('addRowBtn').addEventListener('click', () => { rows.push({vrm: '', fees: [], custom: {}}); renderRows(); });
@@ -191,12 +241,9 @@ $('clearBtn').addEventListener('click', () => {
 
 /* ── Source: upload ────────────────────────────────────── */
 
-document.querySelectorAll('.src-tabs .nav-link').forEach(a => a.addEventListener('click', e => {
-    e.preventDefault();
-    document.querySelectorAll('.src-tabs .nav-link').forEach(x => x.classList.toggle('active', x === a));
-    $('srcUpload').style.display = a.dataset.src === 'upload' ? '' : 'none';
-    $('srcEvaluator').style.display = a.dataset.src === 'evaluator' ? '' : 'none';
-}));
+const modal = id => bootstrap.Modal.getOrCreateInstance($(id));
+$('openUploadBtn').addEventListener('click', () => modal('uploadModal').show());
+$('openEvaluatorBtn').addEventListener('click', () => modal('evaluatorModal').show());
 
 const dz = $('dropZone');
 dz.addEventListener('click', () => $('fileInput').click());
@@ -210,24 +257,86 @@ function startNew() {
     return true;
 }
 
+/* Progress panel: the steps of reading a file, ticked off as the server
+   reports them (stage: read, scan, match). 'scan' only shows for scans. */
+const RP_STEPS = [
+    ['upload', 'Uploading The File', 10],
+    ['read', 'Reading The Invoice', 40],
+    ['scan', 'Reading The Scan (Textract)', 70],
+    ['match', 'Matching To Supplier Stock Data', 90],
+];
+let rpTimer = null, rpStart = 0, rpScan = false;
+
+function rpShow(file) {
+    const ext = (file.name.split('.').pop() || '').toLowerCase();
+    $('rpIcon').className = 'fas ' + (ext === 'pdf' ? 'fa-file-pdf' : ['csv', 'xlsx', 'xls', 'xlsm'].includes(ext) ? 'fa-file-excel'
+        : ['jpg', 'jpeg', 'png'].includes(ext) ? 'fa-file-image' : 'fa-file-alt');
+    $('rpName').textContent = file.name;
+    $('rpSize').textContent = file.size >= 1048576 ? (file.size / 1048576).toFixed(1) + ' MB' : Math.ceil(file.size / 1024) + ' KB';
+    rpScan = false;
+    rpStart = Date.now();
+    clearInterval(rpTimer);
+    rpTimer = setInterval(() => { $('rpTime').textContent = Math.round((Date.now() - rpStart) / 1000) + ' seconds'; }, 500);
+    $('rpTime').textContent = '0 seconds';
+    $('readProgress').style.display = '';
+    dz.style.display = 'none';
+    rpStep('upload');
+}
+
+function rpStep(stage) {
+    if (stage === 'scan') rpScan = true;
+    const steps = RP_STEPS.filter(s => s[0] !== 'scan' || rpScan);
+    const at = steps.findIndex(s => s[0] === stage);
+    $('rpSteps').innerHTML = steps.map(([key, label], i) => {
+        const state = i < at ? 'done' : i === at ? 'active' : '';
+        const icon = state === 'done' ? '<i class="fas fa-check-circle"></i>'
+            : state === 'active' ? '<i class="fas fa-spinner fa-spin"></i>' : '<i class="far fa-circle"></i>';
+        return `<li class="${state}"><span class="rp-icon">${icon}</span>${label}</li>`;
+    }).join('');
+    $('rpBar').style.width = (steps[at] ? steps[at][2] : 100) + '%';
+}
+
+function rpHide() {
+    clearInterval(rpTimer);
+    $('readProgress').style.display = 'none';
+    dz.style.display = '';
+}
+
+// The read runs on the server in the background; ask every 2 seconds, for up to 3 minutes.
+async function pollExtract(jobId) {
+    for (let i = 0; i < 90; i++) {
+        await new Promise(r => setTimeout(r, 2000));
+        const res = await fetch(BASE + '/cars-bought/extract/' + jobId).then(r => r.json());
+        if (res.status !== 'running') return res;
+        if (res.stage) rpStep(res.stage);
+    }
+    return {status: 'error', message: 'Reading the file took more than 3 minutes'};
+}
+
 function readFile(file) {
     if (!startNew()) return;
     if (file.size > 4 * 1024 * 1024) { msg(`${esc(file.name)} is larger than 4 MB`, 'danger'); return; }
     const reader = new FileReader();
     reader.onload = () => {
         const data = String(reader.result).split(',')[1] || '';
-        busy(`Reading ${file.name}... This can take up to 30 seconds`);
+        rpShow(file);
         msg('');
         postJSON('/cars-bought/extract', {filename: file.name, data})
+            .then(start => { if (start.status === 'running') { rpStep('read'); return pollExtract(start.job_id); } return start; })
             .then(res => {
-                busy('');
+                rpHide();
+                modal('uploadModal').hide();
                 if (res.status !== 'ok') { msg(esc(res.message || 'Could not read the file'), 'danger'); return; }
+                capChecked = new Set();
                 rows = res.vehicles;
-                batchMeta = {source: 'upload', filename: res.filename, s3_key: res.s3_key};
-                msg(`${rows.length} vehicle${rows.length === 1 ? '' : 's'} read from ${esc(res.filename)}${res.read_by === 'scan' ? ' (scan)' : ''}. Check every row against the invoice before submitting.`, 'success');
+                batchMeta = {source: 'upload', filename: res.filename, s3_key: res.s3_key, supplier_id: res.supplier_id};
+                const fromEv = rows.filter(r => r.cap_source === 'evaluator').length;
+                msg(`${rows.length} vehicle${rows.length === 1 ? '' : 's'} read from ${esc(res.filename)}.`
+                    + (res.supplier_id ? ` ${fromEv} filled from the Supplier Stock Evaluator (${esc(res.supplier_name)}).` : '')
+                    + ' Press Look Up CAP for the rest, and check every row against the invoice before submitting.', 'success');
                 showBatch(res);
             })
-            .catch(err => { busy(''); msg('Error: ' + esc(err.message), 'danger'); });
+            .catch(err => { rpHide(); modal('uploadModal').hide(); msg('Error: ' + esc(err.message), 'danger'); });
     };
     reader.readAsDataURL(file);
 }
@@ -237,8 +346,9 @@ function readFile(file) {
 $('evLoadBtn').addEventListener('click', () => {
     const sid = $('evSupplier').value;
     const vrms = $('vrmPaste').value;
-    if (!vrms.trim()) { msg('Paste at least one VRM', 'warning'); return; }
+    if (!vrms.trim()) { alert('Paste at least one VRM'); return; }
     if (!startNew()) return;
+    modal('evaluatorModal').hide();
     busy('Loading from the Supplier Stock Evaluator...');
     msg('');
     postJSON('/cars-bought/from-evaluator', {supplier_id: sid, vrms})
@@ -246,6 +356,7 @@ $('evLoadBtn').addEventListener('click', () => {
             busy('');
             if (res.status !== 'ok') { msg(esc(res.message), 'danger'); return; }
             rows = res.vehicles;
+            capChecked = new Set();
             const sup = suppliers.find(s => String(s.supplier_id) === String(sid));
             batchMeta = {source: 'evaluator', supplier_id: sid || null};
             let m = `${rows.length - res.not_found.length} of ${rows.length} found in the evaluator.`;
@@ -258,8 +369,84 @@ $('evLoadBtn').addEventListener('click', () => {
 
 /* ── Submit ────────────────────────────────────────────── */
 
+/* ── CAP lookup (must be done before Submit) ───────────── */
+
+function capPending() {
+    return rows.filter(r => r.vrm && !r.cap_id && !capChecked.has(r.vrm));
+}
+
+const LOOKUP_FIELDS = ['cap_id', 'make', 'model', 'derivative', 'cap_clean', 'at_retail_valuation', 'at_rating'];
+const blank = v => v === null || v === undefined || v === '';
+
+/* mode 'auto' (Look Up CAP): evaluator data (CAP and Autotrader) first, then
+   live CAP for cars it has no CAP ID for; fills blanks only.
+   mode 'manual': live CAP and Autotrader, kept as r.manual for comparing;
+   fills blanks, and any difference from what is shown is highlighted.
+   Batches go out several at once: each request is its own server, so the
+   whole batch takes about as long as the slowest car. */
+async function runLookup(mode, todo) {
+    // One car per request, 8 at once: the count goes up car by car, and a
+    // slow car (CAP timing out) never holds up the rest.
+    const size = 1, parallel = 8;
+    const parts = [];
+    for (let i = 0; i < todo.length; i += size) parts.push(todo.slice(i, i + size));
+    let done = 0, failed = 0, lastError = '';
+    const btns = ['capBtn', 'manualBtn'];
+    btns.forEach(id => { $(id).disabled = true; });
+    const label = mode === 'manual' ? 'Manual check (live CAP and Autotrader)' : 'Looking up CAP';
+    busy(`${label}... 0 of ${todo.length}`);
+    const one = async part => {
+        try {
+            const res = await postJSON('/cars-bought/cap-lookup', {mode, vehicles: part.map(r => ({vrm: r.vrm, mileage: num(r.mileage)}))});
+            if (res.status !== 'ok') throw new Error(res.message);
+            part.forEach(r => {
+                const c = res.results[r.vrm] || {};
+                capChecked.add(r.vrm);
+                const filledCap = blank(r.cap_id) && !blank(c.cap_id);
+                LOOKUP_FIELDS.forEach(k => { if (blank(r[k]) && !blank(c[k])) r[k] = c[k]; });
+                if (mode === 'manual') {
+                    r.manual = c;
+                    if (filledCap) r.cap_source = 'manual';
+                } else if (filledCap) {
+                    r.cap_source = c.cap_source || c.source;
+                    if (c.source === 'evaluator') { r.evaluator_age_hours = c.age_hours; r.from_evaluator = true; r.evaluator_supplier = c.evaluator_supplier; }
+                }
+                r.lookup_note = c.note || null;
+            });
+        } catch (e) {
+            failed += part.length;
+            lastError = e.message;
+        }
+        done += part.length;
+        busy(`${label}... ${done} of ${todo.length}`);
+        renderRows();
+    };
+    for (let i = 0; i < parts.length; i += parallel) await Promise.all(parts.slice(i, i + parallel).map(one));
+    busy('');
+    btns.forEach(id => { $(id).disabled = false; });
+    const noCap = todo.filter(r => !r.cap_id).map(r => r.vrm + (r.lookup_note ? ` (${r.lookup_note})` : ''));
+    const differ = mode === 'manual' ? todo.filter(r => diffs(r).length).length : 0;
+    const parts2 = [];
+    if (failed) parts2.push(`${failed} could not be checked, try again (${esc(lastError)})`);
+    if (noCap.length) parts2.push(`no CAP match for ${noCap.map(esc).join(', ')} (type the CAP ID in if you know it)`);
+    if (differ) parts2.push(`${differ} differ from the manual check (highlighted in red)`);
+    msg(parts2.length ? parts2.join('; ') : (mode === 'manual' ? `Manual check done for ${todo.length}, no differences.` : `CAP found for all ${todo.length}.`),
+        parts2.length ? 'warning' : 'success');
+}
+
+$('capBtn').addEventListener('click', () => {
+    const todo = rows.filter(r => r.vrm && (blank(r.cap_id) || blank(r.at_retail_valuation)));
+    if (!todo.length) { msg('Every row already has CAP and Autotrader figures', 'success'); return; }
+    runLookup('auto', todo);
+});
+$('manualBtn').addEventListener('click', () => {
+    const todo = rows.filter(r => r.vrm);
+    if (todo.length) runLookup('manual', todo);
+});
+
 $('submitBtn').addEventListener('click', () => {
     if (!$('bBuyer').value) { alert('Choose the buyer'); return; }
+    if (capPending().length) { alert(`Press Look Up CAP first: ${capPending().length} row(s) have no CAP ID yet.`); return; }
     const t = rowTotals();
     const mismatch = [['net', 'bNet'], ['vat', 'bVat'], ['gross', 'bGross']]
         .some(([p, id]) => num($(id).value) !== null && Math.abs(t[p] - num($(id).value)) > 0.01);
@@ -273,7 +460,7 @@ $('submitBtn').addEventListener('click', () => {
         notes: $('bNotes').value,
     };
     $('submitBtn').disabled = true;
-    busy('Submitting (CAP is looked up for rows without a CAP ID)...');
+    busy('Submitting...');
     postJSON('/cars-bought/submit', {batch, vehicles: rows})
         .then(res => {
             busy('');
@@ -355,6 +542,14 @@ if (window.IS_ADMIN) {
     $('settingsBtn').addEventListener('click', () => {
         $('cfBody').innerHTML = customFields.map(cfRow).join('');
         $('lockBuyerInput').checked = buyerCfg.lock_buyer;
+        const labels = buyerCfg.column_labels || {};
+        $('colNamesBody').innerHTML = Object.keys(labels).map(k =>
+            `<tr><td class="text-nowrap fw-semibold" style="width:170px">${esc(labels[k])}</td>
+             <td><input class="form-control form-control-sm" data-colfield="${esc(k)}" value="${esc(((buyerCfg.column_names || {})[k] || []).join(', '))}"></td></tr>`).join('');
+        $('feeWordsInput').value = (buyerCfg.fee_words || []).join(', ');
+        $('feeVatRateInput').value = buyerCfg.fee_vat_rate ?? 20;
+        $('evalHoursInput').value = buyerCfg.evaluator_max_hours ?? 24;
+        $('supplierNamesInput').value = (buyerCfg.supplier_names || []).map(s => `${s.text} = ${s.supplier}`).join('\n');
         bootstrap.Modal.getOrCreateInstance($('settingsModal')).show();
     });
     $('cfAddBtn').addEventListener('click', () => $('cfBody').insertAdjacentHTML('beforeend', cfRow({type: 'money'})));
@@ -364,7 +559,16 @@ if (window.IS_ADMIN) {
             key: tr.dataset.key || null, label: tr.querySelector('.cf-label').value,
             type: tr.querySelector('.cf-type').value, required: tr.querySelector('.cf-req').checked,
         }));
-        postJSON('/cars-bought/config', {custom_fields: fields, lock_buyer: $('lockBuyerInput').checked}).then(res => {
+        const split = s => s.split(',').map(x => x.trim()).filter(Boolean);
+        const column_names = {};
+        $('colNamesBody').querySelectorAll('[data-colfield]').forEach(el => { column_names[el.dataset.colfield] = split(el.value); });
+        postJSON('/cars-bought/config', {custom_fields: fields, lock_buyer: $('lockBuyerInput').checked,
+                                         column_names, fee_words: split($('feeWordsInput').value),
+                                         fee_vat_rate: num($('feeVatRateInput').value),
+                                         evaluator_max_hours: num($('evalHoursInput').value),
+                                         supplier_names: $('supplierNamesInput').value.split('\n')
+                                             .map(l => l.split('=')).filter(p => p.length === 2)
+                                             .map(([text, supplier]) => ({text: text.trim(), supplier: supplier.trim()}))}).then(res => {
             if (res.status !== 'ok') { alert(res.message); return; }
             customFields = res.custom_fields;
             buyerCfg = res;

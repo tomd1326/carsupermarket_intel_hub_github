@@ -122,7 +122,6 @@ async function fetchData(force = false) {
         document.body.classList.remove('page-is-loading');
         const errEl = document.getElementById('table-error');
         errEl.textContent = 'Failed to load data: ' + e.message;
-        awsLoginIfExpired(errEl, e.message);
         errEl.classList.remove('d-none');
     } finally {
         if (btn) { btn.disabled = false; btn.innerHTML = '<i class="fas fa-sync-alt me-1"></i>Refresh Data'; }

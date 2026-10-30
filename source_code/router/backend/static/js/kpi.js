@@ -200,7 +200,6 @@
         const status = document.getElementById('statusText');
         status.textContent =
             what + ' - saving is turned off so the saved charts are not overwritten. ' + err.message;
-        awsLoginIfExpired(status, err.message);
         console.error(err);
         fetch(BASE_URL + '/kpi/client-error', {
             method: 'POST',
@@ -1877,6 +1876,9 @@
         const token = String(Date.now());
         loadToken = fromButton === true || fromButton === 'snowflake' ? token : '';
         spRefreshToken = fromButton === true || fromButton === 'sharepoint' ? token : '';
+        // Re-read the metric list too, so the chart editor shows columns
+        // renamed or added in Snowflake since the page opened.
+        if (loadToken) reloadMetricsCatalogue(loadToken).catch(() => {});
         if (!WBR) loadAtAllowance();
         const btn    = document.getElementById('loadBtn');
         const icon   = document.getElementById('loadIcon');
@@ -1912,7 +1914,6 @@
                 if (spPending.length) notes.push(spNote());
                 if (errors.length) notes.push('errors: ' + errors.join(' | '));
                 status.textContent = notes.length ? 'Loaded (' + notes.join('; ') + ')' : 'Loaded';
-                if (errors.length) awsLoginIfExpired(status, errors.join(' | '));
                 startSpPolling();
                 scheduleSpIdleCheck();
             })
@@ -4681,11 +4682,6 @@
         const box = document.getElementById('chartModalError');
         box.textContent = message;
         box.classList.add('show');
-        // Expired AWS sign-in: a button to sign in again. The popup stays open
-        // so nothing typed is lost; Save is pressed again afterwards.
-        awsLoginIfExpired(box, message, () => {
-            box.textContent = 'Signed in to AWS. Press Save again.';
-        });
     }
 
     // One min/max pair for Average charts (they share one scale), three for Sum.
@@ -7076,8 +7072,9 @@
     }
 
     // Reads the metric lists again, e.g. after a data source is added.
-    async function reloadMetricsCatalogue() {
-        const resp = await fetch(BASE_URL + '/kpi/metrics').then(r => r.json());
+    async function reloadMetricsCatalogue(refresh = '') {
+        const query = refresh ? '?refresh=' + encodeURIComponent(refresh) : '';
+        const resp = await fetch(BASE_URL + '/kpi/metrics' + query).then(r => r.json());
         if (resp.status !== 'ok') return;
         metricsCatalogue = resp.metrics || [];
         metricsByKey = Object.fromEntries(metricsCatalogue.map(m => [metricKey(m.source, m.column), m]));

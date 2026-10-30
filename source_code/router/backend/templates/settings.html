@@ -225,9 +225,9 @@
                             <option value="{{ m }}" {% if m == settings.cortex_model %}selected{% endif %}>{{ m }}</option>
                             {% endfor %}
                         </select>
-                        <button type="button" class="btn btn-outline-secondary" id="ai-refresh-models">Update Available Models</button>
+                        <button type="button" class="btn btn-outline-secondary" id="ai-refresh-models" disabled>Update Available Models</button>
                     </div>
-                    <div class="form-text mt-1" id="ai-refresh-note">Models are run through Snowflake Cortex. Update Available Models asks Snowflake which models it serves, then pick one and save.</div>
+                    <div class="form-text mt-1" id="ai-refresh-note">Ask AI is switched off until the Claude API is set up. The website no longer uses Snowflake AI, so it never spends Snowflake AI credits.</div>
                 </div>
             </div>
             <div class="card mb-4">
@@ -282,7 +282,7 @@
                     <div class="d-flex gap-2 align-items-center mb-3">
                         <label class="form-label mb-0" for="ai-page">Page</label>
                         <select class="form-select" id="ai-page" style="max-width: 260px;"></select>
-                        <button type="button" class="btn btn-outline-secondary" id="ai-preview-btn">Preview What Cortex Sees</button>
+                        <button type="button" class="btn btn-outline-secondary" id="ai-preview-btn">Preview What The AI Sees</button>
                     </div>
                     <label class="form-label" for="ai-instructions">Instructions</label>
                     <textarea class="form-control font-monospace" id="ai-instructions" rows="14"></textarea>
@@ -388,7 +388,7 @@
                             <button type="button" class="btn btn-primary" id="ai-draft-go">Draft</button>
                             <button type="button" class="btn btn-outline-secondary" id="ai-draft-cancel">Cancel</button>
                         </div>
-                        <div class="form-text" id="ai-draft-note">Cortex writes a description from the table's columns and any Column Notes already written for it. It is saved as Proposed for you to check.</div>
+                        <div class="form-text" id="ai-draft-note">The AI writes a description from the table's columns and any Column Notes already written for it. It is saved as Proposed for you to check. Switched off until the Claude API is set up.</div>
                     </div>
 
                     <div class="table-responsive">

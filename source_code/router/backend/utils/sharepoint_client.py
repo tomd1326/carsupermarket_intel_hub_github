@@ -257,46 +257,13 @@ class SharePointClient:
             resp.raise_for_status()
             return resp
 
-    def get_range_values_by_url(self, sharepoint_url: str, sheet_name: str, max_col: str, max_row: int,
-                                timeout: float = 120) -> list[list]:
-        """Cell values A1:{max_col}{max_row} of a sheet, fully blank rows at the
-        end removed. Row 0 is the first row of the sheet."""
-        encoded_sheet = requests.utils.quote(sheet_name)
-        address = requests.utils.quote(f"A1:{max_col}{max_row}")
-        resp = self._get_by_url(sharepoint_url,
-                                f"workbook/worksheets/{encoded_sheet}/range(address='{address}')?$select=values",
-                                timeout)
-        values = resp.json().get("values", [])
-        while values and all(c in (None, "") for c in values[-1]):
-            values.pop()
-        return values
-
-    def get_table_values_by_url(self, sharepoint_url: str, table_name: str, timeout: float = 120) -> list[list]:
-        """A named Excel table as rows: row 0 the column headers, in table order."""
-        encoded_table = requests.utils.quote(table_name)
-        columns = [c["name"] for c in self._get_by_url(
-            sharepoint_url, f"workbook/tables/{encoded_table}/columns?$select=name", timeout).json().get("value", [])]
-        rows = [columns]
-        drive_id, item_id = self._item_ids_by_url(sharepoint_url)
-        rows_url = (f"https://graph.microsoft.com/v1.0/drives/{drive_id}/items/{item_id}"
-                    f"/workbook/tables/{encoded_table}/rows")
-        while rows_url:
-            resp = requests.get(rows_url, headers=self._headers, timeout=timeout)
-            resp.raise_for_status()
-            body = resp.json()
-            for row_obj in body.get("value", []):
-                rows.append(row_obj.get("values", [[]])[0])
-            rows_url = body.get("@odata.nextLink")
-        return rows
-
-    def list_sheets_and_tables_by_url(self, sharepoint_url: str, timeout: float = 25) -> tuple[list, list]:
-        """(sheet names, table names) in the workbook. Opens the workbook, so
-        it can take several seconds on a big file, but reads no cells."""
-        sheets = [w["name"] for w in self._get_by_url(
-            sharepoint_url, "workbook/worksheets?$select=name", timeout).json().get("value", [])]
-        tables = [t["name"] for t in self._get_by_url(
-            sharepoint_url, "workbook/tables?$select=name", timeout).json().get("value", [])]
-        return sheets, tables
+    def get_file_content_by_url(self, sharepoint_url: str, timeout: float = 120) -> bytes:
+        """The whole file at sharepoint_url. Downloading the file and reading
+        it here (utils/workbook_values) takes 2 to 6s on the files the app
+        uses, where asking Graph for the cells of one sheet took 5 to 18s:
+        Graph has to open the workbook in Excel Online for that, and the
+        download is a plain file read."""
+        return self._get_by_url(sharepoint_url, "content", timeout).content
 
     def get_last_modified(self, subfolder: str, filename: str) -> str:
         """Same as get_last_modified_by_url, for a file found by folder and name

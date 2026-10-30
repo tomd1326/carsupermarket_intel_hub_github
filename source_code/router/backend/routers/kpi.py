@@ -1335,7 +1335,10 @@ KPI_DEFAULT_LAYOUT = {"rows": []}
 
 
 @router.get("/kpi/metrics")
-def kpi_metrics(request: Request, user: str = Depends(require_page_api(*_KPI_PAGES))):
+def kpi_metrics(request: Request, refresh: str = "", user: str = Depends(require_page_api(*_KPI_PAGES))):
+    # Load Data sends its token here too, so the metric list shows columns a
+    # dbt run has added or renamed since the page opened.
+    _refresh_daily_summary_columns(refresh)
     live_cols = _get_daily_summary_columns()
     metrics = []
     for col in _snowflake_metric_columns():

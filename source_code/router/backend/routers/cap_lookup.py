@@ -89,7 +89,10 @@ def cap_lookup_process(request: Request, payload: dict, user: str = Depends(requ
         except Exception as e:
             return idx, vrm, None, str(e)
 
-    with ThreadPoolExecutor(max_workers=10) as pool:
+    # Workers and rate limit from the global CAP settings (utils/api_limits.py).
+    from utils import api_limits
+    api_limits.apply()
+    with ThreadPoolExecutor(max_workers=api_limits.workers("cap", len(vrms))) as pool:
         futures = {pool.submit(fetch, (i, v)): i for i, v in enumerate(vrms)}
         for fut in as_completed(futures):
             idx, vrm, data, err = fut.result()

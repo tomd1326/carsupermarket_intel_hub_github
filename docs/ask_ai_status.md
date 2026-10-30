@@ -1,19 +1,22 @@
 # Ask AI - Status And Future Requirements
 
-Intelligence Hub. Last updated 2026-10-26.
+Intelligence Hub. Last updated 2026-10-30.
 
-## Current Status (live on `main`)
+## Current Status
 
-### Cortex
-- Every Ask AI call goes through `utils/cortex.py` (`cortex_complete`), which runs `SNOWFLAKE.CORTEX.COMPLETE` and logs the model, seconds taken and tokens in/out.
-- The model is chosen in Settings > AI. The dropdown is filled by **Update Available Models**, which reads `SHOW MODELS IN SNOWFLAKE.MODELS`. Models that cannot chat (embeddings, safety checks, Arctic tools) are left out. Claude, OpenAI GPT, Gemini, Grok, Llama, Mistral, Qwen and DeepSeek models are available on the account.
+### Ask AI is switched off (2026-10-30)
+- The website must not use Snowflake Cortex or any other Snowflake AI function, so it never spends Snowflake AI credits; it runs plain queries only.
+- Every Ask AI call still goes through `utils/cortex.py` (`cortex_complete`), which now raises `AIUnavailable` ("Ask AI is switched off until the Claude API is set up") without connecting to Snowflake. KPI, Orders & Deliveries and Draft With AI show that message.
+- Update Available Models in Settings > AI is disabled and its route returns the same message.
+- Ask AI comes back on the Claude API (Anthropic Console) once the key is available: replace the body of `cortex_complete` (and rename it), keeping the same callers.
+- The code alone does not stop Snowflake AI use: the app's Snowflake role can still call Cortex. Only an admin removing `SNOWFLAKE.CORTEX_USER` from that role makes it impossible.
 
 ### Settings > AI
 | Card | What it holds |
 |---|---|
-| Model | Model dropdown, Update Available Models |
+| Model | Model dropdown, Update Available Models (disabled while Ask AI is off) |
 | Pages | Ask AI on/off for KPI (`kpi_ai_summary`) and Orders & Deliveries (`orders_deliveries_ai`, off by default) |
-| Page Settings | Per page: instructions, answer length limit, temperature, messages remembered, knowledge size limit, Reset To Default, Preview What Cortex Sees |
+| Page Settings | Per page: instructions, answer length limit, temperature, messages remembered, knowledge size limit, Reset To Default, Preview What The AI Sees |
 | Knowledge | Entries every Ask AI reads: Table Descriptions, Column Notes (table and column picked from live Snowflake), Instructions, Learned Facts, YAML, Documents. Search and filters, Approve, Switch On/Off, Delete, Draft With AI, Add Starting Entries. Warns when a page's entries go over its size limit |
 
 ### Storage
@@ -28,15 +31,13 @@ Intelligence Hub. Last updated 2026-10-26.
 ### Code
 | File | Purpose |
 |---|---|
-| `utils/cortex.py` | Cortex call, model from Settings, timing and token log |
+| `utils/cortex.py` | The one place Ask AI calls a model. Switched off: raises `AIUnavailable`, no Snowflake connection |
 | `utils/ai_knowledge.py` | Entries, page settings and defaults, knowledge text builder with size limit |
 | `routers/ai_knowledge.py` | Admin-only JSON API behind Settings > AI, Draft With AI |
 | `static/js/ai_settings.js` | Page Settings and Knowledge cards |
 | `tests/test_ai_knowledge.py` | 8 tests |
 
 ## Known Gaps
-- Cortex usage and cost cannot be seen in the app. The app's Snowflake role cannot read `SNOWFLAKE.ACCOUNT_USAGE.CORTEX_FUNCTIONS_USAGE_HISTORY`; an admin would need to grant it.
-- The `carsupermarket_vehicle_list_evaluator.md` rules file still says the Cortex helper is in `kpi.py`. It needs updating.
 - The list of pages with an Ask AI (`AI_PAGES` in `utils/ai_knowledge.py`) stays in code, because each page needs its own code before it can be switched on.
 
 ## Future Requirements
@@ -50,10 +51,10 @@ Intelligence Hub. Last updated 2026-10-26.
 
 ### 2. Getting The Numbers
 Undecided - two options:
-- **A. Guided question builder, no LLM.** Question types with dropdowns (metric, period, comparison, filters). Business terms in Settings become SQL filters. "Why did X change" uses fixed SQL: change per unit, split by supplier channel, supplier and sales type, ranked by impact, with a mix-shift check. Answers are tables, charts and template sentences. No Cortex cost; numbers always exact; cannot understand free text.
-- **B. Structured query request from Cortex.** Cortex fills in a request (table, columns, filters, dates); the server checks every name against the allowed tables and columns before running it. Cortex only writes about the results, never does the arithmetic.
-- Either way: numbers come from SQL, never from the model; personal data (names, emails, phones) never goes to Cortex; row-level results go straight to the browser.
-- Questions to settle: which question types come first, and whether Cortex stays as an optional switch for writing the paragraph.
+- **A. Guided question builder, no LLM.** Question types with dropdowns (metric, period, comparison, filters). Business terms in Settings become SQL filters. "Why did X change" uses fixed SQL: change per unit, split by supplier channel, supplier and sales type, ranked by impact, with a mix-shift check. Answers are tables, charts and template sentences. No model cost; numbers always exact; cannot understand free text.
+- **B. Structured query request from the Claude API.** The model fills in a request (table, columns, filters, dates); the server checks every name against the allowed tables and columns before running it. The model only writes about the results, never does the arithmetic.
+- Either way: numbers come from SQL, never from the model; personal data (names, emails, phones) never goes to the model; row-level results go straight to the browser.
+- Questions to settle: which question types come first, and whether the model stays as an optional switch for writing the paragraph.
 
 ### 3. Knowledge
 - Check and approve the three starting entries.
@@ -61,11 +62,11 @@ Undecided - two options:
 - Reading the dbt YAML from the site directly (not built; the site only sees Snowflake).
 
 ### 4. Usage And Cost
-- A usage table in Settings > AI: calls, tokens and credits per model, last 7 and 30 days. Needs the Snowflake grant above.
+- A usage table in Settings > AI: calls, tokens and cost per model, last 7 and 30 days, from the Claude API's own usage figures.
 
 ### 5. Other Pages
 - Add Ask AI to more pages one at a time; each gets its own Page Settings and knowledge scope.
 - Orders & Deliveries: drill from an Ask AI finding into the View popup for individual vehicles.
 
 ### 6. Limits To Watch
-- API Gateway likely stops requests at 29 seconds. Cortex time is now logged; if steps run longer, split the work into one step per request or move it to a background job.
+- API Gateway stops requests at 29 seconds. Model calls that may run longer should be a background job the page polls (as Cars Bought's invoice reading does).
