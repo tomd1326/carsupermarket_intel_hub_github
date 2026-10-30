@@ -2450,7 +2450,7 @@ def _validate_stacked_row(row: dict) -> str | None:
         return "bad column_layout"
     if row.get("seg_label_pos", "center") not in ("center", "start", "end"):
         return "bad seg_label_pos"
-    for flag in ("pct", "seg_labels"):
+    for flag in ("pct", "seg_labels", "n1_line"):
         if not isinstance(row.get(flag, False), bool):
             return f"bad {flag}"
     if row.get("divide_by") is not None or row.get("weight_by") is not None:

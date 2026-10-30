@@ -21,7 +21,7 @@ from utils.db_utils import (get_database_connection, get_settings, save_settings
                             get_session_usernames, get_prod_activity_connection,
                             user_sessions_ready, read_session_settings, read_user_details,
                             close_sessions, SESSION_LIST_LIMIT, upsert_user,
-                            load_user_details, update_user_details,
+                            load_user_details, update_user_details, read_role_users, set_user_role,
                             load_all_page_access, set_page_access_many,
                             delete_user_and_access, ALWAYS_ENABLED_USERS,
                             APPEARANCE_COLOUR_SETTINGS,
@@ -1043,18 +1043,19 @@ def _users_source(q) -> tuple:
 
 
 def _read_prod_users() -> tuple:
-    """(people, last_logins, inactive) from prod's database. Read only: nothing
-    is created or changed there. inactive is the usernames that have not set a
-    password yet."""
+    """(people, last_logins, inactive, buyers) from prod's database. Read only:
+    nothing is created or changed there. inactive is the usernames that have
+    not set a password yet; buyers those with the Buyer role."""
     with get_prod_activity_connection() as conn:
         try:
             people = read_user_details(conn)
             last_logins = get_last_login_per_user(conn, write=False)
             inactive = read_inactive_users(conn)
+            buyers = read_role_users(conn, 'buyer', ensure=False)
         except Exception:
             conn.rollback()
             raise
-    return people, last_logins, inactive
+    return people, last_logins, inactive, buyers
 
 
 @router.get("/settings/users", response_class=HTMLResponse)
@@ -1067,13 +1068,14 @@ def users_page(request: Request, user: str = Depends(get_current_user)):
     people = {}
     all_users = []
     inactive = set()
+    buyers = set()
     login_mode = 'both'
     link_settings = {}
     error = None
     if viewing_prod:
         # Never falls back to this environment's users under a Prod heading.
         try:
-            people, last_logins, inactive = _read_prod_users()
+            people, last_logins, inactive, buyers = _read_prod_users()
             all_users = sorted(people)
         except Exception as e:
             logger.warning("Failed to load prod user accounts: %s", e)
@@ -1084,6 +1086,7 @@ def users_page(request: Request, user: str = Depends(get_current_user)):
                 last_logins = get_last_login_per_user(conn)
                 people = load_user_details(conn)
                 inactive = read_inactive_users(conn)
+                buyers = read_role_users(conn, 'buyer')
         except Exception as e:
             logger.warning("Failed to load user accounts data: %s", e)
         all_users = sorted(VALID_USERS)
@@ -1097,7 +1100,7 @@ def users_page(request: Request, user: str = Depends(get_current_user)):
     return templates.TemplateResponse("users.html", {
         "request": request, "user": user, "BASE_URL": BASE_URL,
         "login_mode": login_mode, "admin_username": ADMIN_USERNAME,
-        "inactive": inactive, "link_settings": link_settings,
+        "inactive": inactive, "buyers": buyers, "link_settings": link_settings,
         "password_rules_text": PASSWORD_RULES_TEXT,
         "all_users": all_users, "people": people,
         "last_logins": last_logins, "error": error,
@@ -1116,7 +1119,7 @@ def users_export(request: Request, user: str = Depends(get_current_user)):
     can_view_prod, source = _users_source(request.query_params)
     try:
         if can_view_prod and source == 'prod':
-            people, last_logins, _inactive = _read_prod_users()
+            people, last_logins, _inactive, _buyers = _read_prod_users()
             usernames = sorted(people)
         else:
             with get_database_connection() as conn:
@@ -1615,7 +1618,7 @@ def _end_prod_sessions(conn, reason: str, target: str) -> int:
         return 0
 
 
-def _save_prod_user(mode: str, target: str, details: dict, password: str, user: str):
+def _save_prod_user(mode: str, target: str, details: dict, password: str, user: str, is_buyer: bool = False):
     """save_user against prod's database. Prod's containers pick the change up
     when their user cache next reloads (within about a minute)."""
     if mode not in ('add', 'edit'):
@@ -1636,6 +1639,7 @@ def _save_prod_user(mode: str, target: str, details: dict, password: str, user: 
             elif mode == 'add':
                 add_pending_user(conn, target)
             update_user_details(conn, {target: details}, ensure=False)
+            set_user_role(conn, target, 'buyer', is_buyer)
         except Exception:
             conn.rollback()
             raise
@@ -1660,6 +1664,7 @@ def save_user(
     email: str = Form(default=""),
     password: str = Form(default=""),
     source: str = Form(default="this"),
+    is_buyer: str = Form(default=""),
     user: str = Depends(get_current_user),
 ):
     """The Add / Edit user popup on Settings > User Accounts.
@@ -1676,8 +1681,9 @@ def save_user(
     if target == ADMIN_USERNAME:
         return back(pwderr="The+admin+account+is+set+in+code")
     details = {'first_name': first_name.strip(), 'last_name': last_name.strip(), 'email': email.strip()}
+    buyer = is_buyer == "on"
     if to_prod:
-        return _save_prod_user(mode, target, details, password, user)
+        return _save_prod_user(mode, target, details, password, user, buyer)
 
     if mode == 'add':
         if target in VALID_USERS:
@@ -1693,6 +1699,7 @@ def save_user(
                 # No password yet: the user is activated with a link from the Edit popup.
                 pwd_hash = add_pending_user(conn, target)
             update_user_details(conn, {target: details})
+            set_user_role(conn, target, 'buyer', buyer)
         VALID_USERS[target] = pwd_hash
         core.reload_user_details()
         logger.info("User %s created by %s%s", target, user, "" if password else " (waiting for activation)")
@@ -1708,6 +1715,7 @@ def save_user(
     ended = 0
     with get_database_connection() as conn:
         update_user_details(conn, {target: details})
+        set_user_role(conn, target, 'buyer', buyer)
         if password:
             pwd_hash = hashlib.sha256(password.encode()).hexdigest()
             upsert_user(conn, target, pwd_hash)

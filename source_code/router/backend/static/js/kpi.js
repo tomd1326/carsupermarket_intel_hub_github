@@ -1912,6 +1912,7 @@
                 if (spPending.length) notes.push(spNote());
                 if (errors.length) notes.push('errors: ' + errors.join(' | '));
                 status.textContent = notes.length ? 'Loaded (' + notes.join('; ') + ')' : 'Loaded';
+                if (errors.length) awsLoginIfExpired(status, errors.join(' | '));
                 startSpPolling();
                 scheduleSpIdleCheck();
             })
@@ -3001,7 +3002,18 @@
         if (table) loadVehColumnDraft(table);
     }
 
-    const VEHICLE_NUMBER_TYPES = ['NUMBER', 'FLOAT', 'DECIMAL', 'NUMERIC', 'INT', 'INTEGER', 'BIGINT', 'DOUBLE', 'REAL'];
+    // From Edit Chart > View Vehicles to the same Settings page, on the chosen
+    // table. The chart popup closes without saving.
+    function openVehSettingsFromChart() {
+        if (!confirm('Close this chart without saving and open the View Vehicles settings?')) return;
+        const table = document.getElementById('vehChartTableSelect').value;
+        closeChartModal();
+        openSettingsModal();
+        showSettingsTab('setGroupVehicles');
+        if (table) loadVehColumnDraft(table);
+    }
+
+    const VEHICLE_NUMBER_TYPES =['NUMBER', 'FLOAT', 'DECIMAL', 'NUMERIC', 'INT', 'INTEGER', 'BIGINT', 'DOUBLE', 'REAL'];
 
     // How a column's values show in the list, set per column in Settings.
     const VEH_FORMATS = [
@@ -3543,7 +3555,8 @@
                 const d = {
                     ...results[0],
                     stale_date: results.map(r => r.stale_date).find(Boolean) || null,
-                    stacked: results.map(r => ({ m: r.monthly_values, w: r.weekly_values, d: r.values })),
+                    stacked: results.map(r => ({ m: r.monthly_values, w: r.weekly_values, d: r.values,
+                                                 mn1: r.monthly_values_n1, wn1: r.weekly_values_n1, dn1: r.values_n1 })),
                 };
                 // Per Date: the chart's own figures (kpi:row:<id>). A 100%
                 // chart's weeks and months take the average day, like Average.
@@ -3606,6 +3619,14 @@
         };
         // Series on the right-hand axis are lines: not in the columns, totals or 100%.
         const onRight = plotted.map(p => p.s.axis === 'secondary');
+        // N-1 line: only for a chart that is one plain column series (Show N-1 Line).
+        if (row.n1_line && plotted.length === 1 && !plotted[0].split && !onRight[0] && !pct) {
+            const one = d.stacked[0];
+            if (one.mn1) periods.m.n1 = one.mn1;
+            if (one.wn1) periods.w.n1 = one.wn1;
+            if (one.dn1) periods.d.n1 = rollingOn(row.id) ? rolling7(one.dn1) : one.dn1;
+        }
+        const withN1 = (k, base) => periods[k].n1 ? [...base, periods[k].n1] : base;
         Object.values(periods).forEach(p => {
             p.totals = p.labels.map((_, i) => {
                 const known = p.series.filter((_s, j) => !onRight[j]).map(s => s[i]).filter(v => v !== null && v !== undefined);
@@ -3621,7 +3642,7 @@
         const targets_ = stackedTargets(row, d, periods);
         const ranges = pct
             ? ['m', 'w', 'd'].map(() => ({ yMin: 0, yMax: 100, unit: 20 }))
-            : calcRowRanges(['m', 'w', 'd'].map(k => ({ series: side ? periods[k].series.filter((_s, j) => !onRight[j]) : [periods[k].totals], min: (row.y_min || {})[k], max: (row.y_max || {})[k] })),
+            : calcRowRanges(['m', 'w', 'd'].map(k => ({ series: withN1(k, side ? periods[k].series.filter((_s, j) => !onRight[j]) : [periods[k].totals]), min: (row.y_min || {})[k], max: (row.y_max || {})[k] })),
                 row.agg, sharedAxisValue(row.y_min), sharedAxisValue(row.y_max));
         const opts = { fmt, fullFmt: rowFullFormatter(row, pct), tickFmt, pct, side, colours: plotted.map(p => p.colour), names: plotted.map(p => p.name),
                        splits: plotted.map(p => (p.split ? p.split.part : null)),
@@ -3632,6 +3653,7 @@
         const at = { m: 0, w: 1, d: 2 };
         return targets.map(({ k, canvasId, existing, first }) => buildStackedChart(canvasId, periods[k], targets_[k], existing,
             { ...opts, range: ranges[at[k]], rightRange: rightRanges && rightRanges[at[k]], onRight, day: k === 'd',
+              n1Labels: k === 'w' ? d.weekly_n1_labels : null,
               notes: { rowId: row.id, kind: k, starts: periods[k].starts, first: first || 0 } }));
     }
 
@@ -3813,6 +3835,13 @@
             categoryPercentage: 0.85,
             barPercentage: 0.85,
         }));
+        if (hasValues(p.n1)) {
+            datasets.push({
+                type: 'line', label: 'N-1', data: p.n1, order: 1,
+                borderColor: settings.n1_line_colour || N1_COLOUR, borderWidth: settings.n1_line_px || 1.5,
+                borderDash: [5, 4], pointRadius: 0, fill: false, tension: 0, spanGaps: true,
+            });
+        }
         if (hasValues(target)) {
             datasets.push({
                 type: 'line', label: 'Target', data: target, stack: 'target', order: 1,
@@ -3866,6 +3895,7 @@
                                             `    ${ds.$limitName}: ${opts.fullFmt(v)}`,
                                             `    ${sets[c.datasetIndex + 1].label}: ${opts.fullFmt(upper)}`];
                                 }
+                                if (ds.label === 'N-1' && opts.n1Labels) return `N-1 (${opts.n1Labels[c.dataIndex]}): ${opts.fullFmt(v)}`;
                                 return `${ds.label}: ${opts.fullFmt(v)}`;
                             },
                             footer: items => {
@@ -4651,6 +4681,11 @@
         const box = document.getElementById('chartModalError');
         box.textContent = message;
         box.classList.add('show');
+        // Expired AWS sign-in: a button to sign in again. The popup stays open
+        // so nothing typed is lost; Save is pressed again afterwards.
+        awsLoginIfExpired(box, message, () => {
+            box.textContent = 'Signed in to AWS. Press Save again.';
+        });
     }
 
     // One min/max pair for Average charts (they share one scale), three for Sum.
@@ -4779,6 +4814,8 @@
         document.getElementById('pctInput').checked = stacked && !!row.pct;
         document.getElementById('segLabelsInput').checked = stacked && (!!row.seg_labels || !!row.pct);
         document.getElementById('segLabelPosSelect').value = stacked && row.seg_label_pos ? row.seg_label_pos : 'center';
+        // On for a new chart; a saved chart keeps what it was saved with.
+        document.getElementById('n1LineInput').checked = stacked ? !!row.n1_line : true;
         onPctChange();
         applyChartTypeUi();
     }
@@ -4825,9 +4862,10 @@
 
     // Options for a series' metric list: every metric, grouped by source,
     // keeping a saved one that has gone from the list.
-    function seriesMetricOptions(s, blank = '(choose a metric)') {
+    function seriesMetricOptions(s, blank = '(choose a metric)', onlySource = null) {
         const key = s.metric ? metricKey(s.source || 'snowflake', s.metric) : '';
         const group = source => {
+            if (onlySource && source !== onlySource) return '';
             const items = metricsCatalogue.filter(m => m.source === source);
             if (!items.length) return '';
             return `<optgroup label="${escHtml(sourceLabel(source))}">`
@@ -4838,6 +4876,36 @@
         };
         const missing = key && !metricsByKey[key] ? `<option value="${escHtml(key)}" selected>${escHtml(s.metric)}</option>` : '';
         return `<option value="">${blank}</option>` + missing + allMetricGroups(group);
+    }
+
+    // A Table box above a series' metric box, like the Line chart's: the
+    // metric list shows only that table's metrics. field is where the chosen
+    // table is kept on the series (UI only, never saved): _table for the
+    // metric, _mtable for Multiplied By, _stable for Split At. Until one is
+    // picked it follows the table of the metric already chosen.
+    function seriesTableOptions(s, cur, field) {
+        const sources = metricSources().filter(x => metricsCatalogue.some(m => m.source === x));
+        const table = s[field] || (cur && cur.metric ? cur.source || 'snowflake' : '') || sources[0] || '';
+        if (table && !sources.includes(table)) sources.unshift(table);
+        return { table, html: sources.map(x => `<option value="${escHtml(x)}" ${x === table ? 'selected' : ''}>${escHtml(sourceLabel(x))}</option>`).join('') };
+    }
+
+    function seriesPick(s, i, cur, field, blank, onMetric) {
+        const t = seriesTableOptions(s, cur, field);
+        return `<div class="series-pick">
+                        <select title="Table" onchange="onSeriesTable(${i}, '${field}', this.value)">${t.html}</select>
+                        <select onchange="${onMetric}">${seriesMetricOptions(cur || {}, blank, t.table)}</select>
+                    </div>`;
+    }
+
+    // A different table clears the metric chosen from the old one.
+    function onSeriesTable(i, field, table) {
+        const s = seriesDraft[i];
+        s[field] = table;
+        if (field === '_table') { s.metric = ''; s.label = ''; }
+        else if (field === '_mtable') s.multiply_by = null;
+        else s.split_at = null;
+        renderSeriesList();
     }
 
     function renderSeriesList() {
@@ -4852,10 +4920,12 @@
             const colour = s.colour || themeColour;
             return `
                 <div class="series-row">
-                    <select onchange="onSeriesMetric(${i}, this.value)">${seriesMetricOptions(s)}</select>
-                    <select title="Multiplied By: each day of the metric times the same day of this one"
-                            class="${s.multiply_by && s.multiply_by.metric ? 'series-multiplied' : ''}"
-                            onchange="onSeriesMultiply(${i}, this.value)">${seriesMetricOptions(s.multiply_by || {}, '(Not Multiplied)')}</select>
+                    ${seriesPick(s, i, s, '_table', '(choose a metric)', `onSeriesMetric(${i}, this.value)`)}
+                    <div class="series-pick ${s.multiply_by && s.multiply_by.metric ? 'series-multiplied' : ''}"
+                         title="Multiplied By: each day of the metric times the same day of this one">
+                        <select title="Table" onchange="onSeriesTable(${i}, '_mtable', this.value)">${seriesTableOptions(s, s.multiply_by, '_mtable').html}</select>
+                        <select onchange="onSeriesMultiply(${i}, this.value)">${seriesMetricOptions(s.multiply_by || {}, '(Not Multiplied)', seriesTableOptions(s, s.multiply_by, '_mtable').table)}</select>
+                    </div>
                     <input type="text" maxlength="60" value="${escHtml(s.label || '')}"
                            placeholder="${escHtml(derivedKey(s) ? derivedDefaultName(s) : (s.metric || 'Legend name'))}"
                            title="${derivedKey(s)
@@ -4900,7 +4970,8 @@
                 <div class="series-split">
                     <div class="series-split-head">
                         <span class="series-split-tag">Split ${escHtml(name)} At</span>
-                        <select onchange="onSeriesSplit(${i}, this.value)">${seriesMetricOptions(s.split_at || {}, '(Not Split)')}</select>
+                        <select title="Table" onchange="onSeriesTable(${i}, '_stable', this.value)">${seriesTableOptions(s, s.split_at, '_stable').html}</select>
+                        <select onchange="onSeriesSplit(${i}, this.value)">${seriesMetricOptions(s.split_at || {}, '(Not Split)', seriesTableOptions(s, s.split_at, '_stable').table)}</select>
                     </div>
                     ${on ? '' : `
                     <div class="series-split-help">Optional. Choose a metric to draw ${escHtml(name)} in two parts each day: the part up to that metric's figure, and the part above it in a lighter colour on top. Leave as (Not Split) for a normal single bar.</div>`}
@@ -5056,6 +5127,7 @@
             pct: document.getElementById('pctInput').checked,
             seg_labels: document.getElementById('segLabelsInput').checked,
             seg_label_pos: document.getElementById('segLabelPosSelect').value,
+            n1_line: document.getElementById('n1LineInput').checked,
             title,
             subtitle: document.getElementById('subtitleInput').value.trim(),
             agg: radioValue('aggRadio', 'sum'),
@@ -5181,7 +5253,7 @@
         if (mode !== 'calc') delete updated.target_calc;
         delete updated.vehicles;
         if (vehicles) updated.vehicles = vehicles;
-        ['chart_type', 'series', 'theme', 'pct', 'seg_labels', 'seg_label_pos', 'column_layout', 'stack_target'].forEach(k => delete updated[k]);
+        ['chart_type', 'series', 'theme', 'pct', 'seg_labels', 'seg_label_pos', 'n1_line', 'column_layout', 'stack_target'].forEach(k => delete updated[k]);
         delete updated.weight_by;
         const weightBy = readWeightBy();
         if (weightBy) updated.weight_by = weightBy;
