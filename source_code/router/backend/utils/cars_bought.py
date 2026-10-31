@@ -833,31 +833,6 @@ def manual_check(vrms_mileage: list) -> dict:
     return results
 
 
-def cap_lookup(vrms_mileage: list) -> dict:
-    """{vrm: {cap_id, make, model, derivative, cap_clean, note}} from the CAP
-    VRM service, for vehicles the evaluator has no CAP data for."""
-    from concurrent.futures import ThreadPoolExecutor
-    from clients.cap_client import CAPClient
-    from clients.structs import VehicleRow
-    from utils import api_limits
-    cap = CAPClient()
-
-    def one(item):
-        vrm, mileage = item
-        try:
-            with api_limits.quick():
-                d = cap.vrm_valuation(VehicleRow(vrm=vrm, mileage=mileage or 0))
-        except Exception as e:
-            return vrm, {"note": f"CAP lookup failed: {e}"}
-        return vrm, {"cap_id": to_int(d.get("capid")), "make": d.get("capman"), "model": d.get("capmod"),
-                     "derivative": d.get("capder"), "cap_clean": _num(d.get("clean")) if mileage else None,
-                     "note": d.get("note")}
-
-    if not vrms_mileage:
-        return {}
-    api_limits.apply()
-    with ThreadPoolExecutor(max_workers=api_limits.workers("cap", len(vrms_mileage))) as pool:
-        return dict(pool.map(one, vrms_mileage))
 
 
 # ── Custom fields (stored in settings) ───────────────────────────────────────

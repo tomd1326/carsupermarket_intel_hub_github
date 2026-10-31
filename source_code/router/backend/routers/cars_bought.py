@@ -307,11 +307,11 @@ def _extract(filename: str, data: bytes, stage=lambda name: None) -> dict:
     except Exception as e:
         logger.warning(f"Cars Bought: {filename} not saved to S3: {e}")
         s3_key = None
-    # A supplier the Supplier Stock Evaluator holds (e.g. Enterprise): its
-    # stored data for these cars is used straight away. Others wait for the
-    # Look Up CAP button.
+    # CAP and Autotrader come from live lookups (Look Up CAP & AT), not the
+    # evaluator's stored data: for a batch this size fresh calls are quick
+    # enough. The supplier id is kept on the batch when it is an evaluator one.
     supplier_id = _evaluator_supplier_id(result.get("supplier_name"))
-    result["vehicles"] = _enrich(result["vehicles"], supplier_id, use_evaluator=supplier_id is not None)
+    result["vehicles"] = _enrich(result["vehicles"], use_evaluator=False)
     return {"status": "ok", "read_by": read_by, "s3_key": s3_key, "filename": filename,
             "supplier_id": supplier_id, **result}
 
@@ -335,47 +335,17 @@ def cars_bought_from_evaluator(payload: dict, user: str = Depends(require_page_a
     return {"status": "ok", "vehicles": rows, "not_found": missing}
 
 
-_LOOKUP_FIELDS = ("cap_id", "make", "model", "derivative", "cap_clean", "at_retail_valuation", "at_rating")
-
-
 @router.post("/cars-bought/cap-lookup")
 def cars_bought_cap_lookup(payload: dict, user: str = Depends(require_page_api(_PAGE))):
-    """{vehicles: [{vrm, mileage}], mode} -> {results: {vrm: {...fields,
-    source, age_hours, note}}}.
-    mode 'auto' (Look Up CAP): the evaluator's stored CAP and Autotrader data
-    when recent enough (any supplier), then live CAP for cars it has no CAP
-    ID for. mode 'manual' (Manual Check): live CAP and live Autotrader for
-    every car, for comparing. The page sends 20 (auto) or 5 (manual) at a
-    time, so one request stays inside the 29 second limit."""
-    mode = (payload or {}).get("mode") or "auto"
+    """{vehicles: [{vrm, mileage}]} -> {results: {vrm: {cap_id, make, model,
+    derivative, cap_clean, at_retail_valuation, at_rating, note}}}. Live CAP
+    and Autotrader every time. The page sends one car per request (8 at once),
+    so a slow car stays inside the 29 second limit on its own."""
     items = [(cb.clean_vrm(v.get("vrm")), cb.to_int(v.get("mileage")))
-             for v in ((payload or {}).get("vehicles") or [])[:25] if cb.clean_vrm(v.get("vrm"))]
+             for v in ((payload or {}).get("vehicles") or [])[:8] if cb.clean_vrm(v.get("vrm"))]
     if not items:
         return {"status": "error", "message": "No VRMs to look up"}
-    if mode == "manual":
-        results = cb.manual_check(items[:8])
-        for r in results.values():
-            r["source"] = "manual"
-        return {"status": "ok", "results": results}
-
-    found = _evaluator_data([v for v, _ in items])
-    results = {}
-    for vrm, _ in items:
-        ev = found.get(vrm)
-        if ev:
-            results[vrm] = {**{k: ev.get(k) for k in _LOOKUP_FIELDS}, "source": "evaluator",
-                            "cap_source": "evaluator" if ev.get("cap_id") else None,
-                            "age_hours": ev.get("evaluator_age_hours"), "evaluator_supplier": ev.get("evaluator_supplier")}
-    need = [(v, m) for v, m in items if not (results.get(v) or {}).get("cap_id")]
-    for vrm, c in cb.cap_lookup(need).items():
-        r = results.setdefault(vrm, {})
-        for k in ("cap_id", "make", "model", "derivative", "cap_clean"):
-            if r.get(k) in (None, "") and c.get(k) not in (None, ""):
-                r[k] = c[k]
-        r["cap_source"] = "live"
-        r.setdefault("source", "live")
-        r["note"] = c.get("note") if not c.get("cap_id") else None
-    return {"status": "ok", "results": results}
+    return {"status": "ok", "results": cb.manual_check(items)}
 
 
 @router.post("/cars-bought/submit")

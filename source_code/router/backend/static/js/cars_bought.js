@@ -55,50 +55,14 @@ function vehicleText(r) {
     if (r.already_bought) tags.push(`<span class="tag tag-warn">Already Bought ${esc(r.already_bought)}</span>`);
     if (r.fees && r.fees.length) tags.push(`<span class="tag tag-info" title="${esc(r.fees.map(f => `${f.description}: ${f.gross ?? f.net}`).join('\n'))}">${r.fees.length} Fee${r.fees.length > 1 ? 's' : ''}</span>`);
     if (!r.cap_id) tags.push(capChecked.has(r.vrm) ? '<span class="tag tag-warn">No CAP Match</span>'
-                                                   : '<span class="tag tag-info">Press Look Up CAP</span>');
-    const src = sourceLabel(r);
-    if (src) tags.push(`<span class="tag tag-src">${src}</span>`);
-    const d = diffs(r);
-    if (d.length) tags.push(`<span class="tag tag-diff" title="${esc(d.map(x => `${x.label}: shown ${x.shown}, manual check ${x.manual}`).join('\n'))}">`
-        + `Differs From Manual Check (${d.map(x => x.label).join(', ')})</span>`
-        + `<button class="btn btn-sm btn-outline-danger row-check-btn ms-1" data-usemanual="${rows.indexOf(r)}">Use Manual</button>`);
+                                                   : '<span class="tag tag-info">Press Look Up CAP &amp; AT</span>');
+    if (r.cap_source === 'live') tags.push('<span class="tag tag-src">CAP & AT: Live Lookup</span>');
+    else if (r.cap_source === 'typed') tags.push('<span class="tag tag-src">CAP ID: Typed In</span>');
     return html + (tags.length ? `<div>${tags.join('')}</div>` : '');
-}
-
-// Where the CAP and Autotrader figures shown came from.
-function sourceLabel(r) {
-    const age = h => h == null ? '' : h < 1 ? ', Under 1h Old' : `, ${Math.round(h)}h Old`;
-    if (r.cap_source === 'manual') return 'CAP & AT: Manual Check';
-    if (r.cap_source === 'typed') return 'CAP ID: Typed In';
-    if (r.cap_source === 'evaluator') return `CAP & AT: Evaluator${age(r.evaluator_age_hours)}`;
-    if (r.cap_source === 'live') return 'CAP: Live Lookup' + (r.at_retail_valuation != null ? ' / AT: Evaluator' : '');
-    return '';
-}
-
-// Fields where the figures shown differ from the row's manual check.
-function diffs(r) {
-    const m = r.manual;
-    if (!m || r.cap_source === 'manual') return [];
-    const out = [];
-    const money = (k, label) => {
-        if (m[k] != null && r[k] != null && Math.abs(num(r[k]) - num(m[k])) >= 1) out.push({key: k, label, shown: gbp(r[k]), manual: gbp(m[k])});
-    };
-    if (m.cap_id && r.cap_id && String(m.cap_id) !== String(r.cap_id)) out.push({key: 'cap_id', label: 'CAP ID', shown: r.cap_id, manual: m.cap_id});
-    if (m.derivative && r.derivative && m.derivative.trim().toLowerCase() !== String(r.derivative).trim().toLowerCase())
-        out.push({key: 'derivative', label: 'Derivative', shown: r.derivative, manual: m.derivative});
-    money('cap_clean', 'CAP Clean');
-    money('at_retail_valuation', 'AT Valuation');
-    return out;
 }
 
 function renderRows() {
     $('vehBody').innerHTML = rows.map((r, i) => {
-        const diffKeys = new Set(diffs(r).map(x => x.key));
-        const valueCell = (k, first) => {
-            const d = diffKeys.has(k);
-            const title = d ? ` title="Manual check: ${esc(gbp(r.manual[k]))}"` : '';
-            return `<td class="text-end${first ? ' group-start' : ''}${d ? ' is-diff' : ''}"${title}>${gbp(r[k])}${d ? `<div class="small">Manual ${gbp(r.manual[k])}</div>` : ''}</td>`;
-        };
         const money = MONEY_COLS.map(([k, , g]) =>
             `<td class="${g ? 'group-start' : ''}"><input class="form-control num" data-i="${i}" data-k="${k}" value="${r[k] ?? ''}"></td>`).join('');
         const custom = customFields.map((f, j) => {
@@ -111,13 +75,12 @@ function renderRows() {
             <td><input class="form-control vrm" data-i="${i}" data-k="vrm" value="${esc(r.vrm)}"></td>
             <td><input class="form-control mil" data-i="${i}" data-k="mileage" value="${r.mileage ?? ''}"></td>
             <td class="desc">${vehicleText(r)}</td>
-            <td><input class="form-control capid${diffKeys.has('cap_id') ? ' is-diff' : ''}" data-i="${i}" data-k="cap_id" value="${r.cap_id ?? ''}"
-                ${diffKeys.has('cap_id') ? `title="Manual check: ${esc(r.manual.cap_id)}"` : ''}></td>
+            <td><input class="form-control capid" data-i="${i}" data-k="cap_id" value="${r.cap_id ?? ''}"></td>
             ${money}
-            ${valueCell('at_retail_valuation', true)}
-            ${valueCell('cap_clean', false)}
+            <td class="text-end group-start">${gbp(r.at_retail_valuation)}</td>
+            <td class="text-end">${gbp(r.cap_clean)}</td>
             ${custom}
-            <td class="text-nowrap"><button class="btn btn-sm btn-outline-primary" data-check="${i}" title="Manual check: live CAP and Autotrader for this car"><i class="fas fa-sync-alt"></i></button>
+            <td class="text-nowrap"><button class="btn btn-sm btn-outline-primary" data-check="${i}" title="Look up CAP and Autotrader again for this car"><i class="fas fa-sync-alt"></i></button>
                 <button class="btn btn-sm btn-outline-danger" data-del="${i}" title="Remove"><i class="fas fa-times"></i></button></td>
         </tr>`;
     }).join('');
@@ -220,14 +183,7 @@ $('vehBody').addEventListener('click', e => {
     const del = e.target.closest('[data-del]');
     if (del) { rows.splice(+del.dataset.del, 1); renderRows(); return; }
     const chk = e.target.closest('[data-check]');
-    if (chk) { runLookup('manual', [rows[+chk.dataset.check]]); return; }
-    const use = e.target.closest('[data-usemanual]');
-    if (use) {
-        const r = rows[+use.dataset.usemanual];
-        LOOKUP_FIELDS.forEach(k => { if (r.manual[k] != null && r.manual[k] !== '') r[k] = r.manual[k]; });
-        r.cap_source = 'manual';
-        renderRows();
-    }
+    if (chk && rows[+chk.dataset.check].vrm) runLookup([rows[+chk.dataset.check]]);
 });
 ['bNet', 'bVat', 'bGross'].forEach(id => $(id).addEventListener('input', renderTotals));
 $('addRowBtn').addEventListener('click', () => { rows.push({vrm: '', fees: [], custom: {}}); renderRows(); });
@@ -330,10 +286,8 @@ function readFile(file) {
                 capChecked = new Set();
                 rows = res.vehicles;
                 batchMeta = {source: 'upload', filename: res.filename, s3_key: res.s3_key, supplier_id: res.supplier_id};
-                const fromEv = rows.filter(r => r.cap_source === 'evaluator').length;
                 msg(`${rows.length} vehicle${rows.length === 1 ? '' : 's'} read from ${esc(res.filename)}.`
-                    + (res.supplier_id ? ` ${fromEv} filled from the Supplier Stock Evaluator (${esc(res.supplier_name)}).` : '')
-                    + ' Press Look Up CAP for the rest, and check every row against the invoice before submitting.', 'success');
+                    + ' Press Look Up CAP & AT, and check every row against the invoice before submitting.', 'success');
                 showBatch(res);
             })
             .catch(err => { rpHide(); modal('uploadModal').hide(); msg('Error: ' + esc(err.message), 'danger'); });
@@ -378,75 +332,56 @@ function capPending() {
 const LOOKUP_FIELDS = ['cap_id', 'make', 'model', 'derivative', 'cap_clean', 'at_retail_valuation', 'at_rating'];
 const blank = v => v === null || v === undefined || v === '';
 
-/* mode 'auto' (Look Up CAP): evaluator data (CAP and Autotrader) first, then
-   live CAP for cars it has no CAP ID for; fills blanks only.
-   mode 'manual': live CAP and Autotrader, kept as r.manual for comparing;
-   fills blanks, and any difference from what is shown is highlighted.
-   Batches go out several at once: each request is its own server, so the
-   whole batch takes about as long as the slowest car. */
-async function runLookup(mode, todo) {
-    // One car per request, 8 at once: the count goes up car by car, and a
-    // slow car (CAP timing out) never holds up the rest.
-    const size = 1, parallel = 8;
-    const parts = [];
-    for (let i = 0; i < todo.length; i += size) parts.push(todo.slice(i, i + size));
+/* Live CAP and Autotrader for each car, always fresh API calls (no
+   evaluator data: for a batch this size it is not worth it). The results
+   replace any CAP / Autotrader figures already on the row.
+   One car per request, 8 at once: the count goes up car by car, and a slow
+   car (CAP timing out) never holds up the rest. */
+async function runLookup(todo) {
+    const parallel = 8;
     let done = 0, failed = 0, lastError = '';
-    const btns = ['capBtn', 'manualBtn'];
-    btns.forEach(id => { $(id).disabled = true; });
-    const label = mode === 'manual' ? 'Manual check (live CAP and Autotrader)' : 'Looking up CAP';
+    $('capBtn').disabled = true;
+    const label = 'Looking up CAP and Autotrader';
     busy(`${label}... 0 of ${todo.length}`);
-    const one = async part => {
+    const one = async r => {
         try {
-            const res = await postJSON('/cars-bought/cap-lookup', {mode, vehicles: part.map(r => ({vrm: r.vrm, mileage: num(r.mileage)}))});
+            const res = await postJSON('/cars-bought/cap-lookup', {vehicles: [{vrm: r.vrm, mileage: num(r.mileage)}]});
             if (res.status !== 'ok') throw new Error(res.message);
-            part.forEach(r => {
-                const c = res.results[r.vrm] || {};
-                capChecked.add(r.vrm);
-                const filledCap = blank(r.cap_id) && !blank(c.cap_id);
-                LOOKUP_FIELDS.forEach(k => { if (blank(r[k]) && !blank(c[k])) r[k] = c[k]; });
-                if (mode === 'manual') {
-                    r.manual = c;
-                    if (filledCap) r.cap_source = 'manual';
-                } else if (filledCap) {
-                    r.cap_source = c.cap_source || c.source;
-                    if (c.source === 'evaluator') { r.evaluator_age_hours = c.age_hours; r.from_evaluator = true; r.evaluator_supplier = c.evaluator_supplier; }
-                }
-                r.lookup_note = c.note || null;
-            });
+            const c = res.results[r.vrm] || {};
+            capChecked.add(r.vrm);
+            LOOKUP_FIELDS.forEach(k => { if (!blank(c[k])) r[k] = c[k]; });
+            if (!blank(c.cap_id)) r.cap_source = 'live';
+            r.lookup_note = c.note || null;
         } catch (e) {
-            failed += part.length;
+            failed += 1;
             lastError = e.message;
         }
-        done += part.length;
+        done += 1;
         busy(`${label}... ${done} of ${todo.length}`);
         renderRows();
     };
-    for (let i = 0; i < parts.length; i += parallel) await Promise.all(parts.slice(i, i + parallel).map(one));
+    // A pool of 8: the next car starts as soon as any one finishes.
+    const queue = todo.slice();
+    await Promise.all(Array.from({length: Math.min(parallel, queue.length)}, async () => {
+        while (queue.length) await one(queue.shift());
+    }));
     busy('');
-    btns.forEach(id => { $(id).disabled = false; });
+    $('capBtn').disabled = false;
     const noCap = todo.filter(r => !r.cap_id).map(r => r.vrm + (r.lookup_note ? ` (${r.lookup_note})` : ''));
-    const differ = mode === 'manual' ? todo.filter(r => diffs(r).length).length : 0;
-    const parts2 = [];
-    if (failed) parts2.push(`${failed} could not be checked, try again (${esc(lastError)})`);
-    if (noCap.length) parts2.push(`no CAP match for ${noCap.map(esc).join(', ')} (type the CAP ID in if you know it)`);
-    if (differ) parts2.push(`${differ} differ from the manual check (highlighted in red)`);
-    msg(parts2.length ? parts2.join('; ') : (mode === 'manual' ? `Manual check done for ${todo.length}, no differences.` : `CAP found for all ${todo.length}.`),
-        parts2.length ? 'warning' : 'success');
+    const notes = [];
+    if (failed) notes.push(`${failed} could not be checked, try again (${esc(lastError)})`);
+    if (noCap.length) notes.push(`no CAP match for ${noCap.map(esc).join(', ')} (type the CAP ID in if you know it)`);
+    msg(notes.length ? notes.join('; ') : `CAP and Autotrader found for all ${todo.length}.`, notes.length ? 'warning' : 'success');
 }
 
 $('capBtn').addEventListener('click', () => {
-    const todo = rows.filter(r => r.vrm && (blank(r.cap_id) || blank(r.at_retail_valuation)));
-    if (!todo.length) { msg('Every row already has CAP and Autotrader figures', 'success'); return; }
-    runLookup('auto', todo);
-});
-$('manualBtn').addEventListener('click', () => {
     const todo = rows.filter(r => r.vrm);
-    if (todo.length) runLookup('manual', todo);
+    if (todo.length) runLookup(todo);
 });
 
 $('submitBtn').addEventListener('click', () => {
     if (!$('bBuyer').value) { alert('Choose the buyer'); return; }
-    if (capPending().length) { alert(`Press Look Up CAP first: ${capPending().length} row(s) have no CAP ID yet.`); return; }
+    if (capPending().length) { alert(`Press Look Up CAP & AT first: ${capPending().length} row(s) have no CAP ID yet.`); return; }
     const t = rowTotals();
     const mismatch = [['net', 'bNet'], ['vat', 'bVat'], ['gross', 'bGross']]
         .some(([p, id]) => num($(id).value) !== null && Math.abs(t[p] - num($(id).value)) > 0.01);
