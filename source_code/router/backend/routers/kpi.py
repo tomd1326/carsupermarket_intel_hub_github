@@ -1470,6 +1470,8 @@ KPI_COLOUR_SETTINGS = {
     "n1_line_colour": "#6b7280",
     "target_line_colour": "#e53e3e",
     "wbr_slide_border_colour": "#cbd5e1",
+    # The Admins Only badge on charts only the admin can see yet.
+    "admin_only_badge_colour": "#b45309",
 }
 _KPI_HALF_SETTINGS = {"main_line_px", "n1_line_px", "target_line_px"}
 
@@ -2271,6 +2273,9 @@ def kpi_get_target_dates(request: Request, source: str = None, metric: str = Non
     if error:
         return {"status": "error", "message": error}
     try:
+        refused = _chart_refused(user, row_id)
+        if refused:
+            return {"status": "error", "message": refused}
         with get_prod_pricer_connection() as conn:
             by_date = get_chart_targets(conn, [key], datetime.date(1900, 1, 1),
                                         datetime.date(2999, 12, 31)).get(key, {})
@@ -2317,6 +2322,9 @@ async def kpi_save_target_dates(request: Request, user: str = Depends(require_pa
         by_date[d] = value
 
     try:
+        refused = _chart_refused(user, body.get('row_id'))
+        if refused:
+            return {"status": "error", "message": refused}
         with get_prod_pricer_connection() as conn:
             replace_chart_target_dates(conn, key, sorted(by_date.items()), user)
     except Exception as e:
@@ -2732,6 +2740,10 @@ def _validate_layout(layout: dict, sections: list, locks: dict | None = None) ->
         # Hidden in Settings > Charts: kept, but not shown or loaded.
         if not isinstance(row.get("hidden", False), bool):
             return "bad hidden"
+        # Admins Only: a chart still being made. Only the admin is sent it
+        # (see _drop_admin_only) until Show To Everyone takes the flag off.
+        if not isinstance(row.get("admin_only", False), bool):
+            return "bad admin_only"
         # Which current (part-elapsed) periods to show: {"m": bool, "w": bool,
         # "d": bool}. Rows saved before the day option hold a single bool,
         # meaning month and week.
@@ -2829,6 +2841,14 @@ def _validate_layout(layout: dict, sections: list, locks: dict | None = None) ->
                     return error
         if row.get("divide_plus") and divide_by is None:
             return "divide_plus needs divide_by"
+        # The bottom of a ratio's own Sum / Average for weeks and months
+        # (missing = the chart's), e.g. a week's price changes (Sum) over the
+        # week's average stock on sale (Average).
+        if "divide_agg" in row:
+            if divide_by is None:
+                return "divide_agg needs divide_by"
+            if row["divide_agg"] not in ("sum", "avg"):
+                return f"bad divide_agg: {row['divide_agg']}"
         if row.get("metric_plus") or row.get("divide_plus"):
             if row.get("weight_by") is not None:
                 return "A chart with added metrics cannot be weighted"
@@ -2917,6 +2937,41 @@ def _write_kpi_layout_values(values: dict) -> None:
     _kpi_layout_table_ready = True
 
 
+def _admin_only_ids(layout: dict) -> set:
+    """Ids of the charts marked Admins Only (still being made)."""
+    return {r.get("id") for r in (layout or {}).get("rows", []) if r.get("admin_only") is True}
+
+
+def _drop_admin_only(layout: dict, notes: list, wbr_items: list, wbr_deck):
+    """(layout, notes, wbr_items, wbr_deck) without the Admins Only charts and
+    the notes and review items that point at them, for anyone but the admin.
+    Only the admin can save the layout, notes and review, so leaving them out
+    of what another user is sent never loses them."""
+    drafts = _admin_only_ids(layout)
+    if not drafts:
+        return layout, notes, wbr_items, wbr_deck
+    layout = {**layout, "rows": [r for r in layout.get("rows", []) if r.get("id") not in drafts]}
+    notes = [n for n in notes if not (isinstance(n, dict) and n.get("row_id") in drafts)]
+    wbr_items = [i for i in wbr_items if not (isinstance(i, dict) and i.get("ref") in drafts)]
+    if isinstance(wbr_deck, dict) and isinstance(wbr_deck.get("slides"), list):
+        wbr_deck = {**wbr_deck, "slides": [
+            {**s, "items": [i for i in (s.get("items") or []) if not (isinstance(i, dict) and i.get("ref") in drafts)]}
+            if isinstance(s, dict) else s
+            for s in wbr_deck["slides"]]}
+    return layout, notes, wbr_items, wbr_deck
+
+
+def _chart_refused(user, row_id) -> str | None:
+    """Why this user may not read or change this chart, or None: an Admins
+    Only chart answers as if it did not exist for anyone but the admin."""
+    if row_id is None or is_admin(user):
+        return None
+    layout = _read_kpi_layout_value('layout') or KPI_DEFAULT_LAYOUT
+    if row_id in _admin_only_ids(layout):
+        return "That chart no longer exists - reload the page"
+    return None
+
+
 def _targets_refused(user) -> str | None:
     """Why this user may not change targets, or None. Other users may only
     while Settings > Targets lets every user set them."""
@@ -2966,6 +3021,12 @@ def kpi_layout_get(request: Request, user: str = Depends(require_page_api(*_KPI_
     # The hard-coded Sessions and Apex Orders rows were removed: every chart is
     # now created on the page. Drop them from a layout saved before that.
     layout = {**layout, "rows": [r for r in layout.get("rows", []) if r.get("type") == "custom"]}
+    wbr_items = stored.get(_WBR_ITEMS_KEY) or []
+    wbr_deck = stored.get(_WBR_DECK_KEY)
+    # Admins Only charts are never sent to anyone else, so they cannot be
+    # seen in the page, the review or the browser's network tab.
+    if not is_admin(user):
+        layout, notes, wbr_items, wbr_deck = _drop_admin_only(layout, notes, wbr_items, wbr_deck)
     try:
         raw = stored.get(_AT_PERIODS_KEY) or []
         at_periods = _at_allowance_periods(raw)
@@ -2989,8 +3050,8 @@ def kpi_layout_get(request: Request, user: str = Depends(require_page_api(*_KPI_
             "collapsed_rows": (stored.get(_COLLAPSED_KEY) or {}).get(user, []),
             "rolling_rows": (stored.get(_ROLLING_KEY) or {}).get(user, []),
             "my_charts": (stored.get(_MY_CHARTS_KEY) or {}).get(user, []),
-            "wbr_items": stored.get(_WBR_ITEMS_KEY) or [],
-            "wbr_deck": stored.get(_WBR_DECK_KEY)}
+            "wbr_items": wbr_items,
+            "wbr_deck": wbr_deck}
 
 
 # ── Per-user chart row lists ─────────────────────────────────────────────────
@@ -3136,7 +3197,8 @@ def kpi_row_target_save(request: Request, payload: dict, user: str = Depends(req
         stored = _read_kpi_layout_value('layout') or KPI_DEFAULT_LAYOUT
         layout = json.loads(json.dumps(stored))
         row = next((r for r in layout.get("rows", []) if r.get("id") == row_id), None)
-        if row is None:
+        # An Admins Only chart is not there for anyone but the admin.
+        if row is None or (row.get("admin_only") is True and not is_admin(user)):
             return {"status": "error", "message": "That chart no longer exists - reload the page"}
         # The chart's own fixed figure is saved whichever target it draws, so
         # the Fixed Figure box keeps what was typed while Per Date is chosen.
@@ -4155,7 +4217,7 @@ def kpi_vehicles(request: Request, row_id: str, start: str, end: str, count_only
     try:
         layout = _read_kpi_layout_value('layout') or KPI_DEFAULT_LAYOUT
         row = next((r for r in layout.get("rows", []) if r.get("id") == row_id), None)
-        if not row:
+        if not row or (row.get("admin_only") is True and not is_admin(user)):
             return {"status": "error", "message": "Chart not found - reload the page"}
         vehicles = row.get("vehicles")
         if not vehicles:

@@ -213,10 +213,13 @@ function addIsoDays(iso, n) {
 }
 
 // The chart's day, week and month targets from its per-date figures. A ratio
-// is a rate, so a week or month is the average of its days' figures. An
-// added-metrics Sum chart's week or month is the average day times the
-// period's full length, as the server does for metric targets, so a part-
-// covered period does not dive. A period with no figures has no target.
+// is a rate, so a week or month is the average of its days' figures, times
+// the period's days when its top is a Sum over an Average bottom (a week's
+// price changes / its average stock is 7 days of the daily rate; see
+// ratioPeriodScale in kpi.js). An added-metrics Sum chart's week or month is
+// the average day times the period's full length, as the server does for
+// metric targets, so a part-covered period does not dive. A period with no
+// figures has no target.
 function rollUpRowTargets(row, rows, d) {
     const byDate = Object.fromEntries(rows);
     const sum = !row.divide_by && row.agg === 'sum';
@@ -224,7 +227,7 @@ function rollUpRowTargets(row, rows, d) {
         const vals = days.map(x => byDate[x]).filter(v => v !== undefined);
         if (!vals.length) return null;
         const mean = vals.reduce((a, b) => a + b, 0) / vals.length;
-        return sum ? mean * days.length : mean;
+        return sum ? mean * days.length : mean * ratioPeriodScale(row, days.length);
     };
     const weekDays = start => [0, 1, 2, 3, 4, 5, 6].map(i => addIsoDays(start, i));
     const monthDays = start => {

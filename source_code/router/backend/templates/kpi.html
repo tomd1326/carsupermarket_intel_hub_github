@@ -443,6 +443,18 @@
                         <option value="dec">Decimal</option>
                     </select>
                 </div>
+                <div class="modal-field" id="divideAggField">
+                    <label for="divideAggSelect">Bottom Of Ratio Weekly / Monthly</label>
+                    <select id="divideAggSelect">
+                        <option value="">Same As The Chart</option>
+                        <option value="sum">Sum</option>
+                        <option value="avg">Average</option>
+                    </select>
+                    <div class="modal-hint">
+                        e.g. a week's price changes (Sum) over that week's average stock on sale (Average).
+                        Weekly and monthly targets scale to match.
+                    </div>
+                </div>
                 <div class="modal-field">
                     <label>Weekly / Monthly Figure</label>
                     <div class="agg-options">
@@ -490,6 +502,16 @@
                 <div class="modal-field">
                     <label for="positionSelect">Position In Section</label>
                     <select id="positionSelect"></select>
+                </div>
+            </div>
+            <div class="modal-section-title">Who Can See It</div>
+            <div class="modal-grid">
+                <div class="modal-field span-2">
+                    <label><input type="checkbox" id="adminOnlyInput"> Admins Only</label>
+                    <div class="modal-hint">
+                        No one else is sent the chart until this is unticked, or Show To Everyone is
+                        pressed on the chart. New charts and copies start ticked.
+                    </div>
                 </div>
             </div>
             </div>
@@ -1326,6 +1348,10 @@
                 <div class="modal-field">
                     <label for="setLegendFont">Chart Legend Size (px)</label>
                     <input type="number" id="setLegendFont" step="1">
+                </div>
+                <div class="modal-field">
+                    <label for="setAdminOnlyBadgeColour">Admins Only Badge Colour</label>
+                    <input type="color" id="setAdminOnlyBadgeColour" class="setting-colour">
                 </div>
                 <div class="modal-field">
                     <label for="setZoomSize">Chart Popup Opens At</label>
