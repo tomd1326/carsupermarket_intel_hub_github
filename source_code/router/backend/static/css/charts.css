@@ -245,6 +245,12 @@ body { background: var(--c-page-bg); }
     width: 100%; padding: 6px 10px; border: 1px solid #cbd5e1; border-radius: 6px;
     background: #fff; color: #0f172a;
 }
+/* Switched off while its list loads (or not usable yet): greyed, so it
+   never looks ready when it is not. */
+.modal-field select:disabled,
+.modal-field input:disabled {
+    background: #f1f5f9; color: #94a3b8; border-color: #e2e8f0; cursor: not-allowed;
+}
 .modal-hint { font-size: 0.75rem; color: #64748b; margin-top: 5px; line-height: 1.45; }
 .modal-error { font-size: 0.78rem; color: #e53e3e; margin-bottom: 10px; display: none; }
 .modal-error.show { display: block; }

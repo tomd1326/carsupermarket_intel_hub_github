@@ -276,6 +276,15 @@
               .catch(err => { msg.className = 'small text-danger'; msg.textContent = err.message; });
         }
 
+        // ?page=kpi (the KPI page's Log button): open already filtered to that
+        // page. The option is added now so the first load is filtered too.
+        const presetPage = new URLSearchParams(location.search).get('page');
+        if (presetPage) {
+            const o = document.createElement('option');
+            o.value = presetPage; o.textContent = presetPage;
+            el('f-page').appendChild(o);
+            el('f-page').value = presetPage;
+        }
         loadFilters();
         loadLogs(0);
     </script>

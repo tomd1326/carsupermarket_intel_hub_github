@@ -92,6 +92,13 @@
         <button class="btn btn-edit admin-only" onclick="openChartModal(null)">
             <i class="fas fa-plus"></i> Add Chart
         </button>
+        {% if not wbr %}
+        <!-- Admin only: the KPI page's Snowflake queries, errors and slow requests. -->
+        <button class="btn btn-edit admin-only" onclick="openKpiLog()"
+                title="Snowflake queries, errors and slow requests from the KPI page only">
+            <i class="fas fa-list"></i> Log
+        </button>
+        {% endif %}
         {% endif %}
         <span class="status-text" id="statusText"></span>
     {% endcall %}
@@ -263,6 +270,10 @@
                 </button>
                 <span class="point-status" id="pointStatus"></span>
                 <div class="spacer" style="flex:1;"></div>
+                <button type="button" class="btn btn-edit" id="vehiclesColumnsBtn" onclick="openVehColumnSettings()" style="display:none;"
+                        title="Rename, reorder and format this table's columns in Settings">
+                    <i class="fas fa-cog"></i> Edit Columns
+                </button>
                 <button type="button" class="btn btn-csv" id="vehiclesCsvBtn" onclick="downloadVehiclesCsv()" style="display:none;">
                     <i class="fas fa-download"></i> CSV
                 </button>
@@ -396,9 +407,13 @@
                     <button type="button" class="btn btn-edit section-add-btn" onclick="addSeries()">
                         <i class="fas fa-plus"></i> Add Series
                     </button>
+                    <select id="addAllSource" onchange="addAllSeries(this.value)"
+                            title="Adds a series for every metric of that data source, e.g. one per valuation status"></select>
                 </div>
                 <!-- Line charts only -->
                 <div class="modal-field span-2 line-only">
+                    <label for="metricSourceSelect">Table</label>
+                    <select id="metricSourceSelect" onchange="onMetricSourceChange()" style="margin-bottom: 10px;"></select>
                     <label for="metricSelect">Metric</label>
                     <input type="text" id="metricSearch" class="metric-search" placeholder="Search Metrics"
                            oninput="filterMetricSelect(this.value)" autocomplete="off">
@@ -471,7 +486,7 @@
             <div class="modal-grid">
                 <div class="modal-field">
                     <label for="sectionSelect">Section</label>
-                    <select id="sectionSelect" onchange="fillPositionOptions()"></select>
+                    <select id="sectionSelect" onchange="onChartSectionChange()"></select>
                 </div>
                 <div class="modal-field">
                     <label for="positionSelect">Position In Section</label>
@@ -615,7 +630,9 @@
                     <div class="agg-options">
                         <label><input type="checkbox" id="pctInput" onchange="onPctChange()"> Each Column As 100%</label>
                         <label><input type="checkbox" id="segLabelsInput"> Values In Segments</label>
+                        <label><input type="checkbox" id="n1LineInput"> N-1 Line</label>
                     </div>
+                    <div class="modal-hint">The N-1 line shows only on a chart with one series that is not split or on 100%.</div>
                     <div class="modal-hint">Each series' own colour is set in its row on the Data tab.</div>
                 </div>
                 <div class="modal-field">
@@ -635,12 +652,15 @@
             <div class="modal-field" id="vehCopyField">
                 <label for="vehCopySelect">Copy View Vehicles Setup From</label>
                 <select id="vehCopySelect" onchange="copyVehSetup(this.value)"></select>
-                <div class="modal-hint">Copies that chart's table, date column, dates and filters.</div>
+                <div class="modal-hint">Copies that chart's table, date column, dates, columns and filters.</div>
             </div>
             <div class="modal-field">
                 <label for="vehChartTableSelect">Vehicle Table</label>
                 <select id="vehChartTableSelect" onchange="onVehChartTableChange()"></select>
                 <div class="modal-hint" id="vehTableHint"></div>
+                <button type="button" class="btn btn-sm btn-edit" style="margin-top: 6px;" onclick="openVehSettingsFromChart()"
+                        title="Closes this chart without saving and opens Settings > View Vehicles on this table">
+                    <i class="fas fa-cog"></i> Table Settings</button>
             </div>
             <div class="modal-field">
                 <label for="vehDateSelect">Date Column</label>
@@ -654,6 +674,15 @@
                     <option value="snapshot">Snapshot - the single last day only</option>
                 </select>
                 <div class="modal-hint">Use Snapshot for stock levels (one row per vehicle per day), so a week or month does not return every vehicle times every day.</div>
+            </div>
+            <div class="modal-field" id="vehColumnsField">
+                <label>Columns Shown</label>
+                <div class="veh-col-links">
+                    <a href="#" onclick="setAllVehColumns(true); return false;">Tick All</a>
+                    <a href="#" onclick="setAllVehColumns(false); return false;">Untick All</a>
+                </div>
+                <div class="veh-col-list" id="vehColumnList"></div>
+                <div class="modal-hint">The columns this chart's list shows, from those set for the table in Settings. With all ticked, columns added in Settings later show too.</div>
             </div>
             <div class="modal-field" id="vehFiltersField">
                 <label>Filters (All Must Match)</label>
@@ -680,6 +709,49 @@
         </div>
     </div>
 
+    {% if kpi_is_admin and not wbr %}
+    <!-- Admin only: the Logs page's entries for the KPI page (queries, errors,
+         SharePoint, slow requests), read from /logs/data with page=kpi. -->
+    <div class="modal-overlay" id="kpiLogModal">
+        <div class="modal-box kpi-log-modal">
+            <div class="chart-modal-head">
+                <h2><i class="fas fa-list"></i> KPI Log</h2>
+                <button type="button" class="modal-close-x" onclick="closeKpiLog()" aria-label="Close">&times;</button>
+            </div>
+            <div class="kpi-log-filters">
+                <label>Time
+                    <select id="kpiLogSince" onchange="loadKpiLog(0)">
+                        <option value="15">Last 15 Minutes</option><option value="60" selected>Last Hour</option>
+                        <option value="240">Last 4 Hours</option><option value="1440">Last 24 Hours</option>
+                        <option value="10080">Last 7 Days</option><option value="">Everything Kept</option>
+                    </select></label>
+                <label>Source
+                    <select id="kpiLogSource" onchange="loadKpiLog(0)">
+                        <option value="">All</option><option value="snowflake">Snowflake</option>
+                        <option value="app">App</option><option value="request">Slow Requests</option>
+                        <option value="sharepoint">SharePoint</option>
+                    </select></label>
+                <label>Level
+                    <select id="kpiLogLevel" onchange="loadKpiLog(0)">
+                        <option value="">All</option><option value="INFO">Info</option>
+                        <option value="WARNING">Warning</option><option value="ERROR">Error</option>
+                    </select></label>
+                <button type="button" class="btn btn-edit" onclick="loadKpiLog(0)"><i class="fas fa-sync-alt"></i> Refresh</button>
+                <span class="point-status" id="kpiLogStatus"></span>
+                <div class="spacer" style="flex:1;"></div>
+                <a class="btn btn-edit" href="{{ BASE_URL }}/logs?page=kpi" target="_blank">Open Full Log</a>
+            </div>
+            <div class="kpi-log-wrap">
+                <table class="vehicles-table" id="kpiLogTable"></table>
+            </div>
+            <div class="kpi-log-paging">
+                <button type="button" class="btn btn-edit" id="kpiLogNewer" onclick="pageKpiLog(-1)">Newer</button>
+                <button type="button" class="btn btn-edit" id="kpiLogOlder" onclick="pageKpiLog(1)">Older</button>
+            </div>
+        </div>
+    </div>
+    {% endif %}
+
     <!-- Chart notes: dated notes drawn as a dotted line on the charts -->
     <div class="modal-overlay" id="notesModal">
         <div class="modal-box notes-modal">
@@ -698,6 +770,14 @@
                 <div class="modal-field">
                     <label for="noteRow">Show On</label>
                     <select id="noteRow"></select>
+                </div>
+                <div class="modal-field">
+                    <label for="noteCompany" title="Which company's charts an All Charts note shows on">Applies To</label>
+                    <select id="noteCompany">
+                        <option value="carsupermarket">Carsupermarket.com</option>
+                        <option value="bcb">BCB</option>
+                        <option value="both">Both</option>
+                    </select>
                 </div>
                 <div class="modal-field span-2">
                     <label for="noteTitle">Title</label>
@@ -885,6 +965,10 @@
                  one sub-section at a time (listed under Charts in the menu on the left). -->
             <div class="settings-pane" id="setGroupCharts">
             <div class="chart-subpane" id="chartSubList">
+            <div class="veh-col-links">
+                <a href="#" onclick="setAllChartsHidden(false); return false;">Show All</a>
+                <a href="#" onclick="setAllChartsHidden(true); return false;">Hide All</a>
+            </div>
             <div id="chartList"></div>
             <div class="modal-hint">
                 Untick Show to hide a chart without deleting it; tick it again to bring it back.
@@ -1027,10 +1111,14 @@
             <button type="button" class="btn btn-edit section-add-btn" onclick="addThemeDraft()">
                 <i class="fas fa-plus"></i> Add Theme
             </button>
+            <button type="button" class="btn btn-edit section-add-btn" onclick="addOfficeThemes()">
+                <i class="fas fa-palette"></i> Add Office Themes
+            </button>
             <div class="modal-hint">
                 The series in a stacked chart take its theme's colours in order: the first series
-                the first colour, and so on. A series past the last colour is grey, so add colours
-                to a theme rather than repeat one. Click a colour to change it.
+                the first colour, and so on. Past the last colour the theme's colours repeat in a
+                lighter, then a darker, shade. Click a colour to change it. Apply To All Charts
+                sets that theme on every stacked chart (save new themes first).
             </div>
             </div>
             </div>
@@ -1090,6 +1178,7 @@
                     <select id="dsShape" onchange="renderDataSourceColumns()">
                         <option value="wide">One Row Per Date (Each Number Column Is A Metric)</option>
                         <option value="long">One Row Per Date Per Name (e.g. Per Event)</option>
+                        <option value="records">One Row Per Record (Each Row Is Counted, e.g. Per Valuation)</option>
                     </select>
                 </div>
                 <div class="modal-field">
@@ -1100,10 +1189,16 @@
                     <label for="dsSplit">Name Column</label>
                     <select id="dsSplit"></select>
                 </div>
-                <div class="modal-field ds-long-only">
+                <div class="modal-field ds-value-only">
                     <label for="dsValue">Value Column</label>
                     <select id="dsValue"></select>
                 </div>
+            </div>
+            <!-- The order of the name column's values: every metric list, Add
+                 All From... and the stack in every chart follow it. -->
+            <div class="modal-field ds-long-only">
+                <label>Value Order (Bottom Of The Stack First)</label>
+                <div id="dsOrderList"></div>
             </div>
             <div class="modal-error" id="dataSourceError"></div>
             <div class="ds-form-buttons">
@@ -1151,7 +1246,13 @@
             <div class="settings-pane" id="setGroupVehicles">
             <div class="modal-field">
                 <label for="vehTableSelect">Vehicle Table</label>
-                <select id="vehTableSelect" onchange="onVehTableChange()"></select>
+                <div style="display:flex; gap:8px; align-items:center;">
+                    <select id="vehTableSelect" onchange="onVehTableChange()" style="flex:1;"></select>
+                    <button type="button" class="btn btn-edit" id="vehRefreshColsBtn" onclick="refreshVehColumns()" disabled
+                            title="Read this table's columns from Snowflake now - use after a dbt run adds columns">
+                        <i class="fas fa-sync-alt"></i> Refresh Columns
+                    </button>
+                </div>
                 <div class="modal-hint">Each chart picks its own table in Edit Chart. Set up one table's columns here, Save, then switch to the next - each table is saved separately.</div>
             </div>
             <div class="modal-field">
@@ -1173,6 +1274,9 @@
             <div class="veh-cols">
                 <div>
                     <div class="veh-col-head" id="vehShownHead">Shown, In Order</div>
+                    <div class="veh-col-links">
+                        <a href="#" onclick="removeAllVehColumns(); return false;">Remove All</a>
+                    </div>
                     <div class="veh-col-list" id="vehShownList"></div>
                 </div>
                 <div>

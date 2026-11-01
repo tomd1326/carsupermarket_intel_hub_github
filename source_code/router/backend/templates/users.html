@@ -153,6 +153,7 @@
                         <tr>
                             <td class="text-nowrap">{{ ((d.first_name or '') ~ ' ' ~ (d.last_name or ''))|trim }}
                                 {% if u in inactive %}<span class="badge bg-warning text-dark ms-1">Not Activated</span>{% endif %}
+                                {% if u in buyers %}<span class="badge bg-info text-dark ms-1">Buyer</span>{% endif %}
                             </td>
                             <td>
                                 {% if d.email %}{{ d.email }}{% else %}<span class="text-muted">{{ u }}</span>{% endif %}
@@ -167,6 +168,7 @@
                                         data-last-login="{{ ll.last_login or 'Never' }}"
                                         data-last-seen="{{ ll.last_seen or 'Never' }}"
                                         data-pending="{{ '1' if u in inactive else '0' }}"
+                                        data-buyer="{{ '1' if u in buyers else '0' }}"
                                         data-admin="{{ '1' if u == admin_username else '0' }}">Edit</button>
                             </td>
                         </tr>
@@ -210,6 +212,10 @@
                         <div class="mb-2">
                             <label for="um-email" class="form-label mb-1">Email</label>
                             <input type="email" class="form-control" id="um-email" name="email">
+                        </div>
+                        <div class="form-check mb-2" id="um-buyer-row">
+                            <input class="form-check-input" type="checkbox" id="um-buyer" name="is_buyer">
+                            <label class="form-check-label" for="um-buyer">Buyer <span class="text-muted">(listed in the Cars Bought Buyer dropdown)</span></label>
                         </div>
                         <div class="mb-2" id="um-password-row">
                             <label for="um-password" class="form-label mb-1">Password</label>
@@ -264,6 +270,8 @@
             $('um-first').value = opts.first || '';
             $('um-last').value = opts.last || '';
             $('um-email').value = opts.email || '';
+            $('um-buyer').checked = !!opts.buyer;
+            show($('um-buyer-row'), !isAdmin);
             $('um-password').value = '';
             const rules = 'Needs {{ password_rules_text }}.';
             $('um-password-help').textContent = isAdd
@@ -303,6 +311,7 @@
                 lastSeen: btn.dataset.lastSeen,
                 admin: btn.dataset.admin === '1',
                 pending: btn.dataset.pending === '1',
+                buyer: btn.dataset.buyer === '1',
             }));
         });
         // Every email in the list as one semicolon separated line, to paste into Outlook's To box.

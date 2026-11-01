@@ -716,7 +716,12 @@
                         <div class="form-text">Default: 100 (the API maximum)</div></div>
                     <div><label class="form-label mb-1" for="lu-s-threads">dbt Threads</label>
                         <input class="form-control" type="number" id="lu-s-threads" min="1" max="64" style="width: 110px;">
-                        <div class="form-text">Models built at once. Default: 40</div></div>
+                        <div class="form-text">Models built at once. Default: 50</div></div>
+                    <div><div class="form-check mt-4">
+                        <input class="form-check-input" type="checkbox" id="lu-s-one-job">
+                        <label class="form-check-label" for="lu-s-one-job">One dbt Job</label></div>
+                        <div class="form-text">Build every project in one container from the last project's job,<br>
+                            instead of one container per project. Test in DEV first.</div></div>
                     <div class="mb-4 d-flex align-items-center gap-2">
                         <button type="button" class="btn btn-primary btn-sm" onclick="luSaveSettings()">Save</button>
                         <span class="text-muted small" id="lu-s-note"></span>
@@ -764,6 +769,8 @@
                                    placeholder="Type to add a model" style="width: 360px;" autocomplete="off"
                                    onchange="luAddTarget(this)">
                             <datalist id="lu-model-options"></datalist></div>
+                        <div><label class="form-label mb-1" for="lu-f-skip">Models To Skip (On The Path But Not Needed)</label>
+                            <textarea class="form-control font-monospace" id="lu-f-skip" rows="3" style="width: 300px;"></textarea></div>
                         <div><label class="form-label mb-1" for="lu-f-lookback">Look Back (Hours)</label>
                             <input class="form-control" type="number" id="lu-f-lookback" min="1" max="720" style="width: 110px;"></div>
                     </div>
@@ -1161,7 +1168,7 @@
             <div>
                 <label for="dbt-threads" class="form-label mb-1">dbt Threads</label>
                 <input class="form-control" type="number" id="dbt-threads" min="1" max="64" style="width: 110px;" onchange="dbtSaveThreads()">
-                <div class="form-text">For Plan From A Model and Run A Job. Saved on change. Default: 40 <span id="dbt-threads-note"></span></div>
+                <div class="form-text">For Plan From A Model and Run A Job. Saved on change. Default: 50<span id="dbt-threads-note"></span></div>
             </div>
         </div>
 
@@ -1586,6 +1593,7 @@
                     document.getElementById('lu-s-workers').value = d.run_settings.nexus_workers;
                     document.getElementById('lu-s-per-page').value = d.run_settings.nexus_per_page;
                     document.getElementById('lu-s-threads').value = d.run_settings.dbt_threads;
+                    document.getElementById('lu-s-one-job').checked = !!d.run_settings.one_dbt_job;
                     document.getElementById('dbt-threads').value = d.run_settings.manual_dbt_threads;
                     const pageSel = document.getElementById('lu-f-page');
                     const keepPage = pageSel.value;
@@ -1619,13 +1627,24 @@
                         ? `<a href="${BASE_URL}${dbtEsc(r.page_path)}" target="_blank" rel="noopener" title="Open the page">${dbtEsc(r.name)}</a>`
                         : dbtEsc(r.name)}</td>
                     <td>${r.endpoints.map(e => `<code>${dbtEsc(e)}</code>`).join('<br>')}</td>
-                    <td>${r.targets.map(t => `<code>${dbtEsc(t)}</code>`).join('<br>')}</td>
+                    <td>${r.targets.map(t => `<code>${dbtEsc(t)}</code>`).join('<br>')}${(r.skip_models || []).length
+                        ? `<div class="small text-muted mt-1">Skipped: ${r.skip_models.map(dbtEsc).join(', ')}</div>` : ''}</td>
                     <td>${r.lookback_hours} hours</td>
                     <td class="text-nowrap">
                         <button class="btn btn-sm btn-outline-secondary" onclick="luShowPlan('${r.recipe_key}')">Show Plan</button>
                         <button class="btn btn-sm btn-outline-secondary" onclick="luEdit('${r.recipe_key}')">Edit</button>
+                        ${r.recipe_key === 'apex_missing_finance' ? `<button class="btn btn-sm btn-outline-secondary" onclick="luReset('${r.recipe_key}')"
+                            title="Put back only its own endpoints and table, and 50 dbt threads">Rebuild Recipe</button>` : ''}
                         <button class="btn btn-sm btn-outline-danger" onclick="luDelete('${r.recipe_key}')">Delete</button>
                     </td></tr>`).join('') || '<tr><td colspan="5" class="text-muted">No recipes - add one.</td></tr>';
+            }
+
+            async function luReset(key) {
+                const r = luRecipes.find(x => x.recipe_key === key);
+                if (!r || !confirm(`Rebuild the recipe ${r.name} to the bare minimum (its endpoints and table only, 50 dbt threads)?`)) return;
+                const d = await apiPostJson(BASE_URL + '/api/live-update/recipes/reset', { recipe_key: key });
+                if (d.status !== 'ok') { alert(d.message); return; }
+                luLoad();
             }
 
             function luEdit(key) {
@@ -1633,6 +1652,7 @@
                 document.getElementById('lu-f-key').value = r.recipe_key;
                 document.getElementById('lu-f-name').value = r.name;
                 document.getElementById('lu-f-targets').value = r.targets.join('\n');
+                document.getElementById('lu-f-skip').value = (r.skip_models || []).join('\n');
                 document.getElementById('lu-f-page').value = r.page_path || '';
                 document.getElementById('lu-f-lookback').value = r.lookback_hours;
                 luRenderEndpointPick(r.endpoints);
@@ -1685,6 +1705,7 @@
                     nexus_workers: document.getElementById('lu-s-workers').value,
                     nexus_per_page: document.getElementById('lu-s-per-page').value,
                     dbt_threads: document.getElementById('lu-s-threads').value,
+                    one_dbt_job: document.getElementById('lu-s-one-job').checked,
                 });
                 note.textContent = d.status === 'ok' ? 'Saved' : d.message;
                 if (d.status === 'ok') { luLoad(); nxLoad(); }
@@ -1714,6 +1735,7 @@
                     recipe_key: document.getElementById('lu-f-key').value || null,
                     name: document.getElementById('lu-f-name').value,
                     targets: document.getElementById('lu-f-targets').value.split(/[\s,]+/).filter(Boolean),
+                    skip_models: document.getElementById('lu-f-skip').value.split(/[\s,]+/).filter(Boolean),
                     page_path: document.getElementById('lu-f-page').value,
                     lookback_hours: document.getElementById('lu-f-lookback').value,
                     endpoints: [...document.querySelectorAll('#lu-endpoints-pick input:checked')].map(el => el.value),

@@ -8,18 +8,28 @@
         {{ label }}
     </a>
     {% endfor %}
-    <a href="{{ BASE_URL }}/settings/users"
-       class="btn {% if active_section == 'users' %}btn-dark{% else %}btn-outline-secondary{% endif %}">
-        User Accounts
+    {# Main sections with subsections: the main button opens the first
+       subsection; the subsections are listed indented below it. #}
+    {% set groups = [
+        ('Users', [
+            ('users', 'User Accounts', BASE_URL ~ '/settings/users'),
+            ('user_activity', 'User Activity', BASE_URL ~ '/settings/user-activity'),
+            ('page_access', 'Page Access', BASE_URL ~ '/settings/page-access'),
+        ]),
+    ] %}
+    {% for group_label, subs in groups %}
+    {% set group_active = active_section in subs|map(attribute=0)|list %}
+    <a href="{{ subs[0][2] }}"
+       class="btn {% if group_active %}btn-secondary{% else %}btn-outline-secondary{% endif %}">
+        {{ group_label }}
     </a>
-    <a href="{{ BASE_URL }}/settings/user-activity"
-       class="btn {% if active_section == 'user_activity' %}btn-dark{% else %}btn-outline-secondary{% endif %}">
-        User Activity
+    {% for sub_slug, sub_label, sub_url in subs %}
+    <a href="{{ sub_url }}"
+       class="btn settings-nav-sub {% if sub_slug == active_section %}btn-dark{% else %}btn-outline-secondary{% endif %}">
+        {{ sub_label }}
     </a>
-    <a href="{{ BASE_URL }}/settings/page-access"
-       class="btn {% if active_section == 'page_access' %}btn-dark{% else %}btn-outline-secondary{% endif %}">
-        Page Access
-    </a>
+    {% endfor %}
+    {% endfor %}
     <a href="{{ BASE_URL }}/settings/page-names"
        class="btn {% if active_section == 'page_names' %}btn-dark{% else %}btn-outline-secondary{% endif %}">
         Page Names

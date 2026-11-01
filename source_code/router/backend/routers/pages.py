@@ -11,7 +11,7 @@ import logging
 from utils.snowflake_client import SnowflakeClient
 
 from .core import (BASE_URL, templates, _track, get_current_user, require_page,
-                   require_page_api, get_user_pages, is_admin, user_details)
+                   require_page_api, get_user_pages, is_admin, user_details, visible_pages)
 from .page_registry import PAGES
 
 logger = logging.getLogger(__name__)
@@ -78,7 +78,7 @@ def home(request: Request, user: str = Depends(get_current_user)):
     allowed = get_user_pages(user)
     return templates.TemplateResponse("home.html", {
         "request": request, "user": user, "BASE_URL": BASE_URL,
-        "pages": [p for p in PAGES if p.key in allowed],
+        "pages": [p for p in visible_pages() if p.key in allowed],
     })
 
 

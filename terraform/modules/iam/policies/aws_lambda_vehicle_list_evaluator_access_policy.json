@@ -37,6 +37,13 @@
         {
             "Effect": "Allow",
             "Action": [
+                "textract:AnalyzeDocument"
+            ],
+            "Resource": "*"
+        },
+        {
+            "Effect": "Allow",
+            "Action": [
                 "secretsmanager:GetResourcePolicy",
                 "secretsmanager:GetSecretValue",
                 "secretsmanager:DescribeSecret",

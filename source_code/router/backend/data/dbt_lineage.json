@@ -31,11 +31,11 @@
     "stg_autotrader_competitors_dedup"
    ]
   },
-  "bcb_valuations__s": {
+  "valuations_bcb__s": {
    "project": "raw",
    "materialized": "table",
    "schema": "source_trade_ins",
-   "table": "bcb_valuations",
+   "table": "valuations_bcb",
    "tags": [
     "daily"
    ],
@@ -44,17 +44,17 @@
     "stg_bcb_valuations_dedup"
    ]
   },
-  "bcb_valuations_status_history__c": {
+  "valuations_bcb_status_history__c": {
    "project": "transform",
    "materialized": "table",
    "schema": "compute_trade_ins",
-   "table": "bcb_valuations_status_history",
+   "table": "valuations_bcb_status_history",
    "tags": [
     "daily"
    ],
    "stage_url": null,
    "parents": [
-    "bcb_valuations__s"
+    "valuations_bcb__s"
    ]
   },
   "budget__s": {

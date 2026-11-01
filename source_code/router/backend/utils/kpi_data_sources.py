@@ -1,16 +1,20 @@
 """KPI page data sources (Settings > Data Sources): Snowflake tables added on
 the page, each read as chart metrics.
 
-Two shapes of table:
+Three shapes of table:
 
-  wide - one row per date, every number column is a metric
-         (like product_slt_kpis.daily_summary)
-  long - one row per date per name, e.g. ga4_daily_events: the split column
-         (event_name) gives the metric names and the value column the figures
+  wide    - one row per date, every number column is a metric
+            (like product_slt_kpis.daily_summary)
+  long    - one row per date per name, e.g. ga4_daily_events: the split column
+            (event_name) gives the metric names and the value column the figures
+  records - one row per record (e.g. one per valuation): the split column
+            (valuation_status) gives the metric names and each metric's figure
+            for a day is the number of rows with that name on that day
 
 Each entry is stored in kpi_layout under 'data_sources':
     {id, name, table: 'SCHEMA.TABLE', shape, date_column,
-     split_column, value_column}   (the last two for long tables only)
+     split_column, value_column}   (split_column for long and records tables,
+                                    value_column for long tables only)
 
 The id is made once, when the source is added, and never changes, so a
 rename keeps every chart and stored target that uses it. Charts store it as
@@ -27,13 +31,30 @@ import re
 SOURCE_ID = r"ds_[a-z0-9_]{1,40}"
 IDENTIFIER = r"[A-Z][A-Z0-9_$]*"
 SHAPES = ("wide", "long")
+# The shapes a KPI data source can have. SHAPES stays the two the DSE page
+# (utils/dse_metrics.py) accepts.
+KPI_SHAPES = SHAPES + ("records",)
 SOURCES_MAX = 30
+# Most names a long or records table's name column may hold. Each name is a
+# metric in every list on the page, so an id column picked by mistake (one
+# name per row) would put thousands of options in each and freeze the page.
+# GA4 events holds 260 (2026-10-29), so leave plenty of room above that.
+NAMES_MAX = 1000
 NAME_MAX = 60
 # Tables offered: the compute and product layers only, never raw tables.
 SCHEMA_PATTERNS = ("COMPUTE!_%", "PRODUCT!_%")
 DATE_TYPES = {"DATE", "TIMESTAMP_NTZ", "TIMESTAMP_LTZ", "TIMESTAMP_TZ", "TIMESTAMP"}
 NUMBER_TYPES = {"NUMBER", "FLOAT", "DECIMAL", "NUMERIC", "INT", "INTEGER", "BIGINT", "DOUBLE", "REAL"}
-_FIELDS = {"id", "name", "table", "shape", "date_column", "split_column", "value_column"}
+_FIELDS = {"id", "name", "table", "shape", "date_column", "split_column", "value_column", "name_order"}
+
+
+def order_names(names: list, order) -> list:
+    """names in the saved order (Settings > Data Sources > Value Order): the
+    ones in the order first, as ordered, then any others as they came."""
+    if not order:
+        return list(names)
+    rank = {n: i for i, n in enumerate(order)}
+    return sorted(names, key=lambda n: (n not in rank, rank.get(n, 0)))
 
 
 def is_source_id(source) -> bool:
@@ -68,8 +89,8 @@ def validate_entry(entry, columns: dict, others: list) -> str | None:
     if not columns:
         return f"Table {table} was not found"
     shape = entry.get("shape")
-    if shape not in SHAPES:
-        return "Choose whether the table is one row per date or one row per date per name"
+    if shape not in KPI_SHAPES:
+        return "Choose whether the table is one row per date, one row per date per name, or one row per record"
     date_column = entry.get("date_column")
     if date_column not in columns or columns[date_column] not in DATE_TYPES:
         return "Choose the table's date column"
@@ -82,6 +103,14 @@ def validate_entry(entry, columns: dict, others: list) -> str | None:
     split_column, value_column = entry.get("split_column"), entry.get("value_column")
     if split_column not in columns or split_column == date_column:
         return "Choose the column holding the metric names (e.g. EVENT_NAME)"
+    order = entry.get("name_order")
+    if order is not None and (not isinstance(order, list) or len(order) > NAMES_MAX
+                              or any(not isinstance(n, str) or len(n) > 200 for n in order)):
+        return "bad value order"
+    if shape == "records":
+        if value_column:
+            return "A one-row-per-record table has no value column: each row counts as one"
+        return None
     if value_column not in columns or columns[value_column] not in NUMBER_TYPES:
         return "Choose the number column holding the figures (e.g. EVENT_VOLUME)"
     if value_column in (date_column, split_column):
@@ -94,8 +123,11 @@ def clean_entry(entry: dict) -> dict:
     wide table."""
     out = {"id": entry["id"], "name": entry["name"].strip(), "table": entry["table"],
            "shape": entry["shape"], "date_column": entry["date_column"]}
-    if entry["shape"] == "long":
+    if entry["shape"] in ("long", "records"):
         out["split_column"] = entry["split_column"]
+        if entry.get("name_order"):
+            out["name_order"] = list(dict.fromkeys(entry["name_order"]))
+    if entry["shape"] == "long":
         out["value_column"] = entry["value_column"]
     return out
 
@@ -144,6 +176,19 @@ def references(obj, source_id: str) -> int:
     return 0
 
 
+def sources_used(obj) -> set:
+    """Every source a chart (or any part of one) reads its figures from, read
+    the same way as references(). A calculated target's reference is left
+    out: it only sets the target line, not the chart's figures."""
+    if isinstance(obj, dict):
+        source = obj.get("source", "snowflake" if "metric" in obj else None)
+        own = {source} if source else set()
+        return own.union(*(sources_used(v) for k, v in obj.items() if k != "target_calc"))
+    if isinstance(obj, list):
+        return set().union(*(sources_used(v) for v in obj))
+    return set()
+
+
 def fetch_sql(entry: dict, metrics: list, start, end) -> tuple[str, list]:
     """SQL and bound values reading `metrics` for one entry from start to end.
     The table and column names must already have been checked against the
@@ -158,12 +203,14 @@ def fetch_sql(entry: dict, metrics: list, start, end) -> tuple[str, list]:
         cols = ", ".join(dict.fromkeys(metrics))
         return (f"SELECT {d}::DATE AS D, {cols} FROM {t} "
                 f"WHERE {d}::DATE >= %s AND {d}::DATE <= %s ORDER BY 1"), [str(start), str(end)]
-    s, v = entry["split_column"], entry["value_column"]
+    s = entry["split_column"]
+    # Records: each row counts as one.
+    total = "COUNT(*)" if entry["shape"] == "records" else f"SUM({entry['value_column']})"
     names = list(dict.fromkeys(metrics))
     placeholders = ", ".join(["%s"] * len(names))
     sql = (f"WITH days AS (SELECT DISTINCT {d}::DATE AS D FROM {t} "
            f"WHERE {d}::DATE >= %s AND {d}::DATE <= %s), "
-           f"vals AS (SELECT {d}::DATE AS D, {s}::VARCHAR AS S, SUM({v}) AS V FROM {t} "
+           f"vals AS (SELECT {d}::DATE AS D, {s}::VARCHAR AS S, {total} AS V FROM {t} "
            f"WHERE {d}::DATE >= %s AND {d}::DATE <= %s AND {s}::VARCHAR IN ({placeholders}) "
            f"GROUP BY 1, 2) "
            f"SELECT days.D, vals.S, vals.V FROM days LEFT JOIN vals ON vals.D = days.D ORDER BY 1")
@@ -181,8 +228,8 @@ def _as_date(value) -> datetime.date:
 def rows_to_by_date(entry: dict, metrics: list, rows, names) -> dict:
     """{date: {metric: value}} from fetch_sql's result.
 
-    Long tables: on any date the table holds, a chosen name with no row is 0,
-    because GA4 only writes a row for an event that happened. A date missing
+    Long and records tables: on any date the table holds, a chosen name with
+    no row is 0, because GA4 only writes a row for an event that happened. A date missing
     from the whole table is left out, so the chart shows a gap there rather
     than a false 0."""
     out = {}

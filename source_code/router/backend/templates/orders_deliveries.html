@@ -25,6 +25,13 @@
 </head>
 <body>
     {% call page_header(page_name('orders_deliveries'), user) %}
+            <!-- Enter opens the vehicle popup with just that VRM's rows. -->
+            <input type="search" class="vehicle-modal-search ms-3" id="vrm-search" placeholder="Search VRM"
+                   aria-label="Search VRM" autocomplete="off" spellcheck="false"
+                   onkeydown="if (event.key === 'Enter') searchVrm()">
+            <button class="btn btn-refresh ms-1" type="button" onclick="searchVrm()" title="Show this VRM's rows">
+                <i class="fas fa-magnifying-glass"></i> Search
+            </button>
             <span class="cache-note ms-3" id="cache-note"></span>
             <button class="btn btn-refresh ms-2" id="refresh-btn" onclick="refreshData()" title="Reload the latest data from Snowflake">
                 <i class="fas fa-rotate-right"></i> Refresh Data

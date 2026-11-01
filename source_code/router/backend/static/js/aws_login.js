@@ -15,7 +15,9 @@
         return /aws (sso|credentials)|sso session|credentials expired/i.test(message || '');
     }
 
-    window.awsLoginIfExpired = function (container, message) {
+    // onDone (optional): called instead of reloading the page once signed in,
+    // for popups where a reload would lose what has been typed.
+    window.awsLoginIfExpired = function (container, message, onDone) {
         if (!container || !isExpired(message) || container.querySelector('.aws-login-btn')) return;
         const btn = document.createElement('button');
         btn.type = 'button';
@@ -45,7 +47,10 @@
             const timer = setInterval(async () => {
                 try {
                     const s = await (await fetch(BASE + '/api/aws-sso-login')).json();
-                    if (s.status === 'ok') { clearInterval(timer); location.reload(); }
+                    if (s.status === 'ok') {
+                        clearInterval(timer);
+                        if (onDone) { onDone(); btn.disabled = false; } else location.reload();
+                    }
                     else if (s.status === 'failed') {
                         clearInterval(timer);
                         note.textContent = 'The sign-in did not finish. Try again.';

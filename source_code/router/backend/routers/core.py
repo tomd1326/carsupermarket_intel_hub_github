@@ -214,6 +214,24 @@ ORDER_PREFIX = 'ord__'
 CATEGORY_POS_PREFIX = 'catpos__'
 
 
+# Pages hidden on Settings > Page Names, stored in the same table as
+# hide__<page_key> = '1'. A hidden page is left off the home tiles, the menu
+# and the Page Access grid, and nobody but the admin can open it (get_user_pages).
+# Saved grants are kept, so unhiding it gives everyone their access back.
+HIDDEN_PREFIX = 'hide__'
+
+
+def page_hidden(page_key: str) -> bool:
+    if time.time() - _PAGE_NAMES_LOADED_AT >= PAGE_NAMES_TTL_SECONDS:
+        reload_page_names()
+    return PAGE_NAMES.get(HIDDEN_PREFIX + page_key) == '1'
+
+
+def visible_pages() -> list:
+    """PAGES without the hidden ones, in PAGES order."""
+    return [p for p in PAGES if not page_hidden(p.key)]
+
+
 def page_order(page_key: str) -> int | None:
     value = PAGE_NAMES.get(ORDER_PREFIX + page_key, '')
     return int(value) if value.isdigit() else None
@@ -239,7 +257,7 @@ def user_menu(user: str | None) -> dict:
     if time.time() - _PAGE_NAMES_LOADED_AT >= PAGE_NAMES_TTL_SECONDS:
         reload_page_names()
     ranked = sorted(
-        (p for p in PAGES if p.key in allowed),
+        (p for p in visible_pages() if p.key in allowed),
         key=lambda p: (page_order(p.key) is None, page_order(p.key) or 0),
     )
     loose, grouped = [], {}
@@ -467,10 +485,14 @@ def get_user_pages(user: str | None) -> frozenset:
     if stored is None or CONFIGURED_MARKER not in stored:
         # Never configured — today's access, so nothing changes for anyone
         # until an admin saves their row.
-        return DEFAULT_PAGE_KEYS
+        return frozenset(DEFAULT_PAGE_KEYS - _hidden_page_keys())
     # Configured: exactly what was saved, an empty set included. The marker is
-    # bookkeeping, never a page.
-    return frozenset(stored & ALL_PAGE_KEYS)
+    # bookkeeping, never a page. Hidden pages are taken off (kept in storage).
+    return frozenset((stored & ALL_PAGE_KEYS) - _hidden_page_keys())
+
+
+def _hidden_page_keys() -> set:
+    return {p.key for p in PAGES if page_hidden(p.key)}
 
 
 def user_can(user: str | None, page_key: str) -> bool:

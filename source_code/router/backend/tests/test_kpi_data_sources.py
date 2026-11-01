@@ -63,6 +63,25 @@ def test_unknown_field_is_refused():
     assert kds.validate_entry({**EVENTS, "sql": "SELECT 1"}, EVENTS_COLUMNS, []) is not None
 
 
+def test_value_order_puts_ordered_names_first_and_is_kept():
+    assert kds.order_names(["A", "B", "C", "D"], ["C", "A"]) == ["C", "A", "B", "D"]
+    assert kds.order_names(["A", "B"], None) == ["A", "B"]
+    assert kds.validate_entry({**EVENTS, "name_order": ["x", "y"]}, EVENTS_COLUMNS, []) is None
+    assert kds.validate_entry({**EVENTS, "name_order": "x"}, EVENTS_COLUMNS, []) is not None
+    assert kds.clean_entry({**EVENTS, "name_order": ["y", "x", "y"]})["name_order"] == ["y", "x"]
+
+
+def test_records_entry_counts_rows_and_has_no_value_column():
+    columns = {"VALUATION_CREATED_DATE": "DATE", "VALUATION_STATUS": "TEXT"}
+    records = {"id": "ds_valuations", "name": "Valuations", "table": "PRODUCT_SLT_KPIS.VALUATIONS_BCB",
+               "shape": "records", "date_column": "VALUATION_CREATED_DATE", "split_column": "VALUATION_STATUS"}
+    assert kds.validate_entry(records, columns, []) is None
+    assert kds.validate_entry({**records, "value_column": "VALUATION_STATUS"}, columns, []) is not None
+    assert "value_column" not in kds.clean_entry(records)
+    sql, _ = kds.fetch_sql(records, ["DELIVERED"], D1, D2)
+    assert "COUNT(*)" in sql and "SUM(" not in sql
+
+
 def test_new_id_is_stable_shape_and_unique():
     assert kds.new_id("GA4 Events", set()) == "ds_ga4_events"
     assert kds.new_id("GA4 Events", {"ds_ga4_events"}) == "ds_ga4_events_2"
@@ -163,3 +182,17 @@ def test_long_rows_leave_out_days_the_table_does_not_have():
 def test_wide_rows_by_date():
     out = kds.rows_to_by_date(SUMMARY, ["ORDERS"], [(datetime.datetime(2026, 10, 1, 0, 0), 12)], ["d", "orders"])
     assert out == {D1: {"ORDERS": 12}}
+
+
+# ── Section data source lock ─────────────────────────────────────────────────
+
+def test_sources_used_finds_every_part_of_a_chart():
+    row = {"metric": "VALUATIONS", "source": "ds_bcb", "divide_by": {"metric": "ORDERS"},
+           "series": [{"metric": "X", "source": "sharepoint"}]}
+    assert kds.sources_used(row) == {"ds_bcb", "snowflake", "sharepoint"}
+
+
+def test_sources_used_ignores_a_calculated_target_reference():
+    row = {"metric": "VALUATIONS", "source": "ds_bcb",
+           "target_calc": {"reference": {"metric": "ORDERS", "source": "snowflake"}}}
+    assert kds.sources_used(row) == {"ds_bcb"}
