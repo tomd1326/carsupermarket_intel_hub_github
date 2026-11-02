@@ -36,7 +36,7 @@ ROWS_LIMIT = 100000      # most groups read for one metric
 CALCULATIONS = {"avg": "AVG", "median": "MEDIAN", "min": "MIN", "max": "MAX", "sum": "SUM", "count": "COUNT"}
 DATE_MODES = ("all", "rolling", "fixed")
 FORMATS = ("number", "gbp", "pct")
-NO_VALUE_OPERATORS = ("is_blank", "is_not_blank")
+NO_VALUE_OPERATORS = ("is_blank", "is_not_blank", "is_true", "is_false")
 COMPARE_OPERATORS = {"greater_than": ">", "at_least": ">=", "less_than": "<", "at_most": "<="}
 OPERATORS = ("equals", "not_equals", "contains", "in_list") + tuple(COMPARE_OPERATORS) + NO_VALUE_OPERATORS
 # The vehicle fields a metric can match on, and how the page names them.
@@ -169,6 +169,10 @@ def filter_sql(filters: list) -> tuple:
             clauses.append(f"({column} IS NULL OR TO_VARCHAR({column}) = '')")
         elif operator == "is_not_blank":
             clauses.append(f"({column} IS NOT NULL AND TO_VARCHAR({column}) <> '')")
+        elif operator in ("is_true", "is_false"):
+            # TRY_ so a column that is not true/false matches nothing rather than
+            # failing every chart reading this table.
+            clauses.append(f"TRY_TO_BOOLEAN(TO_VARCHAR({column})) = {'TRUE' if operator == 'is_true' else 'FALSE'}")
         elif operator == "contains":
             clauses.append(f"CONTAINS(UPPER(TO_VARCHAR({column})), UPPER(%s))")
             params.append(value)

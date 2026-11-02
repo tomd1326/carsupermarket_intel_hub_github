@@ -186,7 +186,7 @@
 .chart-list-section { font-size: 0.78rem; font-weight: 700; color: #64748b; margin: 10px 0 4px; }
 .chart-list-section:first-child { margin-top: 0; }
 .chart-item { display: flex; align-items: center; gap: 6px; margin-bottom: 4px; font-size: 0.85rem; }
-.chart-item label { display: flex; align-items: center; gap: 4px; margin: 0; font-weight: 400; width: 58px; }
+.chart-item label { display: flex; align-items: center; gap: 4px; margin: 0; font-weight: 400; flex: none; white-space: nowrap; }
 .chart-item .chart-item-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .chart-item.is-hidden .chart-item-title { color: #94a3b8; }
 .chart-item select { width: 150px; padding: 3px 6px; border: 1px solid #cbd5e1; border-radius: 6px; }
@@ -553,6 +553,13 @@
 /* Settings > Data Sources > Value Order: one row per value, with arrows. */
 .ds-order-row { display: flex; align-items: center; gap: 6px; padding: 2px 0; font-size: 0.85rem; }
 .ds-order-row span { min-width: 220px; }
+.settings-saving-cover { position: fixed; inset: 0; z-index: 20000; display: flex; align-items: center; justify-content: center; gap: 12px; background: rgba(255, 255, 255, 0.7); font-size: 1.6rem; font-weight: 600; color: #475569; cursor: wait; }
+.ds-diff { margin-bottom: 10px; }
+.ds-diff-row { display: flex; align-items: center; gap: 6px; margin-bottom: 4px; font-size: 0.85rem; }
+.ds-diff-row input, .ds-diff-row select { flex: 1; min-width: 0; padding: 4px 6px; border: 1px solid #cbd5e1; border-radius: 6px; }
+.ds-diff-row > span { flex: none; }
+.ds-diff-row .btn { flex: none; }
+.ds-diff-filter { margin-left: 24px; }
 /* Load Data's menu (Admin View): a caret beside the button, opening a list. */
 .load-menu { position: relative; display: inline-block; margin-left: -6px; }
 .load-menu-btn { padding-left: 8px; padding-right: 8px; }
