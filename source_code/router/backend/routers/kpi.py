@@ -569,6 +569,8 @@ async def kpi_ga4_campaigns_add(
     request: Request,
     user: str = Depends(require_page_api('google_ads_campaigns')),
 ):
+    if not is_admin(user):
+        return {"status": "error", "message": "Only the admin can change the campaigns"}
     body = await request.json()
     campaign_id, error = _campaign_id_or_error(body.get('campaign_id'))
     if error:
@@ -589,6 +591,8 @@ async def kpi_ga4_campaigns_remove(
 ):
     """Takes the campaign off the page. Its targets are left in chart_targets,
     so they come back if it is added again."""
+    if not is_admin(user):
+        return {"status": "error", "message": "Only the admin can change the campaigns"}
     body = await request.json()
     campaign_id, error = _campaign_id_or_error(body.get('campaign_id'))
     if error:
@@ -1447,6 +1451,13 @@ KPI_DEFAULT_SETTINGS = {
     # Comments (routers/wbr_comments.py): discussion threads on review charts.
     "wbr_comments_on": 0,             # 1 = comment buttons shown and comments allowed
     "wbr_comments_show_resolved": 0,  # 1 = resolved threads listed by default
+    # Report view (routers/wbr_report.py). Off: only the admin can see it.
+    "wbr_report_on": 0,
+    "wbr_report_weeks_per_month": 4.2,  # divides a month's total into a weekly average
+    "wbr_report_months": 3,             # complete months shown
+    "wbr_report_weeks": 5,              # weeks shown
+    "wbr_report_recon_default": 495,    # recon cost used when a car has none, or less than the floor
+    "wbr_report_recon_floor": 100,
     "wbr_slides_on": 0,
     "wbr_grid_cols": 24,          # snap-to grid across a slide
     "wbr_grid_rows": 12,          # and down it (under the title)
@@ -1474,6 +1485,7 @@ KPI_COLOUR_SETTINGS = {
     "admin_only_badge_colour": "#b45309",
 }
 _KPI_HALF_SETTINGS = {"main_line_px", "n1_line_px", "target_line_px"}
+_KPI_DECIMAL_SETTINGS = {"wbr_report_weeks_per_month"}
 
 KPI_SETTING_LIMITS = {
     "months": (1, 24),
@@ -1514,6 +1526,12 @@ KPI_SETTING_LIMITS = {
     "wbr_slide_gridlines": (0, 1),
     "wbr_comments_on": (0, 1),
     "wbr_comments_show_resolved": (0, 1),
+    "wbr_report_on": (0, 1),
+    "wbr_report_weeks_per_month": (1, 6),
+    "wbr_report_months": (1, 6),
+    "wbr_report_weeks": (1, 13),
+    "wbr_report_recon_default": (0, 5000),
+    "wbr_report_recon_floor": (0, 5000),
     "wbr_slides_on": (0, 1),
     "wbr_grid_cols": (4, 48),
     "wbr_grid_rows": (4, 36),
@@ -1529,10 +1547,13 @@ KPI_SETTING_LIMITS = {
 
 
 def _setting_number(name: str, value):
-    """The setting as its type: a whole number, or for line thickness the
-    nearest half. Raises TypeError / ValueError when it is not a number."""
+    """The setting as its type: a whole number, for line thickness the nearest
+    half, or a decimal to two places. Raises TypeError / ValueError when it is
+    not a number."""
     if name in _KPI_HALF_SETTINGS:
         return round(float(value) * 2) / 2
+    if name in _KPI_DECIMAL_SETTINGS:
+        return round(float(value), 2)
     return int(value)
 
 
@@ -2010,6 +2031,9 @@ def _custom_data(metric: str, agg: str, source: str, target_mode: str, months: i
             "values": values,
             "values_n1": values_n1,
             "values_target": values_target,
+            # Each day's weight, so the page's 7-day view is weighted like weeks and months.
+            "weights": [by_date.get(d, {}).get('w') for d in dates] if weight_by else None,
+            "weights_n1": [by_date.get(_shift_years(d, -1), {}).get('w') for d in dates] if weight_by else None,
             "monthly_labels": monthly_labels,
             "monthly_values": monthly_values,
             "monthly_values_n1": monthly_n1,

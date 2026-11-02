@@ -11,6 +11,8 @@ Two ways in:
   2. Pick a supplier the Supplier Stock Evaluator already holds (Enterprise,
      Motability, Purchase Pro ...) and paste VRMs. Mileage, list price and the
      CAP details come from the evaluator's own tables.
+  3. Invoices saved to a SharePoint folder, read the same way as an upload and
+     left pending for a buyer (utils/cars_bought_inbox.py).
 
 The buyer checks the rows, fills in the custom fields, and submits. One
 submit is one purchase_batches row with a purchase_vehicles row per car.
@@ -27,6 +29,7 @@ from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 import psycopg2.extras
 
 from utils.ddl_once import once_per_database
+from utils.vehicle_store import BUYER_FIGURES, round_mileage_to_nearest_thousand
 
 logger = logging.getLogger(__name__)
 
@@ -76,7 +79,14 @@ DEFAULT_SUPPLIER_NAMES = [
     {"text": "OPENLANE", "supplier": "OPENLANE"},
     {"text": "British Car Auctions", "supplier": "BCA"},
     {"text": "Southern Motor Contracts", "supplier": "Southern Motor Contracts"},
+    {"text": "The Fleet Auction Group", "supplier": "The Fleet Auction Group"},
 ]
+# Our own names on an invoice (the customer's address): never suggested as a supplier.
+DEFAULT_OWN_NAMES = ["Motor Depot", "CarSupermarket", "Car Supermarket", "Best Car Buyer"]
+# How one supplier's invoices are read. priced_lines_are_fees: a line with
+# amounts and no VRM under a car is a fee, whatever it says (BCA cuts its
+# descriptions short: "BCA EV/Hybrid Assured Cha"). Editable on the page.
+DEFAULT_SUPPLIER_RULES = [{"supplier": "BCA", "fee_words": [], "priced_lines_are_fees": True}]
 
 # Fields the buyer fills in. Editable on the page (stored in settings as
 # JSON), these are only what a new install starts with.
@@ -84,7 +94,38 @@ DEFAULT_CUSTOM_FIELDS = [
     {"key": "rrp", "label": "RRP", "type": "money"},
     {"key": "est_prep_cost", "label": "Estimated Prep Cost", "type": "money"},
 ]
-CUSTOM_FIELD_TYPES = ("money", "number", "text")
+CUSTOM_FIELD_TYPES = ("money", "number", "text", "yesno")
+# The buying sheet's columns that no invoice holds, for buyers to fill in. Added
+# once to whatever fields are already set up; after that they are edited on the page.
+SHEET_CUSTOM_FIELDS = [
+    {"key": "vendor", "label": "Vendor", "type": "text", "required": False},
+    {"key": "notes", "label": "Notes", "type": "text", "required": False},
+    {"key": "sat_nav", "label": "Sat Nav", "type": "yesno", "required": False},
+    {"key": "spec", "label": "Spec", "type": "text", "required": False},
+    {"key": "replaceable", "label": "Replaceable", "type": "yesno", "required": False},
+    {"key": "rrp", "label": "RRP", "type": "money", "required": False},
+]
+
+# The All Vehicles Bought table. Columns are named in capitals (the shared column
+# editor searches on capitals); each is the row's field of the same name in lower
+# case, and a custom field is CUSTOM:<KEY>. (column, heading, format)
+TABLE_FIELDS = [
+    ("PURCHASE_DATE", "Date", "date"), ("BUYER", "Buyers", "text"), ("SUPPLIER_NAME", "Supplier", "text"),
+    ("FIRST_REGISTERED", "DOR", "date"), ("VRM", "Reg", "text"), ("MAKE", "Make", "text"), ("MODEL", "Model", "text"),
+    ("DERIVATIVE", "Variant", "text"), ("CAP_ID", "CAP ID", "text"), ("COLOUR", "Colour", "text"),
+    ("MILEAGE", "Mileage", "number"), ("VIN", "VIN", "text"), ("INVOICE_NUMBER", "Invoice", "text"),
+    ("SUPPLIER_DESCRIPTION", "Supplier Description", "text"), ("VAT_STATUS", "VAT Status", "text"),
+    ("VEHICLE_NET", "Vehicle Net", "gbp"), ("VEHICLE_VAT", "Vehicle VAT", "gbp"), ("VEHICLE_GROSS", "Vehicle Gross", "gbp"),
+    ("FEES_NET", "Fees Net", "gbp"), ("FEES_VAT", "Fees VAT", "gbp"), ("FEES_GROSS", "Fees Gross", "gbp"),
+    ("PURCHASE_TOTAL", "Purchase Price", "gbp"), ("AT_RETAIL_VALUATION", "AT Valuation", "gbp"),
+    ("CAP_CLEAN", "CAP Clean", "gbp"), ("SUBMITTED_BY", "Submitted By", "text"), ("SUBMITTED_AT", "Submitted", "date"),
+]
+TABLE_FORMATS = ("text", "number", "gbp", "pct", "date")
+# The order of the buying sheet.
+DEFAULT_TABLE_ORDER = ["PURCHASE_DATE", "BUYER", "SUPPLIER_NAME", "CUSTOM:VENDOR", "FIRST_REGISTERED", "VRM", "MAKE", "MODEL",
+                       "DERIVATIVE", "CAP_ID", "CUSTOM:NOTES", "COLOUR", "MILEAGE", "CUSTOM:SAT_NAV", "CUSTOM:SPEC",
+                       "CUSTOM:REPLACEABLE", "PURCHASE_TOTAL", "CUSTOM:RRP", "CUSTOM:EST_PREP_COST"]
+DEFAULT_TABLE_ROWS = 500
 
 # The Buyer dropdown lists the users given this role on the Users page.
 BUYER_ROLE = "buyer"
@@ -166,7 +207,7 @@ _VRM = re.compile(r"\b([A-Z]{2}[0-9]{2} ?[A-Z]{3}|[A-Z][0-9]{1,3} ?[A-Z]{3}|[A-Z
 _VRM_FULL = re.compile(r"[A-Z]{2}[0-9]{2}[A-Z]{3}|[A-Z][0-9]{1,3}[A-Z]{3}|[A-Z]{3}[0-9]{1,3}[A-Z]")
 _VIN = re.compile(r"\b([A-HJ-NPR-Z0-9]{17})\b")
 _MILEAGE_IN_TEXT = re.compile(r"(?:mileage|odometer)\W*([\d,]{3,7})", re.I)
-_REG_DATE_IN_TEXT = re.compile(r"(?:reg\.? ?date|1st reg|date of reg)\W*(\d{1,2}/\d{1,2}/\d{2,4})", re.I)
+_REG_DATE_IN_TEXT = re.compile(r"(?:reg\.? ?date|registration date|1st reg|date of reg|dfr)\W*(\d{1,2}/\d{1,2}/\d{2,4})", re.I)
 
 
 def norm_label(text) -> str:
@@ -216,6 +257,26 @@ def is_fee(text, fee_words: list) -> bool:
     return any(re.search(rf"(^| ){re.escape(norm_label(w))}( |$)", low) for w in fee_words if w.strip())
 
 
+def clean_supplier_rules(rules) -> list:
+    out = []
+    for r in rules or []:
+        supplier = str((r or {}).get("supplier") or "").strip()[:100]
+        if supplier:
+            out.append({"supplier": supplier,
+                        "fee_words": [str(w).strip()[:30] for w in (r.get("fee_words") or []) if str(w).strip()],
+                        "priced_lines_are_fees": bool(r.get("priced_lines_are_fees"))})
+    return out
+
+
+def apply_supplier_rule(supplier, fee_words: list, rules) -> tuple:
+    """(fee words, priced_lines_are_fees) for this supplier's invoice."""
+    name = str(supplier or "").strip().lower()
+    for r in rules or []:
+        if name and str(r.get("supplier") or "").strip().lower() == name:
+            return list(fee_words) + list(r.get("fee_words") or []), bool(r.get("priced_lines_are_fees"))
+    return fee_words, False
+
+
 def _fill_from_text(v: dict, text: str) -> None:
     """Mileage, VIN and registration date written inside a description."""
     if v.get("mileage") is None:
@@ -232,11 +293,17 @@ def _fill_from_text(v: dict, text: str) -> None:
             v["first_registered"] = m.group(1)
 
 
-def _assemble(lines: list, fee_words: list) -> list:
+def _assemble(lines: list, fee_words: list, priced_lines_are_fees: bool = False, names: dict = None) -> list:
     """Lines [{fields..., text}] in invoice order -> vehicles with their fees.
     A line with a fee word is a fee: it goes on the car whose VRM it names,
     else the car before it, else the first car. Two lines for the same VRM
-    (e.g. a details line and a price line) are merged."""
+    (e.g. a details line and a price line) are merged, but a second priced line
+    for a car is a fee on it (Fleet Auction: "Buyer's Premium (WV75SZD)"). With
+    priced_lines_are_fees, a priced line with no VRM under a car is a fee too,
+    unless it is one of the invoice's totals."""
+    def priced(row):
+        return any(row.get(k) not in (None, "") for k in ("vehicle_net", "vehicle_vat", "vehicle_gross"))
+
     vehicles, order, fees = {}, [], []
     for line in lines:
         text = line.get("text") or ""
@@ -248,8 +315,13 @@ def _assemble(lines: list, fee_words: list) -> list:
             continue
         vrm = vrm or find_vrm(text)
         if not vrm:
+            if priced_lines_are_fees and order and not _total_field(text, names or {}) and priced(line):
+                fees.append({"vrm": None, "after": order[-1], "line": line})
             continue
         v = vehicles.get(vrm)
+        if v is not None and priced(v) and priced(line):
+            fees.append({"vrm": vrm, "after": vrm, "line": line})
+            continue
         if v is None:
             v = vehicles[vrm] = {"vrm": vrm, "fees": []}
             order.append(vrm)
@@ -308,7 +380,7 @@ def parse_sheet(filename: str, data: bytes, names: dict, fee_words: list) -> dic
                 lines.append(line)
     if not lines:
         raise ValueError("No heading row with a VRM column was found. Add the sheet's headings in Cars Bought Settings")
-    return {"vehicles": _assemble(lines, fee_words)}
+    return {"vehicles": _assemble(lines, fee_words), "found_text": found_text([l.get("text") or "" for l in lines])}
 
 
 def row_heading(row: list, i: int) -> str:
@@ -348,7 +420,8 @@ def _field(f: dict) -> tuple:
             ((f.get("ValueDetection") or {}).get("Text") or "").strip())
 
 
-def parse_expense(responses: list, names: dict, fee_words: list) -> dict:
+def parse_expense(responses: list, names: dict, fee_words: list, supplier_names: list = None,
+                  supplier_rules: list = None) -> dict:
     """Vehicles and invoice details from Textract AnalyzeExpense replies."""
     summary, labelled, lines, all_text = {}, {}, [], []
     for resp in responses:
@@ -393,7 +466,10 @@ def parse_expense(responses: list, names: dict, fee_words: list) -> dict:
                 if b.get("BlockType") == "LINE":
                     all_text.append(b.get("Text", ""))
 
-    vehicles = _assemble(lines, fee_words)
+    matched, supplier_text = match_supplier("\n".join(all_text), supplier_names)
+    supplier = matched or summary.get("VENDOR_NAME")
+    fee_words, priced_lines_are_fees = apply_supplier_rule(supplier, fee_words, supplier_rules)
+    vehicles = _assemble(lines, fee_words, priced_lines_are_fees, names)
     if not vehicles:
         # A form with no table (e.g. a handwritten purchase invoice): one car
         # from the labelled fields.
@@ -408,7 +484,10 @@ def parse_expense(responses: list, names: dict, fee_words: list) -> dict:
             _fill_from_text(v, " ".join(all_text))
             vehicles = [v]
     return {
-        "supplier_name": summary.get("VENDOR_NAME"),
+        "supplier_name": supplier,
+        "supplier_text": supplier_text,
+        "supplier_matched": bool(matched),
+        "found_text": found_text(all_text),
         "invoice_number": summary.get("INVOICE_RECEIPT_ID"),
         "invoice_date": summary.get("INVOICE_RECEIPT_DATE"),
         "invoice_net": summary.get("SUBTOTAL"),
@@ -427,7 +506,8 @@ _MONEY_TOKEN = re.compile(r"(?<![\d,.])-?(?:\d{1,3}(?:,\d{3})+|\d+)\.\d{2}(?!\d)
 _DATE_TOKEN = re.compile(r"\b\d{1,2}/\d{1,2}/\d{2,4}\b")
 _MILEAGE_TOKEN = re.compile(r"^(?:\d{1,3}(?:,\d{3})+|\d{3,6})$")
 _INVOICE_NO = re.compile(r"invoice\s*(?:no\.?|number|#)?\s*:?\s*([A-Z0-9/\-]*\d[A-Z0-9/\-]*)", re.I)
-_INVOICE_DATE = re.compile(r"(?:invoice date|tax point date|document date|date)\s*:?\s*(\d{1,2}/\d{1,2}/\d{2,4})", re.I)
+# Not a car's "Registration Date" or "Reg. Date".
+_INVOICE_DATE = re.compile(r"(?<!registration )(?<!reg )(?<!reg\. )(?:invoice date|tax point date|document date|date)\s*:?\s*(\d{1,2}/\d{1,2}/\d{2,4})", re.I)
 _FORM_VRM = re.compile(r"(?:reg(?:istration)?\.?\s*(?:no|number)\.?|vrm|licen[cs]e)\s*:?\s*([A-Z0-9]{2,4} ?[A-Z0-9]{3})\b", re.I)
 _FORM_VEHICLE = re.compile(r"^\s*vehicle\s*:\s*(.+)$", re.I | re.M)
 
@@ -464,6 +544,12 @@ def _header(lines: list, i: int, names: dict):
     cols = [{"label": c[2], "field": match_field(c[2], names),
              "pct": "%" in c[2] or bool(re.search(r"\brate\b", c[2], re.I)) and not match_field(c[2], names)}
             for c in cells]
+    # Fleet Auction: Unit Price, Total, VAT, Total Inc. The last total is the
+    # gross and the total before it the net; a price before that is not used.
+    for field, before in (("vehicle_gross", "vehicle_net"), ("vehicle_net", None)):
+        same = [c for c in cols if c["field"] == field]
+        for c in same[:-1]:
+            c["field"] = before
     fields = [c["field"] for c in cols if c["field"]]
     if len(fields) < 2 or not any(f in _AMOUNT_FIELDS for f in fields):
         return None
@@ -473,16 +559,21 @@ def _header(lines: list, i: int, names: dict):
 def _map_amounts(tokens: list, cols: list) -> list:
     """[(column, amount)] for a row's amounts. Matched by order: to every
     amount-like column (percent columns included) when the counts agree,
-    else to the amount columns alone, else the last amounts to the last
-    amount columns."""
+    else to the amount columns alone. With extra amounts, the last ones are
+    used. With too few, a column in the middle was left blank (OPENLANE's car
+    has no VAT: Net 9,000.00, Gross 9,000.00), so the last amount goes to the
+    last column and the others to the first columns."""
     with_pct = [c for c in cols if c["field"] in _AMOUNT_FIELDS or c["pct"]]
     amounts = [c for c in cols if c["field"] in _AMOUNT_FIELDS]
     if len(tokens) == len(with_pct):
         return list(zip(with_pct, tokens))
     if len(tokens) == len(amounts):
         return list(zip(amounts, tokens))
-    n = min(len(tokens), len(amounts))
-    return list(zip(amounts[len(amounts) - n:], tokens[len(tokens) - n:])) if n else []
+    if not tokens or not amounts:
+        return []
+    if len(tokens) > len(amounts):
+        return list(zip(amounts, tokens[len(tokens) - len(amounts):]))
+    return list(zip(amounts, tokens[:-1])) + [(amounts[-1], tokens[-1])]
 
 
 def _total_field(label: str, names: dict):
@@ -499,17 +590,111 @@ def _total_field(label: str, names: dict):
     return best
 
 
+def match_supplier(text: str, supplier_names: list) -> tuple:
+    """(supplier, the text that matched), or (None, None). The longest match
+    wins, so the order of the list does not matter and a short text cannot
+    take an invoice from a fuller one."""
+    low = (text or "").lower()
+    found = [s for s in supplier_names or [] if s.get("text") and s["text"].lower() in low]
+    if not found:
+        return None, None
+    best = max(found, key=lambda s: len(s["text"]))
+    return best.get("supplier"), best["text"]
+
+
 def detect_supplier(text: str, supplier_names: list):
-    low = text.lower()
-    for s in supplier_names:
-        if s.get("text") and s["text"].lower() in low:
-            return s.get("supplier")
-    return None
+    return match_supplier(text, supplier_names)[0]
 
 
-def parse_layout(pages: list, names: dict, fee_words: list, supplier_names: list) -> dict:
+MIN_SUPPLIER_TEXT = 3
+_COMPANY_WORD = re.compile(r"\b(ltd|limited|plc|llp|auctions?|motors?|cars?|group|trade|leasing|remarketing|rentals?)\b", re.I)
+_NOT_A_NAME = re.compile(r"@|https?:|www\.|\d{4,}|^\d|^(registered|vat|company|invoice|account|sort code|iban|bank|tel|fax|phone|page|date|customer)\b", re.I)
+
+
+def clean_supplier_names(rows) -> list:
+    """The Supplier Names list: one row per text, the later row winning. Raises
+    ValueError for a text so short it would match almost every invoice."""
+    out = {}
+    for r in rows or []:
+        if not isinstance(r, dict):
+            continue
+        text, supplier = str(r.get("text") or "").strip()[:100], str(r.get("supplier") or "").strip()[:100]
+        if not text and not supplier:
+            continue
+        if not text or not supplier:
+            raise ValueError(f"Supplier Names: '{text or supplier}' needs both a text and a supplier")
+        if len(text) < MIN_SUPPLIER_TEXT:
+            raise ValueError(f"Supplier Names: '{text}' is too short, it would match too many invoices")
+        out[text.lower()] = {"text": text, "supplier": supplier}
+    return list(out.values())
+
+
+def found_text(lines: list) -> str:
+    """The text read from an invoice, kept so the supplier can be matched later
+    and shown when it cannot be."""
+    kept = [re.sub(r" {2,}", "  ", line.strip()) for line in lines if str(line).strip()]
+    return "\n".join(kept)[:20000]
+
+
+def contact_options(rows: list) -> list:
+    """[{id, name, label}] for the Apex supplier dropdown, from (id, name) rows.
+    A name used by more than one contact shows its id, so they can be told apart."""
+    names = [str(r[1]).strip() for r in rows]
+    out = [{"id": r[0], "name": str(r[1]).strip(),
+            "label": str(r[1]).strip() + (f" (ID {r[0]})" if names.count(str(r[1]).strip()) > 1 else "")} for r in rows]
+    return sorted(out, key=lambda c: c["label"].lower())
+
+
+def clean_supplier_contacts(rows) -> list:
+    """The mappings sent from the page. No contact chosen clears a supplier's mapping."""
+    out = []
+    for r in rows or []:
+        supplier_id = to_int((r or {}).get("supplier_id"))
+        if supplier_id is None:
+            continue
+        contact_id = to_int(r.get("contact_id"))
+        out.append({"supplier_id": supplier_id, "contact_id": contact_id,
+                    "contact_name": (str(r.get("contact_name") or "").strip()[:250] or None) if contact_id is not None else None})
+    return out
+
+
+def usable_supplier_names(rows) -> list:
+    """An older saved list, keeping what clean_supplier_names accepts. One bad
+    row must not stop the rest being moved across."""
+    out = []
+    for r in rows or []:
+        try:
+            out += clean_supplier_names([r])
+        except (AttributeError, ValueError) as e:
+            logger.warning(f"Cars Bought: supplier name {r} not kept: {e}")
+    return clean_supplier_names(out)
+
+
+def suggest_suppliers(text: str, own_names: list, limit: int = 5) -> list:
+    """[{text, supplier}] that may name an unknown invoice's supplier: pieces
+    of its text with a company word first (Ltd, Auctions...), then the first
+    pieces on the page. Never our own names."""
+    own = [n.lower() for n in own_names or [] if n.strip()]
+    pieces = []
+    for line in (text or "").splitlines():
+        for cell in re.split(r"\s{2,}", line.strip()):
+            name = cell.strip(" .,:;-\\")
+            if (MIN_SUPPLIER_TEXT <= len(name) <= 50 and not _NOT_A_NAME.search(name)
+                    and not any(o in name.lower() for o in own) and name not in pieces):
+                pieces.append(name)
+    chosen = [p for p in pieces if _COMPANY_WORD.search(p)] + [p for p in pieces[:8] if not _COMPANY_WORD.search(p)]
+    out = []
+    for name in chosen[:limit]:
+        short = re.sub(r"[\s,.]*\b(ltd|limited|plc|llp)\b\.?$", "", name, flags=re.I)
+        out.append({"text": name, "supplier": short.title() if short.isupper() else short})
+    return out
+
+
+def parse_layout(pages: list, names: dict, fee_words: list, supplier_names: list, supplier_rules: list = None) -> dict:
     """Vehicles and invoice details from a text PDF's layout text."""
     full = "\n".join(pages)
+    supplier, supplier_text = match_supplier(full, supplier_names)
+    fee_words, priced_lines_are_fees = apply_supplier_rule(supplier, fee_words, supplier_rules)
     lines = [l.rstrip() for l in full.replace("�", " ").replace("£", " ").splitlines()]
     cols, items, totals, prev, i = None, [], {}, None, 0
     while i < len(lines):
@@ -525,6 +710,8 @@ def parse_layout(pages: list, names: dict, fee_words: list, supplier_names: list
         found = list(_MONEY_TOKEN.finditer(line))
         before = line[:found[0].start()] if found else line
         desc = " ".join(before.split())
+        if found and any(c["pct"] for c in cols):
+            desc = re.sub(r"\s+\d{1,2}(?:\.\d+)?$", "", desc)      # the VAT % printed before the amounts
         vrm = find_vrm(before)
         if found and not vrm and _total_field(desc, names):
             mapped = _map_amounts([m.group() for m in found], cols)
@@ -534,6 +721,10 @@ def parse_layout(pages: list, names: dict, fee_words: list, supplier_names: list
                     f = {"vehicle_net": "invoice_net", "vehicle_vat": "invoice_vat", "vehicle_gross": "invoice_gross"}.get(c["field"])
                     if f:
                         totals[f] = str((money(t) or Decimal("0")) + (fees if f == "invoice_net" else 0))
+            prev = None
+            continue
+        if found and not vrm and totals and not is_fee(desc, fee_words):
+            # Below the invoice's totals (a VAT summary, say): not a fee on a car.
             prev = None
             continue
         if not found and not vrm:
@@ -561,8 +752,11 @@ def parse_layout(pages: list, names: dict, fee_words: list, supplier_names: list
         items.append(item)
         prev = item
 
-    vehicles = _assemble(items, fee_words)
+    vehicles = _assemble(items, fee_words, priced_lines_are_fees, names)
     if not vehicles:
+        agreement = _sale_agreement(lines, names)
+        if agreement:
+            return agreement
         vehicles = _form_vehicle(lines, names)
         if vehicles:
             totals = {**_form_totals(lines, names), **totals}
@@ -574,7 +768,8 @@ def parse_layout(pages: list, names: dict, fee_words: list, supplier_names: list
         totals = _form_totals(lines, names)
     number = _INVOICE_NO.search(full)
     date = _INVOICE_DATE.search(full)
-    return {"supplier_name": detect_supplier(full, supplier_names),
+    return {"supplier_name": supplier, "supplier_text": supplier_text, "supplier_matched": bool(supplier),
+            "found_text": found_text(lines),
             "invoice_number": number.group(1) if number else None,
             "invoice_date": date.group(1) if date else None,
             **totals, "vehicles": vehicles}
@@ -604,13 +799,44 @@ def _form_vehicle(lines: list, names: dict) -> list:
     v = {"vrm": vrm, "fees": []}
     d = _FORM_VEHICLE.search(text)
     if d:
-        v["description"] = " ".join(d.group(1).split())
+        # Up to the next wide gap: another label can sit on the same line.
+        v["description"] = " ".join(re.split(r"\s{2,}", d.group(1).strip())[0].split())
     _fill_from_text(v, text)
     return [v]
 
 
+def _sale_agreement(lines: list, names: dict) -> dict | None:
+    """A broker's sale agreement (Motorspace), or None if this is not one. The
+    car is bought from the Selling Dealership at the Sales Price, with no VAT
+    shown, so it is margin. The broker's Commission, its VAT and Total are a
+    fee. The printed Total is only the fee, so it is not kept as the invoice's.
+    These labels are fixed in code as they only mean this on this one form."""
+    text = "\n".join(lines)
+
+    def amount(label):
+        m = re.search(rf"\b{label}\s*:\s*((?:\d{{1,3}}(?:,\d{{3}})+|\d+)\.\d{{2}})(?!\d)", text, re.I)
+        return m.group(1) if m else None
+
+    price, commission = amount(r"sales? price"), amount("commission")
+    vehicles = _form_vehicle(lines, names) if price and commission else []
+    if not vehicles:
+        return None
+    v = vehicles[0]
+    v.update(vehicle_net=price, vehicle_gross=price)
+    v["fees"].append({"description": "Commission", "net": commission, "vat": amount("vat"), "gross": amount("total")})
+    seller = re.search(r"selling dealership\s*:\s*(\S.*?)(?:\s{2,}|$)", text, re.I | re.M)
+    # The date sits on the line under its label.
+    date = re.search(r"^\s*date\s*:.*\n\s*(\d{1,2}/\d{1,2}/\d{2,4})", text, re.I | re.M)
+    # The supplier is named on the form itself, so it is not looked up in the list.
+    return {"supplier_name": seller.group(1) if seller else None, "supplier_matched": bool(seller),
+            "found_text": found_text(lines), "invoice_number": None,
+            "invoice_date": date.group(1) if date else None,
+            "notes": "Broker's sale agreement, not an invoice: the commission is shown as a fee",
+            "vehicles": vehicles}
+
+
 def read_invoice(filename: str, data: bytes, names: dict, fee_words: list, supplier_names: list,
-                 fee_vat_rate: float = DEFAULT_FEE_VAT_RATE, on_scan=None) -> tuple:
+                 fee_vat_rate: float = DEFAULT_FEE_VAT_RATE, on_scan=None, supplier_rules: list = None) -> tuple:
     """(rows in the page's shape, how it was read) for an uploaded file. Text
     PDFs are read from their own text; scans, photos and text PDFs where no
     car was found go to Textract (on_scan is called first, for the progress)."""
@@ -620,12 +846,12 @@ def read_invoice(filename: str, data: bytes, names: dict, fee_words: list, suppl
     if kind == "pdf":
         pages = pdf_layout_pages(data)
         if len("".join(pages).split()) > 20:
-            raw = parse_layout(pages, names, fee_words, supplier_names)
+            raw = parse_layout(pages, names, fee_words, supplier_names, supplier_rules)
             if raw["vehicles"]:
                 return normalise_extract(raw, fee_vat_rate), "text"
     if on_scan:
         on_scan()
-    raw = parse_expense(analyze_expense(filename, data), names, fee_words)
+    raw = parse_expense(analyze_expense(filename, data), names, fee_words, supplier_names, supplier_rules)
     return normalise_extract(raw, fee_vat_rate), "textract"
 
 
@@ -654,6 +880,20 @@ def split_row_fees(fees: list, vehicle_vat, vehicle_gross, rate: float) -> tuple
     return vehicle_vat, vehicle_gross
 
 
+def vat_status(vehicle: dict) -> str:
+    """A car with no VAT shown on it is margin. Its fees have their own VAT,
+    which can be different, and do not count."""
+    return "VAT Qualifying" if money(vehicle.get("vehicle_vat")) else "Margin"
+
+
+def purchase_total(vehicle: dict) -> float:
+    """What the car cost in all: the car, every fee and all VAT."""
+    gross = money(vehicle.get("vehicle_gross"))
+    if gross is None:
+        gross = (money(vehicle.get("vehicle_net")) or Decimal("0")) + (money(vehicle.get("vehicle_vat")) or Decimal("0"))
+    return float(gross + (money(vehicle.get("fees_gross")) or Decimal("0")))
+
+
 def normalise_extract(raw: dict, fee_vat_rate: float = DEFAULT_FEE_VAT_RATE) -> dict:
     """Clean what was read into the row shape the page uses: VRMs cleaned,
     numbers as floats, fees totalled per vehicle (the list is kept too)."""
@@ -668,6 +908,11 @@ def normalise_extract(raw: dict, fee_vat_rate: float = DEFAULT_FEE_VAT_RATE) -> 
                 for f in (v.get("fees") or [])]
         vehicle_vat, vehicle_gross = split_row_fees(fees, _num(v.get("vehicle_vat")), _num(v.get("vehicle_gross")),
                                                     fee_vat_rate)
+        vehicle_net = _num(v.get("vehicle_net"))
+        if not vehicle_vat:
+            # Margin: no VAT on the car, so its net and gross are the same.
+            vehicle_net = vehicle_gross if vehicle_net is None else vehicle_net
+            vehicle_gross = vehicle_net if vehicle_gross is None else vehicle_gross
         reg = to_date(v.get("first_registered"))
         vehicles.append({
             "vrm": vrm,
@@ -676,7 +921,7 @@ def normalise_extract(raw: dict, fee_vat_rate: float = DEFAULT_FEE_VAT_RATE) -> 
             "first_registered": reg.isoformat() if reg else None,
             "supplier_description": (v.get("description") or None),
             "colour": v.get("colour") or None,
-            "vehicle_net": _num(v.get("vehicle_net")),
+            "vehicle_net": vehicle_net,
             "vehicle_vat": vehicle_vat,
             "vehicle_gross": vehicle_gross,
             "fees": fees,
@@ -687,6 +932,9 @@ def normalise_extract(raw: dict, fee_vat_rate: float = DEFAULT_FEE_VAT_RATE) -> 
     date = to_date(raw.get("invoice_date"))
     return {
         "supplier_name": raw.get("supplier_name") or None,
+        "supplier_text": raw.get("supplier_text") or None,
+        "supplier_matched": bool(raw.get("supplier_matched")),
+        "found_text": raw.get("found_text") or "",
         "invoice_number": raw.get("invoice_number") or None,
         "invoice_date": date.isoformat() if date else None,
         "invoice_net": _num(raw.get("invoice_net")),
@@ -713,12 +961,6 @@ def totals_check(vehicles: list, invoice_net, invoice_vat, invoice_gross) -> lis
 
 
 # ── Supplier Stock Evaluator data ────────────────────────────────────────────
-
-def list_suppliers(conn) -> list:
-    with conn.cursor() as cur:
-        cur.execute("SELECT supplier_id, supplier_name FROM suppliers ORDER BY supplier_name")
-        return [{"supplier_id": r[0], "supplier_name": r[1]} for r in cur.fetchall()]
-
 
 DEFAULT_EVALUATOR_MAX_HOURS = 24
 
@@ -786,10 +1028,35 @@ def evaluator_lookup(conn, vrms: list, supplier_id=None, max_age_hours=None) -> 
     return out
 
 
-def manual_check(vrms_mileage: list) -> dict:
+def stored_results(vrms_mileage: list, cached: dict, known: dict) -> dict:
+    """The same results as manual_check, from what the shared store already
+    holds: fetch_cached_valuations and fetch_known_vehicles. Only a car with a
+    CAP ID, a CAP value and an Autotrader value, as a car missing one still
+    needs the live call."""
+    out = {}
+    for vrm, mileage in vrms_mileage:
+        if not mileage:
+            continue
+        val = cached.get((vrm, round_mileage_to_nearest_thousand(mileage)))
+        car = known.get(vrm)
+        if not val or not car or not car.get("cap_capid"):
+            continue
+        clean = val.get("cap_live_clean") if val.get("cap_live_clean") is not None else val.get("cap_monthly_clean")
+        if clean is None or val.get("at_retail_valuation") is None:
+            continue
+        out[vrm] = {"cap_id": car["cap_capid"], "make": car.get("cap_manufacturer"), "model": car.get("cap_model"),
+                    "derivative": car.get("cap_derivative"), "cap_clean": _num(clean),
+                    "at_retail_valuation": _num(val["at_retail_valuation"]), "at_rating": _num(val.get("at_rating")),
+                    "note": None, "from_store": True}
+    return out
+
+
+def manual_check(vrms_mileage: list, on_result=None) -> dict:
     """{vrm: {cap_id, make, model, derivative, cap_clean, at_retail_valuation,
     at_rating, note}} from live CAP and Autotrader, using the Assess Vehicle
-    page's own lookups. Autotrader needs a mileage."""
+    page's own lookups. Autotrader needs a mileage. on_result(vrm, mileage, cap,
+    at) gets the full answers of each car that has a mileage and where neither
+    call failed, for storing."""
     from concurrent.futures import ThreadPoolExecutor
     from routers.assess_vehicle import _at_lookup, _cap_lookup
 
@@ -800,22 +1067,22 @@ def manual_check(vrms_mileage: list) -> dict:
             with api_limits.quick():
                 c = _cap_lookup(vrm, mileage or 0)
         except Exception as e:
-            return {}, f"CAP failed: {e}"
+            return {}, f"CAP failed: {e}", None
         out = {"cap_id": c.get("cap_id"), "make": c.get("make"), "model": c.get("model"),
                "derivative": c.get("derivative"),
                "cap_clean": c.get("live_clean") if c.get("live_clean") is not None else c.get("monthly_clean")}
-        return out, None if c.get("cap_id") else f"CAP: {c.get('note') or 'not found'}"
+        return out, None if c.get("cap_id") else f"CAP: {c.get('note') or 'not found'}", c
 
     def at_one(vrm, mileage):
         if not mileage:
-            return {}, "Autotrader needs a mileage"
+            return {}, "Autotrader needs a mileage", None
         try:
             a = _at_lookup(vrm, mileage)
         except Exception as e:
-            return {}, f"Autotrader failed: {e}"
+            return {}, f"Autotrader failed: {e}", None
         if not a.get("found"):
-            return {}, "Autotrader: not found"
-        return {"at_retail_valuation": _num(a.get("retail_valuation")), "at_rating": _num(a.get("retail_rating"))}, None
+            return {}, "Autotrader: not found", a
+        return {"at_retail_valuation": _num(a.get("retail_valuation")), "at_rating": _num(a.get("retail_rating"))}, None, a
 
     if not vrms_mileage:
         return {}
@@ -825,12 +1092,26 @@ def manual_check(vrms_mileage: list) -> dict:
     # workers: the slowest single call sets the time, not the sum of them.
     with ThreadPoolExecutor(max_workers=api_limits.workers("cap", n)) as cap_pool, \
             ThreadPoolExecutor(max_workers=api_limits.workers("at", n)) as at_pool:
-        jobs = [(vrm, cap_pool.submit(cap_one, vrm, m), at_pool.submit(at_one, vrm, m)) for vrm, m in vrms_mileage]
+        jobs = [(vrm, m, cap_pool.submit(cap_one, vrm, m), at_pool.submit(at_one, vrm, m)) for vrm, m in vrms_mileage]
         results = {}
-        for vrm, fc, fa in jobs:
-            (c, cn), (a, an) = fc.result(), fa.result()
+        for vrm, m, fc, fa in jobs:
+            (c, cn, cap_full), (a, an, at_full) = fc.result(), fa.result()
             results[vrm] = {**c, **a, "note": "; ".join(n for n in (cn, an) if n) or None}
+            if on_result and m and cap_full is not None and at_full is not None:
+                on_result(vrm, m, cap_full, at_full)
     return results
+
+
+def buyer_figures_from_rows(rows: list) -> list:
+    """[{vrm, rrp and/or est_prep_cost}] from purchase rows' custom values, the
+    filled-in ones only, so a blank box does not clear a figure a buyer gave earlier."""
+    out = []
+    for r in rows:
+        custom = r.get("custom") or {}
+        figures = {k: money(custom[k]) for k in BUYER_FIGURES if money(custom.get(k)) is not None}
+        if figures:
+            out.append({"vrm": r["vrm"], **figures})
+    return out
 
 
 
@@ -859,6 +1140,109 @@ def clean_custom_fields(fields: list) -> list:
         keys.add(key)
         ftype = f.get("type") if f.get("type") in CUSTOM_FIELD_TYPES else "text"
         out.append({"key": key, "label": label, "type": ftype, "required": bool(f.get("required"))})
+    return out
+
+
+def add_sheet_fields(fields: list) -> list:
+    """The fields plus any of SHEET_CUSTOM_FIELDS not already there, by key or label."""
+    keys = {f.get("key") for f in fields}
+    labels = {str(f.get("label") or "").strip().lower() for f in fields}
+    return list(fields) + [dict(s) for s in SHEET_CUSTOM_FIELDS if s["key"] not in keys and s["label"].lower() not in labels]
+
+
+def clean_custom_value(field: dict, value):
+    """A value for one custom field as it is stored. Blank is None. Raises
+    ValueError when it does not fit the field's type."""
+    text = str(value if value is not None else "").strip()
+    if not text:
+        return None
+    ftype = field.get("type")
+    if ftype == "yesno":
+        if text not in ("Yes", "No"):
+            raise ValueError(f"{field.get('label')} must be Yes or No")
+        return text
+    if ftype in ("money", "number"):
+        amount = money(text)
+        if amount is None:
+            raise ValueError(f"{field.get('label')} must be a number")
+        return float(amount)
+    return text[:500]
+
+
+def metric_column(metric: dict) -> str:
+    return f"METRIC:{metric['id'].upper()}"
+
+
+def table_live_columns(fields: list, metrics: list = None) -> list:
+    """Every column the All Vehicles Bought table can show."""
+    live = [{"column": c, "type": "", "label": label, "format": fmt, "decimals": 2 if fmt == "gbp" else 0}
+            for c, label, fmt in TABLE_FIELDS]
+    for f in fields:
+        fmt = {"money": "gbp", "number": "number"}.get(f.get("type"), "text")
+        live.append({"column": f"CUSTOM:{f['key'].upper()}", "type": "buyer fills in", "label": f.get("label"),
+                     "format": fmt, "decimals": 2 if fmt == "gbp" else 0})
+    for m in metrics or []:
+        live.append({"column": metric_column(m), "type": "metric", "label": m["label"], "format": m["format"], "decimals": m["decimals"]})
+    return live
+
+
+def read_table_columns(saved, fields: list, metrics: list = None) -> list:
+    """The columns chosen in Settings, else the buying sheet's."""
+    if isinstance(saved, list) and saved:
+        return saved
+    live = {c["column"]: c for c in table_live_columns(fields, metrics)}
+    return [{k: live[c][k] for k in ("column", "label", "format", "decimals")} for c in DEFAULT_TABLE_ORDER if c in live]
+
+
+def table_columns_after_metric_save(columns: list, fields: list, metrics: list) -> list:
+    """After a metric is saved or deleted: a new one goes on the table, a deleted
+    one comes off, and one already shown takes its new label and format."""
+    live = {c["column"]: c for c in table_live_columns(fields, metrics)}
+    wanted = {metric_column(m) for m in metrics}
+    out = []
+    for c in columns:
+        if c["column"].startswith("METRIC:"):
+            if c["column"] not in wanted:
+                continue
+            c = {**c, **{k: live[c["column"]][k] for k in ("label", "format", "decimals")}}
+        out.append(c)
+    shown = {c["column"] for c in out}
+    return out + [{k: live[metric_column(m)][k] for k in ("column", "label", "format", "decimals")}
+                  for m in metrics if metric_column(m) not in shown]
+
+
+def clean_table_columns(columns, fields: list, metrics: list = None) -> list:
+    """The columns sent from the page: known ones only, each once."""
+    live = {c["column"]: c for c in table_live_columns(fields, metrics)}
+    out, seen = [], set()
+    for c in columns or []:
+        name = str((c or {}).get("column") or "")
+        if name not in live or name in seen:
+            continue
+        seen.add(name)
+        fmt = c.get("format") if c.get("format") in TABLE_FORMATS else live[name]["format"]
+        out.append({"column": name, "label": str(c.get("label") or "").strip()[:60] or live[name]["label"], "format": fmt,
+                    "decimals": max(0, min(4, to_int(c.get("decimals")) or 0))})
+    return out
+
+
+def add_new_field_columns(columns: list, old_fields: list, new_fields: list) -> list:
+    """A newly added custom field also goes on the table, so buyers can fill it in."""
+    old_keys = {f.get("key") for f in old_fields}
+    live = {c["column"]: c for c in table_live_columns(new_fields)}
+    shown = {c["column"] for c in columns}
+    extra = [f"CUSTOM:{f['key'].upper()}" for f in new_fields if f["key"] not in old_keys]
+    return columns + [{k: live[c][k] for k in ("column", "label", "format", "decimals")} for c in extra if c not in shown]
+
+
+def table_rows(rows: list) -> list:
+    """Vehicle rows for the table, with the two worked-out figures."""
+    out = []
+    for r in rows:
+        row = {k: v for k, v in r.items() if k != "fees_detail"}
+        row["vat_status"] = vat_status(r)
+        row["purchase_total"] = purchase_total(r)
+        out.append(row)
     return out
 
 
@@ -970,7 +1354,7 @@ def list_batches(conn, limit: int = 200) -> list:
         cur.execute("""
             SELECT b.batch_id, b.supplier_name, b.invoice_number, b.purchase_date, b.source, b.filename,
                    b.invoice_gross, b.submitted_by, b.submitted_at, COUNT(v.id),
-                   COALESCE(SUM(COALESCE(v.vehicle_gross, 0) + COALESCE(v.fees_gross, 0)), 0), b.buyer
+                   COALESCE(SUM(COALESCE(v.vehicle_gross, 0) + COALESCE(v.fees_gross, 0)), 0), b.buyer, b.s3_key IS NOT NULL
             FROM purchase_batches b LEFT JOIN purchase_vehicles v ON v.batch_id = b.batch_id
             GROUP BY b.batch_id ORDER BY b.purchase_date DESC, b.batch_id DESC LIMIT %s""", (limit,))
         rows = cur.fetchall()
@@ -978,7 +1362,17 @@ def list_batches(conn, limit: int = 200) -> list:
     return [{"batch_id": r[0], "supplier_name": r[1], "invoice_number": r[2], "purchase_date": r[3].isoformat(),
              "source": r[4], "filename": r[5], "invoice_gross": float(r[6]) if r[6] is not None else None,
              "submitted_by": r[7], "submitted_at": r[8].isoformat(timespec="minutes"), "vehicles": r[9],
-             "rows_gross": float(r[10]), "buyer": r[11]} for r in rows]
+             "rows_gross": float(r[10]), "buyer": r[11], "has_file": r[12]} for r in rows]
+
+
+def batch_file(conn, batch_id: int) -> tuple:
+    """(filename, s3_key) of the file a batch was read from; (None, None) if none."""
+    ensure_tables(conn)
+    with conn.cursor() as cur:
+        cur.execute("SELECT filename, s3_key FROM purchase_batches WHERE batch_id = %s", (batch_id,))
+        row = cur.fetchone()
+    conn.commit()
+    return row if row else (None, None)
 
 
 def read_vehicles(conn, batch_id=None, date_from=None, date_to=None) -> list:
@@ -997,6 +1391,7 @@ def read_vehicles(conn, batch_id=None, date_from=None, date_to=None) -> list:
     with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
         cur.execute(f"""
             SELECT b.batch_id, b.buyer, b.supplier_name, b.invoice_number, b.purchase_date, b.submitted_by, b.submitted_at,
+                   v.id AS vehicle_id, b.s3_key IS NOT NULL AS has_file,
                    {', '.join('v.' + c for c in VEHICLE_COLS)}
             FROM purchase_vehicles v JOIN purchase_batches b ON b.batch_id = v.batch_id
             {('WHERE ' + ' AND '.join(where)) if where else ''}
@@ -1004,6 +1399,36 @@ def read_vehicles(conn, batch_id=None, date_from=None, date_to=None) -> list:
         rows = [dict(r) for r in cur.fetchall()]
     conn.commit()
     return rows
+
+
+def update_vehicle_custom(conn, vehicle_id: int, key: str, value):
+    """Set one custom field on one bought car, leaving its others alone. Returns
+    the car's VRM, or None if there is no such car."""
+    ensure_tables(conn)
+    with conn.cursor() as cur:
+        cur.execute("UPDATE purchase_vehicles SET custom = COALESCE(custom, '{}'::jsonb) || %s::jsonb WHERE id = %s RETURNING vrm",
+                    (json.dumps({key: value}), vehicle_id))
+        row = cur.fetchone()
+    conn.commit()
+    return row[0] if row else None
+
+
+def batches_without_supplier(conn) -> list:
+    """Supplier names on purchases not yet linked to the supplier list."""
+    ensure_tables(conn)
+    with conn.cursor() as cur:
+        cur.execute("SELECT DISTINCT supplier_name FROM purchase_batches WHERE supplier_id IS NULL")
+        names = [r[0] for r in cur.fetchall()]
+    conn.commit()
+    return names
+
+
+def link_batches_to_suppliers(conn, ids: dict) -> None:
+    """ids: {supplier name as on the purchase: supplier_id}."""
+    with conn.cursor() as cur:
+        for name, supplier_id in ids.items():
+            cur.execute("UPDATE purchase_batches SET supplier_id = %s WHERE supplier_id IS NULL AND supplier_name = %s", (supplier_id, name))
+    conn.commit()
 
 
 def delete_batch(conn, batch_id: int) -> bool:
@@ -1019,8 +1444,8 @@ def csv_rows(rows: list, custom_fields: list) -> tuple:
     """(header, rows) for the CSV extract: one line per vehicle."""
     header = ["Batch", "Buyer", "Supplier", "Invoice Number", "Purchase Date", "VRM", "Mileage", "VIN", "First Registered",
               "Colour", "CAP ID", "Make", "Model", "Derivative", "Supplier Description",
-              "Vehicle Net", "Vehicle VAT", "Vehicle Gross", "Fees Net", "Fees VAT", "Fees Gross",
-              "Total Net", "Total VAT", "Total Gross", "Fees Detail",
+              "VAT Status", "Vehicle Net", "Vehicle VAT", "Vehicle Gross", "Fees Net", "Fees VAT", "Fees Gross",
+              "Total Net", "Total VAT", "Total Purchase", "Fees Detail",
               "From Evaluator", "Evaluator List Price", "AT Retail Valuation", "CAP Clean"] + \
              [f["label"] for f in custom_fields] + ["Submitted By", "Submitted At"]
     out = []
@@ -1039,8 +1464,8 @@ def csv_rows(rows: list, custom_fields: list) -> tuple:
                     r["first_registered"].strftime("%d/%m/%Y") if r["first_registered"] else "",
                     r["colour"] or "", r["cap_id"] or "", r["make"] or "", r["model"] or "", r["derivative"] or "",
                     r["supplier_description"] or "",
-                    n("vehicle_net"), n("vehicle_vat"), n("vehicle_gross"), n("fees_net"), n("fees_vat"), n("fees_gross"),
-                    tot("net"), tot("vat"), tot("gross"),
+                    vat_status(r), n("vehicle_net"), n("vehicle_vat"), n("vehicle_gross"), n("fees_net"), n("fees_vat"), n("fees_gross"),
+                    tot("net"), tot("vat"), purchase_total(r),
                     "; ".join(f"{f.get('description')}: {f.get('gross') if f.get('gross') is not None else f.get('net')}" for f in fees),
                     "Yes" if r["from_evaluator"] else "No", n("evaluator_list_price"), n("at_retail_valuation"), n("cap_clean")] +
                    [custom.get(f["key"], "") for f in custom_fields] +

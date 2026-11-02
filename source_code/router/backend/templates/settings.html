@@ -30,7 +30,7 @@
         {% if active_section == 'buying-requirements' %}
         <form method="post" action="{{ BASE_URL }}/settings/section/buying-requirements">
             <div class="card mb-4">
-                <div class="card-header fw-semibold">Buying Requirements</div>
+                <div class="card-header fw-semibold">{{ section_title }}</div>
                 <div class="card-body">
                     <div class="form-check mb-3">
                         <input class="form-check-input" type="checkbox" id="enable_cars_bought" name="enable_cars_bought"
@@ -99,7 +99,7 @@
         {% if active_section == 'supplier-evaluator' %}
         <form method="post" action="{{ BASE_URL }}/settings/section/supplier-evaluator">
             <div class="card mb-4">
-                <div class="card-header fw-semibold">Supplier Stock Evaluator</div>
+                <div class="card-header fw-semibold">{{ section_title }}</div>
                 <div class="card-body">
                     <div class="row g-3">
                         <div class="col-md-4">
@@ -171,7 +171,7 @@
         {% if active_section == 'mot-check' %}
         <form method="post" action="{{ BASE_URL }}/settings/section/mot-check">
             <div class="card mb-4">
-                <div class="card-header fw-semibold">MOT Check</div>
+                <div class="card-header fw-semibold">{{ section_title }}</div>
                 <div class="card-body">
                     <div class="d-flex gap-3 flex-wrap">
                         <div>
@@ -2515,7 +2515,7 @@
                         .map(field => `${field}: ${(stored[field] || []).join(', ')}`).join('\n');
                     document.getElementById('sp-default-headers').textContent = 'Standard headers:\n' +
                         Object.entries(defaults).map(([field, names]) => `${field}: ${names.join(', ')}`).join('\n');
-                    document.getElementById('sp-required-note').textContent =
+                    document.getElementById('sp-required-note').textContent = type.startsWith('wbr_') ? '' :
                         `Needed for purchases to be counted: ${spRequired.join(', ')}.`;
                 }
                 spReadKindChanged();

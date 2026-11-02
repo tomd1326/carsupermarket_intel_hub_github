@@ -138,9 +138,11 @@
         <button class="btn btn-load" id="loadBtn" onclick="loadGa4Campaigns()">
             <i class="fas fa-sync-alt" id="loadIcon"></i> Load Data
         </button>
+        {% if user_is_admin(user) %}
         <button class="btn btn-edit" onclick="openSettingsModal()">
             <i class="fas fa-cog"></i> Settings
         </button>
+        {% endif %}
         <span class="status-text" id="statusText"></span>
     {% endcall %}
 

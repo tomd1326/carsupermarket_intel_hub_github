@@ -31,14 +31,8 @@
         errorEl.classList.toggle('show', !!msg);
     }
 
-    // ── Tabs ────────────────────────────────────────────────────────────────
-    modal.querySelectorAll('.od-settings-tabs button').forEach(btn => {
-        btn.addEventListener('click', () => {
-            modal.querySelectorAll('.od-settings-tabs button').forEach(b => b.classList.toggle('active', b === btn));
-            modal.querySelectorAll('.od-settings-pane').forEach(p => p.classList.toggle('active', p.id === btn.dataset.tab));
-        });
-    });
-    const activeTab = () => modal.querySelector('.od-settings-tabs button.active').dataset.tab;
+    // ── Tabs (the left-hand menu is built by settings_tabs.js) ──────────────
+    const activeTab = () => modal.querySelector('.settings-tabs button.active').dataset.tab;
 
     // ── Bands tab ───────────────────────────────────────────────────────────
     function buildBandRows(titles) {

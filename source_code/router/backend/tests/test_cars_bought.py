@@ -11,6 +11,64 @@ import pytest
 from utils import cars_bought as cb
 
 
+STORED_CAR = {"cap_capid": 99, "cap_manufacturer": "VW", "cap_model": "Golf", "cap_derivative": "1.5 Life"}
+
+
+def test_stored_results_reuses_a_complete_stored_valuation_at_the_same_rounded_mileage():
+    cached = {("AB12CDE", 20000): {"cap_live_clean": 9000, "cap_monthly_clean": 8000, "at_retail_valuation": 12000, "at_rating": 71.5}}
+    out = cb.stored_results([("AB12CDE", 20300)], cached, {"AB12CDE": STORED_CAR})
+    assert out == {"AB12CDE": {"cap_id": 99, "make": "VW", "model": "Golf", "derivative": "1.5 Life", "cap_clean": 9000.0,
+                               "at_retail_valuation": 12000.0, "at_rating": 71.5, "note": None, "from_store": True}}
+
+
+def test_stored_results_uses_monthly_clean_when_there_is_no_live_clean():
+    cached = {("AB12CDE", 20000): {"cap_live_clean": None, "cap_monthly_clean": 8000, "at_retail_valuation": 12000}}
+    assert cb.stored_results([("AB12CDE", 20000)], cached, {"AB12CDE": STORED_CAR})["AB12CDE"]["cap_clean"] == 8000.0
+
+
+@pytest.mark.parametrize("items,val,car", [
+    ([("AB12CDE", None)], {"cap_live_clean": 9000, "at_retail_valuation": 12000}, STORED_CAR),     # no mileage
+    ([("AB12CDE", 20000)], {"cap_live_clean": None, "at_retail_valuation": 12000}, STORED_CAR),    # no CAP value
+    ([("AB12CDE", 20000)], {"cap_live_clean": 9000, "at_retail_valuation": None}, STORED_CAR),     # no Autotrader value
+    ([("AB12CDE", 20000)], {"cap_live_clean": 9000, "at_retail_valuation": 12000}, {"cap_capid": None}),   # no CAP ID
+    ([("AB12CDE", 50000)], {"cap_live_clean": 9000, "at_retail_valuation": 12000}, STORED_CAR),    # other mileage
+])
+def test_stored_results_leaves_an_incomplete_car_for_a_live_call(items, val, car):
+    assert cb.stored_results(items, {("AB12CDE", 20000): val}, {"AB12CDE": car}) == {}
+
+
+def test_buyer_figures_from_rows_keeps_only_filled_in_figures():
+    rows = [{"vrm": "A1", "custom": {"rrp": "12,500", "est_prep_cost": "", "notes": "x"}},
+            {"vrm": "B2", "custom": {"notes": "x"}}, {"vrm": "C3"},
+            {"vrm": "D4", "custom": {"rrp": 100, "est_prep_cost": "250.50"}}]
+    out = cb.buyer_figures_from_rows(rows)
+    assert [r["vrm"] for r in out] == ["A1", "D4"]
+    assert "est_prep_cost" not in out[0] and float(out[0]["rrp"]) == 12500
+    assert float(out[1]["est_prep_cost"]) == 250.5
+
+
+def test_contact_options_sorts_and_shows_the_id_only_on_repeated_names():
+    out = cb.contact_options([(3, "OPENLANE"), (1, "dbcar"), (2, "ZED"), (4, "ZED ")])
+    assert [c["label"] for c in out] == ["dbcar", "OPENLANE", "ZED (ID 2)", "ZED (ID 4)"]
+    assert out[3] == {"id": 4, "name": "ZED", "label": "ZED (ID 4)"}
+
+
+def test_clean_supplier_contacts_keeps_a_clear_and_drops_rows_with_no_supplier():
+    rows = [{"supplier_id": "5", "contact_id": "460221", "contact_name": " OPENLANE "},
+            {"supplier_id": 6, "contact_id": "", "contact_name": "left over"},
+            {"contact_id": 1, "contact_name": "No Supplier"}]
+    assert cb.clean_supplier_contacts(rows) == [
+        {"supplier_id": 5, "contact_id": 460221, "contact_name": "OPENLANE"},
+        {"supplier_id": 6, "contact_id": None, "contact_name": None}]
+    assert cb.clean_supplier_contacts(None) == []
+
+
+def test_usable_supplier_names_drops_bad_rows_and_keeps_the_rest():
+    rows = [{"text": "OPENLANE", "supplier": "OPENLANE"}, {"text": "ab", "supplier": "Too Short"},
+            {"text": "No Supplier"}, "not a row", {"text": "openlane", "supplier": "Openlane Ltd"}]
+    assert cb.usable_supplier_names(rows) == [{"text": "openlane", "supplier": "Openlane Ltd"}]
+
+
 def test_parse_vrm_list_cleans_and_dedups():
     assert cb.parse_vrm_list("na73 tnf\nHY72ODU, sl22-zwv\n\nNA73TNF") == ["NA73TNF", "HY72ODU", "SL22ZWV"]
 
@@ -137,6 +195,212 @@ def test_layout_bca_heading_and_amounts_not_aligned():
     assert (v["vrm"], v["mileage"], v["vin"], v["first_registered"]) == ("SL22ZWV", 19094, "VXKUPHMHDN4212882", "2022-04-30")
     assert (v["vehicle_net"], v["fees_gross"]) == (7083.33, 476.2)
     assert _all_match(out)
+
+
+BCA_CUT_OFF_FEE_PAGE = (
+    "   BRITISH CAR AUCTIONS LIMITED                                      INVOICE DP/8207\n"
+    "      ITEM DESCRIPTION                                                                   PRICE          VAT       VAT %       TOTAL\n"
+    "      WKZN23/ZEN035 LM72 CKJ AUDI Q4 E-TRON 0.0 A SP  21  ASSURED GREY     15,000.00     3,000.00      20.00      18,000.00\n"
+    "      ODOMETER:29610WARRANTED 1ST REG:26/09/22  MOT:25/09/27-NO DOC\n"
+    "      L/B-HERE S/H-HERE CH:WAUZZZFZ1NP054832 EN:EBJA QUALIFYING VEH\n"
+    "                    Buyers Fee (Business)                             490.00        98.00      20.00         588.00\n"
+    "                    BCA EV/Hybrid Assured Cha                          41.50         8.30      20.00          49.80\n"
+    "                                                 TOTAL       �        15,531.50       3,106.30           18,637.80\n"
+    "                    VAT SUMMARY AT 20%                              15,531.50     3,106.30\n")
+
+
+def test_layout_bca_cut_off_fee_line_goes_in_the_fees():
+    out = cb.normalise_extract(cb.parse_layout([BCA_CUT_OFF_FEE_PAGE], NAMES, cb.DEFAULT_FEE_WORDS,
+                                               cb.DEFAULT_SUPPLIER_NAMES, cb.DEFAULT_SUPPLIER_RULES))
+    assert len(out["vehicles"]) == 1
+    v = out["vehicles"][0]
+    assert (v["vrm"], v["vehicle_net"], v["vehicle_vat"], v["vehicle_gross"]) == ("LM72CKJ", 15000.0, 3000.0, 18000.0)
+    assert (v["fees_net"], v["fees_vat"], v["fees_gross"]) == (531.5, 106.3, 637.8)
+    assert [f["description"] for f in v["fees"]] == ["Buyers Fee (Business)", "BCA EV/Hybrid Assured Cha"]
+    assert _all_match(out)
+
+
+def test_layout_cut_off_fee_line_is_left_out_without_the_supplier_rule():
+    v = _layout([BCA_CUT_OFF_FEE_PAGE])["vehicles"][0]
+    assert v["fees_gross"] == 588.0
+
+
+def test_supplier_rule_adds_fee_words_for_that_supplier_only():
+    rules = [{"supplier": "BCA", "fee_words": ["levy"], "priced_lines_are_fees": False}]
+    assert cb.apply_supplier_rule("bca", ["fee"], rules) == (["fee", "levy"], False)
+    assert cb.apply_supplier_rule("OPENLANE", ["fee"], rules) == (["fee"], False)
+    assert cb.apply_supplier_rule(None, ["fee"], rules) == (["fee"], False)
+
+
+def test_clean_supplier_rules_drops_rows_with_no_supplier():
+    out = cb.clean_supplier_rules([{"supplier": " BCA ", "fee_words": ["a", " "], "priced_lines_are_fees": 1},
+                                   {"supplier": "", "fee_words": ["b"]}])
+    assert out == [{"supplier": "BCA", "fee_words": ["a"], "priced_lines_are_fees": True}]
+
+
+def test_layout_openlane_car_with_no_vat_amount():
+    page = (
+        "   Invoice No.:  PSI061548      OPENLANE UK\n"
+        "   Inv./Tax Point Date:  29/10/26\n"
+        "   Description                                                  VAT %      Net      VAT     Gross\n"
+        "   Vehicle Details:  Reg. No.:HT22XLZ VIN: VXKUKZKXZNW054269 Reg. Date: 15/08/2022 Mileage: 51800\n"
+        "   Buyer's fee for HT22XLZ                                         20    384.00    76.80    460.80\n"
+        "   Mechanical Indicator for HT22XLZ                                20     25.00     5.00     30.00\n"
+        "   Vehicle Reg, No. HT22XLZ                                         0  9,000.00           9,000.00\n"
+        "                                                     Subtotal          9,409.00    81.80  9,490.80\n")
+    out = _layout([page])
+    v = out["vehicles"][0]
+    assert (v["vehicle_net"], v["vehicle_vat"], v["vehicle_gross"]) == (9000.0, None, 9000.0)
+    assert [f["description"] for f in v["fees"]] == ["Buyer's fee for HT22XLZ", "Mechanical Indicator for HT22XLZ"]
+    assert out["invoice_date"] == "2026-10-29"
+    assert _all_match(out)
+
+
+def test_layout_fleet_auction_total_columns_and_second_lines_for_a_car():
+    page = (
+        "   The Fleet Auction Group                         Invoice Number: 244060\n"
+        "                                                   Date: 29/10/2026\n"
+        "   Qty  Description                                 Unit Price      Total        VAT   Total Inc\n"
+        "   1    Lot 222 (WV75SZD: Ford Puma 1.0 EcoBoost)   £16,000.00  £16,000.00  £3,200.00  £19,200.00\n"
+        "        Mileage: 7,814 Miles Warranted\n"
+        "        VIN: WF02XXERK2SA11261\n"
+        "        DFR: 30/09/2025\n"
+        "   1    Buyer's Premium (WV75SZD)                     £375.00     £375.00     £75.00     £450.00\n"
+        "   1    BEN Donation (WV75SZD)                          £1.00       £1.00      £0.00       £1.00\n"
+        "                                          TOTAL:  £16,376.00  £3,275.00  £19,651.00\n")
+    out = _layout([page])
+    assert len(out["vehicles"]) == 1
+    v = out["vehicles"][0]
+    assert out["supplier_name"] == "The Fleet Auction Group"
+    assert (v["vehicle_net"], v["vehicle_vat"], v["vehicle_gross"]) == (16000.0, 3200.0, 19200.0)
+    assert (v["mileage"], v["first_registered"]) == (7814, "2025-09-30")
+    assert (v["fees_net"], v["fees_vat"], v["fees_gross"]) == (376.0, 75.0, 451.0)
+    assert _all_match(out)
+
+
+def test_layout_motorspace_sale_agreement():
+    page = (
+        "                                                       Motorspace Ltd\n"
+        "    SALE AGREEMENT\n"
+        "Date:                           Broker:\n"
+        "                 13/10/2026     Sam Anderson\n"
+        "Vehicle:     VOLKSWAGEN POLO 1.0 TSI R-Line 5dr DSG       Mileage:              14400\n"
+        "Reg Number:  MW23BZF                                      Registration Date:    31/05/2023\n"
+        "Sales Price:                         £14,850.00           Commission:           £150.00\n"
+        "                                                          VAT:                  £30.00\n"
+        "                                                          Total:                £180.00\n"
+        "Selling Dealership:  Cromford Cars                        Buying Dealership:    CarSupermarket.com\n")
+    out = _layout([page])
+    v = out["vehicles"][0]
+    assert (out["supplier_name"], out["invoice_date"], out["invoice_gross"]) == ("Cromford Cars", "2026-10-13", None)
+    assert (v["vrm"], v["mileage"], v["first_registered"]) == ("MW23BZF", 14400, "2023-05-31")
+    assert v["supplier_description"] == "VOLKSWAGEN POLO 1.0 TSI R-Line 5dr DSG"
+    assert (v["vehicle_net"], v["vehicle_vat"], v["vehicle_gross"]) == (14850.0, None, 14850.0)
+    assert (v["fees_net"], v["fees_vat"], v["fees_gross"]) == (150.0, 30.0, 180.0)
+    assert cb.vat_status(v) == "Margin" and cb.purchase_total(v) == 15030.0
+
+
+def test_vat_status_goes_by_the_car_not_its_fees():
+    assert cb.vat_status({"vehicle_vat": 3000.0, "fees_vat": 0}) == "VAT Qualifying"
+    assert cb.vat_status({"vehicle_vat": None, "fees_vat": 81.8}) == "Margin"
+    assert cb.vat_status({"vehicle_vat": 0, "fees_vat": 13.42}) == "Margin"
+
+
+def test_purchase_total_is_the_car_every_fee_and_all_vat():
+    assert cb.purchase_total({"vehicle_gross": 18000.0, "fees_gross": 637.8}) == 18637.8
+    assert cb.purchase_total({"vehicle_net": 100.0, "vehicle_vat": 20.0, "fees_gross": None}) == 120.0
+
+
+def test_match_supplier_longest_text_wins_whatever_the_order():
+    names = [{"text": "Auctions", "supplier": "Short"}, {"text": "British Car Auctions", "supplier": "BCA"}]
+    assert cb.match_supplier("BRITISH CAR AUCTIONS LIMITED", names) == ("BCA", "British Car Auctions")
+    assert cb.match_supplier("Nothing here", names) == (None, None)
+
+
+def test_clean_supplier_names_later_row_wins_and_short_text_is_refused():
+    rows = [{"text": "BCA Ltd", "supplier": "Old"}, {"text": "bca ltd", "supplier": "BCA"}, {"text": "", "supplier": ""}]
+    assert cb.clean_supplier_names(rows) == [{"text": "bca ltd", "supplier": "BCA"}]
+    with pytest.raises(ValueError):
+        cb.clean_supplier_names([{"text": "ab", "supplier": "X"}])
+    with pytest.raises(ValueError):
+        cb.clean_supplier_names([{"text": "Some Text", "supplier": ""}])
+
+
+def test_suggest_suppliers_puts_company_names_first_and_leaves_ours_out():
+    text = ("MOTOR DEPOT LTD  INVOICE 244060\n"
+            "Description of goods\n"
+            "Registered Office: Hook\n"
+            "SHOREHAM VEHICLE SALES LIMITED  VAT Number: 776009712\n"
+            "info@shoreham.example\n")
+    out = cb.suggest_suppliers(text, cb.DEFAULT_OWN_NAMES)
+    assert out[0] == {"text": "SHOREHAM VEHICLE SALES LIMITED", "supplier": "Shoreham Vehicle Sales"}
+    assert not any("MOTOR DEPOT" in s["text"].upper() or "@" in s["text"] for s in out)
+
+
+def test_layout_keeps_the_text_and_says_when_no_supplier_matched():
+    page = ("   Unknown Trade Cars Ltd        Invoice No: 77\n"
+            "   Description                       Net       VAT     Gross\n"
+            "   AB12CDE FORD FOCUS           1,000.00    200.00  1,200.00\n")
+    out = _layout([page])
+    assert (out["supplier_name"], out["supplier_text"], out["supplier_matched"]) == (None, None, False)
+    assert "Unknown Trade Cars Ltd" in out["found_text"]
+    assert cb.suggest_suppliers(out["found_text"], [])[0]["supplier"] == "Unknown Trade Cars"
+
+
+def test_add_sheet_fields_keeps_what_is_there_and_adds_the_rest():
+    out = cb.add_sheet_fields([{"key": "rrp", "label": "RRP", "type": "money"}, {"key": "my_notes", "label": "Notes", "type": "text"}])
+    assert [f["key"] for f in out] == ["rrp", "my_notes", "vendor", "sat_nav", "spec", "replaceable"]
+    assert next(f for f in out if f["key"] == "sat_nav")["type"] == "yesno"
+
+
+def test_clean_custom_fields_keeps_yes_no():
+    assert cb.clean_custom_fields([{"label": "Sat Nav", "type": "yesno", "required": True}])[0] == {
+        "key": "sat_nav", "label": "Sat Nav", "type": "yesno", "required": True}
+
+
+def test_clean_custom_value_fits_the_field_type():
+    assert cb.clean_custom_value({"type": "yesno"}, "Yes") == "Yes"
+    assert cb.clean_custom_value({"type": "yesno"}, "") is None
+    assert cb.clean_custom_value({"type": "money"}, "£1,234.50") == 1234.5
+    assert cb.clean_custom_value({"type": "text"}, " V5 To Follow ") == "V5 To Follow"
+    for field, value in (({"type": "yesno", "label": "A"}, "Maybe"), ({"type": "money", "label": "B"}, "abc")):
+        with pytest.raises(ValueError):
+            cb.clean_custom_value(field, value)
+
+
+FIELDS = cb.add_sheet_fields(list(cb.DEFAULT_CUSTOM_FIELDS))
+
+
+def test_default_table_columns_follow_the_buying_sheet():
+    cols = cb.read_table_columns([], FIELDS)
+    assert [c["column"] for c in cols] == cb.DEFAULT_TABLE_ORDER
+    assert next(c for c in cols if c["column"] == "PURCHASE_TOTAL")["label"] == "Purchase Price"
+    assert next(c for c in cols if c["column"] == "CUSTOM:RRP")["format"] == "gbp"
+
+
+def test_clean_table_columns_drops_unknown_and_repeated_columns():
+    out = cb.clean_table_columns([{"column": "VRM", "label": "", "format": "bad"}, {"column": "VRM"},
+                                  {"column": "PASSWORD"}, {"column": "CUSTOM:GONE"}, {"column": "CUSTOM:SPEC", "label": "My Spec"}], FIELDS)
+    assert [(c["column"], c["label"], c["format"]) for c in out] == [("VRM", "Reg", "text"), ("CUSTOM:SPEC", "My Spec", "text")]
+
+
+def test_a_new_custom_field_goes_on_the_table():
+    new = FIELDS + [{"key": "keys", "label": "Keys", "type": "number", "required": True}]
+    out = cb.add_new_field_columns([{"column": "VRM"}], FIELDS, new)
+    assert [c["column"] for c in out] == ["VRM", "CUSTOM:KEYS"]
+    assert cb.add_new_field_columns([{"column": "VRM"}], new, new) == [{"column": "VRM"}]
+
+
+def test_table_rows_adds_the_two_worked_out_figures():
+    row = cb.table_rows([{"vehicle_vat": None, "vehicle_gross": 100, "fees_gross": 20, "fees_detail": []}])[0]
+    assert (row["vat_status"], row["purchase_total"]) == ("Margin", 120.0)
+    assert "fees_detail" not in row
+
+
+def test_invoice_date_is_not_a_cars_registration_date():
+    assert cb._INVOICE_DATE.search("Registration Date: 31/05/2023") is None
+    assert cb._INVOICE_DATE.search("Reg. Date: 15/08/2022") is None
+    assert cb._INVOICE_DATE.search("Date: 29/10/2026").group(1) == "29/10/2026"
 
 
 def test_layout_erac_two_line_heading_and_second_page():

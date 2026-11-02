@@ -81,13 +81,16 @@ FILE_TYPES = {
     "kpi_daily_metrics": "KPI Daily Metrics",
     "daily_buyers_sheet": "Daily Buyers Sheet",
     "cars_bought": "Cars Bought",
+    "wbr_recon": "Weekly Business Review Recon",
+    "wbr_volume": "Weekly Business Review Volume",
 }
 KPI_FILE_TYPE = "kpi_daily_metrics"
 
-# The two Buying Requirements files. Their code finds them by key and turns
-# their rows into purchases, so they can be edited and switched off but not
-# deleted, and a new file of either type would need code.
-FIXED_KEYS = {"daily_buyers": "daily_buyers_sheet", "cars_bought": "cars_bought"}
+# The Buying Requirements and Weekly Business Review files. Their code finds them
+# by key, so they can be edited and switched off but not deleted, and a new file
+# of any of these types would need code.
+FIXED_KEYS = {"daily_buyers": "daily_buyers_sheet", "cars_bought": "cars_bought",
+              "wbr_recon": "wbr_recon", "wbr_volume": "wbr_volume"}
 
 # Header text the Buying Requirements code looks for, per field. Settings can
 # replace any field's list; a field left blank there uses these.
@@ -126,6 +129,17 @@ DEFAULT_HEADERS = {
         "AT RRP": ["AUTOTRADER RRP", "AT RRP", "AT PTM"],
         "AT RATING": ["AT RATING"],
     },
+    "wbr_recon": {
+        "Date": ["Date"],
+        "Sites Live": ["Sites Live"],
+        "Hull Sent to Trans.": ["Hull Sent to Trans."],
+        "Goole Sent to Trans.": ["Goole Sent to Trans."],
+        "Total Live": ["Total Live"],
+        "Cars Bought": ["Cars Bought"],
+        "DOC Orders": ["DOC Orders"],
+    },
+    # One column per week: rows are found by their labels (wbr_report_data.volume_frame).
+    "wbr_volume": {},
 }
 # Fields the purchase counts cannot be worked out without.
 REQUIRED_HEADERS = ("REG", "CAP ID", "RRP", "RRP 0%")
@@ -171,6 +185,24 @@ _SEED_SOURCES = [
                 "&action=default&mobileredirect=true"),
         "read_kind": "sheet", "sheet_or_table": "TO GO ON", "max_col": "S", "max_row": 2000,
         "date_header": None, "column_names": {}, "check_minutes": 30, "sort_order": 40,
+    },
+]
+
+# Added later than the list above, so each is added on its own if it is missing.
+# An edit made in Settings is never overwritten.
+_ADDED_SOURCES = [
+    {
+        "source_key": "wbr_recon", "name": "WBR Reconditioning", "file_type": "wbr_recon",
+        "url": "https://carsmkt.sharepoint.com/:x:/t/marketing/IQDgqQf3FIC3R7d3FES37sOVAcXHw-QpVoxyhYn0875Wm_4",
+        "read_kind": "sheet", "sheet_or_table": "Data", "max_col": "Z", "max_row": 5000,
+        "date_header": None, "column_names": {}, "check_minutes": 60, "sort_order": 50,
+    },
+    {
+        "source_key": "wbr_volume", "name": "WBR Weekly Performance", "file_type": "wbr_volume",
+        "url": "https://carsmkt.sharepoint.com/:x:/s/CarSupermarketOperationalData/IQD9rFZdVdPCR58KuzXcu6CzAba6UO53zOUFM16eN41W2AA",
+        # Newest week on the left. CL reaches about 21 months back, enough for N-1.
+        "read_kind": "sheet", "sheet_or_table": "Performance", "max_col": "CL", "max_row": 200,
+        "date_header": None, "column_names": {}, "check_minutes": 60, "sort_order": 60,
     },
 ]
 
@@ -247,9 +279,21 @@ _tables_ready = False
 _tables_lock = threading.Lock()
 
 
+def _insert_source(cur, s: dict) -> None:
+    cur.execute("""
+        INSERT INTO sharepoint_sources (source_key, name, file_type, url, read_kind,
+            sheet_or_table, max_col, max_row, date_header, column_names,
+            check_minutes, sort_order, updated_by)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'setup')
+        ON CONFLICT (source_key) DO NOTHING
+    """, (s["source_key"], s["name"], s["file_type"], s["url"], s["read_kind"],
+          s["sheet_or_table"], s["max_col"], s["max_row"], s["date_header"],
+          json.dumps(s["column_names"]), s["check_minutes"], s["sort_order"]))
+
+
 def _ensure_tables(conn) -> None:
-    """Create the two tables and add the four existing files, once per
-    process. Mirrors db/17_sharepoint_sources.sql."""
+    """Create the two tables and add the existing files, once per process.
+    Mirrors db/17_sharepoint_sources.sql."""
     global _tables_ready
     if _tables_ready:
         return
@@ -309,15 +353,9 @@ def _ensure_tables(conn) -> None:
             cur.execute("SELECT COUNT(*) FROM sharepoint_sources")
             if cur.fetchone()[0] == 0:
                 for s in _SEED_SOURCES:
-                    cur.execute("""
-                        INSERT INTO sharepoint_sources (source_key, name, file_type, url, read_kind,
-                            sheet_or_table, max_col, max_row, date_header, column_names,
-                            check_minutes, sort_order, updated_by)
-                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'setup')
-                        ON CONFLICT (source_key) DO NOTHING
-                    """, (s["source_key"], s["name"], s["file_type"], s["url"], s["read_kind"],
-                          s["sheet_or_table"], s["max_col"], s["max_row"], s["date_header"],
-                          json.dumps(s["column_names"]), s["check_minutes"], s["sort_order"]))
+                    _insert_source(cur, s)
+            for s in _ADDED_SOURCES:
+                _insert_source(cur, s)
         conn.commit()
         _tables_ready = True
 
@@ -817,8 +855,8 @@ def _clean(payload: dict, existing: dict | None) -> dict:
     message for the page."""
     file_type = existing["file_type"] if existing else str(payload.get("file_type") or KPI_FILE_TYPE)
     if not existing and file_type != KPI_FILE_TYPE:
-        raise ValueError("Only KPI Daily Metrics files can be added. The Buying Requirements files "
-                         "need code to turn their rows into purchases.")
+        raise ValueError("Only KPI Daily Metrics files can be added. The other files "
+                         "need code to read their rows.")
     name = str(payload.get("name") or "").strip()
     if not 1 <= len(name) <= 100:
         raise ValueError("Name is required (up to 100 characters)")
@@ -931,7 +969,7 @@ def save_source(payload: dict, user: str) -> str:
 
 def delete_source(key: str, user: str) -> None:
     if key in FIXED_KEYS:
-        raise ValueError("This file is used by Buying Requirements and cannot be deleted. Switch it off instead.")
+        raise ValueError("This file is used by another page and cannot be deleted. Switch it off instead.")
     get_source(key, fresh=True)
     with get_prod_pricer_connection() as conn:
         try:

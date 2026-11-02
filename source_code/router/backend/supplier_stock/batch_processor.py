@@ -29,6 +29,7 @@ from utils.vehicle_store import (
     fetch_cached_valuations,
     fetch_known_vehicles,
     fetch_price_history,
+    fetch_buyer_figures,
     ensure_vehicles_exist,
     upsert_vehicles,
     insert_valuations,
@@ -452,9 +453,11 @@ def process_file_with_cache(
 
     # Step 6: fetch price history and prepend as first 3 enhanced columns
     price_history = {}
+    buyer_figures = {}
     try:
         with get_vehicle_database_connection() as conn:
             price_history = fetch_price_history(conn, supplier_id, [v.vrm for v in vehicle_rows])
+            buyer_figures = fetch_buyer_figures(conn, [v.vrm for v in vehicle_rows])
     except Exception:
         logger.error('Price history fetch failed — columns will be blank: %s', traceback.format_exc())
 
@@ -476,6 +479,9 @@ def process_file_with_cache(
             'Previous Price':     float(prev) if prev is not None else None,
             'Price Change':       price_change,
             'Price Change Date':  changed_at.replace(tzinfo=None) if changed_at is not None else None,
+            # "Buyer" so these cannot clash with an RRP column on the supplier's own file.
+            'Buyer RRP':                  buyer_figures.get(vrow.vrm, {}).get('rrp'),
+            'Buyer Estimated Prep Cost':  buyer_figures.get(vrow.vrm, {}).get('est_prep_cost'),
         })
 
     price_df = pd.DataFrame(price_rows)

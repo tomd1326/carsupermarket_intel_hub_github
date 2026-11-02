@@ -538,16 +538,6 @@
         .od-modal-sub { font-size: 0.78rem; color: var(--c-text-muted); margin: 0 0 14px; }
         .od-modal-error { font-size: 0.82rem; color: var(--c-text-danger); margin-bottom: 10px; display: none; }
         .od-modal-error.show { display: block; }
-        .od-settings-body { display: grid; grid-template-columns: 160px minmax(0, 1fr); gap: 22px; min-height: 56vh; }
-        .od-settings-tabs { display: flex; flex-direction: column; gap: 4px; border-right: 1px solid var(--c-border); padding-right: 12px; }
-        .od-settings-tabs button {
-            text-align: left; background: none; border: none; border-radius: 6px; padding: 8px 10px;
-            font-size: 0.88rem; font-weight: 600; color: var(--c-text-muted); cursor: pointer;
-        }
-        .od-settings-tabs button:hover { background: var(--c-disabled-bg); color: var(--c-dark); }
-        .od-settings-tabs button.active { background: var(--c-table-header-bg); color: var(--c-table-header-text); }
-        .od-settings-pane { display: none; }
-        .od-settings-pane.active { display: block; }
         .od-section-title { font-weight: 700; font-size: 0.9rem; margin: 6px 0 8px; }
         .od-label { display: block; font-size: 0.8rem; font-weight: 700; margin-bottom: 4px; }
         .od-hint { font-size: 0.75rem; color: var(--c-text-muted); margin-top: 4px; line-height: 1.45; }

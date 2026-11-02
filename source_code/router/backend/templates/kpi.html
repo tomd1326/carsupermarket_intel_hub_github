@@ -22,6 +22,7 @@
     <!-- Chart styles shared with other chart pages live in charts.css; this
          page's own styles live in kpi.css. -->
     <link href="{{ static_url('css/kpi.css') }}" rel="stylesheet">
+    {% if wbr %}<link href="{{ static_url('css/wbr_report.css') }}" rel="stylesheet">{% endif %}
 </head>
 <body{% if wbr %} class="wbr-mode"{% endif %}>
     <!-- The shared header row, kept at the top when scrolling: the page's
@@ -43,9 +44,11 @@
         </button>
         {% endif %}
         {% if kpi_is_admin %}
-        <button class="btn btn-edit" id="wbrViewBtn" onclick="WbrDeck.toggleView()" style="display:none;">
-            <i class="fas fa-th-large"></i> <span id="wbrViewText">Slides View</span>
-        </button>
+        <span class="wbr-view-switch" id="wbrViewSwitch" style="display:none;">
+            <button class="btn btn-edit" data-view="grid" onclick="WbrDeck.setView('grid')"><i class="fas fa-th-large"></i> Grid</button>
+            <button class="btn btn-edit" data-view="slides" onclick="WbrDeck.setView('slides')"><i class="fas fa-desktop"></i> Slides</button>
+            <button class="btn btn-edit" data-view="report" onclick="WbrDeck.setView('report')"><i class="fas fa-file-alt"></i> Report</button>
+        </span>
         <button class="btn btn-edit admin-only" onclick="openWbrSettings()">
             <i class="fas fa-cog"></i> Settings
         </button>
@@ -123,6 +126,15 @@
                 <div class="wbr-slide" id="wbrSlide"></div>
             </div>
         </div>
+        <!-- Report (wbr_report.js): shown instead of the grid when Settings >
+             Report is on, or the admin picks Report. -->
+        <div class="wbr-deck wbr-report" id="wbrReport" style="display:none;">
+            <div class="wbr-deck-strip" id="wbrReportStrip"></div>
+            <div class="wbr-deck-main">
+                <div class="wbr-deck-tools" id="wbrReportMeta"></div>
+                <div class="wbr-slide" id="wbrReportSlide"></div>
+            </div>
+        </div>
         {% endif %}
     </div>
 
@@ -145,6 +157,7 @@
                 <button type="button" data-tab="wbrTabNotes" onclick="showWbrSettingsTab(this.dataset.tab)">Notes</button>
                 <button type="button" data-tab="wbrTabComments" onclick="showWbrSettingsTab(this.dataset.tab)">Comments</button>
                 <button type="button" data-tab="wbrTabSlides" onclick="showWbrSettingsTab(this.dataset.tab)">Slides</button>
+                <button type="button" data-tab="wbrTabReport" onclick="showWbrSettingsTab(this.dataset.tab)">Report</button>
                 <button type="button" data-tab="wbrTabBudgets" onclick="showWbrSettingsTab(this.dataset.tab)">Budgets</button>
             </nav>
             <div class="settings-panes">
@@ -200,6 +213,29 @@
                 <div class="modal-field"><label for="setWbrSlideTitlePx">Title Size (px)</label><input type="number" id="setWbrSlideTitlePx" step="1"></div>
                 <div class="modal-field"><label for="setWbrSlideSubtitlePx">Subtitle Size (px)</label><input type="number" id="setWbrSlideSubtitlePx" step="1"></div>
             </div>
+            </div>
+
+            <!-- Report (wbr_report.js). The number and On/Off ones are saved with the KPI settings,
+                 the rest by WbrReport.saveSettings. -->
+            <div class="settings-pane" id="wbrTabReport">
+            <div class="wbr-settings-title">Report</div>
+            <div class="wbr-settings-grid">
+                <div class="modal-field"><label for="setWbrReportOn">Report</label>
+                    <select id="setWbrReportOn"><option value="0">Off (Admin Only)</option><option value="1">On For Everyone</option></select></div>
+                <div class="modal-field"><label for="setWbrReportMonths">Complete Months Shown</label><input type="number" id="setWbrReportMonths" step="1"></div>
+                <div class="modal-field"><label for="setWbrReportWeeks">Weeks Shown</label><input type="number" id="setWbrReportWeeks" step="1"></div>
+                <div class="modal-field"><label for="setWbrReportWeeksPerMonth">Weeks Per Month</label><input type="number" id="setWbrReportWeeksPerMonth" step="0.1"></div>
+                <div class="modal-field"><label for="setWbrReportReconDefault">Recon Cost When Missing (£)</label><input type="number" id="setWbrReportReconDefault" step="1"></div>
+                <div class="modal-field"><label for="setWbrReportReconFloor">Treat Recon Cost Below This As Missing (£)</label><input type="number" id="setWbrReportReconFloor" step="1"></div>
+                <div class="modal-field"><label for="setWbrReportUpdateDate">Review Date (A Sunday, Blank = Last Sunday)</label><input type="date" id="setWbrReportUpdateDate"></div>
+                <div class="modal-field"><label for="setWbrReportLastClosed">Last Closed Month (Blank = Month Before Review)</label><input type="month" id="setWbrReportLastClosed"></div>
+                <div class="modal-field"><label for="setWbrReportAutoviewStart">AutoView Costs Start</label><input type="month" id="setWbrReportAutoviewStart"></div>
+            </div>
+            <div class="wbr-settings-title">Sections</div>
+            <div class="wbr-report-settings-status" id="wbrReportSettingsStatus"></div>
+            <div id="wbrReportSections"></div>
+            <div class="wbr-settings-title">Data Files</div>
+            <div class="wbr-report-settings-status" id="wbrReportSources"></div>
             </div>
 
             <!-- Budgets (wbr_budgets.js): monthly budget lines from the old review
@@ -1435,6 +1471,7 @@
     </script>
     {% if wbr %}<script src="{{ static_url('js/wbr_deck.js') }}"></script>
     <script src="{{ static_url('js/wbr_comments.js') }}"></script>
+    <script src="{{ static_url('js/wbr_report.js') }}"></script>
     {% if kpi_is_admin %}<script src="{{ static_url('js/wbr_budgets.js') }}"></script>{% endif %}{% endif %}
     <script src="{{ static_url('js/kpi.js') }}"></script>
 </body>

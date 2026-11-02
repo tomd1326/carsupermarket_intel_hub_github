@@ -37,9 +37,25 @@ const MONEY_COLS = [
     ['fees_net', 'Fees Net', true], ['fees_vat', 'Fees VAT'], ['fees_gross', 'Fees Gross'],
 ];
 
+/* A car with no VAT shown on it is margin. Its fees have their own VAT, which
+   can be different, and do not count. Same as vat_status() in utils/cars_bought.py. */
+const vatStatus = r => num(r.vehicle_vat) ? 'VAT Qualifying' : 'Margin';
+
+/* What the car cost in all: the car, every fee and all VAT. Same as
+   purchase_total() in utils/cars_bought.py. */
+function purchaseTotal(r) {
+    const gross = num(r.vehicle_gross);
+    const car = gross !== null ? gross : (num(r.vehicle_net) || 0) + (num(r.vehicle_vat) || 0);
+    return r2(car + (num(r.fees_gross) || 0));
+}
+
+const isSumField = f => f.type === 'money' || f.type === 'number';
+const yesNoOptions = v => ['', 'Yes', 'No'].map(o => `<option value="${o}"${o === v ? ' selected' : ''}>${o}</option>`).join('');
+
 function renderHead() {
-    $('vehHead').innerHTML = '<tr><th></th><th>VRM</th><th>Mileage</th><th>Vehicle</th><th>CAP ID</th>' +
+    $('vehHead').innerHTML = '<tr><th></th><th>VRM</th><th>Mileage</th><th>Vehicle</th><th>CAP ID</th><th>VAT Status</th>' +
         MONEY_COLS.map(([, l, g]) => `<th class="text-end${g ? ' group-start' : ''}">${l}</th>`).join('') +
+        '<th class="text-end group-start">Total Purchase</th>' +
         '<th class="text-end group-start">AT Valuation</th><th class="text-end">CAP Clean</th>' +
         customFields.map((f, i) => `<th class="${i === 0 ? 'group-start' : ''}">${esc(f.label)}${f.required ? ' *' : ''}</th>`).join('') +
         '<th></th></tr>';
@@ -57,6 +73,7 @@ function vehicleText(r) {
     if (!r.cap_id) tags.push(capChecked.has(r.vrm) ? '<span class="tag tag-warn">No CAP Match</span>'
                                                    : '<span class="tag tag-info">Press Look Up CAP &amp; AT</span>');
     if (r.cap_source === 'live') tags.push('<span class="tag tag-src">CAP & AT: Live Lookup</span>');
+    else if (r.cap_source === 'stored') tags.push('<span class="tag tag-src">CAP & AT: Stored Figures</span>');
     else if (r.cap_source === 'typed') tags.push('<span class="tag tag-src">CAP ID: Typed In</span>');
     return html + (tags.length ? `<div>${tags.join('')}</div>` : '');
 }
@@ -68,7 +85,9 @@ function renderRows() {
         const custom = customFields.map((f, j) => {
             const v = (r.custom || {})[f.key] ?? '';
             const cls = f.type === 'text' ? 'txt' : 'num';
-            return `<td class="${j === 0 ? 'group-start' : ''}"><input class="form-control ${cls}" data-i="${i}" data-c="${esc(f.key)}" value="${esc(v)}"></td>`;
+            const box = f.type === 'yesno' ? `<select class="form-select yesno" data-i="${i}" data-c="${esc(f.key)}">${yesNoOptions(v)}</select>`
+                : `<input class="form-control ${cls}" data-i="${i}" data-c="${esc(f.key)}" value="${esc(v)}">`;
+            return `<td class="${j === 0 ? 'group-start' : ''}">${box}</td>`;
         }).join('');
         return `<tr>
             <td class="text-muted">${i + 1}</td>
@@ -76,7 +95,9 @@ function renderRows() {
             <td><input class="form-control mil" data-i="${i}" data-k="mileage" value="${r.mileage ?? ''}"></td>
             <td class="desc">${vehicleText(r)}</td>
             <td><input class="form-control capid" data-i="${i}" data-k="cap_id" value="${r.cap_id ?? ''}"></td>
+            <td class="text-nowrap" data-status="${i}">${vatStatus(r)}</td>
             ${money}
+            <td class="text-end group-start fw-bold" data-total="${i}">${gbp(purchaseTotal(r))}</td>
             <td class="text-end group-start">${gbp(r.at_retail_valuation)}</td>
             <td class="text-end">${gbp(r.cap_clean)}</td>
             ${custom}
@@ -91,11 +112,12 @@ function rowTotals() {
     const t = {};
     MONEY_COLS.forEach(([k]) => { t[k] = r2(rows.reduce((s, r) => s + (num(r[k]) || 0), 0)); });
     ['net', 'vat', 'gross'].forEach(p => { t[p] = r2(t['vehicle_' + p] + t['fees_' + p]); });
+    t.total = r2(rows.reduce((s, r) => s + purchaseTotal(r), 0));
     t.at = r2(rows.reduce((s, r) => s + (num(r.at_retail_valuation) || 0), 0));
     t.atCount = rows.filter(r => num(r.at_retail_valuation)).length;
     t.cap = r2(rows.reduce((s, r) => s + (num(r.cap_clean) || 0), 0));
     t.capCount = rows.filter(r => num(r.cap_clean)).length;
-    customFields.filter(f => f.type !== 'text').forEach(f => {
+    customFields.filter(isSumField).forEach(f => {
         t['c_' + f.key] = r2(rows.reduce((s, r) => s + (num((r.custom || {})[f.key]) || 0), 0));
     });
     return t;
@@ -103,10 +125,10 @@ function rowTotals() {
 
 function renderTotals() {
     const t = rowTotals();
-    $('vehFoot').innerHTML = `<tr><td colspan="5">Total (${rows.length})</td>` +
+    $('vehFoot').innerHTML = `<tr><td colspan="6">Total (${rows.length})</td>` +
         MONEY_COLS.map(([k]) => `<td>${gbp(t[k])}</td>`).join('') +
-        `<td>${gbp(t.at)}</td><td>${gbp(t.cap)}</td>` +
-        customFields.map(f => `<td>${f.type === 'text' ? '' : gbp(t['c_' + f.key])}</td>`).join('') + '<td></td></tr>';
+        `<td>${gbp(t.total)}</td><td>${gbp(t.at)}</td><td>${gbp(t.cap)}</td>` +
+        customFields.map(f => `<td>${isSumField(f) ? gbp(t['c_' + f.key]) : ''}</td>`).join('') + '<td></td></tr>';
 
     // Rows against the invoice's printed totals.
     const checks = [['net', 'bNet', 'Net'], ['vat', 'bVat', 'VAT'], ['gross', 'bGross', 'Gross']].map(([p, id, label]) => {
@@ -122,14 +144,15 @@ function renderTotals() {
     const n = rows.length || 1;
     const stats = [
         ['Vehicles', rows.length],
-        ['Total Net', gbp(t.net)], ['Total VAT', gbp(t.vat)], ['Total Gross', gbp(t.gross)],
+        ['Total Net', gbp(t.net)], ['Total VAT', gbp(t.vat)], ['Total Purchase', gbp(t.total)],
         ['Fees Gross', gbp(t.fees_gross)],
-        ['Average Gross Per Vehicle', gbp(r2(t.gross / n))],
+        ['Average Purchase Per Vehicle', gbp(r2(t.total / n))],
+        ['Margin Vehicles', `${rows.filter(r => vatStatus(r) === 'Margin').length} of ${rows.length}`],
         ['From Evaluator', `${rows.filter(r => r.from_evaluator).length} of ${rows.length}`],
     ];
     if (t.atCount) stats.push(['AT Valuation Total', `${gbp(t.at)} (${t.atCount})`]);
     if (t.capCount) stats.push(['CAP Clean Total', `${gbp(t.cap)} (${t.capCount})`]);
-    customFields.filter(f => f.type !== 'text').forEach(f => stats.push([f.label + ' Total', gbp(t['c_' + f.key])]));
+    customFields.filter(isSumField).forEach(f => stats.push([f.label + ' Total', gbp(t['c_' + f.key])]));
     const dup = rows.filter(r => r.already_bought).length;
     if (dup) stats.push(['Already Bought', dup]);
     $('summaryGrid').innerHTML = stats.map(([l, v]) => `<div class="stat"><div class="lbl">${esc(l)}</div><div class="val">${v}</div></div>`).join('');
@@ -149,11 +172,86 @@ function fillBuyers() {
     else if (buyerCfg.buyers.includes(buyerCfg.me)) sel.value = buyerCfg.me;
 }
 
+/* An empty Buyer or Supplier is highlighted everywhere it shows. */
+function markMissingBatch() {
+    ['bBuyer', 'bSupplier'].forEach(id => $(id).classList.toggle('cb-missing', !$(id).value.trim()));
+}
+['bBuyer', 'bSupplier'].forEach(id => {
+    $(id).addEventListener('input', markMissingBatch);
+    $(id).addEventListener('change', markMissingBatch);
+});
+const missingCell = value => (value || '').trim() ? `<td>${esc(value)}</td>` : '<td class="cb-missing">Missing</td>';
+
+/* Under the Supplier box: the text the supplier was matched from, or a way to add it. */
+let batchInvoice = {};
+function renderSupplierMatch() {
+    const h = batchInvoice;
+    let html = '';
+    if (h.supplier_text) html = `Matched From Invoice Text: ${esc(h.supplier_text)}`;
+    else if (h.found_text !== undefined && !h.supplier_matched) {
+        html = 'Not Matched To A Supplier.';
+        if (window.IS_ADMIN) html += ' <button type="button" class="btn btn-sm btn-link p-0 align-baseline" id="supFromBatchBtn">Add Supplier</button>';
+    }
+    $('supplierMatch').innerHTML = html;
+    const btn = $('supplierMatch').querySelector('#supFromBatchBtn');
+    if (btn) btn.addEventListener('click', () => openAddSupplier(batchInvoice));
+}
+
+/* Add Supplier popup (admin). invoice: {found_text, supplier_suggestions}. */
+function openAddSupplier(invoice) {
+    const text = invoice.found_text || '';
+    $('supFoundText').textContent = text || 'This invoice was read before its text was kept. Press Read Again in Pending Invoices, then Add Supplier.';
+    const ideas = invoice.supplier_suggestions || [];
+    $('supSuggestions').innerHTML = ideas.length
+        ? ideas.map((s, i) => `<button type="button" class="btn btn-sm btn-outline-secondary text-start" data-idea="${i}">${esc(s.text)}</button>`).join('')
+        : '<span class="small text-muted">None Found. Select Text On The Left.</span>';
+    const use = s => { $('supText').value = s.text; $('supName').value = s.supplier; };
+    $('supSuggestions').onclick = e => { const b = e.target.closest('[data-idea]'); if (b) use(ideas[+b.dataset.idea]); };
+    use(ideas[0] || {text: '', supplier: ''});
+    $('supError').textContent = '';
+    const known = new Set([...(buyerCfg.supplier_names || []).map(s => s.supplier), ...suppliers.map(s => s.supplier_name)]);
+    $('supNameList').innerHTML = [...known].sort().map(n => `<option value="${esc(n)}">`).join('');
+    $('supContact').innerHTML = '<option value="">Reading The Apex Suppliers...</option>';
+    loadApexContacts().then(() => { $('supContact').innerHTML = contactOptions(); })
+        .catch(err => { $('supContact').innerHTML = '<option value="">Not Mapped</option>'; $('supError').textContent = err.message; });
+    modal('supplierModal').show();
+}
+
+if (window.IS_ADMIN) {
+    $('supFoundText').addEventListener('mouseup', () => {
+        const picked = String(window.getSelection ? window.getSelection() : '').trim();
+        if (!picked) return;
+        $('supText').value = picked.split('\n')[0].trim().slice(0, 100);
+        if (!$('supName').value) $('supName').value = $('supText').value;
+    });
+    $('supSaveBtn').addEventListener('click', () => {
+        const text = $('supText').value.trim(), supplier = $('supName').value.trim();
+        const contact = $('supContact').selectedOptions[0];
+        postJSON('/cars-bought/supplier-names', {text, supplier, contact_id: $('supContact').value, contact_name: contact?.dataset.name || ''}).then(res => {
+            if (res.status !== 'ok') { $('supError').textContent = res.message; return; }
+            buyerCfg.supplier_names = res.supplier_names;
+            renderInbox(res.files || []);
+            modal('supplierModal').hide();
+            // The batch on screen, if this text is on its invoice.
+            if ((batchInvoice.found_text || '').toLowerCase().includes(text.toLowerCase())) {
+                Object.assign(batchInvoice, {supplier_text: text, supplier_matched: true});
+                $('bSupplier').value = supplier;
+                markMissingBatch();
+                renderSupplierMatch();
+            }
+            msg(`${esc(text)} now means ${esc(supplier)}. ${res.updated} pending invoice${res.updated === 1 ? '' : 's'} updated.`, 'success');
+        }).catch(err => { $('supError').textContent = 'Error: ' + err.message; });
+    });
+}
+
 function showBatch(header) {
     fillBuyers();
     $('batchCard').style.display = '';
     $('summaryCard').style.display = '';
     $('bSupplier').value = header.supplier_name || '';
+    markMissingBatch();
+    batchInvoice = header;
+    renderSupplierMatch();
     $('bInvoice').value = header.invoice_number || '';
     $('bDate').value = header.invoice_date || new Date().toISOString().slice(0, 10);
     $('bNet').value = header.invoice_net ?? '';
@@ -177,6 +275,9 @@ $('vehBody').addEventListener('input', e => {
         rows[i][el.dataset.k] = el.dataset.k === 'vrm' ? el.value.toUpperCase().replace(/\s+/g, '') : el.value;
         if (el.dataset.k === 'cap_id') rows[i].cap_source = el.value ? 'typed' : null;
     }
+    // Typing must not rebuild the rows (the box would lose focus), so only these two cells change.
+    $('vehBody').querySelector(`[data-status="${i}"]`).textContent = vatStatus(rows[i]);
+    $('vehBody').querySelector(`[data-total="${i}"]`).textContent = gbp(purchaseTotal(rows[i]));
     renderTotals();
 });
 $('vehBody').addEventListener('click', e => {
@@ -295,6 +396,159 @@ function readFile(file) {
     reader.readAsDataURL(file);
 }
 
+/* ── Source: SharePoint folder ─────────────────────────── */
+
+let inboxTimer = null;
+let inboxChecking = false;   // a look in the folder is running
+let inboxSummary = '';       // what the last look found
+
+const inboxBatch = new Set();   // files being read now, and those finished since the reading began
+
+// How far a file being read has got, and what to call that step.
+const INBOX_STEPS = {
+    download: [20, 'Downloading From SharePoint'], read: [45, 'Reading The Invoice'], scan: [70, 'Reading The Scan (Textract)'],
+    match: [85, 'Matching The Vehicles'], save: [95, 'Saving'],
+};
+const inboxStep = f => (f.status === 'queued' ? null : INBOX_STEPS[f.stage]) || [5, 'Waiting To Start'];
+const inboxBar = pct => `<div class="inbox-bar"><div style="width:${pct}%"></div></div>`;
+
+/* The status line under the buttons. bar: a percent for a progress bar, or
+   'unknown' for a moving one when there is no way to tell how far it has got. */
+function inboxLine(text, bar) {
+    $('inboxLine').style.display = text ? '' : 'none';
+    const html = bar === 'unknown'
+        ? '<div class="progress mb-1" style="height:6px;"><div class="progress-bar progress-bar-striped progress-bar-animated" style="width:100%;"></div></div>'
+        : bar === undefined ? '' : inboxBar(bar);
+    $('inboxLine').innerHTML = html + esc(text);
+}
+
+function inboxFoundText(res) {
+    const when = new Date().toLocaleTimeString('en-GB', {hour: '2-digit', minute: '2-digit'});
+    if (!res.in_folder) return `Checked at ${when}: the folder is empty.`;
+    const parts = [`${res.found} new`, `${res.already_read} already read`];
+    if (res.too_old) parts.push(`${res.too_old} saved before the Ignore Files date`);
+    if (res.next_check) parts.push(`${res.next_check} left for the next check`);
+    return `Checked at ${when}: ${res.in_folder} file${res.in_folder === 1 ? '' : 's'} in the folder, ${parts.join(', ')}.`;
+}
+
+function inboxStatus(f) {
+    if (f.status === 'failed') return `<span class="tag tag-warn" title="${esc(f.error || '')}">Could Not Read</span> <span class="text-muted">${esc(f.error || '')}</span>`;
+    if (f.status !== 'pending') { const [pct, label] = inboxStep(f); return inboxBar(pct) + esc(label); }
+    const moved = f.moved_to ? '' : ` <span class="tag tag-warn" title="${esc(f.move_error || '')}">Not Moved</span>`;
+    return `<span class="tag tag-info">Pending Review</span>${moved}`;
+}
+
+function renderInbox(files) {
+    $('inboxCard').style.display = files.length ? '' : 'none';
+    $('inboxBody').innerHTML = files.map(f => {
+        const id = esc(f.file_id);
+        const addSupplier = f.status === 'pending' && !f.supplier_matched && window.IS_ADMIN
+            ? ` <button class="btn btn-sm btn-outline-danger" data-addsup="${id}">Add Supplier</button>` : '';
+        const actions = f.status === 'pending' ? `<button class="btn btn-sm btn-primary" data-review="${id}">Review</button>${addSupplier}
+                <button class="btn btn-sm btn-outline-secondary" data-reread="${id}" data-name="${esc(f.filename)}">Read Again</button>`
+            : f.status === 'failed' ? `<button class="btn btn-sm btn-outline-primary" data-retry="${id}">Retry</button>` : '';
+        const ignore = f.status === 'pending' || f.status === 'failed'
+            ? ` <button class="btn btn-sm btn-outline-secondary" data-ignore="${id}" data-name="${esc(f.filename)}">Ignore</button>` : '';
+        const link = `<a href="${BASE}/cars-bought/inbox/${encodeURIComponent(f.file_id)}/view" target="_blank" rel="noopener" title="Open the file">${esc(f.filename)}</a>`;
+        return `<tr><td>${ukDate(f.found_at)}</td><td>${link}</td>${f.status === 'pending' ? missingCell(f.supplier_name) : `<td>${esc(f.supplier_name || '')}</td>`}<td>${esc(f.invoice_number || '')}</td>
+            <td>${ukDate(f.invoice_date)}</td><td class="text-end">${f.vehicles ?? ''}</td>
+            <td class="text-end">${f.invoice_gross == null ? '' : gbp(f.invoice_gross)}</td>
+            <td style="white-space:normal;">${inboxStatus(f)}</td><td class="text-nowrap">${actions}${ignore}</td></tr>`;
+    }).join('');
+    // Ask again while a file is being read. The server fails a read that never
+    // finishes, so this stops by itself.
+    clearTimeout(inboxTimer);
+    const reading = files.filter(f => f.status === 'queued' || f.status === 'reading');
+    reading.forEach(f => inboxBatch.add(f.file_id));
+    if (reading.length) inboxTimer = setTimeout(pollInbox, 2000);
+    else inboxBatch.clear();
+    if (inboxChecking) return;
+    if (!reading.length) { inboxLine(inboxSummary); return; }
+    // Files no longer being read count as finished, whether they were read or not.
+    // Text only: each file's own row has the progress bar.
+    const size = inboxBatch.size;
+    inboxLine(`Read ${size - reading.length} of ${size} invoice${size === 1 ? '' : 's'}. ${inboxSummary}`);
+}
+
+function loadInbox() {
+    return fetch(BASE + '/cars-bought/inbox').then(r => r.json()).then(res => renderInbox(res.files || []));
+}
+
+// One failed request (the server restarting, say) must not stop the page asking.
+function pollInbox() {
+    loadInbox().catch(() => { inboxTimer = setTimeout(pollInbox, 5000); });
+}
+
+function checkInbox() {
+    const btn = $('inboxCheckBtn');
+    btn.disabled = true;
+    btn.innerHTML = '<i class="fas fa-spinner fa-spin me-1"></i>Checking Folder...';
+    // The server answers once, at the end, so this counts the seconds until then.
+    const started = Date.now();
+    const tick = () => inboxLine(`Looking in the SharePoint folder ${window.INBOX_FOLDER}... ${Math.round((Date.now() - started) / 1000)} seconds`, 'unknown');
+    inboxChecking = true;
+    tick();
+    const ticker = setInterval(tick, 1000);
+    const stop = () => { clearInterval(ticker); inboxChecking = false; };
+    return postJSON('/cars-bought/inbox/check', {}).then(res => {
+        stop();
+        inboxSummary = res.status === 'ok' ? inboxFoundText(res) : 'The last check of the folder failed.';
+        renderInbox(res.files || []);
+        if (res.status !== 'ok') msg(esc(res.message), 'danger');
+    }).catch(err => {
+        stop();
+        inboxSummary = 'The last check of the folder failed.';
+        inboxLine(inboxSummary);
+        throw err;
+    }).finally(() => {
+        btn.disabled = false;
+        btn.innerHTML = '<i class="fas fa-folder-open me-1"></i>Check Folder';
+    });
+}
+
+$('inboxCheckBtn').addEventListener('click', () => { checkInbox().catch(err => msg('Error: ' + esc(err.message), 'danger')); });
+
+$('inboxBody').addEventListener('click', e => {
+    const review = e.target.closest('[data-review]');
+    if (review) { reviewInvoice(review.dataset.review); return; }
+    const addSup = e.target.closest('[data-addsup]');
+    if (addSup) {
+        fetch(BASE + '/cars-bought/inbox/' + encodeURIComponent(addSup.dataset.addsup)).then(r => r.json()).then(res => {
+            if (res.status !== 'ok') { msg(esc(res.message), 'danger'); return; }
+            openAddSupplier(res);
+        }).catch(err => msg('Error: ' + esc(err.message), 'danger'));
+        return;
+    }
+    const reread = e.target.closest('[data-reread]');
+    if (reread) {
+        if (confirm(`Read ${reread.dataset.name} again? Any scan is charged again by Textract.`))
+            postJSON(`/cars-bought/inbox/${encodeURIComponent(reread.dataset.reread)}/retry`, {}).then(res => renderInbox(res.files || []));
+        return;
+    }
+    const retry = e.target.closest('[data-retry]');
+    if (retry) { postJSON(`/cars-bought/inbox/${encodeURIComponent(retry.dataset.retry)}/retry`, {}).then(res => renderInbox(res.files || [])); return; }
+    const ignore = e.target.closest('[data-ignore]');
+    if (ignore && confirm(`Ignore ${ignore.dataset.name}? It will not be read again.`))
+        postJSON(`/cars-bought/inbox/${encodeURIComponent(ignore.dataset.ignore)}/ignore`, {}).then(res => renderInbox(res.files || []));
+});
+
+function reviewInvoice(id) {
+    if (!startNew()) return;
+    busy('Opening the invoice...');
+    msg('');
+    fetch(BASE + '/cars-bought/inbox/' + encodeURIComponent(id)).then(r => r.json()).then(res => {
+        busy('');
+        if (res.status !== 'ok') { msg(esc(res.message), 'danger'); loadInbox(); return; }
+        capChecked = new Set();
+        rows = res.vehicles;
+        batchMeta = {source: 'sharepoint', filename: res.filename, s3_key: res.s3_key, supplier_id: res.supplier_id, inbox_file_id: id};
+        const view = `<a href="${BASE}/cars-bought/inbox/${encodeURIComponent(id)}/view" target="_blank" rel="noopener">${esc(res.filename)}</a>`;
+        msg(`${rows.length} vehicle${rows.length === 1 ? '' : 's'} read from ${view}.`
+            + ' Press Look Up CAP & AT, and check every row against the invoice before submitting.', 'success');
+        showBatch(res);
+    }).catch(err => { busy(''); msg('Error: ' + esc(err.message), 'danger'); });
+}
+
 /* ── Source: evaluator ─────────────────────────────────── */
 
 $('evLoadBtn').addEventListener('click', () => {
@@ -350,7 +604,7 @@ async function runLookup(todo) {
             const c = res.results[r.vrm] || {};
             capChecked.add(r.vrm);
             LOOKUP_FIELDS.forEach(k => { if (!blank(c[k])) r[k] = c[k]; });
-            if (!blank(c.cap_id)) r.cap_source = 'live';
+            if (!blank(c.cap_id)) r.cap_source = c.from_store ? 'stored' : 'live';
             r.lookup_note = c.note || null;
         } catch (e) {
             failed += 1;
@@ -407,20 +661,213 @@ $('submitBtn').addEventListener('click', () => {
             $('batchCard').style.display = 'none';
             $('summaryCard').style.display = 'none';
             loadHistory();
+            loadInbox();
         })
         .catch(err => { busy(''); $('submitBtn').disabled = false; alert('Error: ' + err.message); });
 });
 
 /* ── History and export ────────────────────────────────── */
 
+/* ── All Vehicles Bought: sort, filter and search in the browser ── */
+
+let allRows = [];
+let allSort = {column: 'PURCHASE_DATE', dir: -1};
+let allFilters = {};
+let allLimit = 0;
+let allFilterTimer = null;
+
+const customKey = c => c.column.startsWith('CUSTOM:') ? c.column.slice(7).toLowerCase() : null;
+const customField = c => customFields.find(f => f.key === customKey(c));
+const metricKey = c => c.column.startsWith('METRIC:') ? c.column.slice(7).toLowerCase() : null;
+const metricOf = c => (buyerCfg.metrics || []).find(m => m.id === metricKey(c));
+const isFigure = c => ['gbp', 'number', 'pct'].includes(c.format);
+let metricValues = {};     // {metric id: {vehicle id: {value, rows, matched, level}}}
+let metricErrors = {};     // {metric id: message}
+
+// Columns chosen in Settings, less any whose custom field or metric has gone or is off.
+const allColumns = () => (buyerCfg.table_columns || []).filter(c => {
+    if (customKey(c)) return !!customField(c);
+    if (metricKey(c)) { const m = metricOf(c); return !!(m && m.enabled); }
+    return true;
+});
+
+function allValue(r, c) {
+    const key = customKey(c);
+    if (key) return (r.custom || {})[key];
+    const metric = metricKey(c);
+    if (metric) { const hit = (metricValues[metric] || {})[r.vehicle_id]; return hit ? hit.value : null; }
+    return r[c.column.toLowerCase()];
+}
+
+function allText(r, c) {
+    const v = allValue(r, c);
+    if (v === null || v === undefined || v === '') return '';
+    if (c.format === 'date') return ukDate(String(v));
+    const n = num(v);
+    if (n !== null && c.format === 'gbp') return '£' + n.toLocaleString('en-GB', {minimumFractionDigits: c.decimals ?? 2, maximumFractionDigits: c.decimals ?? 2});
+    if (n !== null && (c.format === 'number' || c.format === 'pct')) {
+        return n.toLocaleString('en-GB', {minimumFractionDigits: c.decimals ?? 0, maximumFractionDigits: c.decimals ?? 0}) + (c.format === 'pct' ? '%' : '');
+    }
+    return String(v);
+}
+
+// What a figure is based on, for hovering over it.
+function metricTitle(r, c) {
+    const m = metricOf(c);
+    const hit = (metricValues[m.id] || {})[r.vehicle_id];
+    const about = m.description ? m.description + '\n' : '';
+    return about + (hit ? `From ${hit.rows} rows, matched on ${hit.matched}` : `No figure: fewer than ${m.min_rows} rows matched`);
+}
+
+/* One request per metric that is on the table. Nothing is asked for when no
+   metric is switched on. force reads Snowflake again (admin). */
+function loadMetricValues(force) {
+    const wanted = allColumns().filter(metricKey).map(metricOf);
+    metricErrors = {};
+    wanted.forEach(m => {
+        fetch(`${BASE}/cars-bought/metric-values/${encodeURIComponent(m.id)}${force ? '?force=true' : ''}`).then(r => r.json()).then(res => {
+            if (res.status === 'ok') { metricValues[m.id] = res.values || {}; delete metricErrors[m.id]; }
+            else metricErrors[m.id] = res.message;
+            refreshAllBody();
+        }).catch(err => { metricErrors[m.id] = `${m.label}: ${err.message}`; refreshAllBody(); });
+    });
+}
+
+// Figures can arrive while a buyer is typing in the table, and redrawing would lose the box.
+function refreshAllBody() {
+    const typing = document.activeElement;
+    if (typing && $('allBody').contains(typing)) { setTimeout(refreshAllBody, 1500); return; }
+    renderAllBody();
+}
+
+function allCompare(a, b, c) {
+    const x = allValue(a, c), y = allValue(b, c);
+    const blankX = x === null || x === undefined || x === '', blankY = y === null || y === undefined || y === '';
+    if (blankX || blankY) return blankX === blankY ? 0 : (blankX ? 1 : -1) * allSort.dir;   // blanks always last
+    if (isFigure(c)) return (num(x) ?? 0) - (num(y) ?? 0);
+    return String(x).localeCompare(String(y));
+}
+
+function allFiltered() {
+    const cols = allColumns();
+    const search = $('allSearch').value.trim().toLowerCase();
+    const active = cols.filter(c => (allFilters[c.column] || '').trim());
+    const out = allRows.filter(r =>
+        active.every(c => allText(r, c).toLowerCase().includes(allFilters[c.column].trim().toLowerCase()))
+        && (!search || cols.some(c => allText(r, c).toLowerCase().includes(search))));
+    const sortCol = cols.find(c => c.column === allSort.column);
+    if (sortCol) out.sort((a, b) => allCompare(a, b, sortCol) * allSort.dir);
+    return out;
+}
+
+function renderAllHead() {
+    const cols = allColumns();
+    const arrow = c => c.column !== allSort.column ? '' : ` <i class="fas fa-sort-${allSort.dir > 0 ? 'up' : 'down'}"></i>`;
+    $('allHead').innerHTML = '<tr>' + cols.map(c => {
+        const f = customField(c);
+        return `<th data-sort="${esc(c.column)}">${esc(c.label || c.column)}${f && f.required ? ' *' : ''}${arrow(c)}</th>`;
+    }).join('') + '<th></th></tr><tr>' +
+        cols.map(c => `<th><input class="form-control" data-filter="${esc(c.column)}" value="${esc(allFilters[c.column] || '')}" placeholder="Filter"></th>`).join('') + '<th></th></tr>';
+}
+
+function allCell(r, c) {
+    const f = customField(c);
+    if (f) {
+        const v = allValue(r, c) ?? '';
+        const missing = f.required && v === '' ? 'cb-missing' : '';
+        const box = f.type === 'yesno'
+            ? `<select class="form-select" data-vid="${r.vehicle_id}" data-ckey="${esc(f.key)}">${yesNoOptions(v)}</select>`
+            : `<input class="form-control${isSumField(f) ? ' text-end' : ''}" data-vid="${r.vehicle_id}" data-ckey="${esc(f.key)}" value="${esc(v)}">`;
+        return `<td class="${missing}${f.key === 'notes' ? ' notes-wide' : ''}">${box}</td>`;
+    }
+    if (c.column === 'BUYER' || c.column === 'SUPPLIER_NAME') return missingCell(allText(r, c));
+    const title = metricKey(c) ? ` title="${esc(metricTitle(r, c))}"` : '';
+    return `<td class="${isFigure(c) ? 'text-end' : ''}"${title}>${esc(allText(r, c))}</td>`;
+}
+
+function renderAllBody() {
+    const cols = allColumns();
+    const rowsNow = allFiltered();
+    const shown = rowsNow.slice(0, allLimit);
+    const total = r2(rowsNow.reduce((s, r) => s + (num(r.purchase_total) || 0), 0));
+    $('allBody').innerHTML = shown.length ? shown.map(r => `<tr>${cols.map(c => allCell(r, c)).join('')}
+        <td class="text-nowrap"><button class="btn btn-sm btn-outline-secondary py-0" data-openbatch="${r.batch_id}" title="Open the batch"><i class="fas fa-list"></i></button>
+        ${r.has_file ? `<a class="btn btn-sm btn-outline-secondary py-0" href="${BASE}/cars-bought/batches/${r.batch_id}/view" target="_blank" rel="noopener" title="Open the file"><i class="fas fa-file-invoice"></i></a>` : ''}</td></tr>`).join('')
+        : `<tr><td colspan="${cols.length + 1}" class="text-muted">${allRows.length ? 'No vehicles match' : 'No purchases yet'}</td></tr>`;
+    $('allCount').textContent = `${rowsNow.length} of ${allRows.length} vehicles, ${gbp(total)}`;
+    const problems = Object.values(metricErrors);
+    $('allMetricErrors').textContent = problems.join(' ');
+    $('allMetricErrors').style.display = problems.length ? '' : 'none';
+    $('allMoreBtn').style.display = rowsNow.length > shown.length ? '' : 'none';
+}
+
+function loadAllVehicles() {
+    return fetch(BASE + '/cars-bought/vehicles').then(r => r.json()).then(res => {
+        allRows = res.vehicles || [];
+        allLimit = allLimit || buyerCfg.table_rows || 500;
+        if (buyerCfg.table_columns) { renderAllHead(); renderAllBody(); }
+    }).catch(() => { $('allBody').innerHTML = '<tr><td class="text-danger">Could not load the vehicles</td></tr>'; });
+}
+
+$('allHead').addEventListener('click', e => {
+    const th = e.target.closest('[data-sort]');
+    if (!th) return;
+    allSort = {column: th.dataset.sort, dir: allSort.column === th.dataset.sort ? -allSort.dir : 1};
+    renderAllHead();
+    renderAllBody();
+});
+// Only the rows are rebuilt while typing, so the filter box keeps the cursor.
+$('allHead').addEventListener('input', e => {
+    if (!e.target.dataset.filter) return;
+    allFilters[e.target.dataset.filter] = e.target.value;
+    allLimit = buyerCfg.table_rows || 500;
+    clearTimeout(allFilterTimer);
+    allFilterTimer = setTimeout(renderAllBody, 150);
+});
+$('allSearch').addEventListener('input', () => {
+    allLimit = buyerCfg.table_rows || 500;
+    clearTimeout(allFilterTimer);
+    allFilterTimer = setTimeout(renderAllBody, 150);
+});
+$('allClearBtn').addEventListener('click', () => {
+    allFilters = {};
+    $('allSearch').value = '';
+    renderAllHead();
+    renderAllBody();
+});
+$('allMoreBtn').addEventListener('click', () => {
+    allLimit += buyerCfg.table_rows || 500;
+    renderAllBody();
+});
+$('allBody').addEventListener('click', e => {
+    const open = e.target.closest('[data-openbatch]');
+    if (open) openBatch(open.dataset.openbatch);
+});
+// A buyer filling in a field: saved as soon as they leave the box.
+$('allBody').addEventListener('change', e => {
+    const el = e.target;
+    if (!el.dataset.vid) return;
+    const row = allRows.find(r => String(r.vehicle_id) === el.dataset.vid);
+    const field = customFields.find(f => f.key === el.dataset.ckey);
+    postJSON(`/cars-bought/vehicles/${el.dataset.vid}/custom`, {key: el.dataset.ckey, value: el.value}).then(res => {
+        if (res.status !== 'ok') { alert(res.message); el.value = (row.custom || {})[el.dataset.ckey] ?? ''; return; }
+        row.custom = {...(row.custom || {}), [el.dataset.ckey]: res.value};
+        el.value = res.value ?? '';
+        el.closest('td').classList.toggle('cb-missing', !!(field && field.required && el.value === ''));
+    }).catch(err => { alert('Error: ' + err.message); el.value = (row.custom || {})[el.dataset.ckey] ?? ''; });
+});
+
 function loadHistory() {
+    loadAllVehicles();
     fetch(BASE + '/cars-bought/batches').then(r => r.json()).then(res => {
         const b = res.batches || [];
         $('histBody').innerHTML = b.length ? b.map(x => `<tr data-batch="${x.batch_id}">
-            <td>${ukDate(x.purchase_date)}</td><td>${esc(x.buyer || '')}</td><td>${esc(x.supplier_name)}</td><td>${esc(x.invoice_number || '')}</td>
+            <td>${ukDate(x.purchase_date)}</td>${missingCell(x.buyer)}${missingCell(x.supplier_name)}<td>${esc(x.invoice_number || '')}</td>
             <td class="text-end">${x.vehicles}</td><td class="text-end">${gbp(x.rows_gross)}</td>
             <td class="text-end">${x.invoice_gross == null ? '—' : gbp(x.invoice_gross)}</td>
-            <td>${x.source === 'evaluator' ? 'Evaluator' : esc(x.filename || 'Upload')}</td>
+            <td>${x.source === 'evaluator' ? 'Evaluator' : x.has_file
+                ? `<a href="${BASE}/cars-bought/batches/${x.batch_id}/view" target="_blank" rel="noopener" data-stop="1" title="Open the file">${esc(x.filename || 'Upload')}</a>`
+                : esc(x.filename || 'Upload')}</td>
             <td>${esc(x.submitted_by)}</td><td>${ukDate(x.submitted_at)} ${x.submitted_at.slice(11, 16)}</td>
             <td><a class="btn btn-sm btn-outline-secondary" href="${BASE}/cars-bought/export.csv?batch_id=${x.batch_id}" data-stop="1"><i class="fas fa-download"></i></a>
             ${window.IS_ADMIN ? `<button class="btn btn-sm btn-outline-danger" data-delbatch="${x.batch_id}" title="Delete"><i class="fas fa-trash"></i></button>` : ''}</td>
@@ -445,9 +892,11 @@ function openBatch(id) {
     fetch(BASE + '/cars-bought/batches/' + id).then(r => r.json()).then(res => {
         const v = res.vehicles || [];
         $('batchModalTitle').textContent = v.length ? `Batch ${id}: ${v[0].supplier_name}, ${ukDate(v[0].purchase_date)}` : `Batch ${id}`;
+        v.forEach(r => { r.vat_status = vatStatus(r); r.purchase_total = purchaseTotal(r); });
         const cols = [['vrm', 'VRM'], ['mileage', 'Mileage'], ['cap_id', 'CAP ID'], ['make', 'Make'], ['model', 'Model'],
-            ['derivative', 'Derivative'], ['vehicle_net', 'Vehicle Net', 1], ['vehicle_vat', 'Vehicle VAT', 1],
-            ['vehicle_gross', 'Vehicle Gross', 1], ['fees_net', 'Fees Net', 1], ['fees_vat', 'Fees VAT', 1], ['fees_gross', 'Fees Gross', 1]];
+            ['derivative', 'Derivative'], ['vat_status', 'VAT Status'], ['vehicle_net', 'Vehicle Net', 1], ['vehicle_vat', 'Vehicle VAT', 1],
+            ['vehicle_gross', 'Vehicle Gross', 1], ['fees_net', 'Fees Net', 1], ['fees_vat', 'Fees VAT', 1], ['fees_gross', 'Fees Gross', 1],
+            ['purchase_total', 'Total Purchase', 1]];
         $('batchModalBody').innerHTML = `<table class="table table-sm veh-table"><thead><tr>${cols.map(c => `<th>${c[1]}</th>`).join('')}${customFields.map(f => `<th>${esc(f.label)}</th>`).join('')}</tr></thead><tbody>` +
             v.map(r => `<tr>${cols.map(([k, , m]) => `<td class="${m ? 'text-end' : ''}">${m ? gbp(r[k]) : esc(r[k] ?? '')}</td>`).join('')}${customFields.map(f => `<td>${esc((r.custom || {})[f.key] ?? '')}</td>`).join('')}</tr>`).join('') +
             '</tbody></table>';
@@ -465,7 +914,7 @@ $('exportBtn').addEventListener('click', () => {
 /* ── Admin settings ────────────────────────────────────── */
 
 function cfRow(f) {
-    const types = [['money', 'Money'], ['number', 'Number'], ['text', 'Text']];
+    const types = [['money', 'Money'], ['number', 'Number'], ['text', 'Text'], ['yesno', 'Yes / No']];
     return `<tr data-key="${esc(f.key || '')}">
         <td><input class="form-control form-control-sm cf-label" value="${esc(f.label || '')}"></td>
         <td><select class="form-select form-select-sm cf-type">${types.map(([v, l]) => `<option value="${v}"${f.type === v ? ' selected' : ''}>${l}</option>`).join('')}</select></td>
@@ -473,9 +922,93 @@ function cfRow(f) {
         <td><button class="btn btn-sm btn-outline-danger cf-del"><i class="fas fa-times"></i></button></td></tr>`;
 }
 
+function snRow(s) {
+    return `<tr>
+        <td><input class="form-control form-control-sm sn-text" value="${esc(s.text || '')}"></td>
+        <td><input class="form-control form-control-sm sn-supplier" value="${esc(s.supplier || '')}"></td>
+        <td><button class="btn btn-sm btn-outline-danger sn-del" title="Delete"><i class="fas fa-times"></i></button></td></tr>`;
+}
+
+// The Apex suppliers (contacts_suppliers__s), read when the settings or Add
+// Supplier popup opens. Null until read, and then the mappings are not sent on Save.
+let apexContacts = null;
+
+function loadApexContacts() {
+    return fetch(BASE + '/cars-bought/supplier-contacts').then(r => r.json()).then(res => {
+        if (res.status !== 'ok') throw new Error(res.message);
+        apexContacts = res.contacts;
+        return res;
+    });
+}
+
+function contactOptions(currentId, currentName) {
+    const known = apexContacts.some(c => String(c.id) === String(currentId));
+    const gone = currentId && !known
+        ? `<option value="${esc(currentId)}" data-name="${esc(currentName || '')}" selected>${esc(currentName || currentId)} (Not In Apex List)</option>` : '';
+    return `<option value="">Not Mapped</option>${gone}` + apexContacts.map(c =>
+        `<option value="${esc(c.id)}" data-name="${esc(c.name)}"${String(c.id) === String(currentId) ? ' selected' : ''}>${esc(c.label)}</option>`).join('');
+}
+
+function openApexSuppliers() {
+    apexContacts = null;
+    $('scSearch').value = '';
+    $('scBody').innerHTML = '';
+    $('scStatus').textContent = 'Reading The Apex Suppliers...';
+    loadApexContacts().then(res => {
+        $('scStatus').textContent = '';
+        $('scBody').innerHTML = res.suppliers.map(s => `<tr data-sid="${s.supplier_id}">
+            <td class="sc-name">${esc(s.supplier_name)}</td>
+            <td><select class="form-select form-select-sm sc-contact">${contactOptions(s.contact_id, s.contact_name)}</select></td></tr>`).join('');
+    }).catch(err => { $('scStatus').textContent = err.message; });
+}
+
+function apexMappings() {
+    if (!apexContacts) return undefined;
+    return [...$('scBody').querySelectorAll('tr')].map(tr => {
+        const sel = tr.querySelector('.sc-contact');
+        return {supplier_id: tr.dataset.sid, contact_id: sel.value, contact_name: sel.selectedOptions[0]?.dataset.name || ''};
+    });
+}
+
+function filterSupplierNames() {
+    const q = $('snSearch').value.trim().toLowerCase();
+    $('snBody').querySelectorAll('tr').forEach(tr => {
+        const line = (tr.querySelector('.sn-text').value + ' ' + tr.querySelector('.sn-supplier').value).toLowerCase();
+        tr.style.display = !q || line.includes(q) ? '' : 'none';
+    });
+}
+
+let tableColumnEditor = null;
+
+function openTableColumnEditor() {
+    const live = buyerCfg.table_live || [];
+    tableColumnEditor = new ColumnEditor($('tableColEditor'), {
+        live, shown: buyerCfg.table_columns || [],
+        formats: [['text', 'Text'], ['number', 'Number'], ['gbp', 'Pounds'], ['pct', 'Percent'], ['date', 'Date']],
+        numberFormats: ['number', 'gbp', 'pct'],
+        newColumn: column => {
+            const c = live.find(x => x.column === column) || {};
+            return {column, label: c.label || '', format: c.format || 'text', decimals: c.decimals || 0};
+        },
+    });
+}
+
+function srRow(r) {
+    return `<tr>
+        <td><input class="form-control form-control-sm sr-supplier" value="${esc(r.supplier || '')}"></td>
+        <td><input class="form-control form-control-sm sr-words" value="${esc((r.fee_words || []).join(', '))}"></td>
+        <td class="text-center"><input type="checkbox" class="form-check-input sr-priced"${r.priced_lines_are_fees ? ' checked' : ''}></td>
+        <td><button class="btn btn-sm btn-outline-danger sr-del"><i class="fas fa-times"></i></button></td></tr>`;
+}
+
 if (window.IS_ADMIN) {
     $('settingsBtn').addEventListener('click', () => {
         $('cfBody').innerHTML = customFields.map(cfRow).join('');
+        openTableColumnEditor();
+        window.openVehicleMetrics();
+        $('tableRowsInput').value = buyerCfg.table_rows ?? 500;
+        $('srBody').innerHTML = (buyerCfg.supplier_rules || []).map(srRow).join('');
+        openApexSuppliers();
         $('lockBuyerInput').checked = buyerCfg.lock_buyer;
         const labels = buyerCfg.column_labels || {};
         $('colNamesBody').innerHTML = Object.keys(labels).map(k =>
@@ -484,11 +1017,39 @@ if (window.IS_ADMIN) {
         $('feeWordsInput').value = (buyerCfg.fee_words || []).join(', ');
         $('feeVatRateInput').value = buyerCfg.fee_vat_rate ?? 20;
         $('evalHoursInput').value = buyerCfg.evaluator_max_hours ?? 24;
-        $('supplierNamesInput').value = (buyerCfg.supplier_names || []).map(s => `${s.text} = ${s.supplier}`).join('\n');
+        $('lookupReuseInput').checked = buyerCfg.lookup_reuse !== false;
+        // Sorted for finding a row: the longest match wins, so order does not change what matches.
+        $('snBody').innerHTML = [...(buyerCfg.supplier_names || [])]
+            .sort((a, b) => a.supplier.localeCompare(b.supplier) || a.text.localeCompare(b.text)).map(snRow).join('');
+        $('snSearch').value = '';
+        $('ownNamesInput').value = (buyerCfg.own_names || []).join(', ');
+        $('gridColourInput').value = buyerCfg.grid_colour || '#d0d0d0';
+        $('missingColourInput').value = buyerCfg.missing_colour || '#f8d7da';
+        $('inboxEnabledInput').checked = !!buyerCfg.inbox_enabled;
+        $('inboxFolderInput').value = buyerCfg.inbox_folder || '';
+        $('inboxDoneInput').value = buyerCfg.inbox_done_folder || '';
+        $('inboxMaxInput').value = buyerCfg.inbox_max_files ?? 20;
+        $('inboxSinceInput').value = buyerCfg.inbox_since || '';
         bootstrap.Modal.getOrCreateInstance($('settingsModal')).show();
     });
     $('cfAddBtn').addEventListener('click', () => $('cfBody').insertAdjacentHTML('beforeend', cfRow({type: 'money'})));
     $('cfBody').addEventListener('click', e => { const b = e.target.closest('.cf-del'); if (b) b.closest('tr').remove(); });
+    $('snSearch').addEventListener('input', filterSupplierNames);
+    $('scSearch').addEventListener('input', () => {
+        const q = $('scSearch').value.trim().toLowerCase();
+        $('scBody').querySelectorAll('tr').forEach(tr => {
+            const line = (tr.querySelector('.sc-name').textContent + ' ' + (tr.querySelector('.sc-contact').selectedOptions[0]?.textContent || '')).toLowerCase();
+            tr.style.display = !q || line.includes(q) ? '' : 'none';
+        });
+    });
+    $('snAddBtn').addEventListener('click', () => {
+        $('snSearch').value = '';
+        filterSupplierNames();
+        $('snBody').insertAdjacentHTML('afterbegin', snRow({}));
+    });
+    $('snBody').addEventListener('click', e => { const b = e.target.closest('.sn-del'); if (b) b.closest('tr').remove(); });
+    $('srAddBtn').addEventListener('click', () => $('srBody').insertAdjacentHTML('beforeend', srRow({})));
+    $('srBody').addEventListener('click', e => { const b = e.target.closest('.sr-del'); if (b) b.closest('tr').remove(); });
     $('settingsSaveBtn').addEventListener('click', () => {
         const fields = [...$('cfBody').querySelectorAll('tr')].map(tr => ({
             key: tr.dataset.key || null, label: tr.querySelector('.cf-label').value,
@@ -497,17 +1058,45 @@ if (window.IS_ADMIN) {
         const split = s => s.split(',').map(x => x.trim()).filter(Boolean);
         const column_names = {};
         $('colNamesBody').querySelectorAll('[data-colfield]').forEach(el => { column_names[el.dataset.colfield] = split(el.value); });
-        postJSON('/cars-bought/config', {custom_fields: fields, lock_buyer: $('lockBuyerInput').checked,
+        const supplier_rules = [...$('srBody').querySelectorAll('tr')].map(tr => ({
+            supplier: tr.querySelector('.sr-supplier').value, fee_words: split(tr.querySelector('.sr-words').value),
+            priced_lines_are_fees: tr.querySelector('.sr-priced').checked,
+        }));
+        postJSON('/cars-bought/config', {custom_fields: fields, lock_buyer: $('lockBuyerInput').checked, supplier_rules,
+                                         supplier_contacts: apexMappings(),
                                          column_names, fee_words: split($('feeWordsInput').value),
                                          fee_vat_rate: num($('feeVatRateInput').value),
                                          evaluator_max_hours: num($('evalHoursInput').value),
-                                         supplier_names: $('supplierNamesInput').value.split('\n')
-                                             .map(l => l.split('=')).filter(p => p.length === 2)
-                                             .map(([text, supplier]) => ({text: text.trim(), supplier: supplier.trim()}))}).then(res => {
+                                         lookup_reuse: $('lookupReuseInput').checked,
+                                         table_columns: tableColumnEditor.columns(),
+                                         table_rows: num($('tableRowsInput').value),
+                                         grid_colour: $('gridColourInput').value,
+                                         missing_colour: $('missingColourInput').value,
+                                         inbox_enabled: $('inboxEnabledInput').checked,
+                                         inbox_folder: $('inboxFolderInput').value,
+                                         inbox_done_folder: $('inboxDoneInput').value,
+                                         inbox_max_files: num($('inboxMaxInput').value),
+                                         inbox_since: $('inboxSinceInput').value,
+                                         own_names: split($('ownNamesInput').value),
+                                         supplier_names: [...$('snBody').querySelectorAll('tr')].map(tr => ({
+                                             text: tr.querySelector('.sn-text').value, supplier: tr.querySelector('.sn-supplier').value,
+                                         }))}).then(res => {
             if (res.status !== 'ok') { alert(res.message); return; }
             customFields = res.custom_fields;
             buyerCfg = res;
             fillBuyers();
+            $('inboxCheckBtn').style.display = res.inbox_enabled ? '' : 'none';
+            window.INBOX_ENABLED = res.inbox_enabled;
+            window.INBOX_FOLDER = res.inbox_folder;
+            $('inboxFolderLink').href = res.inbox_folder_url;
+            $('inboxFolderLink').style.display = res.inbox_enabled ? '' : 'none';
+            document.documentElement.style.setProperty('--cb-grid', res.grid_colour);
+            document.documentElement.style.setProperty('--cb-missing', res.missing_colour);
+            markMissingBatch();
+            allLimit = res.table_rows;
+            renderAllHead();
+            renderAllBody();
+            loadInbox().catch(() => {});
             bootstrap.Modal.getOrCreateInstance($('settingsModal')).hide();
             if (rows.length) { renderHead(); renderRows(); }
         });
@@ -522,7 +1111,16 @@ fetch(BASE + '/cars-bought/config').then(r => r.json()).then(res => {
     buyerCfg = res;
     fillBuyers();
     $('evSupplier').innerHTML = '<option value="">Any Supplier</option>' +
-        suppliers.map(s => `<option value="${s.supplier_id}">${esc(s.supplier_name)}</option>`).join('');
+        suppliers.filter(s => s.has_stock_list).map(s => `<option value="${s.supplier_id}">${esc(s.supplier_name)}</option>`).join('');
     $('supplierList').innerHTML = suppliers.map(s => `<option value="${esc(s.supplier_name)}">`).join('');
+    // Whichever of this and the vehicles arrives second draws the table.
+    allLimit = allLimit || res.table_rows || 500;
+    renderAllHead();
+    renderAllBody();
+    loadMetricValues();
 });
 loadHistory();
+// What is already pending shows first; the slower look in the folder follows.
+loadInbox().catch(() => {}).then(() => {
+    if (window.INBOX_ENABLED) return checkInbox().catch(err => msg('Error: ' + esc(err.message), 'danger'));
+});

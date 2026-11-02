@@ -259,7 +259,7 @@
             document.getElementById('fileList').innerHTML = _sources.map(s => '<div><i class="fas fa-envelope me-1"></i>' + _esc(s) + '</div>').join('');
             document.getElementById('foundCount').textContent = _found.length ? '(' + kept.length + ')' : '';
             document.getElementById('skippedNote').textContent = skipped
-                ? skipped + ' inline / signature image' + (skipped === 1 ? '' : 's') + ' skipped (Settings > Email Attachments)'
+                ? skipped + ' inline / signature image' + (skipped === 1 ? '' : 's') + ' skipped (Settings > Page Settings > ' + {{ page_name('email_attachments')|tojson }} + ')'
                 : '';
             document.getElementById('resultEmpty').style.display = _sources.length ? 'none' : '';
             document.getElementById('resultWrap').style.display = _sources.length ? '' : 'none';

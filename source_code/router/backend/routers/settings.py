@@ -28,6 +28,7 @@ from utils.db_utils import (get_database_connection, get_settings, save_settings
                             get_prod_pricer_connection, load_page_names, save_page_names,
                             add_pending_user, mark_user_activated, cancel_password_links,
                             create_password_link, read_inactive_users, widen_settings_values,
+                            read_password_email_wording,
                             ensure_user_nexus_columns, read_user_nexus_details, add_nexus_users,
                             update_user_org, fill_user_nexus_details, email_match_key,
                             NEXUS_USER_COLUMNS)
@@ -38,7 +39,7 @@ from utils.ddl_once import once_per_database
 from . import core
 from .core import (BASE_URL, templates, VALID_USERS, get_current_user, session_config,
                    ADMIN_USERNAME, _uk_now)
-from .page_registry import (PAGES, ALL_PAGE_KEYS, CONFIGURED_MARKER, DEFAULT_PAGE_KEYS)
+from .page_registry import PAGES, ALL_PAGE_KEYS, CONFIGURED_MARKER, shown_page_access
 
 logger = logging.getLogger(__name__)
 
@@ -48,12 +49,18 @@ router = APIRouter()
 # Settings sections. Each renders its own page with its own Save button, and
 # each save writes only that section's keys (see save_settings_partial) so one
 # page cannot overwrite fields it never displayed.
+# Settings for one page, listed under Page Settings in the nav.
+# slug -> page key; the label and heading are the page's name from Page Names.
+PAGE_SETTINGS_SECTIONS = [
+    ("buying-requirements", "buying_requirements"),
+    ("supplier-evaluator",  "tasks"),
+    ("mot-check",           "mot_check"),
+    ("email-attachments",   "email_attachments"),
+]
+templates.env.globals['page_settings_sections'] = PAGE_SETTINGS_SECTIONS
+
 # slug -> (nav label, page heading)
 SETTINGS_SECTIONS = [
-    ("buying-requirements", "Buying Requirements", "Buying Requirements"),
-    ("supplier-evaluator",  "Supplier Evaluator",  "Supplier Stock Evaluator"),
-    ("mot-check",           "MOT Check",           "MOT Check"),
-    ("email-attachments",   "Email Attachments",   "Email Attachment Extractor"),
     ("ai",                 "AI",                  "AI"),
     ("cap-credentials",     "CAP Credentials",     "CAP Credential Override"),
     ("email",               "Email",               "Email"),
@@ -75,12 +82,20 @@ _MOVED_SECTIONS = {"api-requests": "live-update", "dbt": "live-update", "kpi": "
 _SETTINGS_SCOPE = 'buyer'
 
 
+def _section_title(slug: str) -> str | None:
+    """The section's heading, or None if there is no such section."""
+    page_key = dict(PAGE_SETTINGS_SECTIONS).get(slug)
+    if page_key:
+        return core.page_name(page_key)
+    return next((s[2] for s in SETTINGS_SECTIONS if s[0] == slug), None)
+
+
 def _render_section(request: Request, user: str, slug: str):
+    section_title = _section_title(slug)
+    if section_title is None:
+        return RedirectResponse(url=BASE_URL + "/settings-page", status_code=303)
     with get_database_connection() as conn:
         settings = get_settings(conn, user=_SETTINGS_SCOPE)
-    section = next((s for s in SETTINGS_SECTIONS if s[0] == slug), None)
-    if section is None:
-        return RedirectResponse(url=BASE_URL + "/settings-page", status_code=303)
     google = None
     if slug == "google":
         from utils import google_oauth
@@ -91,7 +106,7 @@ def _render_section(request: Request, user: str, slug: str):
         "settings": settings,
         "sections": SETTINGS_SECTIONS,
         "active_section": slug,
-        "section_title": section[2],
+        "section_title": section_title,
         "google": google,
     })
 
@@ -101,7 +116,7 @@ def settings_page(request: Request, user: str = Depends(get_current_user)):
     """Landing on the settings area — show the first section."""
     if user != 'tdrayson':
         return RedirectResponse(url=BASE_URL + "/home", status_code=303)
-    return _render_section(request, user, SETTINGS_SECTIONS[0][0])
+    return _render_section(request, user, PAGE_SETTINGS_SECTIONS[0][0])
 
 
 @router.get("/settings/section/{slug}", response_class=HTMLResponse)
@@ -1023,9 +1038,9 @@ def _users_source(q) -> tuple:
 
 
 def _read_prod_users() -> tuple:
-    """(people, last_logins, inactive, buyers) from prod's database. Read only:
-    nothing is created or changed there. inactive is the usernames that have
-    not set a password yet; buyers those with the Buyer role."""
+    """(people, last_logins, inactive, buyers, stored_access) from prod's
+    database. Read only: nothing is created or changed there. inactive is the
+    usernames that have not set a password yet; buyers those with the Buyer role."""
     with get_prod_activity_connection() as conn:
         try:
             people = read_user_details(conn)
@@ -1035,10 +1050,11 @@ def _read_prod_users() -> tuple:
             for username, extra in read_user_nexus_details(conn).items():
                 if username in people:
                     people[username].update(extra)
+            stored_access = load_all_page_access(conn)
         except Exception:
             conn.rollback()
             raise
-    return people, last_logins, inactive, buyers
+    return people, last_logins, inactive, buyers, stored_access
 
 
 @router.get("/settings/users", response_class=HTMLResponse)
@@ -1052,13 +1068,16 @@ def users_page(request: Request, user: str = Depends(get_current_user)):
     all_users = []
     inactive = set()
     buyers = set()
+    # None means it could not be read: the popup then hides the ticks, so a save
+    # cannot overwrite access nobody was shown.
+    stored_access = None
     login_mode = 'both'
     link_settings = {}
     error = None
     if viewing_prod:
         # Never falls back to this environment's users under a Prod heading.
         try:
-            people, last_logins, inactive, buyers = _read_prod_users()
+            people, last_logins, inactive, buyers, stored_access = _read_prod_users()
             all_users = sorted(people)
         except Exception as e:
             logger.warning("Failed to load prod user accounts: %s", e)
@@ -1074,9 +1093,15 @@ def users_page(request: Request, user: str = Depends(get_current_user)):
                 for username, extra in read_user_nexus_details(conn).items():
                     if username in people:
                         people[username].update(extra)
+                stored_access = load_all_page_access(conn)
         except Exception as e:
             logger.warning("Failed to load user accounts data: %s", e)
         all_users = sorted(VALID_USERS)
+    # Pages hidden on Settings > Page Names get no tick box and are not counted.
+    pages = core.visible_pages()
+    visible_keys = {p.key for p in pages}
+    access = {u: shown_page_access(stored_access.get(u), u in inactive) & visible_keys
+              for u in all_users} if stored_access is not None else {}
     try:
         with get_database_connection() as conn:
             link_settings = get_settings(conn)
@@ -1084,13 +1109,22 @@ def users_page(request: Request, user: str = Depends(get_current_user)):
         logger.warning("Failed to load sign in settings: %s", e)
         link_settings = dict(SETTINGS_DEFAULTS)
     login_mode = link_settings.get('login_mode', 'both')
+    # None means it could not be read: the card then has no form to save.
+    email_wording = None
+    try:
+        with get_prod_activity_connection() as conn:
+            email_wording = read_password_email_wording(conn)
+    except Exception as e:
+        logger.warning("Failed to load the password email wording: %s", e)
     return templates.TemplateResponse("users.html", {
         "request": request, "user": user, "BASE_URL": BASE_URL,
+        "email_wording": email_wording,
         "login_mode": login_mode, "admin_username": ADMIN_USERNAME,
         "inactive": inactive, "buyers": buyers, "link_settings": link_settings,
         "password_rules_text": PASSWORD_RULES_TEXT,
         "all_users": all_users, "people": people,
         "last_logins": last_logins, "error": error,
+        "pages": pages, "access": access, "access_loaded": stored_access is not None,
         "can_view_prod": can_view_prod, "source": source, "viewing_prod": viewing_prod,
         "this_env": core._ENV,
         "sections": SETTINGS_SECTIONS, "active_section": "users",
@@ -1106,7 +1140,7 @@ def users_export(request: Request, user: str = Depends(get_current_user)):
     can_view_prod, source = _users_source(request.query_params)
     try:
         if can_view_prod and source == 'prod':
-            people, last_logins, _inactive, _buyers = _read_prod_users()
+            people, last_logins, _inactive, _buyers, _access = _read_prod_users()
             usernames = sorted(people)
         else:
             with get_database_connection() as conn:
@@ -1462,7 +1496,6 @@ def force_relogin(request: Request, user: str = Depends(get_current_user)):
 _REDIRECT_TARGETS = {
     "users":       "/settings/users",
     "user_activity": "/settings/user-activity",
-    "page_access": "/settings/page-access",
     "page_names":  "/settings/page-names",
 }
 
@@ -1580,101 +1613,34 @@ def _user_redirect(redirect_to: str, **params):
     return RedirectResponse(url=f"{base}?{qs}", status_code=303)
 
 
-@router.get("/settings/page-access", response_class=HTMLResponse)
-def page_access_page(request: Request, user: str = Depends(get_current_user)):
-    """Grid of users against pages. Reads only — nothing is written until a row
-    is saved, so the table need not exist yet."""
+@router.get("/settings/page-access")
+def page_access_page(user: str = Depends(get_current_user)):
+    """Page access moved to the Edit popup on User Accounts. Keeps old links working."""
     if user != ADMIN_USERNAME:
         return RedirectResponse(url=BASE_URL + "/home", status_code=303)
-
-    try:
-        with get_database_connection() as conn:
-            stored = load_all_page_access(conn)
-    except Exception as e:
-        logger.warning("Page access: could not load grants: %s", e)
-        stored = {}
-
-    # What each box shows. A user who has never been saved (no marker) is shown
-    # the defaults, so the grid opens displaying today's real access and the
-    # first save simply records it. Once saved, exactly what was stored.
-    users = sorted(u for u in VALID_USERS if u != ADMIN_USERNAME)
-    access = {}
-    for u in users:
-        rows = stored.get(u)
-        if rows is None or CONFIGURED_MARKER not in rows:
-            access[u] = set(DEFAULT_PAGE_KEYS)
-        else:
-            access[u] = rows & ALL_PAGE_KEYS
-
-    return templates.TemplateResponse("page_access.html", {
-        "request": request, "user": user, "BASE_URL": BASE_URL,
-        # Pages hidden on Settings > Page Names get no column.
-        "pages": core.visible_pages(), "users": users, "access": access,
-        "admin_user": ADMIN_USERNAME,
-        "sections": SETTINGS_SECTIONS, "active_section": "page_access",
-    })
+    return RedirectResponse(url=BASE_URL + "/settings/users", status_code=303)
 
 
-@router.post("/settings/page-access")
-def save_page_access(
-    request: Request,
-    users: list[str] = Form(default=[]),
-    access: list[str] = Form(default=[]),
-    user: str = Depends(get_current_user)
-):
-    """Save the whole grid in one go. `users` lists every row on the page (so a
-    row with every box unticked is still saved); `access` holds one
-    "username:page_key" value per ticked box."""
-    if user != ADMIN_USERNAME:
-        raise HTTPException(status_code=403)
-    if ADMIN_USERNAME in users:
-        raise HTTPException(status_code=400, detail="Cannot change admin access")
-    missing = [u for u in users if u not in VALID_USERS]
-    if missing:
-        return _user_redirect("page_access", accesserr="User+not+found")
-
-    submitted = {u: set() for u in users}
-    for item in access:
-        u, _, key = item.rpartition(':')
-        if u not in submitted:
-            return _user_redirect("page_access", accesserr="User+not+found")
-        submitted[u].add(key)
-
-    # Anything not a real page is rejected rather than ignored — this is also
-    # what stops CONFIGURED_MARKER being submitted as if it were a page.
-    for u, keys in submitted.items():
-        unknown = keys - ALL_PAGE_KEYS
-        if unknown:
-            logger.warning("Page access: rejected unknown keys %s for %s", sorted(unknown), u)
-            return _user_redirect("page_access", accesserr="Unknown+page")
-
-    with get_database_connection() as conn:
-        stored = load_all_page_access(conn)
-        # Only write rows that changed, so granted_at/granted_by keep showing
-        # when each person's access was last really changed. A user never
-        # saved before counts as having the defaults, the same as the grid shows.
-        # Hidden pages have no column on the grid, so nothing arrives for them:
-        # keep whatever each user already had, ready for when they are unhidden.
-        hidden = ALL_PAGE_KEYS - {p.key for p in core.visible_pages()}
-        changed = {}
-        for u, keys in submitted.items():
-            rows = stored.get(u)
-            if rows is None or CONFIGURED_MARKER not in rows:
-                current = set(DEFAULT_PAGE_KEYS)
-            else:
-                current = rows & ALL_PAGE_KEYS
-            keys = keys | (current & hidden)
-            if keys != current:
-                changed[u] = keys
-        set_page_access_many(conn, changed, granted_by=user)
-
-    # Update this process's cache so the grid reflects the save immediately.
-    # Other containers pick it up on their own TTL — see core.PERMISSION_TTL_SECONDS.
-    for u, keys in changed.items():
-        core.USER_PAGE_ACCESS[u] = keys | {CONFIGURED_MARKER}
-        logger.info("Page access for %s set to %s by %s", u, sorted(keys) or 'none', user)
-
-    return _user_redirect("page_access", accessok=len(changed))
+def _save_user_access(conn, target: str, ticked: set | None, user: str, is_new: bool = False) -> set | None:
+    """Save the Page Access ticks from the Add / Edit popup. Returns what was
+    saved, or None when nothing changed. ticked None means the popup did not show
+    the ticks: an existing user is left alone, a new one gets no pages.
+    Only writes a real change, so granted_at/granted_by keep showing when access
+    last changed. Hidden pages have no tick box, so nothing arrives for them: keep
+    what the user already had, ready for when they are unhidden."""
+    if ticked is None:
+        if not is_new:
+            return None
+        ticked = set()
+    current = set()
+    if not is_new:
+        current = shown_page_access(load_all_page_access(conn).get(target), target in read_inactive_users(conn))
+    keys = ticked | (current & (ALL_PAGE_KEYS - {p.key for p in core.visible_pages()}))
+    if keys == current and not is_new:
+        return None
+    set_page_access_many(conn, {target: keys}, granted_by=user)
+    logger.info("Page access for %s set to %s by %s", target, sorted(keys) or 'none', user)
+    return keys
 
 
 def _password_problem_redirect(back, problem: str):
@@ -1718,7 +1684,7 @@ def _end_prod_sessions(conn, reason: str, target: str) -> int:
 
 
 def _save_prod_user(mode: str, target: str, details: dict, password: str, user: str, is_buyer: bool = False,
-                    org: dict = None):
+                    org: dict = None, ticked: set = None):
     """save_user against prod's database. Prod's containers pick the change up
     when their user cache next reloads (within about a minute)."""
     if mode not in ('add', 'edit'):
@@ -1741,6 +1707,7 @@ def _save_prod_user(mode: str, target: str, details: dict, password: str, user: 
             update_user_details(conn, {target: details}, ensure=False)
             set_user_role(conn, target, 'buyer', is_buyer)
             update_user_org(conn, target, org or {})
+            _save_user_access(conn, target, ticked, user, is_new=mode == 'add')
         except Exception:
             conn.rollback()
             raise
@@ -1770,11 +1737,15 @@ def save_user(
     site_type: str = Form(default=""),
     company_name: str = Form(default=""),
     company_type: str = Form(default=""),
+    access: list[str] = Form(default=[]),
+    access_shown: str = Form(default=""),
     user: str = Depends(get_current_user),
 ):
     """The Add / Edit user popup on Settings > User Accounts.
     mode 'add' needs a password; mode 'edit' keeps the old one when it is
     left blank. A changed password ends that user's open sessions.
+    access holds one page key per ticked box; access_shown says the ticks were
+    on the page, so none ticked means no pages rather than leave as it is.
     source 'prod' (local and dev only) saves to prod's database instead."""
     if user != ADMIN_USERNAME:
         raise HTTPException(status_code=403)
@@ -1789,8 +1760,14 @@ def save_user(
     buyer = is_buyer == "on"
     org = {'site_name': site_name[:255], 'site_type': site_type[:100],
            'company_name': company_name[:255], 'company_type': company_type[:100]}
+    ticked = set(access) if access_shown else None
+    # Anything not a real page is rejected rather than ignored — this is also
+    # what stops CONFIGURED_MARKER being submitted as if it were a page.
+    if ticked and ticked - ALL_PAGE_KEYS:
+        logger.warning("Page access: rejected unknown keys %s for %s", sorted(ticked - ALL_PAGE_KEYS), target)
+        return back(pwderr="Unknown+page")
     if to_prod:
-        return _save_prod_user(mode, target, details, password, user, buyer, org)
+        return _save_prod_user(mode, target, details, password, user, buyer, org, ticked)
 
     if mode == 'add':
         if target in VALID_USERS:
@@ -1809,7 +1786,9 @@ def save_user(
             set_user_role(conn, target, 'buyer', buyer)
             ensure_user_nexus_columns(conn)
             update_user_org(conn, target, org)
+            saved_access = _save_user_access(conn, target, ticked, user, is_new=True)
         VALID_USERS[target] = pwd_hash
+        core.USER_PAGE_ACCESS[target] = saved_access | {CONFIGURED_MARKER}
         core.reload_user_details()
         logger.info("User %s created by %s%s", target, user, "" if password else " (waiting for activation)")
         return _user_redirect("users", **{'useradded' if password else 'userpending': target})
@@ -1827,6 +1806,10 @@ def save_user(
         set_user_role(conn, target, 'buyer', buyer)
         ensure_user_nexus_columns(conn)
         update_user_org(conn, target, org)
+        saved_access = _save_user_access(conn, target, ticked, user)
+        if saved_access is not None:
+            # This container straight away; others within PERMISSION_TTL_SECONDS.
+            core.USER_PAGE_ACCESS[target] = saved_access | {CONFIGURED_MARKER}
         if password:
             pwd_hash = hashlib.sha256(password.encode()).hexdigest()
             upsert_user(conn, target, pwd_hash)
@@ -1865,6 +1848,9 @@ def make_password_link(
     try:
         with get_database_connection() as local:
             cfg = get_settings(local)
+        # Read before the link is made: a failure here must not cancel their earlier link.
+        with get_prod_activity_connection() as prod:
+            wording = read_password_email_wording(prod)
         with (get_prod_activity_connection() if to_prod else get_database_connection()) as conn:
             people = read_user_details(conn)
             if target not in people:
@@ -1892,8 +1878,8 @@ def make_password_link(
     return JSONResponse({
         "url": url, "purpose": purpose, "expires": expires,
         "email": person.get('email') or '',
-        "subject": filled(cfg[f'password_email_subject_{purpose}']),
-        "body": filled(cfg[f'password_email_body_{purpose}']),
+        "subject": filled(wording[f'password_email_subject_{purpose}']),
+        "body": filled(wording[f'password_email_body_{purpose}']),
     })
 
 
@@ -1903,10 +1889,6 @@ def save_password_links(
     password_link_hours: int = Form(...),
     password_link_base_prod: str = Form(...),
     password_link_base_dev: str = Form(...),
-    password_email_subject_activate: str = Form(default=""),
-    password_email_body_activate: str = Form(default=""),
-    password_email_subject_reset: str = Form(default=""),
-    password_email_body_reset: str = Form(default=""),
     user: str = Depends(get_current_user),
 ):
     """Hours a link works for, and the address each environment's links start with."""
@@ -1916,24 +1898,50 @@ def save_password_links(
     dev_base = password_link_base_dev.strip().rstrip('/')
     if not (prod_base.startswith('https://') and dev_base.startswith('https://')):
         return _user_redirect("users", linkerr="Addresses+must+start+with+https%3A%2F%2F")
+    with get_database_connection() as conn:
+        save_settings_partial(conn, {
+            'password_link_hours': max(1, min(password_link_hours, 720)),
+            'password_link_base_prod': prod_base,
+            'password_link_base_dev': dev_base,
+        })
+    logger.info("Settings [Password Links] hours=%s set by %s", password_link_hours, user)
+    return _user_redirect("users", linkok=1)
+
+
+@router.post("/settings/password-email-wording")
+def save_password_email_wording(
+    request: Request,
+    password_email_subject_activate: str = Form(default=""),
+    password_email_body_activate: str = Form(default=""),
+    password_email_subject_reset: str = Form(default=""),
+    password_email_body_reset: str = Form(default=""),
+    source: str = Form(default="this"),
+    user: str = Depends(get_current_user),
+):
+    """One version of the wording for every environment, saved to prod's database."""
+    if user != ADMIN_USERNAME:
+        raise HTTPException(status_code=403)
     emails = {
         'password_email_subject_activate': password_email_subject_activate,
         'password_email_body_activate': password_email_body_activate,
         'password_email_subject_reset': password_email_subject_reset,
         'password_email_body_reset': password_email_body_reset,
     }
-    # A blank box goes back to the built-in wording (get_settings falls back to it).
+    # A blank box goes back to the built-in wording (read_password_email_wording falls back to it).
     emails = {k: v.replace(chr(13) + chr(10), chr(10)).strip() for k, v in emails.items()}
-    with get_database_connection() as conn:
-        widen_settings_values(conn)
-        save_settings_partial(conn, {
-            'password_link_hours': max(1, min(password_link_hours, 720)),
-            'password_link_base_prod': prod_base,
-            'password_link_base_dev': dev_base,
-            **emails,
-        })
-    logger.info("Settings [Password Links] hours=%s set by %s", password_link_hours, user)
-    return _user_redirect("users", linkok=1)
+    try:
+        with get_prod_activity_connection() as conn:
+            try:
+                widen_settings_values(conn)
+                save_settings_partial(conn, emails)
+            except Exception:
+                conn.rollback()
+                raise
+    except Exception as e:
+        logger.warning("Could not save the password email wording: %s", e)
+        return _user_redirect("users", source=source, wordingerr="Could+not+save+-+see+the+log")
+    logger.info("Password email wording saved by %s", user)
+    return _user_redirect("users", source=source, wordingok=1)
 
 
 @router.post("/settings/delete-user")
