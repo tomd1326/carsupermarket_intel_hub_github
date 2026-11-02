@@ -27,7 +27,11 @@ from utils.db_utils import (get_database_connection, get_settings, save_settings
                             APPEARANCE_COLOUR_SETTINGS,
                             get_prod_pricer_connection, load_page_names, save_page_names,
                             add_pending_user, mark_user_activated, cancel_password_links,
-                            create_password_link, read_inactive_users, widen_settings_values)
+                            create_password_link, read_inactive_users, widen_settings_values,
+                            ensure_user_nexus_columns, read_user_nexus_details, add_nexus_users,
+                            update_user_org, fill_user_nexus_details, email_match_key,
+                            NEXUS_USER_COLUMNS)
+from utils import nexus_ingest
 from utils.password_rules import password_error, PASSWORD_RULES_TEXT
 from utils.ddl_once import once_per_database
 
@@ -213,37 +217,12 @@ def save_email_attachments(
 
 @router.post("/settings/ai/refresh-models")
 def refresh_ai_models(request: Request, user: str = Depends(get_current_user)):
-    """Ask Snowflake which Cortex models it serves and store the list for the
-    Settings > AI dropdown. The chosen model is kept in the list either way."""
+    """Used to ask Snowflake which Cortex models it serves. The website no
+    longer uses Snowflake Cortex (see utils/cortex.py), so it only says so."""
     if user != 'tdrayson':
         raise HTTPException(status_code=403, detail="Forbidden")
-    try:
-        from utils.snowflake_client import SnowflakeClient
-        with SnowflakeClient() as client:
-            rows, columns = client.execute("SHOW MODELS IN SNOWFLAKE.MODELS")
-        names = [c.lower() for c in columns]
-        name_at = names.index("name")
-        type_at = names.index("model_type") if "model_type" in names else None
-        # The list also holds models that cannot chat (embeddings, safety
-        # checks, Arctic extract / parse / sentiment / translate tools).
-        not_chat = ("embed", "e5-", "voyage", "guard", "twelvelabs")
-        found = sorted({str(r[name_at]).lower() for r in rows
-                        if (type_at is None or str(r[type_at]).upper() == "CORTEX_BASE")
-                        and not str(r[name_at]).lower().startswith("arctic-")
-                        and not any(word in str(r[name_at]).lower() for word in not_chat)})
-    except Exception as e:
-        logger.error("Settings [AI] model refresh failed: %s", e)
-        return JSONResponse({"error": f"Could not read the model list from Snowflake: {e}"}, status_code=500)
-    if not found:
-        return JSONResponse({"error": "Snowflake returned no models"}, status_code=500)
-    with get_database_connection() as conn:
-        widen_settings_values(conn)
-        current = get_settings(conn).get('cortex_model')
-        if current and current not in found:
-            found.append(current)
-        save_settings_partial(conn, {'cortex_models': ",".join(found)})
-    logger.info("Settings [AI] model list refreshed by %s: %s models", user, len(found))
-    return {"models": found}
+    from utils.cortex import AI_OFF_MESSAGE
+    return JSONResponse({"error": AI_OFF_MESSAGE}, status_code=400)
 
 
 @router.post("/settings/section/ai")
@@ -469,7 +448,8 @@ async def reset_appearance(user: str = Depends(get_current_user)):
 # Sign in to AWS again when the SSO session has expired. Only works where the
 # app runs on your own machine (not on Lambda): `aws sso login` opens the sign-in
 # page in a browser on the machine it runs on, so on Lambda it would do nothing
-# useful. Pages that hit the "AWS credentials expired" error show a button for it.
+# useful. Started from Sign In To AWS in the account menu (aws_login.js), which
+# only shows when the app runs locally.
 # Errors are returned as JSON, not raised: a raised HTTPException is turned into
 # the HTML error page (exceptions.py), which the button's script cannot read.
 _sso_login_process = None
@@ -1052,6 +1032,9 @@ def _read_prod_users() -> tuple:
             last_logins = get_last_login_per_user(conn, write=False)
             inactive = read_inactive_users(conn)
             buyers = read_role_users(conn, 'buyer', ensure=False)
+            for username, extra in read_user_nexus_details(conn).items():
+                if username in people:
+                    people[username].update(extra)
         except Exception:
             conn.rollback()
             raise
@@ -1087,6 +1070,10 @@ def users_page(request: Request, user: str = Depends(get_current_user)):
                 people = load_user_details(conn)
                 inactive = read_inactive_users(conn)
                 buyers = read_role_users(conn, 'buyer')
+                ensure_user_nexus_columns(conn)
+                for username, extra in read_user_nexus_details(conn).items():
+                    if username in people:
+                        people[username].update(extra)
         except Exception as e:
             logger.warning("Failed to load user accounts data: %s", e)
         all_users = sorted(VALID_USERS)
@@ -1125,6 +1112,9 @@ def users_export(request: Request, user: str = Depends(get_current_user)):
             with get_database_connection() as conn:
                 last_logins = get_last_login_per_user(conn)
                 people = load_user_details(conn)
+                for username, extra in read_user_nexus_details(conn).items():
+                    if username in people:
+                        people[username].update(extra)
             usernames = sorted(VALID_USERS)
     except Exception as e:
         logger.warning("Users export failed (%s): %s", source, e)
@@ -1132,12 +1122,14 @@ def users_export(request: Request, user: str = Depends(get_current_user)):
 
     out = io.StringIO()
     writer = csv.writer(out)
-    writer.writerow(['Username', 'First Name', 'Last Name', 'Email', 'Last Login', 'Last Seen'])
+    writer.writerow(['Username', 'First Name', 'Last Name', 'Email', 'Nexus User ID', 'Site ID', 'Site Name',
+                     'Site Type', 'Company ID', 'Company Name', 'Company Type', 'Last Login', 'Last Seen'])
     for u in usernames:
         d = people.get(u, {})
         ll = last_logins.get(u, {})
         writer.writerow([_csv_cell(v) for v in (
             u, d.get('first_name') or '', d.get('last_name') or '', d.get('email') or '',
+            *[d.get(c) if d.get(c) is not None else '' for c in NEXUS_USER_COLUMNS],
             ll.get('last_login') or 'Never', ll.get('last_seen') or 'Never',
         )])
     filename = f"users_{source}_{_uk_now().date().isoformat()}.csv"
@@ -1147,6 +1139,113 @@ def users_export(request: Request, user: str = Depends(get_current_user)):
         media_type="text/csv; charset=utf-8",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
+
+
+def _nexus_host() -> str:
+    """The API Host saved on Settings > Live Update, else the default there."""
+    from .api_requests import SOURCES
+    host = SOURCES['nexus']['defaults']['nexus_host']
+    try:
+        with get_database_connection() as conn, conn.cursor() as cur:
+            cur.execute("SELECT value FROM settings WHERE key = 'nexus_host'")
+            row = cur.fetchone()
+            if row and str(row[0]).startswith('https://'):
+                host = str(row[0])
+    except Exception as e:
+        logger.warning("Could not read the Nexus host setting: %s", e)
+    return host.rstrip('/')
+
+
+def _existing_user_keys(source: str) -> set:
+    """Lower-case usernames and emails already in the chosen database."""
+    with (get_prod_activity_connection() if _writes_to_prod(source) else get_database_connection()) as conn:
+        people = read_user_details(conn)
+    return {email_match_key(v) for u, d in people.items() for v in (u, d.get('email') or '') if v}
+
+
+@router.get("/settings/users/nexus")
+def nexus_users(request: Request, user: str = Depends(get_current_user)):
+    """Every Nexus Point user, each marked existing when their email is already
+    a username or a user's email here."""
+    if user != ADMIN_USERNAME:
+        raise HTTPException(status_code=403)
+    source = request.query_params.get('source') or 'this'
+    try:
+        rows = nexus_ingest.fetch_users_with_units(_nexus_host())
+        taken = _existing_user_keys(source)
+    except Exception as e:
+        logger.warning("Nexus users fetch failed: %s", e)
+        return JSONResponse({"error": str(e)[:300]}, status_code=502)
+    for r in rows:
+        r['existing'] = email_match_key(r['email']) in taken
+    rows.sort(key=lambda r: (r['existing'], (r['first_name'] + ' ' + r['last_name']).lower()))
+    return JSONResponse({"rows": rows})
+
+
+def _int_or_none(value):
+    try:
+        return int(value) if value not in (None, '') else None
+    except (TypeError, ValueError):
+        return None
+
+
+@router.post("/settings/users/nexus-import")
+async def nexus_users_import(request: Request, user: str = Depends(get_current_user)):
+    """Create the ticked Nexus users as pending accounts (activated later with
+    a link from Edit). Existing emails are skipped."""
+    if user != ADMIN_USERNAME:
+        raise HTTPException(status_code=403)
+    data = await request.json()
+    source = data.get('source') or 'this'
+    rows = []
+    for r in data.get('rows') or []:
+        if not isinstance(r, dict) or '@' not in str(r.get('email') or ''):
+            continue
+        rows.append({
+            'email': str(r['email'])[:255], 'first_name': str(r.get('first_name') or '')[:100],
+            'last_name': str(r.get('last_name') or '')[:100],
+            'nexus_user_id': _int_or_none(r.get('nexus_user_id')),
+            'site_id': _int_or_none(r.get('site_id')), 'company_id': _int_or_none(r.get('company_id')),
+            'site_name': str(r.get('site_name') or '')[:255], 'site_type': str(r.get('site_type') or '')[:100],
+            'company_name': str(r.get('company_name') or '')[:255],
+            'company_type': str(r.get('company_type') or '')[:100],
+        })
+    to_prod = _writes_to_prod(source)
+    try:
+        with (get_prod_activity_connection() if to_prod else get_database_connection()) as conn:
+            created = add_nexus_users(conn, rows)
+    except Exception as e:
+        logger.warning("Nexus users import failed: %s", e)
+        return JSONResponse({"error": str(e)[:300]}, status_code=500)
+    if not to_prod:
+        with get_database_connection() as conn, conn.cursor() as cur:
+            cur.execute("SELECT username, pwd_hash FROM users WHERE username = ANY(%s)", (created,))
+            VALID_USERS.update(dict(cur.fetchall()))
+        core.reload_user_details()
+    logger.info("%d Nexus users imported%s by %s: %s", len(created), " to PROD" if to_prod else "",
+                user, ', '.join(created))
+    return JSONResponse({"created": created})
+
+
+@router.post("/settings/users/nexus-fill")
+async def nexus_users_fill(request: Request, user: str = Depends(get_current_user)):
+    """Fill in empty Nexus ids, site and company for the users already here,
+    matched on email. Nothing already filled is changed."""
+    if user != ADMIN_USERNAME:
+        raise HTTPException(status_code=403)
+    data = await request.json()
+    source = data.get('source') or 'this'
+    to_prod = _writes_to_prod(source)
+    try:
+        rows = nexus_ingest.fetch_users_with_units(_nexus_host())
+        with (get_prod_activity_connection() if to_prod else get_database_connection()) as conn:
+            updated, unmatched = fill_user_nexus_details(conn, rows)
+    except Exception as e:
+        logger.warning("Fill users from Nexus failed: %s", e)
+        return JSONResponse({"error": str(e)[:300]}, status_code=500)
+    logger.info("%d users filled from Nexus%s by %s (%d not in Nexus)", updated,
+                " on PROD" if to_prod else "", user, unmatched)
+    return JSONResponse({"updated": updated, "unmatched": unmatched})
 
 
 _ENDED_BY_LABELS = {
@@ -1618,7 +1717,8 @@ def _end_prod_sessions(conn, reason: str, target: str) -> int:
         return 0
 
 
-def _save_prod_user(mode: str, target: str, details: dict, password: str, user: str, is_buyer: bool = False):
+def _save_prod_user(mode: str, target: str, details: dict, password: str, user: str, is_buyer: bool = False,
+                    org: dict = None):
     """save_user against prod's database. Prod's containers pick the change up
     when their user cache next reloads (within about a minute)."""
     if mode not in ('add', 'edit'):
@@ -1640,6 +1740,7 @@ def _save_prod_user(mode: str, target: str, details: dict, password: str, user: 
                 add_pending_user(conn, target)
             update_user_details(conn, {target: details}, ensure=False)
             set_user_role(conn, target, 'buyer', is_buyer)
+            update_user_org(conn, target, org or {})
         except Exception:
             conn.rollback()
             raise
@@ -1665,6 +1766,10 @@ def save_user(
     password: str = Form(default=""),
     source: str = Form(default="this"),
     is_buyer: str = Form(default=""),
+    site_name: str = Form(default=""),
+    site_type: str = Form(default=""),
+    company_name: str = Form(default=""),
+    company_type: str = Form(default=""),
     user: str = Depends(get_current_user),
 ):
     """The Add / Edit user popup on Settings > User Accounts.
@@ -1682,8 +1787,10 @@ def save_user(
         return back(pwderr="The+admin+account+is+set+in+code")
     details = {'first_name': first_name.strip(), 'last_name': last_name.strip(), 'email': email.strip()}
     buyer = is_buyer == "on"
+    org = {'site_name': site_name[:255], 'site_type': site_type[:100],
+           'company_name': company_name[:255], 'company_type': company_type[:100]}
     if to_prod:
-        return _save_prod_user(mode, target, details, password, user, buyer)
+        return _save_prod_user(mode, target, details, password, user, buyer, org)
 
     if mode == 'add':
         if target in VALID_USERS:
@@ -1700,6 +1807,8 @@ def save_user(
                 pwd_hash = add_pending_user(conn, target)
             update_user_details(conn, {target: details})
             set_user_role(conn, target, 'buyer', buyer)
+            ensure_user_nexus_columns(conn)
+            update_user_org(conn, target, org)
         VALID_USERS[target] = pwd_hash
         core.reload_user_details()
         logger.info("User %s created by %s%s", target, user, "" if password else " (waiting for activation)")
@@ -1716,6 +1825,8 @@ def save_user(
     with get_database_connection() as conn:
         update_user_details(conn, {target: details})
         set_user_role(conn, target, 'buyer', buyer)
+        ensure_user_nexus_columns(conn)
+        update_user_org(conn, target, org)
         if password:
             pwd_hash = hashlib.sha256(password.encode()).hexdigest()
             upsert_user(conn, target, pwd_hash)

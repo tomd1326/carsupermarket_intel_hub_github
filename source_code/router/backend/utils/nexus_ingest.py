@@ -145,6 +145,35 @@ def fetch_route(host: str, route: str, per_page: int, workers: int, updated_at: 
     return rows
 
 
+def fetch_users_with_units(host: str, per_page: int = 100, workers: int = 4) -> list:
+    """Every Nexus user with their site and company name and type, for
+    Settings > User Accounts > Import From Nexus. site_id and company_id both
+    match id in organisation-units. Users deleted in Nexus are left out.
+    Nothing is saved to S3."""
+    users = fetch_route(host, 'users', per_page, workers)
+    units = {u.get('id'): u for u in fetch_route(host, 'organisation-units', per_page, workers)
+             if isinstance(u, dict)}
+    out = []
+    for u in users:
+        if not isinstance(u, dict) or u.get('deleted_at'):
+            continue
+        site = units.get(u.get('site_id')) or {}
+        company = units.get(u.get('company_id')) or {}
+        out.append({
+            'nexus_user_id': u.get('id'),
+            'first_name': u.get('first_name') or '',
+            'last_name': u.get('last_name') or '',
+            'email': (u.get('email') or '').strip(),
+            'site_id': u.get('site_id'),
+            'site_name': site.get('name') or '',
+            'site_type': site.get('type') or '',
+            'company_id': u.get('company_id'),
+            'company_name': company.get('name') or '',
+            'company_type': company.get('type') or '',
+        })
+    return out
+
+
 def upload_route(route: str, rows: list, folder: str) -> str:
     """Gzipped JSON lines to the ingestion job's path. folder is 'v0' (what
     dbt reads) or 'dev'. Stamped with the UK run time, as the job is."""

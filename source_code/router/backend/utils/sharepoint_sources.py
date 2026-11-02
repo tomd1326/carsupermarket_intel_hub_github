@@ -58,6 +58,7 @@ import psycopg2.extras
 
 from utils.db_utils import get_prod_pricer_connection
 from utils.sharepoint_client import SharePointClient
+from utils import workbook_values
 
 logger = logging.getLogger(__name__)
 
@@ -210,7 +211,9 @@ def _short(e: Exception) -> str:
 def fingerprint(src: dict) -> str:
     """Which part of the file a copy holds. A copy taken with different
     settings (another link, sheet or range) is not used."""
-    parts = [src.get("url"), src.get("read_kind"), src.get("sheet_or_table"),
+    # "calamine": copies made by the Graph cell reads (dates as serial
+    # numbers) are not reused once the file is read here instead.
+    parts = ["calamine", src.get("url"), src.get("read_kind"), src.get("sheet_or_table"),
              src.get("max_col"), src.get("max_row")]
     return hashlib.sha1(json.dumps(parts, default=str).encode()).hexdigest()[:16]
 
@@ -566,10 +569,13 @@ def _claim_job(job_id: str) -> bool:
 
 
 def _download(src: dict, client: SharePointClient) -> list:
+    """The file's rows: the whole file is downloaded and the sheet or table
+    read from it (see utils/workbook_values)."""
+    data = client.get_file_content_by_url(src["url"])
     if src["read_kind"] == "table":
-        return client.get_table_values_by_url(src["url"], src["sheet_or_table"])
-    return client.get_range_values_by_url(src["url"], src["sheet_or_table"],
-                                          src.get("max_col") or "Z", int(src.get("max_row") or 2000))
+        return workbook_values.table_values(data, src["sheet_or_table"])
+    return workbook_values.sheet_values(data, src["sheet_or_table"],
+                                        src.get("max_col") or "Z", int(src.get("max_row") or 2000))
 
 
 def run_job(job_id: str) -> None:
@@ -984,7 +990,8 @@ def test_access(url: str, read_kind: str, name: str) -> dict:
         "check_seconds": round(check_seconds_taken, 2),
     }
     try:
-        sheets, tables = client.list_sheets_and_tables_by_url(url)
+        data = client.get_file_content_by_url(url, timeout=60)
+        sheets, tables = workbook_values.sheet_names(data), workbook_values.table_names(data)
     except Exception as e:
         result["message"] = f"File found, but its sheets could not be listed: {_short(e)}"
         return result

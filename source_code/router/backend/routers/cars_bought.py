@@ -9,6 +9,7 @@ import io
 import json
 import logging
 import os
+import threading
 import uuid
 
 from fastapi import APIRouter, Depends, Request
@@ -28,6 +29,13 @@ _PAGE = 'cars_bought'
 _CUSTOM_FIELDS_KEY = 'cars_bought_custom_fields'
 # '1' = the buyer is always the logged-in user (dropdown locked).
 _LOCK_BUYER_KEY = 'cars_bought_lock_buyer'
+# How invoices are read: column headings per field, and the words marking a fee line.
+_COLUMN_NAMES_KEY = 'cars_bought_column_names'
+_FEE_WORDS_KEY = 'cars_bought_fee_words'
+_SUPPLIER_NAMES_KEY = 'cars_bought_supplier_names'
+_FEE_VAT_RATE_KEY = 'cars_bought_fee_vat_rate'
+# Oldest Supplier Stock Evaluator data (hours) used to fill in a car.
+_EVALUATOR_HOURS_KEY = 'cars_bought_evaluator_max_hours'
 
 
 def _read_setting(conn, key: str) -> str:
@@ -68,46 +76,127 @@ def cars_bought_config(user: str = Depends(require_page_api(_PAGE))):
     with get_database_connection() as conn:
         fields = _custom_fields(conn)
         buyers = _buyer_config(conn, user)
+        names, fee_words, supplier_names, fee_vat_rate = _reading_settings(conn)
+        hours = _max_age_hours(conn)
     try:
         with get_vehicle_database_connection() as conn:
             suppliers = cb.list_suppliers(conn)
     except Exception as e:
         logger.warning(f"Cars Bought: suppliers not read: {e}")
         suppliers = []
-    return {"status": "ok", "suppliers": suppliers, "custom_fields": fields, **buyers}
+    return {"status": "ok", "suppliers": suppliers, "custom_fields": fields, **buyers,
+            "column_names": names, "column_labels": cb.COLUMN_FIELD_LABELS, "fee_words": fee_words,
+            "supplier_names": supplier_names, "fee_vat_rate": fee_vat_rate,
+            "evaluator_max_hours": hours}
+
+
+def _json_setting(conn, key: str, default):
+    try:
+        value = json.loads(_read_setting(conn, key) or 'null')
+    except ValueError:
+        value = None
+    return value if isinstance(value, type(default)) else default
+
+
+def _reading_settings(conn) -> tuple:
+    """(column names per field, fee words, supplier names on invoices, VAT %
+    on fees) used to read uploaded invoices."""
+    try:
+        rate = float(_read_setting(conn, _FEE_VAT_RATE_KEY) or cb.DEFAULT_FEE_VAT_RATE)
+    except ValueError:
+        rate = cb.DEFAULT_FEE_VAT_RATE
+    return (cb.read_column_names(_json_setting(conn, _COLUMN_NAMES_KEY, {})),
+            _json_setting(conn, _FEE_WORDS_KEY, list(cb.DEFAULT_FEE_WORDS)),
+            _json_setting(conn, _SUPPLIER_NAMES_KEY, [dict(s) for s in cb.DEFAULT_SUPPLIER_NAMES]),
+            rate)
 
 
 @router.post("/cars-bought/config")
 def cars_bought_save_config(payload: dict, user: str = Depends(require_page_api(_PAGE))):
-    """Admin only: custom fields and the buyer lock."""
+    """Admin only: custom fields, the buyer lock, and the column names and fee
+    words used to read invoices."""
     if not is_admin(user):
         return {"status": "error", "message": "Only the admin can change these settings"}
-    fields = cb.clean_custom_fields((payload or {}).get("custom_fields"))
-    lock = '1' if (payload or {}).get("lock_buyer") else '0'
+    payload = payload or {}
+    fields = cb.clean_custom_fields(payload.get("custom_fields"))
+    lock = '1' if payload.get("lock_buyer") else '0'
+    names = cb.read_column_names({k: [str(x).strip()[:60] for x in v if str(x).strip()]
+                                  for k, v in (payload.get("column_names") or {}).items() if isinstance(v, list)})
+    words = [str(w).strip()[:30] for w in (payload.get("fee_words") or []) if str(w).strip()]
+    supplier_names = [{"text": str(s.get("text") or "").strip()[:100], "supplier": str(s.get("supplier") or "").strip()[:100]}
+                      for s in (payload.get("supplier_names") or []) if isinstance(s, dict)]
+    supplier_names = [s for s in supplier_names if s["text"] and s["supplier"]]
+    try:
+        rate = float(payload.get("fee_vat_rate"))
+    except (TypeError, ValueError):
+        rate = cb.DEFAULT_FEE_VAT_RATE
+    if not 0 <= rate <= 100:
+        return {"status": "error", "message": "VAT on fees must be between 0 and 100%"}
+    try:
+        hours = float(payload.get("evaluator_max_hours"))
+    except (TypeError, ValueError):
+        hours = float(cb.DEFAULT_EVALUATOR_MAX_HOURS)
+    if not 1 <= hours <= 720:
+        return {"status": "error", "message": "Evaluator data age must be between 1 and 720 hours"}
     with get_database_connection() as conn:
         widen_settings_values(conn)
-        save_settings_partial(conn, {_CUSTOM_FIELDS_KEY: json.dumps(fields), _LOCK_BUYER_KEY: lock})
+        save_settings_partial(conn, {_CUSTOM_FIELDS_KEY: json.dumps(fields), _LOCK_BUYER_KEY: lock,
+                                     _COLUMN_NAMES_KEY: json.dumps(names), _FEE_WORDS_KEY: json.dumps(words),
+                                     _SUPPLIER_NAMES_KEY: json.dumps(supplier_names), _FEE_VAT_RATE_KEY: rate,
+                                     _EVALUATOR_HOURS_KEY: hours})
         buyers = _buyer_config(conn, user)
-    return {"status": "ok", "custom_fields": fields, **buyers}
+    return {"status": "ok", "custom_fields": fields, **buyers,
+            "column_names": names, "column_labels": cb.COLUMN_FIELD_LABELS, "fee_words": words,
+            "supplier_names": supplier_names, "fee_vat_rate": rate, "evaluator_max_hours": hours}
 
 
-def _enrich(rows: list, supplier_id=None) -> list:
-    """Add the evaluator's data (CAP, valuations, list price) and any earlier
-    purchase of the same VRM to each row. Rows keep what the invoice said;
-    evaluator values only fill gaps."""
-    vrms = [r["vrm"] for r in rows]
+def _max_age_hours(conn) -> float:
+    try:
+        return float(_read_setting(conn, _EVALUATOR_HOURS_KEY) or cb.DEFAULT_EVALUATOR_MAX_HOURS)
+    except ValueError:
+        return float(cb.DEFAULT_EVALUATOR_MAX_HOURS)
+
+
+def _evaluator_supplier_id(name):
+    """The Supplier Stock Evaluator supplier with this name, or None."""
+    if not name:
+        return None
     try:
         with get_vehicle_database_connection() as conn:
-            found = cb.evaluator_lookup(conn, vrms, supplier_id)
+            for s in cb.list_suppliers(conn):
+                if str(s["supplier_name"]).strip().lower() == str(name).strip().lower():
+                    return s["supplier_id"]
+    except Exception as e:
+        logger.warning(f"Cars Bought: suppliers not read: {e}")
+    return None
+
+
+def _evaluator_data(vrms: list, supplier_id=None) -> dict:
+    with get_database_connection() as conn:
+        hours = _max_age_hours(conn)
+    try:
+        with get_vehicle_database_connection() as conn:
+            return cb.evaluator_lookup(conn, vrms, supplier_id, hours)
     except Exception as e:
         logger.warning(f"Cars Bought: evaluator lookup failed: {e}")
-        found = {}
+        return {}
+
+
+def _enrich(rows: list, supplier_id=None, use_evaluator: bool = True) -> list:
+    """Add the evaluator's data (CAP, Autotrader and CAP valuations, list
+    price), when it is no older than the Cars Bought setting, and any earlier
+    purchase of the same VRM to each row. Rows keep what the invoice said;
+    evaluator values only fill gaps. cap_source records where CAP came from."""
+    vrms = [r["vrm"] for r in rows]
+    found = _evaluator_data(vrms, supplier_id) if use_evaluator else {}
     with get_database_connection() as conn:
         bought = cb.already_bought(conn, vrms)
     for r in rows:
         ev = found.get(r["vrm"])
         r["from_evaluator"] = bool(ev and ev.get("evaluator_supplier"))
         if ev:
+            if not r.get("cap_id") and ev.get("cap_id"):
+                r["cap_source"] = "evaluator"
             for k, v in ev.items():
                 if r.get(k) in (None, "") and v is not None:
                     r[k] = v
@@ -119,9 +208,45 @@ def _enrich(rows: list, supplier_id=None) -> list:
     return rows
 
 
+# Reading an invoice (Textract, one call per page) can take longer than API Gateway's
+# 29 second limit, so it runs in a thread and the page polls for the result.
+# The result is also written to S3, as a poll can land on another container.
+_jobs: dict = {}
+_jobs_lock = threading.Lock()
+
+
+def _job_key(job_id: str) -> str:
+    return f"applications/pricing/uk-vehicle-list-evaluator/{_S3_ENV}/cars_bought/jobs/{job_id}.json"
+
+
+def _finish_job(job_id: str, result: dict) -> None:
+    with _jobs_lock:
+        _jobs[job_id] = result
+    try:
+        import boto3
+        boto3.client("s3", region_name=s3_bucket_region).put_object(
+            Bucket=s3_bucketname, Key=_job_key(job_id), Body=json.dumps(result).encode(),
+            ContentType="application/json")
+    except Exception as e:
+        logger.warning(f"Cars Bought: job {job_id} result not saved to S3: {e}")
+
+
+def _run_extract(job_id: str, filename: str, data: bytes) -> None:
+    def stage(name: str) -> None:
+        # Which step the read is on, shown in the page's progress panel.
+        with _jobs_lock:
+            _jobs[job_id] = {"status": "running", "stage": name}
+    try:
+        result = _extract(filename, data, stage)
+    except Exception as e:
+        logger.error(f"Cars Bought: reading {filename} failed: {e}")
+        result = {"status": "error", "message": f"{filename}: {type(e).__name__}: {e}"}
+    _finish_job(job_id, result)
+
+
 @router.post("/cars-bought/extract")
 def cars_bought_extract(request: Request, payload: dict, user: str = Depends(require_page_api(_PAGE))):
-    """{filename, data (base64)} -> the invoice's header and vehicle rows."""
+    """{filename, data (base64)} -> {job_id}; poll /cars-bought/extract/{job_id}."""
     filename = str((payload or {}).get("filename") or "")[:200]
     try:
         data = base64.b64decode(str((payload or {}).get("data") or ""), validate=True)
@@ -129,22 +254,48 @@ def cars_bought_extract(request: Request, payload: dict, user: str = Depends(req
         return {"status": "error", "message": f"{filename}: the file could not be read"}
     if not data or len(data) > cb.MAX_UPLOAD_BYTES:
         return {"status": "error", "message": f"{filename}: empty, or larger than 4 MB"}
-    _track(request, 'cars_bought_extract', '/cars-bought', {'filename': filename})
-    read_by = "text"
     try:
-        try:
-            text = cb.file_to_text(filename, data)
-        except cb.ScanNeeded:
-            text = cb.ocr_scan(filename, data)
-            read_by = "scan"
-        result = cb.extract_with_ai(text, filename)
+        cb.file_kind(filename)
     except ValueError as e:
         return {"status": "error", "message": f"{filename}: {e}"}
-    except Exception as e:
-        logger.error(f"Cars Bought: reading {filename} failed: {e}")
-        return {"status": "error", "message": f"{filename}: {type(e).__name__}: {e}"}
+    _track(request, 'cars_bought_extract', '/cars-bought', {'filename': filename})
+    job_id = uuid.uuid4().hex
+    with _jobs_lock:
+        _jobs[job_id] = {"status": "running", "stage": "read"}
+    threading.Thread(target=_run_extract, args=(job_id, filename, data), daemon=True).start()
+    return {"status": "running", "job_id": job_id}
+
+
+@router.get("/cars-bought/extract/{job_id}")
+def cars_bought_extract_result(job_id: str, user: str = Depends(require_page_api(_PAGE))):
+    if not job_id.isalnum():
+        return {"status": "error", "message": "Bad job id"}
+    with _jobs_lock:
+        result = _jobs.get(job_id)
+    if result is not None:
+        return result
+    # Another container is reading it: only the finished result is in S3.
+    try:
+        import boto3
+        obj = boto3.client("s3", region_name=s3_bucket_region).get_object(Bucket=s3_bucketname, Key=_job_key(job_id))
+        return json.loads(obj["Body"].read())
+    except Exception:
+        return {"status": "running"}
+
+
+def _extract(filename: str, data: bytes, stage=lambda name: None) -> dict:
+    """The invoice's header and vehicle rows, filled in from the evaluator.
+    stage() is told each step: read, scan (Textract), match."""
+    with get_database_connection() as conn:
+        names, fee_words, supplier_names, fee_vat_rate = _reading_settings(conn)
+    try:
+        result, read_by = cb.read_invoice(filename, data, names, fee_words, supplier_names, fee_vat_rate,
+                                          on_scan=lambda: stage("scan"))
+    except ValueError as e:
+        return {"status": "error", "message": f"{filename}: {e}"}
     if not result["vehicles"]:
         return {"status": "error", "message": f"{filename}: no vehicles found"}
+    stage("match")
 
     # The original file is kept so the batch can be checked against it later.
     # Not saving it is reported but does not stop the read.
@@ -156,8 +307,13 @@ def cars_bought_extract(request: Request, payload: dict, user: str = Depends(req
     except Exception as e:
         logger.warning(f"Cars Bought: {filename} not saved to S3: {e}")
         s3_key = None
-    result["vehicles"] = _enrich(result["vehicles"])
-    return {"status": "ok", "read_by": read_by, "s3_key": s3_key, "filename": filename, **result}
+    # CAP and Autotrader come from live lookups (Look Up CAP & AT), not the
+    # evaluator's stored data: for a batch this size fresh calls are quick
+    # enough. The supplier id is kept on the batch when it is an evaluator one.
+    supplier_id = _evaluator_supplier_id(result.get("supplier_name"))
+    result["vehicles"] = _enrich(result["vehicles"], use_evaluator=False)
+    return {"status": "ok", "read_by": read_by, "s3_key": s3_key, "filename": filename,
+            "supplier_id": supplier_id, **result}
 
 
 @router.post("/cars-bought/from-evaluator")
@@ -179,10 +335,23 @@ def cars_bought_from_evaluator(payload: dict, user: str = Depends(require_page_a
     return {"status": "ok", "vehicles": rows, "not_found": missing}
 
 
+@router.post("/cars-bought/cap-lookup")
+def cars_bought_cap_lookup(payload: dict, user: str = Depends(require_page_api(_PAGE))):
+    """{vehicles: [{vrm, mileage}]} -> {results: {vrm: {cap_id, make, model,
+    derivative, cap_clean, at_retail_valuation, at_rating, note}}}. Live CAP
+    and Autotrader every time. The page sends one car per request (8 at once),
+    so a slow car stays inside the 29 second limit on its own."""
+    items = [(cb.clean_vrm(v.get("vrm")), cb.to_int(v.get("mileage")))
+             for v in ((payload or {}).get("vehicles") or [])[:8] if cb.clean_vrm(v.get("vrm"))]
+    if not items:
+        return {"status": "error", "message": "No VRMs to look up"}
+    return {"status": "ok", "results": cb.manual_check(items)}
+
+
 @router.post("/cars-bought/submit")
 def cars_bought_submit(request: Request, payload: dict, user: str = Depends(require_page_api(_PAGE))):
-    """{batch: {...}, vehicles: [...]} -> stored. CAP is looked up for any row
-    still missing a CAP ID before saving."""
+    """{batch: {...}, vehicles: [...]} -> stored. CAP is looked up first, with
+    the page's Look Up CAP button."""
     batch = (payload or {}).get("batch") or {}
     vehicles = (payload or {}).get("vehicles") or []
     supplier = str(batch.get("supplier_name") or "").strip()
@@ -220,16 +389,9 @@ def cars_bought_submit(request: Request, payload: dict, user: str = Depends(requ
     if errors:
         return {"status": "error", "message": "; ".join(errors)}
 
-    need_cap = [(v["vrm"], cb.to_int(v.get("mileage"))) for v in vehicles if not cb.to_int(v.get("cap_id"))]
-    cap_notes = {}
-    if need_cap:
-        for vrm, c in cb.cap_lookup(need_cap).items():
-            v = next(x for x in vehicles if x["vrm"] == vrm)
-            for k in ("cap_id", "make", "model", "derivative", "cap_clean"):
-                if v.get(k) in (None, "") and c.get(k) not in (None, ""):
-                    v[k] = c[k]
-            if not c.get("cap_id"):
-                cap_notes[vrm] = c.get("note") or "not found"
+    # CAP is looked up before Submit (the Look Up CAP button), not here: a
+    # long batch looked up during Submit could pass the 29 second limit.
+    cap_notes = {v["vrm"]: "no CAP ID" for v in vehicles if not cb.to_int(v.get("cap_id"))}
 
     batch_row = {"buyer": buyer[:100], "supplier_name": supplier[:200], "supplier_id": cb.to_int(batch.get("supplier_id")),
                  "invoice_number": (str(batch.get("invoice_number") or "").strip() or None),

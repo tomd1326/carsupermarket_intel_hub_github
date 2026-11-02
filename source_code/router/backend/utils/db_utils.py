@@ -1458,6 +1458,161 @@ def update_user_details(conn, details: dict, ensure: bool = True) -> None:
         raise
 
 
+# ── Nexus Point ids on users (Settings > User Accounts > Import From Nexus) ──
+# The Nexus user id, site and company, with the site and company name and type
+# looked up from Nexus organisation-units at import time.
+
+NEXUS_USER_COLUMNS = ('nexus_user_id', 'site_id', 'site_name', 'site_type',
+                      'company_id', 'company_name', 'company_type')
+
+
+def _nexus_user_columns_present(conn) -> bool:
+    """A plain read, so it never locks the users table."""
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT 1 FROM information_schema.columns WHERE table_schema = current_schema() "
+            "AND table_name = 'users' AND column_name = 'company_type'"
+        )
+        return cur.fetchone() is not None
+
+
+@once_per_database
+def ensure_user_nexus_columns(conn) -> None:
+    """The ALTER only runs when the columns are missing, because it locks the
+    users table."""
+    if _nexus_user_columns_present(conn):
+        return
+    with conn.cursor() as cur:
+        cur.execute(
+            "ALTER TABLE users "
+            "ADD COLUMN IF NOT EXISTS nexus_user_id BIGINT, "
+            "ADD COLUMN IF NOT EXISTS site_id BIGINT, "
+            "ADD COLUMN IF NOT EXISTS site_name VARCHAR(255), "
+            "ADD COLUMN IF NOT EXISTS site_type VARCHAR(100), "
+            "ADD COLUMN IF NOT EXISTS company_id BIGINT, "
+            "ADD COLUMN IF NOT EXISTS company_name VARCHAR(255), "
+            "ADD COLUMN IF NOT EXISTS company_type VARCHAR(100)"
+        )
+    conn.commit()
+
+
+def read_user_nexus_details(conn) -> dict:
+    """{username: {nexus_user_id, site_id, ...}}. Empty when the columns do not
+    exist yet (e.g. prod before this change is deployed there)."""
+    if not _nexus_user_columns_present(conn):
+        return {}
+    with conn.cursor() as cur:
+        cur.execute(f"SELECT username, {', '.join(NEXUS_USER_COLUMNS)} FROM users")
+        return {row[0]: dict(zip(NEXUS_USER_COLUMNS, row[1:])) for row in cur.fetchall()}
+
+
+def update_user_org(conn, username: str, org: dict) -> bool:
+    """Save site and company name and type typed in the Edit popup, for users
+    Nexus does not hold (e.g. Aramis). The ids only come from the import.
+    Returns False when the columns do not exist in this database yet."""
+    if not _nexus_user_columns_present(conn):
+        return False
+    keys = ('site_name', 'site_type', 'company_name', 'company_type')
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                f"UPDATE users SET {', '.join(k + ' = %s' for k in keys)} WHERE username = %s",
+                (*[(org.get(k) or '').strip() or None for k in keys], username),
+            )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    return True
+
+
+EMAIL_DOMAIN_ALIASES = {'motordepot.co.uk': 'carsupermarket.com',
+                        'bestcarbuyer.co.uk': 'carsupermarket.com'}
+
+
+def email_match_key(email: str) -> str:
+    """Email as used to match a user here to a Nexus user: trimmed, lower
+    case, and a Motor Depot or Best Car Buyer address counts as the same as the
+    Car Supermarket one (Nexus holds some people under those domains)."""
+    email = (email or '').strip().lower()
+    local, sep, domain = email.partition('@')
+    return local + sep + EMAIL_DOMAIN_ALIASES.get(domain, domain)
+
+
+def fill_user_nexus_details(conn, rows: list) -> tuple:
+    """Fill in EMPTY Nexus fields for users already here, matched on email
+    (the user's email, else their username). A field that already has a value
+    is left as it is. rows is the list from nexus_ingest.fetch_users_with_units.
+    Returns (users updated, users here with no Nexus match)."""
+    _ensure_password_links(conn)
+    ensure_user_nexus_columns(conn)
+    by_email = {}
+    for r in rows:
+        email = email_match_key(r.get('email'))
+        if email and email not in by_email:
+            by_email[email] = r
+    updated = 0
+    unmatched = 0
+    sets = ', '.join(f"{c} = COALESCE({c}, %s)" for c in NEXUS_USER_COLUMNS)
+    empty = ' OR '.join(f"{c} IS NULL" for c in NEXUS_USER_COLUMNS)
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT username, COALESCE(NULLIF(email, ''), username) FROM users")
+            users = cur.fetchall()
+            for username, key in users:
+                if username in ADMIN_DETAILS:
+                    continue
+                r = by_email.get(email_match_key(key))
+                if r is None:
+                    unmatched += 1
+                    continue
+                cur.execute(
+                    f"UPDATE users SET {sets} WHERE username = %s AND ({empty})",
+                    (*[r.get(c) if r.get(c) not in ('', None) else None for c in NEXUS_USER_COLUMNS], username),
+                )
+                updated += cur.rowcount
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    return updated, unmatched
+
+
+def add_nexus_users(conn, rows: list) -> list:
+    """Create one pending user per Nexus row, in one transaction. Each row is
+    {'email', 'first_name', 'last_name', NEXUS_USER_COLUMNS...}. The username is
+    the email in lower case. Rows whose email is already a username or a user's
+    email are skipped. Returns the usernames created. Adds the activated and
+    Nexus columns first if this database has not got them yet."""
+    _ensure_password_links(conn)
+    ensure_user_nexus_columns(conn)
+    created = []
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT username, COALESCE(email, '') FROM users")
+            taken = {email_match_key(v) for row in cur.fetchall() for v in row if v}
+            for r in rows:
+                email = (r.get('email') or '').strip().lower()
+                if not email or email_match_key(email) in taken:
+                    continue
+                cur.execute(
+                    f"INSERT INTO users (username, pwd_hash, activated, first_name, last_name, email, "
+                    f"{', '.join(NEXUS_USER_COLUMNS)}) "
+                    f"VALUES (%s, %s, FALSE, %s, %s, %s, {', '.join(['%s'] * len(NEXUS_USER_COLUMNS))})",
+                    (email, '!' + secrets.token_hex(16),
+                     (r.get('first_name') or '').strip() or None,
+                     (r.get('last_name') or '').strip() or None, email,
+                     *[r.get(c) if r.get(c) not in ('', None) else None for c in NEXUS_USER_COLUMNS]),
+                )
+                taken.add(email_match_key(email))
+                created.append(email)
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    return created
+
+
 def remove_user(conn, username: str) -> None:
     with conn.cursor() as cur:
         cur.execute("DELETE FROM users WHERE username = %s", (username,))

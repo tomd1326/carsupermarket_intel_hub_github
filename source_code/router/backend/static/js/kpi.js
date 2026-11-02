@@ -86,6 +86,23 @@
     // orders / (calls + emails): [{ source, metric, op? }].
     function rowPlus(row) { return row.metric_plus || []; }
     function rowDividePlus(row) { return row.divide_by ? (row.divide_plus || []) : []; }
+    // The bottom of a ratio's Sum / Average for weeks and months: its own
+    // (Edit Chart > Bottom Of Ratio) or, on charts saved before that, the chart's.
+    function rowDivideAgg(row) { return row.divide_agg || row.agg; }
+    // How many days' worth of the daily rate a week or month figure is, on a
+    // ratio whose top and bottom add up differently: a week's Sum over its
+    // Average is 7 days of the rate (e.g. price changes / average stock),
+    // Average over Sum is a seventh of it. 1 when both sides match, as on
+    // every chart saved before the bottom had its own setting.
+    function ratioPeriodScale(row, days) {
+        if (!row.divide_by || row.agg === rowDivideAgg(row)) return 1;
+        return row.agg === 'sum' ? days : 1 / days;
+    }
+    // Days in the month starting on an ISO date (YYYY-MM-01).
+    function daysInMonthOf(start) {
+        const [y, m] = start.split('-').map(Number);
+        return new Date(Date.UTC(y, m, 0)).getUTCDate();
+    }
     // A ratio chart or one with added metrics keeps its own target on the row
     // (ratio_target): the stored targets each belong to a single metric.
     function rowOwnTarget(row) { return !!row.divide_by || rowPlus(row).length > 0; }
@@ -126,7 +143,13 @@
         document.querySelectorAll('.view-toggle button').forEach(b => b.classList.toggle('active', b.dataset.view === view));
         try { localStorage.setItem(PAGE_VIEW_KEY, view); } catch (e) {}
         // Admin View also lists empty sections as tabs (see renderLayout).
-        if (layoutLoaded) { renderLayout(); redrawActiveSection(); }
+        if (layoutLoaded) {
+            renderLayout();
+            redrawActiveSection();
+            // Admins Only charts are left out in User View, so back in Admin
+            // View any not loaded yet are fetched now.
+            shownRows().forEach(row => { if (!customRowData[row.id]) loadCustomRow(row); });
+        }
     }
 
     if (IS_ADMIN) {
@@ -200,7 +223,6 @@
         const status = document.getElementById('statusText');
         status.textContent =
             what + ' - saving is turned off so the saved charts are not overwritten. ' + err.message;
-        awsLoginIfExpired(status, err.message);
         console.error(err);
         fetch(BASE_URL + '/kpi/client-error', {
             method: 'POST',
@@ -266,7 +288,7 @@
                 + missing.join(', ') + '. Sections on this page: ' + SECTIONS.join(', ') + '.');
         }
         layout.rows.forEach(row => {
-            if (row.hidden || hiddenSections.has(row.section)) { dropRowElement(row.id); return; }
+            if (!rowShownOnPage(row)) { dropRowElement(row.id); return; }
             document.getElementById(sectionDomId(row.section)).querySelector('.category-body')
                 .appendChild(getRowElement(row));
         });
@@ -864,7 +886,8 @@
         const deck = typeof WbrDeck !== 'undefined' && WbrDeck.active();
         const have = new Set(deck ? [] : wbrItems.map(i => i.ref + '|' + i.period));
         const html = SECTIONS.map(section => {
-            const rows = layout.rows.filter(r => r.section === section && !r.hidden
+            // Admins Only charts are not offered: release them on the KPI page first.
+            const rows = layout.rows.filter(r => r.section === section && !r.hidden && !r.admin_only
                 && (!q || `${rowTitle(r)} ${r.subtitle || ''}`.toLowerCase().includes(q)));
             if (!rows.length) return '';
             return `<div class="wbr-picker-section">${escHtml(section)}</div>` + rows.map(r => {
@@ -1095,7 +1118,17 @@
                 <button type="button" class="${rolling ? '' : 'active'}" onclick="setRolling('${row.id}', false)">Daily</button>
                 <button type="button" class="${rolling ? 'active' : ''}" onclick="setRolling('${row.id}', true)">7-day avg</button>
             </span>`;
-        const editButton = IS_ADMIN ? `
+        // Admins Only: a chart still being made, which no one else is sent.
+        // The badge says so, and Show To Everyone releases it.
+        const adminOnly = IS_ADMIN && row.admin_only ? `
+            <span class="admin-only-badge" title="Only you can see this chart. Show To Everyone releases it to every user">
+                <i class="fas fa-user-lock"></i> Admins Only
+            </span>
+            <button type="button" class="chart-title-btn" title="Let every user see this chart"
+                    onclick="setChartAdminOnly('${row.id}', false)">
+                <i class="fas fa-eye"></i> Show To Everyone
+            </button>` : '';
+        const editButton = IS_ADMIN ? `${adminOnly}
             <button type="button" class="chart-title-btn" onclick="openChartModal('${row.id}')">
                 <i class="fas fa-pen"></i> Edit Chart
             </button>
@@ -1406,7 +1439,14 @@
                 .concat(typeof WbrDeck !== 'undefined' ? WbrDeck.refs() : []));
             return layout.rows.filter(r => refs.has(r.id));
         }
-        return layout.rows.filter(r => !r.hidden && !hiddenSections.has(r.section));
+        return layout.rows.filter(rowShownOnPage);
+    }
+
+    // Shown on the KPI page: not hidden, not in a hidden section, and not an
+    // Admins Only chart while the admin is in User View (other users are
+    // never sent those charts at all, see kpi.py _drop_admin_only).
+    function rowShownOnPage(row) {
+        return !row.hidden && !hiddenSections.has(row.section) && !(row.admin_only && isUserView());
     }
 
     // Sections hidden in Settings > Sections: no tab, charts not loaded.
@@ -1563,8 +1603,8 @@
         // From Inputs: each metric fetched with its own target (source picked
         // per metric), then added and divided the same way as the figures.
         const inputs = row.target_mode === 'inputs' ? rowInputTargets(row) : null;
-        const fetchSide = parts => Promise.all(parts.map((p, i) =>
-            fetchMetricData(p.source || 'snowflake', p.metric, row.agg,
+        const fetchSide = (parts, agg) => Promise.all(parts.map((p, i) =>
+            fetchMetricData(p.source || 'snowflake', p.metric, agg,
                 inputs ? inputs[metricKey(p.source || 'snowflake', p.metric)] : 'none', cur).then(d =>
                 d.status === 'ok' || (parts === top && i === 0) ? d : { ...d, message: `${p.metric}: ${d.message}` })))
             .then(d => {
@@ -1579,7 +1619,7 @@
         // Per Date: the chart's own pasted figures (kpi_targets.js).
         const ownDates = d => (row.target_mode === 'import' ? withRowDateTargets(row, d) : d);
         if (!row.divide_by) {
-            return fetchSide(top).then(d => {
+            return fetchSide(top, row.agg).then(d => {
                 if (d.status !== 'ok' || inputs) return d;
                 // Not divided, so the chart's Sum / Average decides, as on a
                 // plain chart. Sum: the fixed figure is per day, and a week's
@@ -1589,14 +1629,15 @@
                 // every point whatever Sum / Average says: see ratioData.)
                 const target = rowTargetFn(row);
                 const sum = row.agg === 'sum';
-                const daysInMonth = s => { const [y, m] = s.split('-').map(Number); return new Date(Date.UTC(y, m, 0)).getUTCDate(); };
                 const times = (list, n) => (list ? list.map((v, i) => (v === null || !sum ? v : v * n(i))) : null);
                 return ownDates({ ...d, values_target: target(d.dates),
                                   weekly_values_target: times(target(d.weekly_labels), () => 7),
-                                  monthly_values_target: times(target(d.monthly_labels), i => daysInMonth(d.monthly_starts[i])) });
+                                  monthly_values_target: times(target(d.monthly_labels), i => daysInMonthOf(d.monthly_starts[i])) });
             });
         }
-        return Promise.all([fetchSide(top), fetchSide([row.divide_by, ...rowDividePlus(row)])]).then(([num, den]) => {
+        // The bottom uses its own Sum / Average (rowDivideAgg), e.g. a week's
+        // price changes over the week's average stock on sale.
+        return Promise.all([fetchSide(top, row.agg), fetchSide([row.divide_by, ...rowDividePlus(row)], rowDivideAgg(row))]).then(([num, den]) => {
             if (num.status !== 'ok') return num;
             if (den.status !== 'ok') return den;
             return ownDates(ratioData(row, num, den));
@@ -1687,7 +1728,17 @@
             if (v === null || v === undefined || d === null || d === undefined || d === 0) return null;
             return v / d * scale;
         });
-        const target = rowTargetFn(row);
+        const rowTarget = rowTargetFn(row);
+        // The fixed figure is a day's rate. Where the top and bottom add up
+        // differently a week or month figure is several days of that rate, so
+        // its target is too (ratioPeriodScale). Same figure on every point otherwise.
+        const scaleTarget = (list, days) => list.map((v, i) => (v === null || v === undefined ? v : v * ratioPeriodScale(row, days(i))));
+        const target = labels => rowTarget(labels || []);
+        const weekTarget = labels => { const t = target(labels); return t ? scaleTarget(t, () => 7) : t; };
+        const monthTarget = labels => {
+            const t = target(labels);
+            return t && num.monthly_starts ? scaleTarget(t, i => daysInMonthOf(num.monthly_starts[i])) : t;
+        };
         // From Inputs: a week's target is the week's numerator target over the
         // week's divide-by target, as for the actuals.
         const fromInputs = row.target_mode === 'inputs';
@@ -1703,11 +1754,11 @@
             monthly_values_n1: num.monthly_values_n1 && den.monthly_values_n1
                 ? divide(num.monthly_values_n1, den.monthly_values_n1) : null,
             monthly_values_target: fromInputs ? divide(num.monthly_values_target, den.monthly_values_target)
-                : target(num.monthly_labels),
+                : monthTarget(num.monthly_labels),
             weekly_values: divide(num.weekly_values, den.weekly_values),
             weekly_values_n1: divide(num.weekly_values_n1, den.weekly_values_n1),
             weekly_values_target: fromInputs ? divide(num.weekly_values_target, den.weekly_values_target)
-                : target(num.weekly_labels),
+                : weekTarget(num.weekly_labels),
         };
     }
 
@@ -1877,6 +1928,9 @@
         const token = String(Date.now());
         loadToken = fromButton === true || fromButton === 'snowflake' ? token : '';
         spRefreshToken = fromButton === true || fromButton === 'sharepoint' ? token : '';
+        // Re-read the metric list too, so the chart editor shows columns
+        // renamed or added in Snowflake since the page opened.
+        if (loadToken) reloadMetricsCatalogue(loadToken).catch(() => {});
         if (!WBR) loadAtAllowance();
         const btn    = document.getElementById('loadBtn');
         const icon   = document.getElementById('loadIcon');
@@ -1912,7 +1966,6 @@
                 if (spPending.length) notes.push(spNote());
                 if (errors.length) notes.push('errors: ' + errors.join(' | '));
                 status.textContent = notes.length ? 'Loaded (' + notes.join('; ') + ')' : 'Loaded';
-                if (errors.length) awsLoginIfExpired(status, errors.join(' | '));
                 startSpPolling();
                 scheduleSpIdleCheck();
             })
@@ -4218,6 +4271,10 @@
         }
         multiplySelect.value = multiplyKey;
         document.getElementById('ratioAsSelect').value = row && row.ratio_as === 'dec' ? 'dec' : 'pct';
+        document.getElementById('divideAggSelect').value = (row && row.divide_agg) || '';
+        // A new chart starts Admins Only, so no one else sees it until it is
+        // released with Show To Everyone (or this tick is taken off).
+        document.getElementById('adminOnlyInput').checked = row ? !!row.admin_only : true;
         chartModalState.plus = {
             metric: row ? rowPlus(row).map(p => metricKey(p.source || 'snowflake', p.metric)) : [],
             divide: row ? rowDividePlus(row).map(p => metricKey(p.source || 'snowflake', p.metric)) : [],
@@ -4585,7 +4642,15 @@
 
     // Shows the ratio settings when a divide-by metric is chosen.
     function updateRatioUi() {
-        document.getElementById('ratioAsField').style.display = selectedDivide() ? '' : 'none';
+        const show = selectedDivide() ? '' : 'none';
+        document.getElementById('ratioAsField').style.display = show;
+        document.getElementById('divideAggField').style.display = show;
+    }
+
+    // The Admins Only tick in Edit Chart onto the row being saved.
+    function setAdminOnlyField(row) {
+        if (document.getElementById('adminOnlyInput').checked) row.admin_only = true;
+        else delete row.admin_only;
     }
 
     function onDivideChange() {
@@ -4681,11 +4746,6 @@
         const box = document.getElementById('chartModalError');
         box.textContent = message;
         box.classList.add('show');
-        // Expired AWS sign-in: a button to sign in again. The popup stays open
-        // so nothing typed is lost; Save is pressed again afterwards.
-        awsLoginIfExpired(box, message, () => {
-            box.textContent = 'Signed in to AWS. Press Save again.';
-        });
     }
 
     // One min/max pair for Average charts (they share one scale), three for Sum.
@@ -4850,7 +4910,7 @@
         document.querySelectorAll('#chartModal .line-only').forEach(el => { el.style.display = stacked ? 'none' : ''; });
         if (!stacked && chartTab === 'columns') showChartTab('data');
         if (stacked) {
-            ['ratioAsField', 'weightField'].forEach(id => { document.getElementById(id).style.display = 'none'; });
+            ['ratioAsField', 'divideAggField', 'weightField'].forEach(id => { document.getElementById(id).style.display = 'none'; });
             renderSeriesList();
         } else {
             // Back to a line chart: the line chart's own rules for these fields.
@@ -5115,7 +5175,7 @@
         const title = document.getElementById('titleInput').value.trim()
             || series.map(s => names[metricKey(s.source, s.metric)] || s.metric).join(' / ').slice(0, 100);
         const updated = {
-            ...(existing || { id: 'c' + Date.now().toString(36), type: 'custom' }),
+            ...(existing || { id: newChartId(), type: 'custom' }),
             chart_type: 'stacked',
             // The first series stands in as the chart's metric for anything
             // that reads one (notes, titles).
@@ -5141,9 +5201,10 @@
             y_min: yMin,
             y_max: yMax,
         };
-        ['divide_by', 'divide_plus', 'metric_plus', 'ratio_as', 'ratio_target', 'weight_by', 'vehicles',
+        ['divide_by', 'divide_plus', 'divide_agg', 'metric_plus', 'ratio_as', 'ratio_target', 'weight_by', 'vehicles',
          'input_targets', 'target_calc'].forEach(k => delete updated[k]);
         if (vehicles) updated.vehicles = vehicles;
+        setAdminOnlyField(updated);
         const rows = placeRow(layout.rows, updated,
             document.getElementById('sectionSelect').value,
             parseInt(document.getElementById('positionSelect').value, 10));
@@ -5218,7 +5279,7 @@
         try { vehicles = readVehSetup(); } catch (err) { showChartError(err.message); return; }
 
         const updated = {
-            ...(existing || { id: 'c' + Date.now().toString(36), type: 'custom' }),
+            ...(existing || { id: newChartId(), type: 'custom' }),
             source,
             metric,
             title: document.getElementById('titleInput').value.trim() || metric,
@@ -5239,11 +5300,16 @@
         delete updated.ratio_as;
         delete updated.metric_plus;
         delete updated.divide_plus;
+        delete updated.divide_agg;
         if (divide) {
             updated.divide_by = divide;
             updated.ratio_as = document.getElementById('ratioAsSelect').value;
             if (dividePlus.length) updated.divide_plus = dividePlus;
+            // Blank = the bottom adds up the same way as the chart.
+            const divideAgg = document.getElementById('divideAggSelect').value;
+            if (divideAgg) updated.divide_agg = divideAgg;
         }
+        setAdminOnlyField(updated);
         if (metricPlus.length) updated.metric_plus = metricPlus;
         delete updated.multiply_by;
         if (multiply) updated.multiply_by = multiply;
@@ -5272,7 +5338,7 @@
             // Moved to another section: follow it to that tab.
             activeSection = row.section;
 
-            const ratioKey = r => JSON.stringify([r.divide_by || null, r.ratio_as || null, r.ratio_target ?? null,
+            const ratioKey = r => JSON.stringify([r.divide_by || null, r.divide_agg || null, r.ratio_as || null, r.ratio_target ?? null,
                 rowPlus(r), rowDividePlus(r), r.input_targets || null, r.target_calc || null]);
             const needsData = !existing || existing.metric !== row.metric || rowSource(existing) !== row.source
                 || existing.agg !== row.agg || JSON.stringify(rowCurrent(existing)) !== JSON.stringify(rowCurrent(row)) || rowTargetMode(existing) !== row.target_mode
@@ -5372,14 +5438,46 @@
         }
     }
 
+    // Admins Only on (a chart still being made: no one else is sent it) or
+    // off (Show To Everyone). Saved before the page changes, since turning it
+    // off shows the chart to every user.
+    async function setChartAdminOnly(rowId, on) {
+        const row = findRow(rowId);
+        if (!row || !!row.admin_only === on) return;
+        const rows = layout.rows.map(r => {
+            if (r.id !== rowId) return r;
+            const out = { ...r };
+            if (on) out.admin_only = true; else delete out.admin_only;
+            return out;
+        });
+        const status = document.getElementById('statusText');
+        try {
+            await saveLayout(rows);
+        } catch (err) {
+            status.textContent = (on ? 'Admins Only' : 'Show To Everyone') + ' failed: ' + err.message;
+            return;
+        }
+        layout.rows = rows;
+        rebuildCustomRow(findRow(rowId), false);
+        status.textContent = on ? `${rowTitle(row)} is now Admins Only` : `${rowTitle(row)} is now shown to everyone`;
+    }
+
+    // A new chart id. Two made in the same millisecond (a copy, or a script
+    // adding several) must still differ, so a random part is added.
+    function newChartId() {
+        return 'c' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+    }
+
     async function copyChartBelow(rowId) {
         const row = findRow(rowId);
         if (!row) return;
         const copy = {
             ...JSON.parse(JSON.stringify(row)),
-            id: 'c' + Date.now().toString(36),
+            id: newChartId(),
             // The server rejects titles over 100 characters.
             title: `${rowTitle(row).slice(0, 93)} (copy)`,
+            // A copy is a new chart, so it starts Admins Only like any other.
+            admin_only: true,
         };
         const rows = [...layout.rows];
         rows.splice(rows.indexOf(row) + 1, 0, copy);
@@ -5450,6 +5548,7 @@
         main_line_px: 'setMainLinePx', n1_line_px: 'setN1LinePx', target_line_px: 'setTargetLinePx',
         main_line_colour: 'setMainLineColour', n1_line_colour: 'setN1LineColour',
         target_line_colour: 'setTargetLineColour',
+        admin_only_badge_colour: 'setAdminOnlyBadgeColour',
         targets_for_all: 'setTargetsForAll',
     };
     // A setting's value from its box: a colour as #rrggbb, a thickness to the
@@ -5475,6 +5574,7 @@
         if (settings.at_font_px) root.setProperty('--kpi-at-font', settings.at_font_px + 'px');
         if (settings.at_table_font_px) root.setProperty('--kpi-at-table-font', settings.at_table_font_px + 'px');
         if (settings.wbr_columns) root.setProperty('--wbr-columns', settings.wbr_columns);
+        if (settings.admin_only_badge_colour) root.setProperty('--kpi-admin-only', settings.admin_only_badge_colour);
         // Settings > Targets: Targets button for every user or the admin only.
         // The admin sees it either way, except in User View when it is off.
         document.body.classList.toggle('targets-off', Number(settings.targets_for_all) === 0);
@@ -7076,8 +7176,9 @@
     }
 
     // Reads the metric lists again, e.g. after a data source is added.
-    async function reloadMetricsCatalogue() {
-        const resp = await fetch(BASE_URL + '/kpi/metrics').then(r => r.json());
+    async function reloadMetricsCatalogue(refresh = '') {
+        const query = refresh ? '?refresh=' + encodeURIComponent(refresh) : '';
+        const resp = await fetch(BASE_URL + '/kpi/metrics' + query).then(r => r.json());
         if (resp.status !== 'ok') return;
         metricsCatalogue = resp.metrics || [];
         metricsByKey = Object.fromEntries(metricsCatalogue.map(m => [metricKey(m.source, m.column), m]));
@@ -7586,6 +7687,7 @@
             id: r.id,
             title: rowTitle(r),
             hidden: !!r.hidden,
+            admin_only: !!r.admin_only,
             sec: sectionDraft.find(s => s.from === r.section),
         }));
         renderChartDraft();
@@ -7606,6 +7708,8 @@
                 return `
                 <div class="chart-item ${c.hidden ? 'is-hidden' : ''}">
                     <label><input type="checkbox" ${c.hidden ? '' : 'checked'} onchange="setChartHidden(${i}, !this.checked)"> Show</label>
+                    <label title="Untick to keep the chart Admins Only: no one else sees it until it is ticked">
+                        <input type="checkbox" ${c.admin_only ? '' : 'checked'} onchange="setChartDraftAdminOnly(${i}, !this.checked)"> Everyone</label>
                     <span class="chart-item-title" title="${escHtml(c.title)}">${escHtml(c.title)}</span>
                     <select onchange="setChartSection(${i}, this.value)">${options(s)}</select>
                     <button type="button" class="btn btn-edit" title="Move up"
@@ -7629,6 +7733,11 @@
 
     function setChartHidden(i, hidden) {
         chartDraft[i].hidden = hidden;
+        renderChartDraft();
+    }
+
+    function setChartDraftAdminOnly(i, adminOnly) {
+        chartDraft[i].admin_only = adminOnly;
         renderChartDraft();
     }
 
@@ -7657,14 +7766,14 @@
     function chartDraftPlan() {
         const plan = sectionDraft.flatMap(s => chartDraft
             .filter(c => c.sec === s)
-            .map(c => ({ id: c.id, section: s.name.trim(), hidden: c.hidden })));
+            .map(c => ({ id: c.id, section: s.name.trim(), hidden: c.hidden, admin_only: c.admin_only })));
         // A chart left out here would be deleted by the save.
         if (plan.length !== layout.rows.length) throw new Error('Some charts have no section - reload the page');
         return plan;
     }
 
     function chartsChanged(plan) {
-        const now = layout.rows.map(r => ({ id: r.id, section: r.section, hidden: !!r.hidden }));
+        const now = layout.rows.map(r => ({ id: r.id, section: r.section, hidden: !!r.hidden, admin_only: !!r.admin_only }));
         return JSON.stringify(plan) !== JSON.stringify(now);
     }
 
@@ -7673,9 +7782,12 @@
         const rows = plan.map(p => {
             const row = { ...byId[p.id], section: p.section };
             if (p.hidden) row.hidden = true; else delete row.hidden;
+            if (p.admin_only) row.admin_only = true; else delete row.admin_only;
             return row;
         });
         await saveLayout(rows);
+        // Rows whose Admins Only changed need their badge redrawn.
+        rows.forEach(r => { if (!!r.admin_only !== !!(byId[r.id] || {}).admin_only) dropRowElement(r.id); });
         layout.rows = rows;
         renderLayout();
         // Charts shown again have no chart drawn yet.

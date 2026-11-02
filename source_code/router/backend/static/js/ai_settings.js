@@ -284,7 +284,7 @@
         if (!table) return;
         const btn = $('ai-draft-go'), note = $('ai-draft-note');
         btn.disabled = true;
-        note.textContent = 'Cortex is drafting a description of ' + table + '...';
+        note.textContent = 'The AI is drafting a description of ' + table + '...';
         try {
             const data = await api('/settings/ai/knowledge/draft', {table});
             $('ai-draft-box').style.display = 'none';

@@ -40,8 +40,6 @@
                 The saved names could not be loaded, so saving is turned off to avoid
                 wiping them. {{ load_error }}
             </div>
-            <script src="{{ static_url('js/aws_login.js') }}"></script>
-            <script>awsLoginIfExpired(document.getElementById('pn-load-error'), {{ load_error|tojson }});</script>
             {% endif %}
             <div class="card-body">
                 <p class="pn-note mb-3">

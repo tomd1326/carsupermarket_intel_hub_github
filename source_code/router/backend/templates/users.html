@@ -13,7 +13,11 @@
 </head>
 <body>
     {{ page_header('Settings', user) }}
-    <div class="settings-card">
+    <style>
+        #accounts-table th { font-weight: 600; white-space: nowrap; padding: .5rem .6rem; }
+        #accounts-table td { padding: .4rem .6rem; }
+    </style>
+    <div class="settings-card settings-card-wide">
 
         <div class="settings-layout">
         {% include '_settings_nav.html' %}
@@ -118,6 +122,8 @@
                 <span class="d-flex gap-2">
                     <button type="button" class="btn btn-outline-secondary btn-sm" id="copy-emails-btn">Copy Emails</button>
                     <a href="{{ BASE_URL }}/settings/users/export?source={{ source }}" class="btn btn-outline-secondary btn-sm">Export CSV</a>
+                    <button type="button" class="btn btn-outline-primary btn-sm" id="nexus-fill-btn" title="Fill in empty Nexus ids, site and company for users already here, matched on email">Fill From Nexus</button>
+                    <button type="button" class="btn btn-outline-primary btn-sm" id="nexus-import-btn">Import From Nexus</button>
                     <button type="button" class="btn btn-success btn-sm" id="add-user-btn">Add User</button>
                 </span>
             </div>
@@ -136,19 +142,24 @@
             {% if request.query_params.get('pwderr') %}
             <div class="alert alert-danger mb-0 rounded-0 border-0 py-2 px-3">{{ request.query_params.get('pwderr') }}</div>
             {% endif %}
+            <div class="alert alert-danger mb-0 rounded-0 border-0 py-2 px-3" id="nexus-fill-error" style="display: none;"></div>
             <div class="card-body p-0 table-responsive">
-                <table class="table table-sm table-hover mb-0 align-middle">
+                <table class="table table-sm table-hover mb-0 align-middle" id="accounts-table">
                     <thead class="table-light">
                         <tr>
                             <th>Name</th>
                             <th>Email</th>
+                            <th class="text-nowrap">Company Name</th>
+                            <th class="text-nowrap">Site Name</th>
                             <th class="text-nowrap">Last Login</th>
                             <th></th>
                         </tr>
                     </thead>
                     <tbody>
+                        {% set companies = [] %}
                         {% for u in all_users %}
                         {% set d = people.get(u, {}) %}
+                        {% if d.company_name and d.company_name not in companies %}{% set _ = companies.append(d.company_name) %}{% endif %}
                         {% set ll = last_logins.get(u, {}) %}
                         <tr>
                             <td class="text-nowrap">{{ ((d.first_name or '') ~ ' ' ~ (d.last_name or ''))|trim }}
@@ -158,13 +169,22 @@
                             <td>
                                 {% if d.email %}{{ d.email }}{% else %}<span class="text-muted">{{ u }}</span>{% endif %}
                             </td>
-                            <td class="text-muted small text-nowrap">{{ ll.last_login or 'Never' }}</td>
+                            <td class="text-nowrap">{{ d.company_name or '' }}</td>
+                            <td class="text-nowrap">{{ d.site_name or '' }}</td>
+                            <td class="text-muted text-nowrap">{{ ll.last_login or 'Never' }}</td>
                             <td class="text-end">
                                 <button type="button" class="btn btn-sm btn-outline-primary edit-user-btn"
                                         data-username="{{ u }}"
                                         data-first="{{ d.first_name or '' }}"
                                         data-last="{{ d.last_name or '' }}"
                                         data-email="{{ d.email or '' }}"
+                                        data-nexus-user-id="{{ d.nexus_user_id if d.nexus_user_id is not none else '' }}"
+                                        data-site-id="{{ d.site_id if d.site_id is not none else '' }}"
+                                        data-site-name="{{ d.site_name or '' }}"
+                                        data-site-type="{{ d.site_type or '' }}"
+                                        data-company-id="{{ d.company_id if d.company_id is not none else '' }}"
+                                        data-company-name="{{ d.company_name or '' }}"
+                                        data-company-type="{{ d.company_type or '' }}"
                                         data-last-login="{{ ll.last_login or 'Never' }}"
                                         data-last-seen="{{ ll.last_seen or 'Never' }}"
                                         data-pending="{{ '1' if u in inactive else '0' }}"
@@ -213,6 +233,40 @@
                             <label for="um-email" class="form-label mb-1">Email</label>
                             <input type="email" class="form-control" id="um-email" name="email">
                         </div>
+                        <div class="row g-2 mb-2" id="um-org-row">
+                            <div class="col-4">
+                                <label for="um-nexus-user-id" class="form-label mb-1">Nexus User ID</label>
+                                <input type="text" class="form-control" id="um-nexus-user-id" readonly>
+                            </div>
+                            <div class="col-4">
+                                <label for="um-site-id" class="form-label mb-1">Site ID</label>
+                                <input type="text" class="form-control" id="um-site-id" readonly>
+                            </div>
+                            <div class="col-4">
+                                <label for="um-company-id" class="form-label mb-1">Company ID</label>
+                                <input type="text" class="form-control" id="um-company-id" readonly>
+                            </div>
+                            <div class="col-6">
+                                <label for="um-site-name" class="form-label mb-1">Site Name</label>
+                                <input type="text" class="form-control" id="um-site-name" name="site_name" maxlength="255">
+                            </div>
+                            <div class="col-6">
+                                <label for="um-site-type" class="form-label mb-1">Site Type</label>
+                                <input type="text" class="form-control" id="um-site-type" name="site_type" maxlength="100">
+                            </div>
+                            <div class="col-6">
+                                <label for="um-company-name" class="form-label mb-1">Company Name</label>
+                                <input type="text" class="form-control" id="um-company-name" name="company_name" maxlength="255" list="um-company-list">
+                                <datalist id="um-company-list">
+                                    {% for c in companies|sort %}<option value="{{ c }}">{% endfor %}
+                                </datalist>
+                            </div>
+                            <div class="col-6">
+                                <label for="um-company-type" class="form-label mb-1">Company Type</label>
+                                <input type="text" class="form-control" id="um-company-type" name="company_type" maxlength="100">
+                            </div>
+                            <div class="col-12 form-text mt-0">Ids come from the Nexus import. Type a company here for users Nexus does not hold (e.g. Aramis).</div>
+                        </div>
                         <div class="form-check mb-2" id="um-buyer-row">
                             <input class="form-check-input" type="checkbox" id="um-buyer" name="is_buyer">
                             <label class="form-check-label" for="um-buyer">Buyer <span class="text-muted">(listed in the Cars Bought Buyer dropdown)</span></label>
@@ -251,6 +305,55 @@
         </div>
     </div>
 
+    {# Import From Nexus: fetch every Nexus Point user, tick the ones to add.
+       Users whose email is already here are greyed out and cannot be ticked. #}
+    <div class="modal fade" id="nexusModal" tabindex="-1" aria-labelledby="nexusModalTitle" aria-hidden="true">
+        <div class="modal-dialog modal-xl modal-dialog-scrollable">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title" id="nexusModalTitle">Import From Nexus{% if viewing_prod %} (Prod){% endif %}</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="d-flex gap-2 align-items-center mb-2 flex-wrap">
+                        <button type="button" class="btn btn-primary btn-sm" id="nx-fetch">Fetch Users</button>
+                        <input type="search" class="form-control form-control-sm" id="nx-filter" placeholder="Filter" style="width: 260px;">
+                        <div class="form-check mb-0">
+                            <input class="form-check-input" type="checkbox" id="nx-hide-existing">
+                            <label class="form-check-label small" for="nx-hide-existing">Hide Existing</label>
+                        </div>
+                        <span class="small text-muted" id="nx-status"></span>
+                    </div>
+                    <div class="table-responsive">
+                        <table class="table table-sm table-hover mb-0 align-middle small" id="nx-table" style="display: none;">
+                            <thead class="table-light">
+                                <tr>
+                                    <th><input class="form-check-input" type="checkbox" id="nx-all" title="Tick all shown"></th>
+                                    <th>Name</th>
+                                    <th>Email</th>
+                                    <th class="text-nowrap">Nexus User ID</th>
+                                    <th class="text-nowrap">Site ID</th>
+                                    <th class="text-nowrap">Site Name</th>
+                                    <th class="text-nowrap">Site Type</th>
+                                    <th class="text-nowrap">Company ID</th>
+                                    <th class="text-nowrap">Company Name</th>
+                                    <th class="text-nowrap">Company Type</th>
+                                    <th></th>
+                                </tr>
+                            </thead>
+                            <tbody id="nx-body"></tbody>
+                        </table>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <span class="small text-danger me-auto" id="nx-error"></span>
+                    <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <button type="button" class="btn btn-success" id="nx-add" disabled>Add Selected</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
     <script>
     (function () {
@@ -270,6 +373,9 @@
             $('um-first').value = opts.first || '';
             $('um-last').value = opts.last || '';
             $('um-email').value = opts.email || '';
+            ['nexus-user-id', 'site-id', 'company-id', 'site-name', 'site-type', 'company-name', 'company-type']
+                .forEach(k => { $('um-' + k).value = (opts.org || {})[k] || ''; });
+            show($('um-org-row'), !isAdmin);
             $('um-buyer').checked = !!opts.buyer;
             show($('um-buyer-row'), !isAdmin);
             $('um-password').value = '';
@@ -307,6 +413,12 @@
                 first: btn.dataset.first,
                 last: btn.dataset.last,
                 email: btn.dataset.email,
+                org: {
+                    'nexus-user-id': btn.dataset.nexusUserId, 'site-id': btn.dataset.siteId,
+                    'company-id': btn.dataset.companyId, 'site-name': btn.dataset.siteName,
+                    'site-type': btn.dataset.siteType, 'company-name': btn.dataset.companyName,
+                    'company-type': btn.dataset.companyType,
+                },
                 lastLogin: btn.dataset.lastLogin,
                 lastSeen: btn.dataset.lastSeen,
                 admin: btn.dataset.admin === '1',
@@ -377,6 +489,121 @@
                 btn.disabled = false;
             }
         });
+        // Import From Nexus
+        const nxModal = new bootstrap.Modal($('nexusModal'));
+        const NX_COLS = ['nexus_user_id', 'site_id', 'site_name', 'site_type',
+                         'company_id', 'company_name', 'company_type'];
+        let nxRows = [];
+        const nxPicked = new Set();
+        const esc = s => String(s == null ? '' : s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+        function nxShown() {
+            const f = $('nx-filter').value.trim().toLowerCase();
+            const hide = $('nx-hide-existing').checked;
+            return nxRows.filter(r => !(hide && r.existing) && (!f || [r.first_name, r.last_name, r.email, ...NX_COLS.map(c => r[c])]
+                .some(v => String(v == null ? '' : v).toLowerCase().includes(f))));
+        }
+        function nxRender() {
+            const shown = nxShown();
+            $('nx-body').innerHTML = shown.map(r => {
+                const i = nxRows.indexOf(r);
+                return '<tr class="' + (r.existing ? 'text-muted' : '') + '"' + (r.existing ? ' style="opacity: .55;"' : '') + '>'
+                    + '<td><input class="form-check-input nx-pick" type="checkbox" data-i="' + i + '"'
+                    + (r.existing ? ' disabled' : '') + (nxPicked.has(i) ? ' checked' : '') + '></td>'
+                    + '<td class="text-nowrap">' + esc((r.first_name + ' ' + r.last_name).trim()) + '</td>'
+                    + '<td>' + esc(r.email) + '</td>'
+                    + NX_COLS.map(c => '<td class="text-nowrap">' + esc(r[c]) + '</td>').join('')
+                    + '<td>' + (r.existing ? '<span class="badge bg-secondary">Existing</span>' : '') + '</td></tr>';
+            }).join('');
+            const free = shown.filter(r => !r.existing);
+            $('nx-all').checked = free.length > 0 && free.every(r => nxPicked.has(nxRows.indexOf(r)));
+            $('nx-add').disabled = nxPicked.size === 0;
+            $('nx-add').textContent = nxPicked.size ? 'Add Selected (' + nxPicked.size + ')' : 'Add Selected';
+            const existing = nxRows.filter(r => r.existing).length;
+            $('nx-status').textContent = nxRows.length + ' Nexus users, ' + existing + ' already here, ' + shown.length + ' shown';
+        }
+        $('nexus-import-btn').addEventListener('click', () => { $('nx-error').textContent = ''; nxModal.show(); });
+        // Fill in empty Nexus fields for users already here, matched on email. Never overwrites a filled field.
+        $('nexus-fill-btn').addEventListener('click', async () => {
+            const where = toProd ? ' on PROD' : '';
+            if (!confirm('Fill in empty Nexus ids, site and company for the users here' + where + ', matched on email? Filled fields are left as they are.')) return;
+            const btn = $('nexus-fill-btn');
+            btn.disabled = true;
+            btn.textContent = 'Filling...';
+            $('nexus-fill-error').style.display = 'none';
+            try {
+                const resp = await fetch('{{ BASE_URL }}/settings/users/nexus-fill', {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ source: '{{ source }}' }),
+                });
+                const data = await resp.json();
+                if (!resp.ok) throw new Error(data.error || 'Could not fill from Nexus');
+                window.location.href = '{{ BASE_URL }}/settings/users?source={{ source }}&saved='
+                    + encodeURIComponent(data.updated + ' user(s) filled from Nexus, ' + data.unmatched + ' not in Nexus');
+            } catch (e) {
+                $('nexus-fill-error').textContent = e.message;
+                $('nexus-fill-error').style.display = '';
+                btn.disabled = false;
+                btn.textContent = 'Fill From Nexus';
+            }
+        });
+        $('nx-fetch').addEventListener('click', async () => {
+            const btn = $('nx-fetch');
+            btn.disabled = true;
+            $('nx-error').textContent = '';
+            $('nx-status').textContent = 'Fetching from Nexus...';
+            try {
+                const resp = await fetch('{{ BASE_URL }}/settings/users/nexus?source={{ source }}');
+                const data = await resp.json();
+                if (!resp.ok) throw new Error(data.error || 'Could not fetch Nexus users');
+                nxRows = data.rows || [];
+                nxPicked.clear();
+                $('nx-table').style.display = '';
+                nxRender();
+            } catch (e) {
+                $('nx-status').textContent = '';
+                $('nx-error').textContent = e.message;
+            } finally {
+                btn.disabled = false;
+            }
+        });
+        $('nx-filter').addEventListener('input', nxRender);
+        $('nx-hide-existing').addEventListener('change', nxRender);
+        $('nx-body').addEventListener('change', e => {
+            if (!e.target.classList.contains('nx-pick')) return;
+            const i = Number(e.target.dataset.i);
+            if (e.target.checked) nxPicked.add(i); else nxPicked.delete(i);
+            nxRender();
+        });
+        $('nx-all').addEventListener('change', e => {
+            nxShown().filter(r => !r.existing).forEach(r => {
+                const i = nxRows.indexOf(r);
+                if (e.target.checked) nxPicked.add(i); else nxPicked.delete(i);
+            });
+            nxRender();
+        });
+        $('nx-add').addEventListener('click', async () => {
+            const rows = [...nxPicked].map(i => nxRows[i]);
+            const where = toProd ? ' on PROD' : '';
+            if (!rows.length || !confirm('Add ' + rows.length + ' user(s)' + where + '? Each is created waiting for activation; make their link from Edit.')) return;
+            const btn = $('nx-add');
+            btn.disabled = true;
+            $('nx-error').textContent = '';
+            try {
+                const resp = await fetch('{{ BASE_URL }}/settings/users/nexus-import', {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ source: '{{ source }}', rows: rows }),
+                });
+                const data = await resp.json();
+                if (!resp.ok) throw new Error(data.error || 'Could not add the users');
+                window.location.href = '{{ BASE_URL }}/settings/users?source={{ source }}&saved='
+                    + encodeURIComponent((data.created || []).length + ' Nexus user(s)');
+            } catch (e) {
+                $('nx-error').textContent = e.message;
+                btn.disabled = false;
+            }
+        });
+
         $('um-delete').addEventListener('click', () => {
             const u = $('um-delete-user').value;
             const where = toProd ? ' from PROD' : '';
