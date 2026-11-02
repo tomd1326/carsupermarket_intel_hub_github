@@ -84,7 +84,6 @@ async function fetchData(force = false) {
         const errEl = document.getElementById('table-error');
         errEl.textContent = 'Failed to load data: ' + e.message;
         errEl.classList.remove('d-none');
-        awsLoginIfExpired(errEl, e.message);
     } finally {
         document.body.classList.remove('page-is-loading');
         btn.disabled = false;

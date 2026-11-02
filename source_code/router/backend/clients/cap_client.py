@@ -143,6 +143,11 @@ class CAPClient(metaclass=Singleton):
 
     def _post_with_retry(self, url, payload, label='', retries=3, timeout=20):
         _RETRYABLE = (requests.exceptions.ReadTimeout, requests.exceptions.ConnectionError)
+        # A page someone is waiting on (utils/api_limits.quick): give up sooner,
+        # so one slow car stays well inside API Gateway's 29 second limit
+        # (8s + 1s wait + 8s). Supplier list runs keep the patient default.
+        if getattr(self._local, 'quick', False):
+            retries, timeout = 2, 8
         for attempt in range(retries):
             try:
                 with self.limiter:

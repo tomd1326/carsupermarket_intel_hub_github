@@ -2235,7 +2235,6 @@ const BASE_URL = window.BASE_URL;
                 const summaryArea = document.getElementById('summary-area');
                 summaryArea.classList.add('is-loading');   // full width, matching the control bar, rather than shrink-wrapping the message
                 summaryArea.innerHTML = html;
-                awsLoginIfExpired(document.getElementById('grid-area').firstElementChild, e.message);
             } finally {
                 btn.disabled = false;
                 setApplyLoading(false);

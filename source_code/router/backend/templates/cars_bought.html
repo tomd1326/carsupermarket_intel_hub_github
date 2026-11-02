@@ -20,11 +20,20 @@
         .card { border: 1px solid var(--c-border); border-radius: var(--radius-lg); box-shadow: none; }
         .card-body { padding: 20px 24px; }
         .section-title { font-weight: 700; margin-bottom: 12px; }
-        .src-tabs .nav-link { font-weight: 600; font-size: 0.9rem; }
-        .drop-zone { border: 2px dashed var(--c-border); border-radius: var(--radius-md); padding: 22px; text-align: center;
+        /* Importer: one compact bar across the top, so the vehicle table below gets the full width */
+        .importer .card-body { padding: 12px 16px; }
+        .importer-row { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+        .drop-zone { border: 2px dashed var(--c-border); border-radius: var(--radius-md); padding: 40px 20px; text-align: center;
                      color: var(--c-muted); cursor: pointer; }
+        .drop-zone i { font-size: 2.2rem; margin-bottom: 8px; }
         .drop-zone.over { border-color: var(--c-primary); background: #eef5ff; }
-        #vrmPaste { font-size: 0.8rem; min-height: 160px; }
+        #vrmPaste { font-size: 0.85rem; }
+        /* Where CAP / Autotrader came from, and differences found by a manual check */
+        .veh-table input.is-diff { border-color: #dc3545; background: #fff1f2; }
+        .veh-table td.is-diff { background: #fff1f2; color: #842029; font-weight: 600; }
+        .tag-src { background: #dbeafe; color: #1e3a5f; }
+        .tag-diff { background: #f8d7da; color: #842029; cursor: help; }
+        .row-check-btn { padding: 1px 6px; font-size: 0.75rem; }
 
         .veh-scroll { overflow-x: auto; }
         .veh-table { font-size: 0.8rem; width: max-content; min-width: 100%; }
@@ -60,47 +69,44 @@
         .hist-table tbody tr { cursor: pointer; }
         .hist-table tbody tr:hover { background: #f0f7ff; }
         #busy { display: none; }
+
+        /* Progress panel while a file is read */
+        .read-progress { display: flex; align-items: center; gap: 18px; border: 1px solid var(--c-border);
+                         border-radius: var(--radius-md); padding: 14px 16px; flex-wrap: wrap; }
+        .read-progress .rp-file { display: flex; align-items: center; gap: 10px; min-width: 200px; max-width: 280px; }
+        .read-progress .rp-file i { font-size: 1.5rem; color: var(--c-primary); }
+        .read-progress .rp-name { font-weight: 600; word-break: break-all; line-height: 1.2; font-size: 0.85rem; }
+        .read-progress .rp-size { font-size: 0.75rem; color: var(--c-muted); }
+        .read-progress .rp-mid { flex: 1; }
+        .read-progress .rp-bar { height: 6px; border-radius: 3px; background: #e9eef5; overflow: hidden; margin-bottom: 6px; }
+        .read-progress .rp-bar > div { height: 100%; width: 0; background: var(--c-primary); border-radius: 3px; transition: width 0.4s ease; }
+        .read-progress ul { list-style: none; padding: 0; margin: 0; display: flex; gap: 18px; flex-wrap: wrap; }
+        .read-progress li { display: flex; align-items: center; gap: 6px; font-size: 0.82rem; color: var(--c-muted); }
+        .read-progress li.active { color: var(--c-text); font-weight: 600; }
+        .read-progress li.done { color: #0f5132; }
+        .read-progress .rp-time { font-size: 0.75rem; color: var(--c-muted); white-space: nowrap; }
     </style>
 </head>
 <body>
     {{ page_header(page_name('cars_bought'), user) }}
 
     <div class="page-wrap">
-        <div class="row g-4">
-            <!-- Left: where the vehicles come from -->
-            <div class="col-12 col-xl-3">
-                <div class="card">
+                <!-- Where the vehicles come from: a compact bar across the top -->
+                <div class="card mb-3 importer">
                     <div class="card-body">
-                        <ul class="nav nav-tabs src-tabs mb-3">
-                            <li class="nav-item"><a class="nav-link active" href="#" data-src="upload">Upload Invoice</a></li>
-                            <li class="nav-item"><a class="nav-link" href="#" data-src="evaluator">From Evaluator</a></li>
-                        </ul>
-                        <div id="srcUpload">
-                            <div class="drop-zone" id="dropZone">
-                                <i class="fas fa-file-invoice fa-2x mb-2"></i>
-                                <div>Drop An Invoice Or Sheet Here, Or Click To Choose</div>
-                                <div class="small mt-1">CSV, XLSX, PDF Or Photo (Scans And Handwriting Included), Up To 4 MB</div>
-                            </div>
-                            <input type="file" id="fileInput" accept=".csv,.xlsx,.xls,.xlsm,.pdf,.jpg,.jpeg,.png" style="display:none;">
+                        <div class="importer-row">
+                            <button type="button" class="btn btn-primary fw-bold" id="openUploadBtn"><i class="fas fa-file-invoice me-1"></i>Upload Invoice</button>
+                            <button type="button" class="btn btn-outline-primary fw-bold" id="openEvaluatorBtn"><i class="fas fa-paste me-1"></i>From Evaluator</button>
+                            <div class="flex-grow-1"></div>
+                            {% if is_admin %}
+                            <button class="btn btn-sm btn-outline-secondary text-nowrap" id="settingsBtn"><i class="fas fa-cog me-1"></i>Settings</button>
+                            {% endif %}
                         </div>
-                        <div id="srcEvaluator" style="display:none;">
-                            <label class="form-label small fw-bold text-muted mb-1">Supplier</label>
-                            <select id="evSupplier" class="form-select form-select-sm mb-2"></select>
-                            <label class="form-label small fw-bold text-muted mb-1">VRMs (One Per Line)</label>
-                            <textarea id="vrmPaste" class="form-control mb-2"></textarea>
-                            <button class="btn btn-primary w-100 fw-bold" id="evLoadBtn">Load Vehicles</button>
-                        </div>
-                        <div id="busy" class="mt-3 small text-muted"><i class="fas fa-spinner fa-spin me-1"></i><span id="busyText"></span></div>
-                        <div id="srcMsg" class="mt-3 small"></div>
+                        <div id="busy" class="mt-2 small text-muted"><i class="fas fa-spinner fa-spin me-1"></i><span id="busyText"></span></div>
+                        <div id="srcMsg" class="small"></div>
                     </div>
                 </div>
-                {% if is_admin %}
-                <button class="btn btn-sm btn-outline-secondary mt-3" id="settingsBtn"><i class="fas fa-cog me-1"></i>Cars Bought Settings</button>
-                {% endif %}
-            </div>
 
-            <!-- Right: the batch being built -->
-            <div class="col-12 col-xl-9">
                 <div class="card mb-3" id="batchCard" style="display:none;">
                     <div class="card-body">
                         <div class="section-title">Batch</div>
@@ -139,7 +145,10 @@
 
                         <div class="d-flex justify-content-between align-items-center mb-2">
                             <div class="section-title mb-0">Vehicles</div>
-                            <button class="btn btn-sm btn-outline-primary" id="addRowBtn"><i class="fas fa-plus me-1"></i>Add Row</button>
+                            <div class="d-flex gap-2">
+                                <button class="btn btn-sm btn-primary" id="capBtn" title="Live CAP and Autotrader for every car"><i class="fas fa-search me-1"></i>Look Up CAP &amp; AT</button>
+                                <button class="btn btn-sm btn-outline-primary" id="addRowBtn"><i class="fas fa-plus me-1"></i>Add Row</button>
+                            </div>
                         </div>
                         <div class="veh-scroll">
                             <table class="table table-sm veh-table mb-0">
@@ -184,6 +193,48 @@
                         </div>
                     </div>
                 </div>
+    </div>
+
+    <!-- Upload Invoice popup -->
+    <div class="modal fade" id="uploadModal" tabindex="-1">
+        <div class="modal-dialog modal-lg">
+            <div class="modal-content">
+                <div class="modal-header"><h6 class="modal-title fw-bold">Upload Invoice</h6>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
+                <div class="modal-body">
+                    <div class="drop-zone" id="dropZone">
+                        <i class="fas fa-file-invoice"></i>
+                        <div><strong>Drop An Invoice Or Sheet Here, Or Click To Choose</strong>
+                            <div class="small mt-1">CSV, XLSX, PDF Or Photo (Scans And Handwriting Included), Up To 4 MB</div></div>
+                    </div>
+                    <input type="file" id="fileInput" accept=".csv,.xlsx,.xls,.xlsm,.pdf,.jpg,.jpeg,.png" style="display:none;">
+                    <div class="read-progress" id="readProgress" style="display:none;">
+                        <div class="rp-file"><i class="fas fa-file-alt" id="rpIcon"></i>
+                            <div><div class="rp-name" id="rpName"></div><div class="rp-size" id="rpSize"></div></div></div>
+                        <div class="rp-mid">
+                            <div class="rp-bar"><div id="rpBar"></div></div>
+                            <ul id="rpSteps"></ul>
+                        </div>
+                        <div class="rp-time" id="rpTime"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- From Evaluator popup -->
+    <div class="modal fade" id="evaluatorModal" tabindex="-1">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header"><h6 class="modal-title fw-bold">From Supplier Stock Evaluator</h6>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
+                <div class="modal-body">
+                    <label class="form-label small fw-bold text-muted mb-1" for="evSupplier">Supplier</label>
+                    <select id="evSupplier" class="form-select form-select-sm mb-2"></select>
+                    <label class="form-label small fw-bold text-muted mb-1" for="vrmPaste">VRMs (One Per Line)</label>
+                    <textarea id="vrmPaste" class="form-control" rows="10"></textarea>
+                </div>
+                <div class="modal-footer"><button class="btn btn-primary fw-bold" id="evLoadBtn">Load Vehicles</button></div>
             </div>
         </div>
     </div>
@@ -212,6 +263,17 @@
                     <table class="table table-sm small"><thead><tr><th>Label</th><th>Type</th><th>Required</th><th></th></tr></thead>
                         <tbody id="cfBody"></tbody></table>
                     <button class="btn btn-sm btn-outline-primary mb-3" id="cfAddBtn"><i class="fas fa-plus me-1"></i>Add Field</button>
+                    <div class="fw-bold mb-1">Reading Invoices</div>
+                    <div class="small text-muted mb-2">Column headings for each field, comma separated, matched ignoring case and punctuation. When a supplier's invoice is not read, add its headings here.</div>
+                    <table class="table table-sm small mb-2"><tbody id="colNamesBody"></tbody></table>
+                    <label class="small fw-bold mb-1" for="feeWordsInput">Fee Words <span class="fw-normal text-muted">(a line containing one is a fee, not a car)</span></label>
+                    <input id="feeWordsInput" class="form-control form-control-sm mb-2">
+                    <label class="small fw-bold mb-1" for="evalHoursInput">Supplier Stock Evaluator Data Max Age (Hours) <span class="fw-normal text-muted">(older stored CAP / Autotrader data is not used)</span></label>
+                    <input id="evalHoursInput" type="number" min="1" max="720" class="form-control form-control-sm mb-2" style="width:110px;">
+                    <label class="small fw-bold mb-1" for="feeVatRateInput">VAT On Fees In A Car's Row (%) <span class="fw-normal text-muted">(e.g. Enterprise Service Fee: the row's VAT covers car and fee, so the fee gets this % and the car the rest)</span></label>
+                    <input id="feeVatRateInput" type="number" min="0" max="100" step="0.01" class="form-control form-control-sm mb-2" style="width:110px;">
+                    <label class="small fw-bold mb-1" for="supplierNamesInput">Supplier Names On Invoices <span class="fw-normal text-muted">(one per line: Text On Invoice = Supplier Name; the first found on the invoice is used)</span></label>
+                    <textarea id="supplierNamesInput" class="form-control form-control-sm mb-3" rows="5"></textarea>
                     <div class="fw-bold mb-1">Buyers</div>
                     <div class="small text-muted mb-1">The Buyer dropdown lists the users ticked as Buyer on the Users page.</div>
                     <div class="form-check">

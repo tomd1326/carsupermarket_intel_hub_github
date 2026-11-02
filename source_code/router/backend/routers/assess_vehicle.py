@@ -899,7 +899,10 @@ def assess_vehicle_lookup(request: Request, payload: dict, user: str = Depends(r
             logger.warning(f"Assess vehicle: could not read spec confirmation state for {vrm}: {e}")
             spec_confirmed = False
 
-        # CAP and Autotrader are independent, so run them together.
+        # CAP and Autotrader are independent, so run them together, under the
+        # global rate limits (utils/api_limits.py).
+        from utils import api_limits
+        api_limits.apply()
         with ThreadPoolExecutor(max_workers=2) as ex:
             f_cap = ex.submit(_cap_lookup, vrm, mileage)
             f_at = ex.submit(_at_lookup, vrm, mileage, spec_confirmed)

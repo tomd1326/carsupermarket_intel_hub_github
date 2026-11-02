@@ -1742,7 +1742,6 @@ function loadFromServer(fetchSP = false, fromFetchData = false) {
         .catch(err => {
             document.getElementById('table-error').textContent = 'Failed to load data: ' + err;
             document.getElementById('table-error').classList.remove('d-none');
-            awsLoginIfExpired(document.getElementById('table-error'), String(err));
             hideTableOverlay();
         })
         .finally(() => {

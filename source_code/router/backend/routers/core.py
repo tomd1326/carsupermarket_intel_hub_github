@@ -418,6 +418,15 @@ def is_admin(user: str | None) -> bool:
 templates.env.globals['user_is_admin'] = is_admin
 
 
+def is_local_app() -> bool:
+    """Running on your own computer, not Lambda (AWS sets AWS_LAMBDA_FUNCTION_NAME
+    in every Lambda). The account menu's Sign In To AWS only works here."""
+    return not os.getenv("AWS_LAMBDA_FUNCTION_NAME")
+
+
+templates.env.globals['is_local_app'] = is_local_app
+
+
 # Name and email for the account menu at the top right of every page, cached
 # per process the same way as page names. Settings > Users reloads this
 # container's copy on save; other containers catch up within the TTL. A failed

@@ -53,6 +53,14 @@
 .chart-row.collapsed .add-my-chart-btn,
 .chart-row.collapsed .in-my-chart-btn { display: none !important; }
 .my-charts-empty { color: #64748b; font-size: 0.85rem; padding: 8px 0; }
+/* Admins Only badge: a chart no one else is sent yet. Sized like the chart
+   buttons beside it; colour from Settings > Appearance. */
+.admin-only-badge {
+    flex: none; display: inline-flex; align-items: center; gap: 4px;
+    border: 1px solid var(--kpi-admin-only, #b45309); color: var(--kpi-admin-only, #b45309);
+    background: color-mix(in srgb, var(--kpi-admin-only, #b45309) 10%, #fff);
+    border-radius: 6px; padding: 3px 10px; font-size: 0.74rem; font-weight: 700; white-space: nowrap;
+}
 .at-strip { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 12px; }
 /* Size from Settings > Appearance ("Autotrader Figures Size"); padding
    and the figure are in em so the box keeps its shape at any size. */

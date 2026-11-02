@@ -1,65 +1,47 @@
-/* "Sign In To AWS" button for pages that fail because the AWS session expired.
- *
- *   awsLoginIfExpired(containerElement, errorMessage)
- *
- * Does nothing unless the message is the expired-credentials one. Otherwise it
- * adds a button to the container. Clicking it asks the server to run
- * `aws sso login` (only possible when the app runs on your own computer), then
- * checks every 2 seconds and reloads the page once the sign-in has finished.
+/* "Sign In To AWS" in the account menu (top right). Only on the app running
+ * on your own computer (see _navigation.html). Clicking it asks the server to
+ * run `aws sso login`, which opens the sign-in in a browser, then checks every
+ * 2 seconds until it has finished. The page is not reloaded, so nothing on
+ * screen is lost: retry whatever failed once it says Signed In.
  */
 (function () {
-    // The app's base path (e.g. /dev), taken from where this script was loaded.
+    // The app's base path, taken from where this script was loaded.
     const BASE = new URL(document.currentScript.src).pathname.replace(/\/static\/js\/aws_login\.js$/, '');
 
-    function isExpired(message) {
-        return /aws (sso|credentials)|sso session|credentials expired/i.test(message || '');
+    function start(item) {
+        const text = item.querySelector('.aws-login-text');
+        const set = t => { text.textContent = t; };
+        if (item.dataset.busy) return;
+        item.dataset.busy = '1';
+        set('Signing In - Complete It In The Browser...');
+        fetch(BASE + '/api/aws-sso-login', {method: 'POST'})
+            .then(async r => {
+                // An error page comes back as HTML, not JSON, so read it as text first.
+                const body = await r.text();
+                let j = {};
+                try { j = JSON.parse(body); } catch (e) { /* not JSON */ }
+                if (!r.ok) throw new Error(j.detail || 'Could not start the sign-in (error ' + r.status + ')');
+                const timer = setInterval(async () => {
+                    try {
+                        const s = await (await fetch(BASE + '/api/aws-sso-login')).json();
+                        if (s.status === 'ok' || s.status === 'failed') {
+                            clearInterval(timer);
+                            delete item.dataset.busy;
+                            set(s.status === 'ok' ? 'Signed In To AWS - Try Again' : 'Sign-In Did Not Finish - Sign In To AWS');
+                        }
+                    } catch (e) { /* keep waiting */ }
+                }, 2000);
+            })
+            .catch(e => {
+                delete item.dataset.busy;
+                set('Sign In To AWS (' + e.message + ')');
+            });
     }
 
-    // onDone (optional): called instead of reloading the page once signed in,
-    // for popups where a reload would lose what has been typed.
-    window.awsLoginIfExpired = function (container, message, onDone) {
-        if (!container || !isExpired(message) || container.querySelector('.aws-login-btn')) return;
-        const btn = document.createElement('button');
-        btn.type = 'button';
-        btn.className = 'btn btn-primary btn-sm aws-login-btn ms-2';
-        btn.innerHTML = '<i class="fas fa-key me-1"></i>Sign In To AWS';
-        const note = document.createElement('span');
-        note.className = 'ms-2';
-        btn.addEventListener('click', async () => {
-            btn.disabled = true;
-            note.textContent = 'Complete the sign-in in the browser window that opens...';
-            try {
-                const r = await fetch(BASE + '/api/aws-sso-login', { method: 'POST' });
-                // An error page comes back as HTML, not JSON, so read it as text first.
-                const text = await r.text();
-                let j = {};
-                try { j = JSON.parse(text); } catch (e) { /* not JSON */ }
-                if (!r.ok) {
-                    throw new Error(j.detail || (r.status === 404
-                        ? 'The sign-in route was not found - restart the app so it picks up the new code.'
-                        : 'Could not start the sign-in (error ' + r.status + ').'));
-                }
-            } catch (e) {
-                note.textContent = e.message;
-                btn.disabled = false;
-                return;
-            }
-            const timer = setInterval(async () => {
-                try {
-                    const s = await (await fetch(BASE + '/api/aws-sso-login')).json();
-                    if (s.status === 'ok') {
-                        clearInterval(timer);
-                        if (onDone) { onDone(); btn.disabled = false; } else location.reload();
-                    }
-                    else if (s.status === 'failed') {
-                        clearInterval(timer);
-                        note.textContent = 'The sign-in did not finish. Try again.';
-                        btn.disabled = false;
-                    }
-                } catch (e) { /* keep waiting */ }
-            }, 2000);
-        });
-        container.appendChild(btn);
-        container.appendChild(note);
-    };
+    document.addEventListener('click', e => {
+        const item = e.target.closest('.aws-login-item');
+        if (!item) return;
+        e.preventDefault();
+        start(item);
+    });
 })();
