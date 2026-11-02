@@ -60,6 +60,10 @@
                 <div class="modal-body">
                     <div id="settings-error" class="alert alert-danger d-none py-1 small"></div>
 
+                    <div class="settings-body" data-auto-tabs>
+                    <nav class="settings-tabs"></nav>
+                    <div class="settings-panes">
+                    <div class="settings-pane" data-title="Rows">
                     <h6 class="dse-settings-section">Rows</h6>
                     <p class="text-muted small mb-2">Each row reads one figure per day from a COMPUTE_ or PRODUCT_ table.
                         A heading is drawn above a row whenever its Section differs from the row before.</p>
@@ -114,8 +118,9 @@
                             <button type="button" class="btn btn-sm btn-outline-secondary" onclick="closeRowEditor()">Cancel</button>
                         </div>
                     </div>
-
-                    <h6 class="dse-settings-section mt-4">Date Range And Comparison Columns</h6>
+                    </div>
+                    <div class="settings-pane" data-title="Date Range">
+                    <h6 class="dse-settings-section">Date Range And Comparison Columns</h6>
                     <div class="dse-form">
                         <label>Default Days (Up To And Including Yesterday) <input type="number" id="st-default_days" min="1" max="366"></label>
                         <label>Previous Period And Last Year
@@ -125,8 +130,9 @@
                             </select>
                         </label>
                     </div>
-
-                    <h6 class="dse-settings-section mt-4">Appearance</h6>
+                    </div>
+                    <div class="settings-pane" data-title="Appearance">
+                    <h6 class="dse-settings-section">Appearance</h6>
                     <div class="dse-form">
                         <label>Font Size <input type="number" id="st-font_size" min="9" max="20"></label>
                         <label>Row Height <input type="number" id="st-row_height" min="16" max="48"></label>
@@ -137,6 +143,9 @@
                         <label>Section Heading Colour <input type="color" id="st-section_bg"></label>
                         <label>Section Heading Text <input type="color" id="st-section_text"></label>
                         <label>Month Columns Colour <input type="color" id="st-summary_bg"></label>
+                    </div>
+                    </div>
+                    </div>
                     </div>
                 </div>
                 <div class="modal-footer">
@@ -150,6 +159,7 @@
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
     <script>window.BASE_URL = "{{ BASE_URL }}"; window.IS_ADMIN = {{ 'true' if is_admin else 'false' }};</script>
+    <script src="{{ static_url('js/settings_tabs.js') }}"></script>
     <script src="{{ static_url('js/shading.js') }}"></script>
     <script src="{{ static_url('js/searchable_select.js') }}"></script>
     <script src="{{ static_url('js/colour_picker.js') }}"></script>

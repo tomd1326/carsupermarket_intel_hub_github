@@ -241,6 +241,9 @@
         const lock = sectionSources[name];
         // A section locked to one data source only takes charts that read nothing else.
         if (lock && [...sources].some(s => s !== lock)) return `${name} (Obeya)`;
+        // A hidden section is left hidden: unhiding it would show every chart
+        // already in it to everyone, so the new charts get a section of their own.
+        if (hiddenSections.has(name)) return `${name} (Obeya)`;
         return name;
     };
 
@@ -335,7 +338,7 @@
     const adding = plan.filter(i => i.row);
     console.table(plan.map(({ Chart, Section, Action, Reads, Target }) => ({ Chart, Section, Action, Reads, Target })));
     const newSections = [...new Set(adding.map(i => i.row.section))].filter(s => !SECTIONS.includes(s));
-    const unhide = [...new Set(adding.map(i => i.row.section))].filter(s => hiddenSections.has(s));
+    const unhide = [];
     console.log(`${adding.length} to add, ${plan.filter(i => i.Action.startsWith('already')).length} already there, `
         + `${plan.filter(i => i.Action.startsWith('skip')).length} skipped.`
         + (newSections.length ? ` New sections: ${newSections.join(', ')}.` : '')

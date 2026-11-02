@@ -90,36 +90,58 @@
                     <div class="col-auto">
                         <button type="submit" class="btn btn-primary">Save</button>
                     </div>
-                    <div class="col-12">
-                        <details>
-                            <summary class="small">Email Wording (Opens In Outlook From The Edit Popup)</summary>
-                            <div class="form-text mb-2">Use {first_name}, {link} and {expires}. Your own signature is added by Outlook. Leave a box empty to use the built-in wording.</div>
-                            <div class="row g-2">
-                                <div class="col-md-6">
-                                    <label for="password_email_subject_activate" class="form-label mb-1">Activation Email Subject</label>
-                                    <input type="text" class="form-control mb-2" id="password_email_subject_activate" name="password_email_subject_activate" value="{{ link_settings.password_email_subject_activate }}">
-                                    <label for="password_email_body_activate" class="form-label mb-1">Activation Email Text</label>
-                                    <textarea class="form-control" rows="9" id="password_email_body_activate" name="password_email_body_activate">{{ link_settings.password_email_body_activate }}</textarea>
-                                </div>
-                                <div class="col-md-6">
-                                    <label for="password_email_subject_reset" class="form-label mb-1">Reset Email Subject</label>
-                                    <input type="text" class="form-control mb-2" id="password_email_subject_reset" name="password_email_subject_reset" value="{{ link_settings.password_email_subject_reset }}">
-                                    <label for="password_email_body_reset" class="form-label mb-1">Reset Email Text</label>
-                                    <textarea class="form-control" rows="9" id="password_email_body_reset" name="password_email_body_reset">{{ link_settings.password_email_body_reset }}</textarea>
-                                </div>
-                            </div>
-                        </details>
-                    </div>
                 </form>
                 <div class="form-text">Open a user with Edit to make an activation link (no password yet) or a reset link. Each link works once and stops working after this many hours. Passwords need {{ password_rules_text }}.</div>
             </div>
         </div>
         {% endif %}
 
+        <div class="card mb-4">
+            <div class="card-header fw-semibold">Email Wording</div>
+            {% if request.query_params.get('wordingok') %}
+            <div class="alert alert-success mb-0 rounded-0 border-0 py-2 px-3">Email wording saved.</div>
+            {% endif %}
+            {% if request.query_params.get('wordingerr') %}
+            <div class="alert alert-danger mb-0 rounded-0 border-0 py-2 px-3">{{ request.query_params.get('wordingerr') }}</div>
+            {% endif %}
+            <div class="card-body">
+                {% if email_wording %}
+                <form method="post" action="{{ BASE_URL }}/settings/password-email-wording">
+                    <input type="hidden" name="source" value="{{ source }}">
+                    <details>
+                        <summary class="small">Activation And Reset Emails (Open In Outlook From The Edit Popup)</summary>
+                        <div class="form-text mb-2">One version for prod and dev. Use {first_name}, {link} and {expires}. Your own signature is added by Outlook. Leave a box empty to use the built-in wording.</div>
+                        <div class="row g-2 mb-2">
+                            <div class="col-md-6">
+                                <label for="password_email_subject_activate" class="form-label mb-1">Activation Email Subject</label>
+                                <input type="text" class="form-control mb-2" id="password_email_subject_activate" name="password_email_subject_activate" value="{{ email_wording.password_email_subject_activate }}">
+                                <label for="password_email_body_activate" class="form-label mb-1">Activation Email Text</label>
+                                <textarea class="form-control" rows="9" id="password_email_body_activate" name="password_email_body_activate">{{ email_wording.password_email_body_activate }}</textarea>
+                            </div>
+                            <div class="col-md-6">
+                                <label for="password_email_subject_reset" class="form-label mb-1">Reset Email Subject</label>
+                                <input type="text" class="form-control mb-2" id="password_email_subject_reset" name="password_email_subject_reset" value="{{ email_wording.password_email_subject_reset }}">
+                                <label for="password_email_body_reset" class="form-label mb-1">Reset Email Text</label>
+                                <textarea class="form-control" rows="9" id="password_email_body_reset" name="password_email_body_reset">{{ email_wording.password_email_body_reset }}</textarea>
+                            </div>
+                        </div>
+                        <button type="submit" class="btn btn-primary">Save</button>
+                    </details>
+                </form>
+                {% else %}
+                <div class="small text-danger">The email wording could not be loaded from prod's database.</div>
+                {% endif %}
+            </div>
+        </div>
+
         <div class="card">
             <div class="card-header fw-semibold d-flex align-items-center justify-content-between">
                 <span>Accounts{% if viewing_prod %} <span class="text-muted fw-normal small">(prod)</span>{% endif %}</span>
-                <span class="d-flex gap-2">
+                <span class="d-flex gap-2 align-items-center">
+                    <span class="form-check mb-0 fw-normal small">
+                        <input class="form-check-input" type="checkbox" id="not-activated-only">
+                        <label class="form-check-label" for="not-activated-only">Not Activated Only ({{ all_users|select('in', inactive)|list|length }})</label>
+                    </span>
                     <button type="button" class="btn btn-outline-secondary btn-sm" id="copy-emails-btn">Copy Emails</button>
                     <a href="{{ BASE_URL }}/settings/users/export?source={{ source }}" class="btn btn-outline-secondary btn-sm">Export CSV</a>
                     <button type="button" class="btn btn-outline-primary btn-sm" id="nexus-fill-btn" title="Fill in empty Nexus ids, site and company for users already here, matched on email">Fill From Nexus</button>
@@ -152,6 +174,7 @@
                             <th class="text-nowrap">Company Name</th>
                             <th class="text-nowrap">Site Name</th>
                             <th class="text-nowrap">Last Login</th>
+                            <th class="text-nowrap">Pages</th>
                             <th></th>
                         </tr>
                     </thead>
@@ -161,7 +184,8 @@
                         {% set d = people.get(u, {}) %}
                         {% if d.company_name and d.company_name not in companies %}{% set _ = companies.append(d.company_name) %}{% endif %}
                         {% set ll = last_logins.get(u, {}) %}
-                        <tr>
+                        {% set user_pages = access.get(u, []) %}
+                        <tr data-inactive="{{ '1' if u in inactive else '0' }}">
                             <td class="text-nowrap">{{ ((d.first_name or '') ~ ' ' ~ (d.last_name or ''))|trim }}
                                 {% if u in inactive %}<span class="badge bg-warning text-dark ms-1">Not Activated</span>{% endif %}
                                 {% if u in buyers %}<span class="badge bg-info text-dark ms-1">Buyer</span>{% endif %}
@@ -172,6 +196,10 @@
                             <td class="text-nowrap">{{ d.company_name or '' }}</td>
                             <td class="text-nowrap">{{ d.site_name or '' }}</td>
                             <td class="text-muted text-nowrap">{{ ll.last_login or 'Never' }}</td>
+                            <td class="text-nowrap">
+                                {% if u == admin_username %}All
+                                {% elif access_loaded %}{{ user_pages|length }} of {{ pages|length }}{% endif %}
+                            </td>
                             <td class="text-end">
                                 <button type="button" class="btn btn-sm btn-outline-primary edit-user-btn"
                                         data-username="{{ u }}"
@@ -189,6 +217,7 @@
                                         data-last-seen="{{ ll.last_seen or 'Never' }}"
                                         data-pending="{{ '1' if u in inactive else '0' }}"
                                         data-buyer="{{ '1' if u in buyers else '0' }}"
+                                        data-pages="{{ user_pages|sort|join(',') }}"
                                         data-admin="{{ '1' if u == admin_username else '0' }}">Edit</button>
                             </td>
                         </tr>
@@ -205,7 +234,7 @@
     {# One popup for Add User and Edit. Edit fills it from the row's data-
        attributes; the username cannot be changed once created. #}
     <div class="modal fade" id="userModal" tabindex="-1" aria-labelledby="userModalTitle" aria-hidden="true">
-        <div class="modal-dialog">
+        <div class="modal-dialog modal-lg">
             <div class="modal-content">
                 <form method="post" action="{{ BASE_URL }}/settings/user/save" id="user-form" autocomplete="off">
                     <div class="modal-header">
@@ -270,6 +299,31 @@
                         <div class="form-check mb-2" id="um-buyer-row">
                             <input class="form-check-input" type="checkbox" id="um-buyer" name="is_buyer">
                             <label class="form-check-label" for="um-buyer">Buyer <span class="text-muted">(listed in the Cars Bought Buyer dropdown)</span></label>
+                        </div>
+                        <div class="border rounded p-2 mb-2" id="um-access-row">
+                            {% if access_loaded %}
+                            <input type="hidden" name="access_shown" value="1">
+                            <div class="d-flex align-items-center justify-content-between mb-1">
+                                <span class="fw-semibold">Page Access</span>
+                                <span class="d-flex gap-2">
+                                    <button type="button" class="btn btn-outline-secondary btn-sm" id="um-access-all">Select All</button>
+                                    <button type="button" class="btn btn-outline-secondary btn-sm" id="um-access-none">Clear</button>
+                                </span>
+                            </div>
+                            <div class="row row-cols-1 row-cols-md-3 g-1">
+                                {% for page in pages %}
+                                <div class="col">
+                                    <div class="form-check mb-0">
+                                        <input class="form-check-input um-access" type="checkbox" name="access" value="{{ page.key }}" id="um-access-{{ page.key }}">
+                                        <label class="form-check-label" for="um-access-{{ page.key }}">{{ page_name(page.key) }}</label>
+                                    </div>
+                                </div>
+                                {% endfor %}
+                            </div>
+                            <div class="form-text mb-0">A change takes effect within a minute.</div>
+                            {% else %}
+                            <div class="small text-danger">Page access could not be loaded, so saving here leaves it as it is.</div>
+                            {% endif %}
                         </div>
                         <div class="mb-2" id="um-password-row">
                             <label for="um-password" class="form-label mb-1">Password</label>
@@ -378,6 +432,9 @@
             show($('um-org-row'), !isAdmin);
             $('um-buyer').checked = !!opts.buyer;
             show($('um-buyer-row'), !isAdmin);
+            const ticked = (opts.pages || '').split(',');
+            document.querySelectorAll('.um-access').forEach(box => { box.checked = ticked.includes(box.value); });
+            show($('um-access-row'), !isAdmin);
             $('um-password').value = '';
             const rules = 'Needs {{ password_rules_text }}.';
             $('um-password-help').textContent = isAdd
@@ -424,12 +481,24 @@
                 admin: btn.dataset.admin === '1',
                 pending: btn.dataset.pending === '1',
                 buyer: btn.dataset.buyer === '1',
+                pages: btn.dataset.pages,
             }));
         });
-        // Every email in the list as one semicolon separated line, to paste into Outlook's To box.
+        {% if access_loaded %}
+        const tickAll = on => document.querySelectorAll('.um-access').forEach(box => { box.checked = on; });
+        $('um-access-all').addEventListener('click', () => tickAll(true));
+        $('um-access-none').addEventListener('click', () => tickAll(false));
+        {% endif %}
+        $('not-activated-only').addEventListener('change', e => {
+            document.querySelectorAll('#accounts-table tbody tr').forEach(tr => {
+                show(tr, !e.target.checked || tr.dataset.inactive === '1');
+            });
+        });
+        // Every email shown in the list as one semicolon separated line, to paste into Outlook's To box.
         $('copy-emails-btn').addEventListener('click', async () => {
             const emails = [...new Set(
                 [...document.querySelectorAll('.edit-user-btn')]
+                    .filter(b => b.closest('tr').style.display !== 'none')
                     .map(b => (b.dataset.email || '').trim())
                     .filter(Boolean)
             )];

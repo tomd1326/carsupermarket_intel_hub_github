@@ -155,17 +155,14 @@
             </div>
             <p class="od-modal-sub">Applies to this page, for everyone.</p>
             <div class="od-modal-error" id="od-settings-error"></div>
-            <div class="od-settings-body">
-                <nav class="od-settings-tabs">
-                    <button type="button" data-tab="od-tab-bands" class="active">Bands</button>
-                    <button type="button" data-tab="od-tab-shading">Highlighting</button>
-                </nav>
-                <div>
-                    <div class="od-settings-pane active" id="od-tab-bands">
+            <div class="settings-body" data-auto-tabs>
+                <nav class="settings-tabs"></nav>
+                <div class="settings-panes">
+                    <div class="settings-pane" id="od-tab-bands" data-title="Bands">
                         <div class="od-hint mb-3">Type the upper limit of each band, separated by commas. The labels are built from them, and the last band is everything above the final limit.</div>
                         <div id="od-bands-rows"></div>
                     </div>
-                    <div class="od-settings-pane" id="od-tab-shading">
+                    <div class="settings-pane" id="od-tab-shading" data-title="Highlighting">
                         <div class="od-section-title">Default Colour Scheme</div>
                         <div class="d-flex gap-4 flex-wrap align-items-end mb-2">
                             <div>
@@ -248,6 +245,7 @@
     <script src="{{ static_url('js/shading.js') }}"></script>
     <script src="{{ static_url('js/orders_deliveries.js') }}"></script>
     {% if is_admin %}
+    <script src="{{ static_url('js/settings_tabs.js') }}"></script>
     <script src="{{ static_url('js/orders_deliveries_settings.js') }}"></script>
     {% endif %}
 </body>

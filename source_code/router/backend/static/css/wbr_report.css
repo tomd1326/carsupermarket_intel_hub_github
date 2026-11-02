@@ -1,0 +1,10 @@
+/* Weekly Business Review > Report view (wbr_report.js). The section strip and
+   slide reuse the .wbr-deck and .wbr-slide styles in kpi.css. */
+.wbr-view-switch { display: inline-flex; gap: 2px; }
+.wbr-view-switch .btn.active { background: #0d3d6e; border-color: #0d3d6e; color: #fff; }
+.wbr-report-empty { color: #64748b; padding: 24px 0; }
+.wbr-report-warning { color: #92400e; background: #fef3c7; border-radius: 6px; padding: 4px 8px; font-size: 0.82rem; }
+.wbr-report-section { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 3px 0; font-size: 0.85rem; }
+.wbr-report-section label { margin: 0; }
+.wbr-report-settings-status { color: #64748b; font-size: 0.82rem; }
+.wbr-report-source-error { color: #b91c1c; }

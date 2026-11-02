@@ -5,6 +5,8 @@ import re
 import psycopg2
 import psycopg2.extras
 
+from utils.ddl_once import once_per_database
+
 logger = logging.getLogger(__name__)
 
 VALUATION_TTL_HOURS = 36
@@ -645,6 +647,72 @@ def ensure_vehicles_exist(conn, vrms: list[str]) -> None:
             [(vrm,) for vrm in vrms],
             page_size=WRITE_PAGE_SIZE,
         )
+
+
+BUYER_FIGURES = ('rrp', 'est_prep_cost')
+
+
+@once_per_database
+def _ensure_buyer_figures_table(conn) -> None:
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS vehicle_buyer_figures (
+                vrm VARCHAR(20) PRIMARY KEY REFERENCES vehicles (vrm),
+                rrp NUMERIC(12, 2),
+                est_prep_cost NUMERIC(12, 2),
+                updated_by VARCHAR(100),
+                updated_at TIMESTAMP
+            )
+            """
+        )
+    conn.commit()
+
+
+def fetch_buyer_figures(conn, vrms: list[str]) -> dict[str, dict]:
+    """The buyer's current figures, for the VRMs that have any: {vrm: {rrp,
+    est_prep_cost, updated_by, updated_at}}."""
+    if not vrms:
+        return {}
+    _ensure_buyer_figures_table(conn)
+    with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        cur.execute(
+            "SELECT vrm, rrp, est_prep_cost, updated_by, updated_at FROM vehicle_buyer_figures WHERE vrm IN %s",
+            (tuple(vrms),)
+        )
+        rows = cur.fetchall()
+    conn.commit()
+    return {r['vrm']: {'rrp': _to_float(r['rrp']), 'est_prep_cost': _to_float(r['est_prep_cost']),
+                       'updated_by': r['updated_by'], 'updated_at': r['updated_at']} for r in rows}
+
+
+def save_buyer_figures(conn, rows: list[dict], user: str) -> None:
+    """Rows of {vrm, rrp and/or est_prep_cost}. Only the figures a row carries
+    change, and None clears one. Called by every page buyers enter them on."""
+    rows = [r for r in rows if any(f in r for f in BUYER_FIGURES)]
+    if not rows:
+        return
+    _ensure_buyer_figures_table(conn)
+    ensure_vehicles_exist(conn, [r['vrm'] for r in rows])
+    now = datetime.datetime.utcnow()
+    with conn.cursor() as cur:
+        for figure in BUYER_FIGURES:
+            values = [(r['vrm'], r[figure], user, now) for r in rows if figure in r]
+            if values:
+                psycopg2.extras.execute_values(
+                    cur,
+                    f"""
+                    INSERT INTO vehicle_buyer_figures (vrm, {figure}, updated_by, updated_at)
+                    VALUES %s
+                    ON CONFLICT (vrm) DO UPDATE SET
+                        {figure}   = EXCLUDED.{figure},
+                        updated_by = EXCLUDED.updated_by,
+                        updated_at = EXCLUDED.updated_at
+                    """,
+                    values,
+                    page_size=WRITE_PAGE_SIZE,
+                )
+    conn.commit()
 
 
 def upsert_vehicles(conn, vehicles: list[dict]) -> None:

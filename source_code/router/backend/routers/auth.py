@@ -149,6 +149,8 @@ def set_password_save(
     if redeemed is None:
         return _set_password_page(request, invalid=True)
     VALID_USERS[username] = pwd_hash
+    if purpose == 'activate':
+        _reload_users_from_aurora()   # their page access, before they first sign in
     logger.info("User %s set a password from a %s link", username, purpose)
     return RedirectResponse(url=BASE_URL + "/login?pwset=1", status_code=303)
 

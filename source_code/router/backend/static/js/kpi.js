@@ -733,6 +733,9 @@
         wbr_snap: 'setWbrSnap', wbr_slide_gridlines: 'setWbrSlideGridlines',
         wbr_slide_border_px: 'setWbrSlideBorderPx', wbr_slide_border_colour: 'setWbrSlideBorderColour',
         wbr_slide_title_px: 'setWbrSlideTitlePx', wbr_slide_subtitle_px: 'setWbrSlideSubtitlePx',
+        wbr_report_on: 'setWbrReportOn', wbr_report_months: 'setWbrReportMonths',
+        wbr_report_weeks: 'setWbrReportWeeks', wbr_report_weeks_per_month: 'setWbrReportWeeksPerMonth',
+        wbr_report_recon_default: 'setWbrReportReconDefault', wbr_report_recon_floor: 'setWbrReportReconFloor',
     };
     // Changing these changes what is loaded, so the charts are fetched again.
     const WBR_LOAD_SETTINGS = ['wbr_months_after', 'wbr_months_scroll', 'wbr_weeks_after', 'wbr_weeks_scroll'];
@@ -756,6 +759,7 @@
         });
         document.getElementById('wbrSettingsError').classList.remove('show');
         if (typeof WbrBudgets !== 'undefined') WbrBudgets.reset();
+        if (typeof WbrReport !== 'undefined') WbrReport.openSettings();
         showWbrSettingsTab(wbrSettingsTab);
         document.getElementById('wbrSettingsModal').classList.add('open');
     }
@@ -787,6 +791,7 @@
             // Budget edits first: if they fail, nothing else is saved and the popup stays open.
             // Then the charts' budget targets are read again, so a new mapping or figure shows on Save.
             if (typeof WbrBudgets !== 'undefined' && await WbrBudgets.save()) await loadWbrBudgetTargets();
+            if (typeof WbrReport !== 'undefined') await WbrReport.saveSettings();
             const resp = await fetch(BASE_URL + '/kpi/settings', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -1081,6 +1086,55 @@
             const week = values.slice(i - 6, i + 1).filter(v => v !== null && v !== undefined);
             return week.length ? week.reduce((a, b) => a + b, 0) / week.length : null;
         });
+    }
+
+    // The columns a chart's 7-day figure is pooled from, when it is one column
+    // divided by another: the chart's Divide By, or a '/' between its metrics.
+    // A '*' chart is left out: a day's cost is slots x price that day, so the
+    // plain average of the days is the right figure. Null when not pooled.
+    function rollingPooledParts(d) {
+        if (d.calc) return [d.calc.num, d.calc.den];
+        const parts = d.side_parts || [];
+        const ops = parts.slice(1).map(p => p.op || '+');
+        return ops.includes('/') && !ops.includes('*') ? parts.map(p => p.data) : null;
+    }
+
+    // Each point from the columns' averages over that day and the 6 before it,
+    // then combined: 8 calls / 436 valuations over 7 days is 1.8%, however the
+    // days' own percentages came out. Only days with a figure of their own count.
+    function rollingPooled(shown, lists, combine, ownDayOnly) {
+        const known = v => v !== null && v !== undefined;
+        return shown.map((v, i) => {
+            if (i < 6 || (ownDayOnly && !known(v))) return null;
+            const days = [];
+            for (let j = i - 6; j <= i; j++) if (known(shown[j])) days.push(j);
+            if (!days.length) return null;
+            return combine(lists.map(l => days.reduce((t, j) => t + (known(l[j]) ? l[j] : 0), 0) / days.length));
+        });
+    }
+
+    // One series of a chart's 7-day view: pooled on a divided or weighted
+    // chart, otherwise the plain average of the days.
+    function rollingSeries(row, d, key, ownDayOnly = false) {
+        const shown = d[key];
+        if (!shown) return shown;
+        const plain = () => rolling7(shown, ownDayOnly);
+        // A budget target replaces the columns' own targets on the review.
+        if (key === 'values_target' && WBR && wbrBudgetTargets[row.id]) return plain();
+        const pooled = rollingPooledParts(d);
+        if (pooled) {
+            const lists = pooled.map(p => p[key]);
+            if (lists.some(l => !l)) return plain();
+            if (d.calc) return rollingPooled(shown, lists, ([t, b]) => (b ? t / b * d.calc.scale : null), ownDayOnly);
+            const ops = d.side_parts.slice(1).map(p => p.op || '+');
+            return rollingPooled(shown, lists, avgs => evalTerms(avgs, ops, true), ownDayOnly);
+        }
+        const weights = key === 'values' ? d.weights : key === 'values_n1' ? d.weights_n1 : null;
+        if (!weights) return plain();
+        const known = v => v !== null && v !== undefined;
+        const weighted = shown.map((v, i) => (known(v) && known(weights[i]) ? v * weights[i] : null));
+        const counted = shown.map((v, i) => (known(v) ? weights[i] : null));
+        return rollingPooled(shown, [weighted, counted], ([t, w]) => (w ? t / w : null), ownDayOnly);
     }
 
     function buildCustomRowElement(row) {
@@ -2348,8 +2402,8 @@
         // 7-day average on the daily chart only; the cached data is kept as
         // loaded so switching back needs no reload.
         if (rollingOn(row.id)) {
-            d = { ...d, values: rolling7(d.values, true), values_n1: rolling7(d.values_n1),
-                  values_target: rolling7(d.values_target) };
+            d = { ...d, values: rollingSeries(row, d, 'values', true), values_n1: rollingSeries(row, d, 'values_n1'),
+                  values_target: rollingSeries(row, d, 'values_target') };
         }
 
         const nulls = arr => arr.map(() => null);
@@ -2890,8 +2944,10 @@
             const parts = sideData.side_parts || [];
             const first = cols.length;
             parts.forEach(p => cols.push({ head: (p.op ? p.op + ' ' : '') + metricName(p.source, p.name), title: p.name,
-                                           cell: i => partFmt(p, at(p.data, i)) }));
-            if (parts.length > 1) cols.push({ head: totalHead, total: true, cell: i => plain(at(sideData, i)) });
+                                           cell: i => partFmt(p, at(p.data, i)),
+                                           sum: days => partFmt(p, days.reduce((t, j) => t + (at(p.data, j) || 0), 0)) }));
+            if (parts.length > 1) cols.push({ head: totalHead, total: true, cell: i => plain(at(sideData, i)),
+                                              sum: d.calc ? days => plain(days.reduce((t, j) => t + (at(sideData, j) || 0), 0)) : null });
             const span = parts.length + (parts.length > 1 ? 1 : 0);
             if (span) {
                 groups.push({ label, span, start: s > 0 });
@@ -2903,22 +2959,30 @@
                     cell: (i, v) => (blank(v) ? '-' : resultFmt(v)) });
         groups.push({ label: 'Result', span: 1, start: true });
         const rolling = kind === 'd' && rollingOn(row.id);
+        const pooled = rolling && !!rollingPooledParts(d);
         const rowsHtml = [];
         const cellHtml = (i, v) => cols.map(c => `<td class="${c.result ? 'calc-res' : c.total ? 'calc-tot' : ''}${c.start ? ' calc-start' : ''}">${escHtml(c.cell(i, v))}</td>`).join('');
         let footer = '';
         if (rolling) {
-            // The chart point is the average of this day and the 6 before it.
+            // The chart point covers this day and the 6 before it.
             const included = [];
+            const includedDays = [];
             for (let j = Math.max(0, index - 6); j <= index; j++) {
                 const v = d.values[j];
                 if (blank(v)) continue;
                 included.push(v);
+                includedDays.push(j);
                 rowsHtml.push(`<tr><td class="calc-date">${escHtml(ukDate(d.dates[j]))}</td>${cellHtml(j, v)}</tr>`);
             }
             const sum = included.reduce((a, b) => a + b, 0);
-            footer = `<tr class="calc-foot"><td colspan="${cols.length}">7-day average: ${escHtml(included.length ? resultFmt(sum) : '-')}`
-                + ` (sum of ${included.length} day${included.length === 1 ? '' : 's'}) / ${included.length}</td>`
-                + `<td class="calc-res">${escHtml(result && !blank(result.v) ? resultFmt(result.v) : '-')}</td></tr>`;
+            const resultCell = `<td class="calc-res">${escHtml(result && !blank(result.v) ? resultFmt(result.v) : '-')}</td>`;
+            footer = pooled
+                // A divided chart: the columns' totals, which the result comes from.
+                ? `<tr class="calc-foot"><td class="calc-date">Total</td>`
+                  + cols.slice(0, -1).map(c => `<td class="${c.total ? 'calc-tot' : ''}${c.start ? ' calc-start' : ''}">${escHtml(c.sum ? c.sum(includedDays) : '')}</td>`).join('')
+                  + resultCell.replace('calc-res', `calc-res${cols[cols.length - 1].start ? ' calc-start' : ''}`) + '</tr>'
+                : `<tr class="calc-foot"><td colspan="${cols.length}">7-day average: ${escHtml(included.length ? resultFmt(sum) : '-')}`
+                  + ` (sum of ${included.length} day${included.length === 1 ? '' : 's'}) / ${included.length}</td>${resultCell}</tr>`;
         } else {
             rowsHtml.push(`<tr>${cellHtml(index, result ? result.v : null)}</tr>`);
         }
@@ -2962,7 +3026,9 @@
         }
         const howHtml = `<div class="calc-how"><div class="calc-how-title">How This Is Worked Out</div>`
             + `<div><span class="calc-how-label">Calculation:</span> ${escHtml(words)}</div>`
-            + (rolling
+            + (pooled
+                ? `<div>Worked out from the totals of the days below, not by averaging each day's result.</div>`
+                : rolling
                 ? `<div>Worked out for each day below, then the chart shows the average of the last 7 days.</div>`
                 : `<div><span class="calc-how-label">For this point:</span> <b>${escHtml(numbers)}</b></div>`)
             + `</div>`;

@@ -71,6 +71,12 @@ class ColumnEditor {
                 this.render();
             }
         });
+        // The name boxes are sized by measuring them, which gives nothing while
+        // their settings section or popup is hidden, so size them again once shown.
+        const pane = el.closest('.settings-pane');
+        if (pane) pane.addEventListener('settings-pane-open', () => this.renderShown());
+        const popup = el.closest('.modal');
+        if (popup) popup.addEventListener('shown.bs.modal', () => this.renderShown());
         this.render();
     }
 
