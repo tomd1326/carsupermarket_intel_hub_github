@@ -411,15 +411,14 @@
             </div>
             <div class="modal-error" id="chartModalError"></div>
 
-            <!-- Tabs down the left, grouped by what gets changed together: title
-                 and placement (what the chart is and where it goes) | what is
-                 plotted | how stacked columns look | number format and axis (a
-                 format change usually needs the axis changing too) | View
-                 Vehicles. The target is not here: it has its own Targets popup. -->
+            <!-- Tabs down the left, grouped by what gets changed together: what is
+                 plotted, then its title and placement | how stacked columns look |
+                 number format and axis (a format change usually needs the axis
+                 changing too) | View Vehicles. The target is not here: it has its
+                 own Targets popup. -->
             <div class="chart-modal-body">
             <nav class="chart-tabs">
-                <button type="button" data-tab="title" onclick="showChartTab('title')">Title &amp; Placement</button>
-                <button type="button" data-tab="data" onclick="showChartTab('data')">Data</button>
+                <button type="button" data-tab="data" onclick="showChartTab('data')">Data, Title &amp; Placement</button>
                 <button type="button" data-tab="columns" class="stacked-only" onclick="showChartTab('columns')">Columns</button>
                 <button type="button" data-tab="labels" onclick="showChartTab('labels')">Number Format</button>
                 <button type="button" data-tab="axis" onclick="showChartTab('axis')">Axis &amp; Target</button>
@@ -515,9 +514,6 @@
                     </div>
                 </div>
             </div>
-            </div>
-
-            <div class="chart-pane" data-pane="title">
             <div class="modal-section-title">Title</div>
             <div class="modal-grid">
                 <div class="modal-field span-2">
@@ -557,7 +553,7 @@
             <div class="modal-grid three">
                 <div class="modal-field">
                     <label for="fmtSelect">Label Format</label>
-                    <select id="fmtSelect">
+                    <select id="fmtSelect" onchange="updateTimeFromField()">
                         <option value="num">Number</option>
                         <option value="pct">Percent (%) - value is already a %</option>
                         <option value="pct100">Percent (%) - from a decimal, 1.02 = 102%</option>
@@ -565,6 +561,9 @@
                         <option value="km">Thousands (k) and millions (M)</option>
                         <option value="gbp">Pounds (£)</option>
                         <option value="gbpkm">Pounds (£) in thousands (k) and millions (M)</option>
+                        <option value="mins">Time - Minutes</option>
+                        <option value="hours">Time - Hours</option>
+                        <option value="days">Time - Days</option>
                     </select>
                 </div>
                 <div class="modal-field">
@@ -576,12 +575,22 @@
                         <option value="3">3</option>
                     </select>
                 </div>
+                <div class="modal-field" id="timeFromField" style="display:none;">
+                    <label for="timeFromSelect">The Data Is Held In</label>
+                    <select id="timeFromSelect" title="The unit the data holds, e.g. Minutes for MINUTES_TO_FIRST_CALL">
+                        <option value="sec">Seconds</option>
+                        <option value="min">Minutes</option>
+                        <option value="hour">Hours</option>
+                        <option value="day">Days</option>
+                    </select>
+                    <div class="modal-hint">Targets and axis limits are still typed in this unit.</div>
+                </div>
             </div>
             <div class="modal-section-title">Hover Box</div>
             <div class="modal-grid">
                 <div class="modal-field">
                     <label for="hoverFmtSelect">Hover Format</label>
-                    <select id="hoverFmtSelect" title="The box shown when hovering over a point, set apart from the labels">
+                    <select id="hoverFmtSelect" onchange="updateTimeFromField()" title="The box shown when hovering over a point, set apart from the labels">
                         <option value="">Full Figure</option>
                         <option value="num">Number</option>
                         <option value="pct">Percent (%) - value is already a %</option>
@@ -590,6 +599,9 @@
                         <option value="km">Thousands (k) and millions (M)</option>
                         <option value="gbp">Pounds (£)</option>
                         <option value="gbpkm">Pounds (£) in thousands (k) and millions (M)</option>
+                        <option value="mins">Time - Minutes</option>
+                        <option value="hours">Time - Hours</option>
+                        <option value="days">Time - Days</option>
                     </select>
                 </div>
                 <div class="modal-field">
@@ -1227,6 +1239,10 @@
                     <input type="text" id="dsName" maxlength="60" placeholder="e.g. GA4 Events">
                 </div>
                 <div class="modal-field">
+                    <label for="dsSchema">Schema</label>
+                    <select id="dsSchema" onchange="onDsSchemaChange()"></select>
+                </div>
+                <div class="modal-field">
                     <label for="dsTable">Table</label>
                     <select id="dsTable" onchange="loadDataSourceColumns(this.value)"></select>
                 </div>
@@ -1243,8 +1259,8 @@
                     <select id="dsDate"></select>
                 </div>
                 <div class="modal-field ds-long-only">
-                    <label for="dsSplit">Name Column</label>
-                    <select id="dsSplit"></select>
+                    <label for="dsSplit" id="dsSplitLabel">Name Column</label>
+                    <select id="dsSplit" onchange="renderDsOrder()"></select>
                 </div>
                 <div class="modal-field ds-value-only">
                     <label for="dsValue">Value Column</label>
@@ -1256,6 +1272,19 @@
             <div class="modal-field ds-long-only">
                 <label>Value Order (Bottom Of The Stack First)</label>
                 <div id="dsOrderList"></div>
+            </div>
+            <!-- One column minus another on each row. Each becomes a Total and a
+                 Count metric in Edit Chart. -->
+            <div class="modal-field ds-records-only">
+                <label>Metrics To Average</label>
+                <div id="dsDifferenceList"></div>
+                <button type="button" class="btn btn-edit btn-sm" onclick="addDsDifference()"><i class="fas fa-plus"></i> Add Metric</button>
+                <div class="modal-hint">
+                    The metrics to chart from this table. Pick one number column and leave Minus on (nothing), or pick two
+                    columns to subtract: two dates or times give days or minutes (later column first), two numbers a plain
+                    subtraction. Rows with a blank are left out. Each shows in Edit Chart as &lt;name&gt; - Average.
+                    Leave Count Rows By on (none) unless you want a count per value of a column like a status.
+                </div>
             </div>
             <div class="modal-error" id="dataSourceError"></div>
             <div class="ds-form-buttons">

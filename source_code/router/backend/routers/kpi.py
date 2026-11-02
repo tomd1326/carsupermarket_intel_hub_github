@@ -1136,11 +1136,13 @@ def _data_source_metrics(entry: dict) -> list:
     _checked_data_source(entry)
     if entry["shape"] == "wide":
         return kds.wide_metric_columns(entry, _source_columns(entry["table"]))
-    return kds.order_names(_data_source_names(entry), entry.get("name_order"))
+    return kds.order_names(_data_source_names(entry), entry.get("name_order")) + kds.difference_metrics(entry)
 
 
 def _data_source_names(entry: dict) -> list:
     """Every name in a long or records table's name column, A-Z (cached)."""
+    if not entry.get("split_column"):
+        return []
     cached = _source_names_cache.get(entry["id"])
     if cached and time.time() - cached[0] < _SOURCE_META_TTL:
         return cached[1]
@@ -1175,7 +1177,7 @@ def _fetch_data_source(entry: dict, metrics: list, fetch_start, fetch_end) -> di
     if not metrics:
         return {}
     sql, params = kds.fetch_sql({**entry, "table": f"{_VEHICLE_DB}.{entry['table']}"},
-                                metrics, fetch_start, fetch_end)
+                                metrics, fetch_start, fetch_end, _source_columns(entry["table"]))
     with SnowflakeClient() as sf:
         rows, names = sf.execute(sql, params)
     return kds.rows_to_by_date(entry, metrics, rows, names)
@@ -1286,15 +1288,27 @@ def kpi_data_source_save(request: Request, payload: dict, user: str = Depends(re
                 return {"status": "error", "message":
                         f"{table} has more than one row for some dates. Choose One Row Per Date Per Name, "
                         "or a table with one row per date"}
-        else:
+        elif entry.get("split_column"):
             s = entry["split_column"]
             with SnowflakeClient() as sf:
                 rows, _ = sf.execute(f"SELECT COUNT(DISTINCT {s}) FROM {_VEHICLE_DB}.{table}")
             if rows and rows[0][0] > kds.NAMES_MAX:
                 return {"status": "error", "message":
                         f"{s} has {rows[0][0]:,} different values, so each would be its own metric. "
-                        f"Choose a name column with at most {kds.NAMES_MAX} (e.g. a status column)"}
+                        + ("Leave Count Rows By on (none), or choose a column like a status"
+                           if entry["shape"] == "records"
+                           else f"Choose a name column with at most {kds.NAMES_MAX} (e.g. a status column)")}
         entry = kds.clean_entry(entry)
+        # A chart stores a difference by name, so one still in use cannot be
+        # renamed or removed.
+        previous = next((s for s in sources if s["id"] == entry["id"]), None)
+        if previous:
+            layout = _read_kpi_layout_value('layout') or {}
+            lost = set(kds.difference_metrics(previous)) - set(kds.difference_metrics(entry))
+            used = sorted(m for m in lost if kds.metric_references(layout, entry["id"], m))
+            if used:
+                return {"status": "error", "message":
+                        f"{used[0]} is used by a chart, so it cannot be renamed or removed. Change that chart first"}
         saved = [entry if s["id"] == entry["id"] else s for s in sources]
         if entry not in saved:
             saved.append(entry)
@@ -1382,6 +1396,8 @@ def kpi_metrics(request: Request, refresh: str = "", user: str = Depends(require
         except Exception as e:
             logger.warning("KPI data source %s metric list failed: %s", entry["id"], e)
             continue
+        difference_names = set(kds.difference_metrics(entry))
+        differences = kds.difference_info(entry, _source_columns(entry["table"])) if difference_names else {}
         for col in names:
             metrics.append({
                 "source": entry["id"],
@@ -1390,7 +1406,10 @@ def kpi_metrics(request: Request, refresh: str = "", user: str = Depends(require
                 "description": f"From {entry['table']}",
                 # Stacked charts draw this source's series in its Value Order.
                 "ordered": bool(entry.get("name_order")),
-                "suggested_agg": _guess_agg(col),
+                "suggested_agg": "sum" if col in difference_names else _guess_agg(col),
+                "is_difference": col in difference_names,
+                # On a difference's total: its count and what the figure is in.
+                "difference": differences.get(col),
                 "has_n1": True,
                 "has_target": False,
             })
@@ -2788,13 +2807,16 @@ def _validate_layout(layout: dict, sections: list, locks: dict | None = None) ->
         if label_decimals is not None and (not isinstance(label_decimals, int) or isinstance(label_decimals, bool)
                                            or not 0 <= label_decimals <= 4):
             return "bad label_decimals"
-        if row.get("fmt", "num") not in ("num", "pct", "pct100", "k", "km", "gbp", "gbpkm"):
+        if row.get("fmt", "num") not in ("num", "pct", "pct100", "k", "km", "gbp", "gbpkm", "mins", "hours", "days"):
             return f"bad fmt: {row.get('fmt')}"
+        # The unit a time format's figure is held in (Number Format > Figure Is In).
+        if row.get("time_from", "min") not in ("sec", "min", "hour", "day"):
+            return f"bad time_from: {row.get('time_from')}"
         decimals = row.get("decimals", 0)
         if not isinstance(decimals, int) or not (0 <= decimals <= 3):
             return f"bad decimals: {decimals}"
         # Hover box format, set apart from the labels: "" = the figure in full.
-        if row.get("hover_fmt", "") not in ("", "num", "pct", "pct100", "k", "km", "gbp", "gbpkm"):
+        if row.get("hover_fmt", "") not in ("", "num", "pct", "pct100", "k", "km", "gbp", "gbpkm", "mins", "hours", "days"):
             return f"bad hover_fmt: {row.get('hover_fmt')}"
         hover_decimals = row.get("hover_decimals")
         if hover_decimals is not None and (isinstance(hover_decimals, bool) or not isinstance(hover_decimals, int)

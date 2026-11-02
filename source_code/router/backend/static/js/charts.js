@@ -403,6 +403,7 @@ const DayWindow = {
             chart.data.datasets.forEach((dataset, i) => { dataset.data = this.slice(full.data[i]); });
             // The background reads this, so it has to move with the line.
             chart.$bgTarget = this.slice(full.target);
+            if (chart.$fitWindow) chart.$fitWindow();
             chart.update('none');
         });
     },

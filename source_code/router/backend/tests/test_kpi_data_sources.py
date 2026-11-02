@@ -82,6 +82,130 @@ def test_records_entry_counts_rows_and_has_no_value_column():
     assert "COUNT(*)" in sql and "SUM(" not in sql
 
 
+BCB_COLUMNS = {"VALUATION_CREATED_DATE": "DATE", "VALUATION_STATUS": "TEXT", "CREATED_AT": "TIMESTAMP_NTZ",
+               "CALL_AT": "TIMESTAMP_NTZ", "FINAL": "NUMBER", "SYSTEM": "FLOAT", "LISTED_ON": "DATE"}
+BCB = {"id": "ds_bcb", "name": "BCB", "table": "PRODUCT_VALUATIONS.VALUATIONS_BCB", "shape": "records",
+       "date_column": "VALUATION_CREATED_DATE", "split_column": "VALUATION_STATUS",
+       "differences": [{"name": " Mins To Call ", "column_a": "CALL_AT", "column_b": "CREATED_AT", "filters": []},
+                       {"name": "Price Gap", "column_a": "FINAL", "column_b": "SYSTEM",
+                        "filters": [{"column": "VALUATION_STATUS", "operator": "equals", "value": " DEAD "}]}]}
+
+
+def test_difference_is_checked_against_the_table():
+    assert kds.validate_entry(BCB, BCB_COLUMNS, []) is None
+    bad = lambda **change: {**BCB, "differences": [{**BCB["differences"][0], **change}]}
+    assert kds.validate_entry(bad(column_a="NOPE; DROP TABLE X"), BCB_COLUMNS, []) is not None
+    assert kds.validate_entry(bad(column_a="FINAL"), BCB_COLUMNS, []) is not None    # a number minus a time
+    assert kds.validate_entry(bad(column_a="CREATED_AT"), BCB_COLUMNS, []) is not None    # the same column twice
+    assert kds.validate_entry(bad(name=" "), BCB_COLUMNS, []) is not None
+    assert kds.validate_entry(bad(filters=[{"column": "NOPE", "operator": "equals", "value": "x"}]), BCB_COLUMNS, []) is not None
+    assert kds.validate_entry(bad(filters=[{"column": "FINAL", "operator": "equals", "value": " "}]), BCB_COLUMNS, []) is not None
+    assert kds.validate_entry(bad(filters=[{"column": "FINAL", "operator": "drop", "value": "x"}]), BCB_COLUMNS, []) is not None
+    assert kds.validate_entry(bad(extra=1), BCB_COLUMNS, []) is not None
+    same_name = {**BCB, "differences": [BCB["differences"][0], {**BCB["differences"][1], "name": "mins to call"}]}
+    assert kds.validate_entry(same_name, BCB_COLUMNS, []) is not None
+
+
+def test_records_table_with_differences_needs_no_name_column():
+    no_name = {k: v for k, v in BCB.items() if k != "split_column"}
+    assert kds.validate_entry(no_name, BCB_COLUMNS, []) is None
+    assert kds.validate_entry({**no_name, "split_column": ""}, BCB_COLUMNS, []) is None
+    assert "split_column" not in kds.clean_entry({**no_name, "split_column": ""})
+    assert kds.validate_entry({**no_name, "differences": []}, BCB_COLUMNS, []) is not None
+    assert kds.validate_entry({**no_name, "split_column": "NOPE"}, BCB_COLUMNS, []) is not None
+    sql, params = kds.fetch_sql(no_name, ["Price Gap - Total"], D1, D2, BCB_COLUMNS)
+    assert "COUNT(*)" not in sql and sql.count("%s") == len(params)
+    long_no_name = {k: v for k, v in EVENTS.items() if k != "split_column"}
+    assert kds.validate_entry(long_no_name, EVENTS_COLUMNS, []) is not None
+
+
+def test_one_number_column_needs_no_second_column():
+    one = {**BCB, "differences": [{"name": "Final", "column_a": "FINAL", "column_b": "", "filters": []}]}
+    assert kds.validate_entry(one, BCB_COLUMNS, []) is None
+    assert kds.difference_info(one, BCB_COLUMNS)["Final - Total"]["kind"] == "number"
+    assert kds.clean_entry(one)["differences"][0]["column_b"] == ""
+    sql, params = kds.fetch_sql(one, ["Final - Total", "Final - Count"], D1, D2, BCB_COLUMNS)
+    assert "SUM(FINAL)" in sql and "COUNT(FINAL)" in sql and sql.count("%s") == len(params)
+    no_b_key = {**BCB, "differences": [{"name": "Final", "column_a": "FINAL"}]}
+    assert kds.validate_entry(no_b_key, BCB_COLUMNS, []) is None
+    assert kds.fetch_sql(no_b_key, ["Final - Total"], D1, D2, BCB_COLUMNS)
+    a_date_alone = {**BCB, "differences": [{"name": "When", "column_a": "CALL_AT", "column_b": "", "filters": []}]}
+    assert kds.validate_entry(a_date_alone, BCB_COLUMNS, []) is not None
+
+
+def test_is_true_and_is_false_filters_need_no_value():
+    flagged = {**BCB, "differences": [{"name": "Final", "column_a": "FINAL", "column_b": "", "filters": [
+        {"column": "VALUATION_STATUS", "operator": "is_false", "value": "old text"},
+        {"column": "VALUATION_STATUS", "operator": "is_true", "value": ""}]}]}
+    assert kds.validate_entry(flagged, BCB_COLUMNS, []) is None
+    assert [f["value"] for f in kds.clean_entry(flagged)["differences"][0]["filters"]] == ["", ""]
+    sql, params = kds.fetch_sql(flagged, ["Final - Total"], D1, D2, BCB_COLUMNS)
+    assert "TRY_TO_BOOLEAN(TO_VARCHAR(VALUATION_STATUS)) = FALSE" in sql
+    assert "TRY_TO_BOOLEAN(TO_VARCHAR(VALUATION_STATUS)) = TRUE" in sql
+    assert sql.count("%s") == len(params)
+
+
+def test_only_a_records_table_can_have_differences():
+    wide = {**SUMMARY, "differences": BCB["differences"]}
+    assert kds.validate_entry(wide, SUMMARY_COLUMNS, []) is not None
+    assert kds.validate_entry({**EVENTS, "differences": BCB["differences"]}, EVENTS_COLUMNS, []) is not None
+
+
+def test_difference_kind_follows_the_column_types():
+    assert kds.difference_kind("DATE", "DATE") == "days"
+    assert kds.difference_kind("TIMESTAMP_NTZ", "DATE") == "minutes"
+    assert kds.difference_kind("NUMBER", "FLOAT") == "number"
+    assert kds.difference_kind("NUMBER", "DATE") is None
+
+
+def test_each_difference_is_a_total_and_a_count_metric():
+    assert kds.difference_metrics(BCB) == ["Mins To Call - Total", "Mins To Call - Count", "Price Gap - Total", "Price Gap - Count"]
+    assert kds.difference_info(BCB, BCB_COLUMNS)["Mins To Call - Total"] == {"count": "Mins To Call - Count", "kind": "minutes"}
+    assert kds.difference_info(BCB, BCB_COLUMNS)["Price Gap - Total"]["kind"] == "number"
+    assert kds.difference_metrics(SUMMARY) == []
+
+
+def test_clean_entry_trims_differences_and_drops_them_from_other_shapes():
+    cleaned = kds.clean_entry(BCB)
+    assert cleaned["differences"][0]["name"] == "Mins To Call"
+    assert cleaned["differences"][1]["filters"][0]["value"] == "DEAD"
+    assert "differences" not in kds.clean_entry({**BCB, "differences": []})
+
+
+def test_difference_sql_keeps_status_counts_and_binds_values_in_order():
+    sql, params = kds.fetch_sql(BCB, ["DEAD", "Mins To Call - Total", "Price Gap - Count"], D1, D2, BCB_COLUMNS)
+    assert "COUNT(*)" in sql
+    assert "SUM(DATEDIFF(MINUTE, CREATED_AT, CALL_AT))" in sql
+    assert "COUNT((FINAL - SYSTEM))" in sql
+    assert "SUM((FINAL - SYSTEM))" not in sql and "COUNT(DATEDIFF" not in sql
+    assert sql.count("%s") == len(params)
+    day1, day2 = str(D1), str(D2)
+    assert params == [day1, day2, day1, day2, "DEAD", "Mins To Call - Total", day1, day2, "Price Gap - Count", day1, day2, " DEAD "]
+
+
+def test_difference_alone_reads_without_a_status_count():
+    sql, params = kds.fetch_sql(BCB, ["Mins To Call - Count"], D1, D2, BCB_COLUMNS)
+    assert "COUNT(*)" not in sql and "COUNT(DATEDIFF(MINUTE, CREATED_AT, CALL_AT))" in sql
+    assert sql.count("%s") == len(params)
+    assert params == [str(D1), str(D2), "Mins To Call - Count", str(D1), str(D2)]
+
+
+def test_difference_rows_become_daily_figures_with_0_on_a_day_with_none():
+    metrics = ["Mins To Call - Total", "Mins To Call - Count"]
+    rows = [(D1, "Mins To Call - Total", 90), (D1, "Mins To Call - Count", 3), (D2, None, None)]
+    out = kds.rows_to_by_date(BCB, metrics, rows, ["D", "S", "V"])
+    assert out[D1] == {"Mins To Call - Total": 90, "Mins To Call - Count": 3}
+    assert out[D2] == {"Mins To Call - Total": 0, "Mins To Call - Count": 0}
+
+
+def test_metric_references_finds_one_metric_wherever_a_chart_uses_it():
+    layout = {"rows": [{"source": "ds_bcb", "metric": "Gap - Total", "divide_by": {"source": "ds_bcb", "metric": "Gap - Count"}},
+                       {"metric": "Gap - Total"}, {"source": "ds_other", "metric": "Gap - Total"}]}
+    assert kds.metric_references(layout, "ds_bcb", "Gap - Total") == 1
+    assert kds.metric_references(layout, "ds_bcb", "Gap - Count") == 1
+    assert kds.metric_references(layout, "ds_bcb", "Other") == 0
+
+
 def test_new_id_is_stable_shape_and_unique():
     assert kds.new_id("GA4 Events", set()) == "ds_ga4_events"
     assert kds.new_id("GA4 Events", {"ds_ga4_events"}) == "ds_ga4_events_2"
