@@ -2,6 +2,21 @@
    list of pages stays identical across both. Expects `sections` and
    `active_section` in the context. #}
 <div class="settings-nav">
+    {# Page Settings: the main button opens the first page; the pages are only
+       listed while one is open, as the list would otherwise fill the nav. #}
+    {% set page_settings_active = active_section in page_settings_sections|map(attribute=0)|list %}
+    <a href="{{ BASE_URL }}/settings/section/{{ page_settings_sections[0][0] }}"
+       class="btn {% if page_settings_active %}btn-secondary{% else %}btn-outline-secondary{% endif %}">
+        Page Settings
+    </a>
+    {% if page_settings_active %}
+    {% for slug, page_key in page_settings_sections %}
+    <a href="{{ BASE_URL }}/settings/section/{{ slug }}"
+       class="btn settings-nav-sub {% if slug == active_section %}btn-dark{% else %}btn-outline-secondary{% endif %}">
+        {{ page_name(page_key) }}
+    </a>
+    {% endfor %}
+    {% endif %}
     {% for slug, label, title in sections %}
     <a href="{{ BASE_URL }}/settings/section/{{ slug }}"
        class="btn {% if slug == active_section %}btn-dark{% else %}btn-outline-secondary{% endif %}">
@@ -14,7 +29,6 @@
         ('Users', [
             ('users', 'User Accounts', BASE_URL ~ '/settings/users'),
             ('user_activity', 'User Activity', BASE_URL ~ '/settings/user-activity'),
-            ('page_access', 'Page Access', BASE_URL ~ '/settings/page-access'),
         ]),
     ] %}
     {% for group_label, subs in groups %}

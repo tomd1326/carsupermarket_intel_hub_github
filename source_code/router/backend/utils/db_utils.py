@@ -331,6 +331,21 @@ def widen_settings_values(conn) -> None:
     conn.commit()
 
 
+def read_password_email_wording(conn) -> dict:
+    """The activation and reset email wording. There is one version, stored in
+    prod's database: pass a get_prod_activity_connection connection. A blank or
+    missing value uses the built-in wording. Unlike get_settings this RAISES on a
+    failed read, so a save cannot overwrite wording nobody was shown."""
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT key, value FROM settings WHERE key IN %s", (PASSWORD_EMAIL_KEYS,))
+            stored = dict(cur.fetchall())
+    except Exception:
+        conn.rollback()
+        raise
+    return {key: stored.get(key) or SETTINGS_DEFAULTS[key] for key in PASSWORD_EMAIL_KEYS}
+
+
 def get_settings(conn, user: str = None) -> dict:
     try:
         with conn.cursor() as cur:
@@ -1319,6 +1334,7 @@ def add_pending_user(conn, username: str) -> str:
             "INSERT INTO users (username, pwd_hash, activated) VALUES (%s, %s, FALSE)",
             (username, pwd_hash),
         )
+        _start_with_no_pages(cur, username)
     conn.commit()
     return pwd_hash
 
@@ -1329,7 +1345,9 @@ def mark_user_activated(conn, username: str) -> None:
     if not _password_links_present(conn):
         return
     with conn.cursor() as cur:
-        cur.execute("UPDATE users SET activated = TRUE WHERE username = %s", (username,))
+        cur.execute("UPDATE users SET activated = TRUE WHERE username = %s AND NOT activated", (username,))
+        if cur.rowcount == 1:
+            _start_with_no_pages(cur, username)
     conn.commit()
 
 
@@ -1418,6 +1436,8 @@ def redeem_password_link(conn, token: str, pwd_hash: str) -> tuple | None:
             if cur.rowcount != 1:
                 conn.rollback()
                 return None
+            if row[1] == 'activate':
+                _start_with_no_pages(cur, row[0])
         conn.commit()
     except Exception:
         conn.rollback()
@@ -1604,6 +1624,7 @@ def add_nexus_users(conn, rows: list) -> list:
                      (r.get('last_name') or '').strip() or None, email,
                      *[r.get(c) if r.get(c) not in ('', None) else None for c in NEXUS_USER_COLUMNS]),
                 )
+                _start_with_no_pages(cur, email)
                 taken.add(email_match_key(email))
                 created.append(email)
         conn.commit()
@@ -1626,21 +1647,35 @@ def remove_user(conn, username: str) -> None:
 #
 # The '__configured__' key is not a page — see page_registry.CONFIGURED_MARKER.
 
+_USER_PAGE_ACCESS_DDL = """
+    CREATE TABLE IF NOT EXISTS user_page_access (
+        username   VARCHAR(100) NOT NULL,
+        page_key   VARCHAR(64)  NOT NULL,
+        granted_at TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+        granted_by VARCHAR(100),
+        PRIMARY KEY (username, page_key)
+    )
+"""
+
+
 @once_per_database
 def _ensure_user_page_access_table(conn) -> None:
     with conn.cursor() as cur:
-        cur.execute(
-            """
-            CREATE TABLE IF NOT EXISTS user_page_access (
-                username   VARCHAR(100) NOT NULL,
-                page_key   VARCHAR(64)  NOT NULL,
-                granted_at TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
-                granted_by VARCHAR(100),
-                PRIMARY KEY (username, page_key)
-            )
-            """
-        )
+        cur.execute(_USER_PAGE_ACCESS_DDL)
     conn.commit()
+
+
+def _start_with_no_pages(cur, username: str) -> None:
+    """Record a new or just activated account as configured, so it gets no pages
+    until the admin ticks some, not the defaults. Runs inside the caller's
+    transaction and leaves any access already saved as it is."""
+    from routers.page_registry import CONFIGURED_MARKER
+    cur.execute(_USER_PAGE_ACCESS_DDL)
+    cur.execute(
+        "INSERT INTO user_page_access (username, page_key, granted_by) VALUES (%s, %s, %s) "
+        "ON CONFLICT DO NOTHING",
+        (username, CONFIGURED_MARKER, 'new account'),
+    )
 
 
 def load_all_page_access(conn) -> dict:
@@ -1819,7 +1854,8 @@ def _get_prod_activity_pool() -> psycopg2.pool.ThreadedConnectionPool:
 
 @contextmanager
 def get_prod_activity_connection():
-    """Read prod's user sessions from any environment. Callers must not write."""
+    """Prod's database from any environment: its user sessions, its users (the
+    Users page's Prod view) and the one version of the password email wording."""
     try:
         pool = _get_prod_activity_pool()
     except UnauthorizedSSOTokenError:

@@ -157,6 +157,24 @@
                 </div>
             </div>
 
+            <div class="card mb-3">
+                <div class="card-body">
+                    <div class="section-title">Buyer Figures <span class="src">Shared With Cars Bought</span></div>
+                    <div class="d-flex flex-wrap align-items-end gap-2">
+                        <div>
+                            <label class="form-label small fw-bold text-muted mb-1" for="bfRrp">RRP</label>
+                            <input id="bfRrp" class="form-control form-control-sm" style="width:130px;" inputmode="decimal">
+                        </div>
+                        <div>
+                            <label class="form-label small fw-bold text-muted mb-1" for="bfPrep">Estimated Prep Cost</label>
+                            <input id="bfPrep" class="form-control form-control-sm" style="width:130px;" inputmode="decimal">
+                        </div>
+                        <button type="button" id="bfSave" class="btn btn-sm btn-primary">Save</button>
+                        <span id="bfStatus" class="small text-muted"></span>
+                    </div>
+                </div>
+            </div>
+
             <div class="row g-3 align-items-stretch">
                 <div class="col-12 col-md-6 col-xl-3">
                     <div class="card h-100"><div class="card-body">
@@ -228,6 +246,7 @@
             // Separate request: reads the store only, never calls HPI, so it
             // does not hold up the rest of the page.
             loadSpecCheck();
+            loadBuyerFigures();
             // Also separate: these need the SharePoint sheets, which are far
             // slower than the valuation. Shown as loading until they arrive.
             loadMarket(cap.cap_id, at.retail_valuation);
@@ -236,6 +255,28 @@
             $('errorState').style.display = 'none';
             $('detail').style.display = '';
         }
+
+        // RRP and prep cost for this car, the same figures Cars Bought uses.
+        function showBuyerFigures(f) {
+            $('bfRrp').value = f.rrp ?? '';
+            $('bfPrep').value = f.est_prep_cost ?? '';
+            $('bfStatus').textContent = f.updated_at ? `Last Changed ${f.updated_at} By ${f.updated_by || 'Unknown'}` : '';
+        }
+
+        function loadBuyerFigures() {
+            jsonFetch(BASE_URL + '/assess-vehicle/buyer-figures/' + encodeURIComponent(VRM))
+                .then(showBuyerFigures)
+                .catch(err => { $('bfStatus').textContent = err.message; });
+        }
+
+        $('bfSave').addEventListener('click', () => {
+            $('bfStatus').textContent = 'Saving...';
+            jsonFetch(BASE_URL + '/assess-vehicle/buyer-figures/' + encodeURIComponent(VRM), {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({rrp: $('bfRrp').value, est_prep_cost: $('bfPrep').value}),
+            }).then(showBuyerFigures).catch(err => { $('bfStatus').textContent = err.message; });
+        });
 
         // Presence (Apex / Daily Buyers Sheet / Cars Bought) and buying
         // requirements. Fetched after the valuation is already on screen — a

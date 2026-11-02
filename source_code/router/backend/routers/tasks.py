@@ -19,6 +19,7 @@ import pandas as pd
 from utils.lambda_http import LambdaRequestsManager
 from utils.s3_tools import upload_file, download_file
 from utils.db_utils import (get_database_connection, get_settings)
+from utils.supplier_store import ensure_tables as ensure_supplier_tables
 from clients.autotrader_client import AutoTraderClient
 from clients.cap_client import CAPClient
 from clients.columns_mapper import get_columns_mapper
@@ -71,9 +72,10 @@ def read_tasks(request: Request, page: Optional[int] = 1, page_size: Optional[in
     at_least_one_pending = False
     offset = (page - 1) * page_size
     with get_database_connection() as conn:
-        # Get the list of suppliers
+        # Get the list of suppliers that send a stock list, not those we only get invoices from
+        ensure_supplier_tables(conn)
         with conn.cursor() as cursor:
-            cursor.execute("SELECT supplier_id, supplier_name FROM suppliers ORDER BY CASE WHEN supplier_name = 'Universal' THEN 1 ELSE 0 END, supplier_name")
+            cursor.execute("SELECT supplier_id, supplier_name FROM suppliers WHERE has_stock_list ORDER BY CASE WHEN supplier_name = 'Universal' THEN 1 ELSE 0 END, supplier_name")
             cols = [desc[0] for desc in cursor.description]
             suppliers = [dict(zip(cols, row)) for row in cursor.fetchall()]
 

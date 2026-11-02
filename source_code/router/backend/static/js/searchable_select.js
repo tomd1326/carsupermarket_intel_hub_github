@@ -60,7 +60,8 @@
         list.className = 'ss-list';
         el.appendChild(input);
         el.appendChild(list);
-        document.body.appendChild(el);
+        // Inside an open popup, or the popup takes the cursor back from the search box.
+        (sel.closest('.modal') || document.body).appendChild(el);
 
         const rect = sel.getBoundingClientRect();
         const width = Math.max(rect.width, 260);

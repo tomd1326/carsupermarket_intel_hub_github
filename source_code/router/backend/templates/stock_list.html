@@ -234,7 +234,7 @@
         <div class="modal-dialog modal-xl" style="max-width:min(1500px, 95vw)">
             <div class="modal-content">
                 <div class="modal-header">
-                    <h5 class="modal-title">Stock List settings</h5>
+                    <h5 class="modal-title">Stock List Settings</h5>
                     <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
                 </div>
                 <div class="modal-body">
@@ -243,24 +243,33 @@
                         <i class="fas fa-sync-alt spin" aria-hidden="true"></i> Loading settings...
                     </div>
                     <div id="settings-content" class="d-none">
+                    <div class="settings-body" data-auto-tabs>
+                    <nav class="settings-tabs"></nav>
+                    <div class="settings-panes">
+                    <div class="settings-pane" data-title="Columns">
                     <h6 class="settings-section">Columns</h6>
                     <p class="text-muted small mb-2">Columns of <strong>PRODUCT_VEHICLE_JOURNEY.CURRENT_STOCK</strong>.
                         The heading box sets the name shown on the page; leave it empty to show the column name.</p>
                     <div id="colEditor"><div class="text-muted small">Loading columns&hellip;</div></div>
-
-                    <h6 class="settings-section mt-4">Filters</h6>
+                    </div>
+                    <div class="settings-pane" data-title="Filters">
+                    <h6 class="settings-section">Filters</h6>
                     <p class="text-muted small mb-2">Each filter is a row of buttons on the page, one for every value
                         found in its column (a dropdown when there are more than 15). The description shows when
                         hovering the "i" next to the filter's title. Status, Missing and Search are always shown.</p>
                     <div id="filterEditor"></div>
                     <button type="button" class="btn btn-sm btn-outline-primary mt-2" onclick="addFilterDraft()">
-                        <i class="fas fa-plus"></i> Add filter</button>
-
-                    <h6 class="settings-section mt-4">Hard filters</h6>
+                        <i class="fas fa-plus"></i> Add Filter</button>
+                    </div>
+                    <div class="settings-pane" data-title="Hard Filters">
+                    <h6 class="settings-section">Hard Filters</h6>
                     <p class="text-muted small mb-2">These rules apply to the Snowflake data for everyone, including the totals and CSV export. They do not appear as buttons on the page. All rules must match.</p>
                     <div id="hardFilterEditor"></div>
                     <button type="button" class="btn btn-sm btn-outline-primary mt-2" onclick="addHardFilterDraft()">
-                        <i class="fas fa-plus"></i> Add hard filter</button>
+                        <i class="fas fa-plus"></i> Add Hard Filter</button>
+                    </div>
+                    </div>
+                    </div>
                     </div>
                 </div>
                 <div class="modal-footer">
@@ -273,6 +282,7 @@
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
     <script>window.BASE_URL = "{{ BASE_URL }}";</script>
+    <script src="{{ static_url('js/settings_tabs.js') }}"></script>
     <script src="{{ static_url('js/column_editor.js') }}"></script>
     <script src="{{ BASE_URL }}/static/js/stock_list.js"></script>
 </body>

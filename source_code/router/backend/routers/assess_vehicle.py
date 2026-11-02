@@ -16,7 +16,7 @@ from utils.vehicle_store import (
     fetch_selected_features, save_selected_features, save_spec_valuation,
     fetch_latest_valuation_id, fetch_spec_check, save_spec_check,
     fetch_vin_spec_features, save_vin_spec_features, ensure_vin_spec_seeded,
-    has_confirmed_spec,
+    has_confirmed_spec, fetch_buyer_figures, save_buyer_figures, BUYER_FIGURES,
 )
 
 from .core import (BASE_URL, templates, _track, _uk_now,
@@ -1061,6 +1061,36 @@ def assess_vehicle_image(cap_id: int, date: str = None,
         raise HTTPException(status_code=404, detail="No image available")
 
     return _serve(content, content_type)
+
+
+def _buyer_figures_reply(conn, vrm: str) -> dict:
+    found = fetch_buyer_figures(conn, [vrm]).get(vrm) or {}
+    when = found.get('updated_at')
+    return {'rrp': found.get('rrp'), 'est_prep_cost': found.get('est_prep_cost'),
+            'updated_by': found.get('updated_by'), 'updated_at': when.strftime('%d/%m/%Y %H:%M') if when else None}
+
+
+@router.get("/assess-vehicle/buyer-figures/{vrm}")
+def assess_vehicle_buyer_figures(vrm: str, user: str = Depends(require_page_api('assess_vehicle'))):
+    """The buyer's RRP and prep cost for this car, the same ones Cars Bought uses."""
+    with get_vehicle_database_connection() as conn:
+        return _buyer_figures_reply(conn, vrm.upper())
+
+
+@router.post("/assess-vehicle/buyer-figures/{vrm}")
+def assess_vehicle_save_buyer_figures(vrm: str, payload: dict,
+                                      user: str = Depends(require_page_api('assess_vehicle'))):
+    """{rrp, est_prep_cost}: a blank clears that figure."""
+    row = {'vrm': vrm.upper()}
+    for figure in BUYER_FIGURES:
+        text = str((payload or {}).get(figure) if (payload or {}).get(figure) is not None else '').replace(',', '').replace('£', '').strip()
+        try:
+            row[figure] = round(float(text), 2) if text else None
+        except ValueError:
+            raise HTTPException(status_code=400, detail=f"'{text}' is not a number")
+    with get_vehicle_database_connection() as conn:
+        save_buyer_figures(conn, [row], user)
+        return _buyer_figures_reply(conn, row['vrm'])
 
 
 @router.get("/assess-vehicle/features/{vrm}")

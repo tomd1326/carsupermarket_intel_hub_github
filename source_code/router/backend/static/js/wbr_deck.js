@@ -11,7 +11,7 @@
 // can sit on any number of slides and the grid's cards are never moved.
 // Item x / y / w / h are in grid squares (Settings: Slide Grid Columns / Rows).
 const WbrDeck = (() => {
-    const VIEW_KEY = 'wbrDeckView';   // admin only, this browser: 'slides' | 'grid'
+    const VIEW_KEY = 'wbrDeckView';   // admin only, this browser: 'slides' | 'grid' | 'report'
     let saved = null;                 // the deck as stored, or null if never saved
     let deck = null;                  // the deck shown (saved, or laid out from the grid)
     let current = 0;                  // index of the slide showing
@@ -32,11 +32,17 @@ const WbrDeck = (() => {
         try { return localStorage.getItem(VIEW_KEY); } catch (e) { return null; }
     }
 
-    // Slides show when the setting is on; the admin can also switch view in
-    // this browser, to build the slides before turning them on for everyone.
-    function active() {
+    // Report, then Slides, show when their setting is on; the admin can also
+    // switch view in this browser, to build them before turning them on for everyone.
+    function view() {
         const pref = viewPref();
-        return pref ? pref === 'slides' : Number(settings.wbr_slides_on) === 1;
+        if (pref) return pref;
+        if (Number(settings.wbr_report_on) === 1) return 'report';
+        return Number(settings.wbr_slides_on) === 1 ? 'slides' : 'grid';
+    }
+
+    function active() {
+        return view() === 'slides';
     }
 
     // The grid's charts laid out on slides: charts per row as on the grid,
@@ -196,15 +202,17 @@ const WbrDeck = (() => {
     function render() {
         const box = document.getElementById('wbrDeck');
         if (!box) return;
-        const on = active();
-        const viewBtn = document.getElementById('wbrViewBtn');
-        if (viewBtn) {
-            viewBtn.style.display = '';
-            document.getElementById('wbrViewText').textContent = on ? 'Grid View' : 'Slides View';
+        const shown = view();
+        const on = shown === 'slides';
+        const viewSwitch = document.getElementById('wbrViewSwitch');
+        if (viewSwitch) {
+            viewSwitch.style.display = '';
+            viewSwitch.querySelectorAll('[data-view]').forEach(b => b.classList.toggle('active', b.dataset.view === shown));
         }
-        document.getElementById('wbrGrid').style.display = on ? 'none' : '';
-        if (on) document.getElementById('wbrEmpty').style.display = 'none';
+        document.getElementById('wbrGrid').style.display = shown === 'grid' ? '' : 'none';
+        if (shown !== 'grid') document.getElementById('wbrEmpty').style.display = 'none';
         box.style.display = on ? '' : 'none';
+        if (typeof WbrReport !== 'undefined') WbrReport.setVisible(shown === 'report');
         destroyCharts();
         if (!on) return;
         const root = document.documentElement.style;
@@ -296,8 +304,8 @@ const WbrDeck = (() => {
         render();
     }
 
-    function toggleView() {
-        try { localStorage.setItem(VIEW_KEY, active() ? 'grid' : 'slides'); } catch (e) {}
+    function setView(name) {
+        try { localStorage.setItem(VIEW_KEY, name); } catch (e) {}
         render();
         // Charts drawn while the grid was hidden need their size again.
         setTimeout(resizeAllCharts, 10);
@@ -374,7 +382,7 @@ const WbrDeck = (() => {
 
     return {
         active, setSaved, refs, render, rowLoaded, addChart, removeItem, setText, setItemText,
-        addSlide, moveSlide, deleteSlide, show, toggleView,
+        addSlide, moveSlide, deleteSlide, show, setView,
         charts: () => Object.values(charts),
     };
 })();

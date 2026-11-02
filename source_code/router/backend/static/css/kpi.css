@@ -600,27 +600,7 @@
 .chart-row.collapsed .labels-toggle { display: none; }
 body.user-view .chart-row-admin { display: none !important; }
 body.targets-off.not-admin .targets-btn, body.targets-off.user-view .targets-btn { display: none !important; }
-/* Settings popup: tabs down the left, one pane showing on the right. The
-   box keeps one height whichever tab is open, so it does not jump. */
-.settings-body { display: grid; grid-template-columns: 170px minmax(0, 1fr); gap: 22px; min-height: 62vh; }
-.settings-tabs { display: flex; flex-direction: column; gap: 4px; border-right: 1px solid #e2e8f0; padding-right: 12px; }
-.settings-tabs button {
-    text-align: left; background: none; border: none; border-radius: 6px; padding: 8px 10px;
-    font-size: 0.88rem; font-weight: 600; color: #475569; cursor: pointer;
-}
-.settings-tabs button:hover { background: #f1f5f9; color: #0f172a; }
-.settings-tabs button.active { background: var(--c-table-header-bg); color: var(--c-table-header-text); }
-.settings-pane { display: none; }
-.settings-pane.active { display: block; }
-/* A tab's sub-sections, listed under it in the left menu while it is open. */
-.settings-subtabs { display: none; flex-direction: column; gap: 2px; margin: 0 0 4px 10px; padding-left: 8px; border-left: 2px solid #e2e8f0; }
-.settings-subtabs.open { display: flex; }
-.settings-subtabs button {
-    text-align: left; background: none; border: none; border-radius: 6px; padding: 6px 10px;
-    font-size: 0.82rem; font-weight: 600; color: #64748b; cursor: pointer;
-}
-.settings-subtabs button:hover { background: #f1f5f9; color: #0f172a; }
-.settings-subtabs button.active { background: #e2e8f0; color: #0f172a; }
+/* The settings popup's left-hand menu is in theme.css, shared with other pages. */
 .chart-subpane { display: none; }
 .chart-subpane.active { display: block; }
 /* Chart List keeps the box at the same 62vh as every other tab

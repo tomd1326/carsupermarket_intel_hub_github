@@ -47,6 +47,12 @@
         .veh-table input.capid { width: 80px; }
         .veh-table input.txt { width: 130px; }
         .veh-table .desc { max-width: 260px; white-space: normal; line-height: 1.2; }
+        /* Gridlines: the colour is set in Cars Bought Settings > Appearance. */
+        :root { --cb-grid: {{ grid_colour }}; --cb-missing: {{ missing_colour }}; }
+        /* An empty Buyer or Supplier, in a table cell or a box on the form. */
+        td.cb-missing, input.cb-missing, select.cb-missing { background-color: var(--cb-missing); color: #842029; font-weight: 600; }
+        .veh-table th, .veh-table td, .hist-table th, .hist-table td { border: 1px solid var(--cb-grid); }
+        .veh-table > :not(:first-child) { border-top: 0; }
         .veh-table .group-start { border-left: 2px solid var(--c-border); }
         .veh-table tfoot td { font-weight: 700; text-align: right; padding: 6px; border-top: 2px solid var(--c-border); }
         .tag { display: inline-block; font-size: 0.7rem; font-weight: 600; padding: 1px 6px; border-radius: 4px; margin: 1px 2px 1px 0; }
@@ -65,7 +71,29 @@
 
         .hist-table { font-size: 0.82rem; width: 100%; }
         .hist-table th { background: #f0f4f8; font-weight: 600; padding: 6px 8px; white-space: nowrap; }
-        .hist-table td { padding: 6px 8px; border-top: 1px solid #dee2e6; white-space: nowrap; }
+        .inbox-bar { height: 6px; min-width: 150px; border-radius: 3px; background: #e9eef5; overflow: hidden; margin-bottom: 3px; }
+        .inbox-bar > div { height: 100%; background: var(--c-primary); border-radius: 3px; }
+        /* All Vehicles Bought. Borders are not collapsed, as collapsed borders do
+           not stay with a sticky heading when the rows scroll. */
+        .all-scroll { max-height: 70vh; overflow: auto; }
+        .all-table { font-size: 0.8rem; width: max-content; min-width: 100%; border-collapse: separate; border-spacing: 0;
+                     border-top: 1px solid var(--cb-grid); border-left: 1px solid var(--cb-grid); }
+        .all-table th, .all-table td { border-right: 1px solid var(--cb-grid); border-bottom: 1px solid var(--cb-grid); padding: 3px 6px; white-space: nowrap; }
+        .all-table thead { position: sticky; top: 0; z-index: 2; }
+        .all-table th { background: var(--c-table-header-bg, #dbeafe); color: var(--c-table-header-text, #1e3a5f); font-weight: 600; }
+        .all-table th[data-sort] { cursor: pointer; user-select: none; }
+        .all-table th input { font-size: 0.75rem; height: 24px; padding: 1px 4px; min-width: 60px; }
+        .all-table td input, .all-table td select { font-size: 0.8rem; height: 24px; padding: 1px 4px; background-color: transparent; border-color: transparent; min-width: 70px; }
+        .all-table td input:focus, .all-table td select:focus { background-color: #fff; }
+        .all-table td.notes-wide input { min-width: 160px; }
+        .metric-editor { border: 1px solid var(--c-border); border-radius: var(--radius-md); padding: 12px; }
+        .metric-row { display: flex; gap: 6px; align-items: center; margin-bottom: 4px; }
+        .metric-row select, .metric-row input { flex: 1; min-width: 0; }
+        .metric-item { display: flex; gap: 8px; align-items: center; padding: 5px 8px; border-bottom: 1px solid var(--cb-grid); font-size: 0.85rem; }
+        .metric-item .grow { flex: 1; min-width: 0; }
+        .veh-table select.yesno { width: 76px; font-size: 0.8rem; height: 28px; padding: 2px 5px; }
+        .hist-table { border-collapse: collapse; }
+        .hist-table td { padding: 6px 8px; white-space: nowrap; }
         .hist-table tbody tr { cursor: pointer; }
         .hist-table tbody tr:hover { background: #f0f7ff; }
         #busy { display: none; }
@@ -97,13 +125,32 @@
                         <div class="importer-row">
                             <button type="button" class="btn btn-primary fw-bold" id="openUploadBtn"><i class="fas fa-file-invoice me-1"></i>Upload Invoice</button>
                             <button type="button" class="btn btn-outline-primary fw-bold" id="openEvaluatorBtn"><i class="fas fa-paste me-1"></i>From Evaluator</button>
+                            <button type="button" class="btn btn-outline-primary fw-bold" id="inboxCheckBtn"{% if not inbox_enabled %} style="display:none;"{% endif %} title="Look for new invoices in the SharePoint folder"><i class="fas fa-folder-open me-1"></i>Check Folder</button>
+                            <a class="btn btn-outline-primary fw-bold" id="inboxFolderLink" href="{{ inbox_folder_url }}" target="_blank" rel="noopener"{% if not inbox_enabled %} style="display:none;"{% endif %} title="Open the invoice folder in SharePoint"><i class="fas fa-external-link-alt me-1"></i>Open Folder</a>
                             <div class="flex-grow-1"></div>
                             {% if is_admin %}
                             <button class="btn btn-sm btn-outline-secondary text-nowrap" id="settingsBtn"><i class="fas fa-cog me-1"></i>Settings</button>
                             {% endif %}
                         </div>
+                        <div id="inboxLine" class="mt-2 small text-muted" style="display:none;"></div>
                         <div id="busy" class="mt-2 small text-muted"><i class="fas fa-spinner fa-spin me-1"></i><span id="busyText"></span></div>
                         <div id="srcMsg" class="small"></div>
+                    </div>
+                </div>
+
+                <div class="card mb-3" id="inboxCard" style="display:none;">
+                    <div class="card-body">
+                        <div class="section-title">Pending Invoices</div>
+                        <div class="small text-muted mb-2">From the SharePoint folder. Not counted as purchases until a buyer reviews and submits them.</div>
+                        <div style="max-height:300px;overflow:auto;">
+                            <table class="hist-table">
+                                <thead><tr>
+                                    <th>Found</th><th>File</th><th>Supplier</th><th>Invoice</th><th>Invoice Date</th>
+                                    <th class="text-end">Vehicles</th><th class="text-end">Gross (Invoice)</th><th>Status</th><th></th>
+                                </tr></thead>
+                                <tbody id="inboxBody"></tbody>
+                            </table>
+                        </div>
                     </div>
                 </div>
 
@@ -119,6 +166,7 @@
                                 <label class="form-label small fw-bold text-muted mb-1">Supplier Name</label>
                                 <input id="bSupplier" class="form-control form-control-sm" list="supplierList">
                                 <datalist id="supplierList"></datalist>
+                                <div class="small text-muted mt-1" id="supplierMatch"></div>
                             </div>
                             <div class="col-md-2">
                                 <label class="form-label small fw-bold text-muted mb-1">Invoice Number</label>
@@ -168,6 +216,27 @@
                             <button class="btn btn-outline-secondary" id="clearBtn">Clear</button>
                             <button class="btn btn-success fw-bold px-4" id="submitBtn"><i class="fas fa-check me-1"></i>Confirm And Submit</button>
                         </div>
+                    </div>
+                </div>
+
+                <div class="card mb-3">
+                    <div class="card-body">
+                        <div class="d-flex justify-content-between align-items-center mb-2 flex-wrap gap-2">
+                            <div class="section-title mb-0">All Vehicles Bought</div>
+                            <div class="d-flex gap-2 align-items-center small">
+                                <span class="text-muted text-nowrap" id="allCount"></span>
+                                <input id="allSearch" class="form-control form-control-sm" style="width:240px;" placeholder="Search All Columns">
+                                <button class="btn btn-sm btn-outline-secondary text-nowrap" id="allClearBtn">Clear Filters</button>
+                            </div>
+                        </div>
+                        <div id="allMetricErrors" class="small text-danger mb-1" style="display:none;"></div>
+                        <div class="all-scroll">
+                            <table class="all-table">
+                                <thead id="allHead"></thead>
+                                <tbody id="allBody"><tr><td class="text-muted">Loading...</td></tr></tbody>
+                            </table>
+                        </div>
+                        <div class="text-center mt-2"><button class="btn btn-sm btn-outline-primary" id="allMoreBtn" style="display:none;">Show More</button></div>
                     </div>
                 </div>
 
@@ -251,34 +320,203 @@
     </div>
 
     {% if is_admin %}
+    <!-- Add Supplier: the text read from an invoice no supplier matched -->
+    <div class="modal fade" id="supplierModal" tabindex="-1">
+        <div class="modal-dialog modal-xl">
+            <div class="modal-content">
+                <div class="modal-header"><h6 class="modal-title fw-bold">Add Supplier</h6>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
+                <div class="modal-body">
+                    <div class="row g-3">
+                        <div class="col-md-7">
+                            <div class="small fw-bold mb-1">Text Found On The Invoice <span class="fw-normal text-muted">(select some to use it as the Text On Invoice)</span></div>
+                            <pre id="supFoundText" class="small border rounded p-2 mb-0" style="height:52vh;overflow:auto;white-space:pre-wrap;"></pre>
+                        </div>
+                        <div class="col-md-5">
+                            <div class="small fw-bold mb-1">Suggestions</div>
+                            <div id="supSuggestions" class="d-flex flex-column gap-1 mb-3"></div>
+                            <label class="small fw-bold mb-1" for="supText">Text On Invoice <span class="fw-normal text-muted">(pick text only this supplier's invoices have)</span></label>
+                            <input id="supText" class="form-control form-control-sm mb-2">
+                            <label class="small fw-bold mb-1" for="supName">Supplier Name</label>
+                            <input id="supName" class="form-control form-control-sm" list="supNameList">
+                            <datalist id="supNameList"></datalist>
+                            <label class="small fw-bold mb-1 mt-2" for="supContact">Apex Supplier</label>
+                            <select id="supContact" class="form-select form-select-sm"></select>
+                            <div id="supError" class="small text-danger mt-2"></div>
+                        </div>
+                    </div>
+                </div>
+                <div class="modal-footer"><button class="btn btn-primary" id="supSaveBtn">Save</button></div>
+            </div>
+        </div>
+    </div>
+
     <!-- Admin settings -->
     <div class="modal fade" id="settingsModal" tabindex="-1">
-        <div class="modal-dialog modal-lg">
+        <div class="modal-dialog modal-xl">
             <div class="modal-content">
                 <div class="modal-header"><h6 class="modal-title fw-bold">Cars Bought Settings</h6>
                     <button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
                 <div class="modal-body">
-                    <div class="fw-bold mb-2">Custom Fields</div>
-                    <div class="small text-muted mb-2">Filled in by the buyer for each vehicle. Renaming a field keeps its saved values.</div>
-                    <table class="table table-sm small"><thead><tr><th>Label</th><th>Type</th><th>Required</th><th></th></tr></thead>
-                        <tbody id="cfBody"></tbody></table>
-                    <button class="btn btn-sm btn-outline-primary mb-3" id="cfAddBtn"><i class="fas fa-plus me-1"></i>Add Field</button>
-                    <div class="fw-bold mb-1">Reading Invoices</div>
+                    <div class="settings-body" data-auto-tabs>
+                    <nav class="settings-tabs"></nav>
+                    <div class="settings-panes">
+                    <div class="settings-pane" data-title="Reading Invoices">
                     <div class="small text-muted mb-2">Column headings for each field, comma separated, matched ignoring case and punctuation. When a supplier's invoice is not read, add its headings here.</div>
                     <table class="table table-sm small mb-2"><tbody id="colNamesBody"></tbody></table>
                     <label class="small fw-bold mb-1" for="feeWordsInput">Fee Words <span class="fw-normal text-muted">(a line containing one is a fee, not a car)</span></label>
                     <input id="feeWordsInput" class="form-control form-control-sm mb-2">
                     <label class="small fw-bold mb-1" for="evalHoursInput">Supplier Stock Evaluator Data Max Age (Hours) <span class="fw-normal text-muted">(older stored CAP / Autotrader data is not used)</span></label>
                     <input id="evalHoursInput" type="number" min="1" max="720" class="form-control form-control-sm mb-2" style="width:110px;">
+                    <div class="form-check mb-2">
+                        <input id="lookupReuseInput" type="checkbox" class="form-check-input">
+                        <label class="form-check-label small fw-bold" for="lookupReuseInput">Look Up CAP &amp; AT Reuses Stored Figures <span class="fw-normal text-muted">(within the age above and for the same mileage to the nearest 1,000. Off: always a live call)</span></label>
+                    </div>
                     <label class="small fw-bold mb-1" for="feeVatRateInput">VAT On Fees In A Car's Row (%) <span class="fw-normal text-muted">(e.g. Enterprise Service Fee: the row's VAT covers car and fee, so the fee gets this % and the car the rest)</span></label>
                     <input id="feeVatRateInput" type="number" min="0" max="100" step="0.01" class="form-control form-control-sm mb-2" style="width:110px;">
-                    <label class="small fw-bold mb-1" for="supplierNamesInput">Supplier Names On Invoices <span class="fw-normal text-muted">(one per line: Text On Invoice = Supplier Name; the first found on the invoice is used)</span></label>
-                    <textarea id="supplierNamesInput" class="form-control form-control-sm mb-3" rows="5"></textarea>
-                    <div class="fw-bold mb-1">Buyers</div>
+                    </div>
+                    <div class="settings-pane" data-title="Supplier Names">
+                    <div class="small text-muted mb-2">Which text on an invoice means which supplier. If several match, the longest text wins. Pending invoices are looked up again when you save.</div>
+                    <div class="d-flex gap-2 mb-2">
+                        <input id="snSearch" class="form-control form-control-sm" placeholder="Search Text Or Supplier">
+                        <button class="btn btn-sm btn-outline-primary text-nowrap" id="snAddBtn"><i class="fas fa-plus me-1"></i>Add Row</button>
+                    </div>
+                    <div style="max-height:46vh;overflow:auto;" class="mb-3">
+                        <table class="table table-sm small mb-0"><thead><tr><th>Text On Invoice</th><th>Supplier Name</th><th></th></tr></thead>
+                            <tbody id="snBody"></tbody></table>
+                    </div>
+                    <label class="small fw-bold mb-1" for="ownNamesInput">Our Own Names <span class="fw-normal text-muted">(comma separated: never suggested as a supplier)</span></label>
+                    <input id="ownNamesInput" class="form-control form-control-sm">
+                    </div>
+                    <div class="settings-pane" data-title="Apex Suppliers">
+                    <div class="small text-muted mb-2">Which Apex supplier (<code>contacts_suppliers__s</code>) each of our suppliers is. A supplier just added in Supplier Names shows here after Save.</div>
+                    <input id="scSearch" class="form-control form-control-sm mb-2" placeholder="Search Supplier">
+                    <div id="scStatus" class="small text-muted mb-2"></div>
+                    <div style="max-height:46vh;overflow:auto;">
+                        <table class="table table-sm small mb-0"><thead><tr><th>Supplier</th><th>Apex Supplier</th></tr></thead>
+                            <tbody id="scBody"></tbody></table>
+                    </div>
+                    </div>
+                    <div class="settings-pane" data-title="Supplier Rules">
+                    <div class="small text-muted mb-2">How one supplier's invoices are read. The supplier must be spelled as in Supplier Names. All of a car's fees add up into its Fees columns; hover over the Fees tag on the row to see each one.</div>
+                    <table class="table table-sm small"><thead><tr><th>Supplier</th><th>Extra Fee Words <span class="fw-normal text-muted">(comma separated)</span></th><th class="text-center">Priced Lines With No Reg Are Fees</th><th></th></tr></thead>
+                        <tbody id="srBody"></tbody></table>
+                    <button class="btn btn-sm btn-outline-primary" id="srAddBtn"><i class="fas fa-plus me-1"></i>Add Supplier</button>
+                    </div>
+                    <div class="settings-pane" data-title="SharePoint">
+                    <div class="small text-muted mb-2">Opening this page, or pressing Check Folder, reads new files in this folder and lists them as pending. Each file is read once, and PDFs and scans can use Textract, which is charged per page.</div>
+                    <div class="form-check mb-2">
+                        <input class="form-check-input" type="checkbox" id="inboxEnabledInput">
+                        <label class="form-check-label" for="inboxEnabledInput">Read Invoices From The Folder</label>
+                    </div>
+                    <label class="small fw-bold mb-1" for="inboxFolderInput">Invoice Folder <span class="fw-normal text-muted">(path inside the Buying Drive's Documents)</span></label>
+                    <input id="inboxFolderInput" class="form-control form-control-sm mb-2">
+                    <label class="small fw-bold mb-1" for="inboxDoneInput">Processed Subfolder <span class="fw-normal text-muted">(files that were read move here; created if missing)</span></label>
+                    <input id="inboxDoneInput" class="form-control form-control-sm mb-2" style="width:220px;">
+                    <label class="small fw-bold mb-1" for="inboxMaxInput">Most Files Read Per Check</label>
+                    <input id="inboxMaxInput" type="number" min="1" max="100" class="form-control form-control-sm mb-2" style="width:110px;">
+                    <label class="small fw-bold mb-1" for="inboxSinceInput">Ignore Files Saved Before <span class="fw-normal text-muted">(blank reads any date)</span></label>
+                    <input id="inboxSinceInput" type="date" class="form-control form-control-sm" style="width:170px;">
+                    </div>
+                    <div class="settings-pane" data-title="All Vehicles Table">
+                    <label class="small fw-bold mb-1" for="tableRowsInput">Rows Shown At Once <span class="fw-normal text-muted">(Show More adds this many again)</span></label>
+                    <input id="tableRowsInput" type="number" min="50" max="5000" class="form-control form-control-sm mb-3" style="width:110px;">
+                    <div class="small text-muted mb-2">The columns of the All Vehicles Bought table, in order. CUSTOM: columns are the Custom Fields buyers fill in, in the table itself.</div>
+                    <div id="tableColEditor"></div>
+                    </div>
+                    <div class="settings-pane" data-title="Vehicle Metrics" id="metricsPane">
+                    <div class="small text-muted mb-2">An average (or similar) from any Snowflake table, shown against each bought car, such as % AT PTM across past sales of the same CAP ID. Each metric is saved as soon as you press Save Metric. Nothing is read from Snowflake until a metric is switched on, or you press Test.</div>
+                    <div id="metricList" class="mb-2"></div>
+                    <div class="d-flex gap-2 mb-3" id="metricListBtns">
+                        <button class="btn btn-sm btn-outline-primary" id="metricAddBtn"><i class="fas fa-plus me-1"></i>Add Metric</button>
+                        <button class="btn btn-sm btn-outline-secondary" id="metricRefreshBtn" title="Read every metric that is on again, without waiting for the next dbt run"><i class="fas fa-sync-alt me-1"></i>Read Figures Again</button>
+                    </div>
+                    <div id="metricEditor" class="metric-editor" style="display:none;">
+                        <div id="metricError" class="alert alert-danger py-1 small" style="display:none;"></div>
+                        <div class="row g-2 mb-2">
+                            <div class="col-md-4"><label class="small fw-bold mb-1" for="mLabel">Label</label>
+                                <input id="mLabel" class="form-control form-control-sm" maxlength="60"></div>
+                            <div class="col-md-8"><label class="small fw-bold mb-1" for="mDescription">Description <span class="fw-normal text-muted">(shows when hovering over a figure)</span></label>
+                                <input id="mDescription" class="form-control form-control-sm" maxlength="300"></div>
+                        </div>
+                        <div class="row g-2 mb-2">
+                            <div class="col-md-5"><label class="small fw-bold mb-1" for="mTable">Table</label>
+                                <select id="mTable" class="form-select form-select-sm"></select></div>
+                            <div class="col-md-4"><label class="small fw-bold mb-1" for="mColumn">Column</label>
+                                <select id="mColumn" class="form-select form-select-sm"></select></div>
+                            <div class="col-md-3"><label class="small fw-bold mb-1" for="mCalculation">Calculation</label>
+                                <select id="mCalculation" class="form-select form-select-sm">
+                                    <option value="avg">Average</option><option value="median">Median</option><option value="min">Lowest</option>
+                                    <option value="max">Highest</option><option value="sum">Total</option><option value="count">Count Of Rows</option>
+                                </select></div>
+                        </div>
+                        <div class="form-check mb-2">
+                            <input class="form-check-input" type="checkbox" id="mIgnoreZero">
+                            <label class="form-check-label small" for="mIgnoreZero">Leave Out Rows Where The Column Is Zero</label>
+                        </div>
+                        <div class="row g-2 mb-2">
+                            <div class="col-md-3"><label class="small fw-bold mb-1" for="mDateMode">Date Range</label>
+                                <select id="mDateMode" class="form-select form-select-sm">
+                                    <option value="rolling">Last Number Of Days</option><option value="fixed">Between Two Dates</option><option value="all">All Dates</option>
+                                </select></div>
+                            <div class="col-md-4 m-date"><label class="small fw-bold mb-1" for="mDateColumn">Date Column</label>
+                                <select id="mDateColumn" class="form-select form-select-sm"></select></div>
+                            <div class="col-md-2 m-rolling"><label class="small fw-bold mb-1" for="mDays">Days</label>
+                                <input id="mDays" type="number" min="1" max="3650" class="form-control form-control-sm"></div>
+                            <div class="col-md-2 m-fixed"><label class="small fw-bold mb-1" for="mDateFrom">From</label>
+                                <input id="mDateFrom" type="date" class="form-control form-control-sm"></div>
+                            <div class="col-md-2 m-fixed"><label class="small fw-bold mb-1" for="mDateTo">To</label>
+                                <input id="mDateTo" type="date" class="form-control form-control-sm"></div>
+                        </div>
+                        <div class="small fw-bold mb-1">Filters <span class="fw-normal text-muted">(a row must match all of them. A list is comma separated)</span></div>
+                        <div id="mFilters" class="mb-1"></div>
+                        <button class="btn btn-sm btn-outline-primary mb-2" id="mAddFilterBtn"><i class="fas fa-plus me-1"></i>Add Filter</button>
+                        <div class="small fw-bold mb-1">Match On <span class="fw-normal text-muted">(the car's field must equal this column. Add more to match on all of them)</span></div>
+                        <div id="mMatch" class="mb-1"></div>
+                        <button class="btn btn-sm btn-outline-primary mb-2" id="mAddMatchBtn"><i class="fas fa-plus me-1"></i>Add Match Column</button>
+                        <div class="small fw-bold mb-1">If Too Few Rows, Match On <span class="fw-normal text-muted">(optional. For example Make And Model when a CAP ID has too few sales)</span></div>
+                        <div id="mFallback" class="mb-1"></div>
+                        <button class="btn btn-sm btn-outline-primary mb-2" id="mAddFallbackBtn"><i class="fas fa-plus me-1"></i>Add Fallback Column</button>
+                        <div class="row g-2 mb-2">
+                            <div class="col-md-3"><label class="small fw-bold mb-1" for="mMinRows">Fewest Rows To Show A Figure</label>
+                                <input id="mMinRows" type="number" min="1" class="form-control form-control-sm"></div>
+                            <div class="col-md-3"><label class="small fw-bold mb-1" for="mFormat">Show As</label>
+                                <select id="mFormat" class="form-select form-select-sm"><option value="number">Number</option><option value="gbp">Pounds</option><option value="pct">Percent</option></select></div>
+                            <div class="col-md-2"><label class="small fw-bold mb-1" for="mDecimals">Decimals</label>
+                                <input id="mDecimals" type="number" min="0" max="4" class="form-control form-control-sm"></div>
+                            <div class="col-md-4 d-flex align-items-end"><div class="form-check mb-1">
+                                <input class="form-check-input" type="checkbox" id="mEnabled">
+                                <label class="form-check-label small" for="mEnabled">On (Read From Snowflake And Show On The Table)</label>
+                            </div></div>
+                        </div>
+                        <div id="mTestResult" class="small mb-2"></div>
+                        <div class="d-flex gap-2">
+                            <button class="btn btn-sm btn-primary" id="mSaveBtn">Save Metric</button>
+                            <button class="btn btn-sm btn-outline-primary" id="mTestBtn" title="Reads Snowflake once, without saving">Test</button>
+                            <button class="btn btn-sm btn-outline-secondary" id="mCancelBtn">Cancel</button>
+                        </div>
+                    </div>
+                    </div>
+                    <div class="settings-pane" data-title="Custom Fields">
+                    <div class="small text-muted mb-2">Filled in by the buyer for each vehicle. Renaming a field keeps its saved values. A Required field must be filled in before a batch can be submitted, and is highlighted in the All Vehicles Bought table while empty. A new field is added to that table too.</div>
+                    <table class="table table-sm small"><thead><tr><th>Label</th><th>Type</th><th>Required</th><th></th></tr></thead>
+                        <tbody id="cfBody"></tbody></table>
+                    <button class="btn btn-sm btn-outline-primary" id="cfAddBtn"><i class="fas fa-plus me-1"></i>Add Field</button>
+                    </div>
+                    <div class="settings-pane" data-title="Buyers">
                     <div class="small text-muted mb-1">The Buyer dropdown lists the users ticked as Buyer on the Users page.</div>
                     <div class="form-check">
                         <input class="form-check-input" type="checkbox" id="lockBuyerInput">
                         <label class="form-check-label" for="lockBuyerInput">Buyer Is Always The Logged-In User (Dropdown Locked)</label>
+                    </div>
+                    </div>
+                    <div class="settings-pane" data-title="Appearance">
+                    <label class="small fw-bold mb-1" for="gridColourInput">Table Gridline Colour <span class="fw-normal text-muted">(Pending Invoices, Vehicles and Purchases tables)</span></label>
+                    <input id="gridColourInput" type="color" class="form-control form-control-sm form-control-color mb-3">
+                    <label class="small fw-bold mb-1" for="missingColourInput">Missing Buyer Or Supplier Colour <span class="fw-normal text-muted">(the Batch form, Pending Invoices and Purchases)</span></label>
+                    <input id="missingColourInput" type="color" class="form-control form-control-sm form-control-color">
+                    </div>
+                    </div>
                     </div>
                 </div>
                 <div class="modal-footer"><button class="btn btn-primary" id="settingsSaveBtn">Save</button></div>
@@ -291,7 +529,15 @@
     <script>
         window.BASE_URL = "{{ BASE_URL }}";
         window.IS_ADMIN = {{ 'true' if is_admin else 'false' }};
+        window.INBOX_ENABLED = {{ 'true' if inbox_enabled else 'false' }};
+        window.INBOX_FOLDER = {{ inbox_folder | tojson }};
     </script>
+    <script src="{{ static_url('js/searchable_select.js') }}"></script>
+    <script src="{{ static_url('js/settings_tabs.js') }}"></script>
+    <script src="{{ static_url('js/column_editor.js') }}"></script>
     <script src="{{ static_url('js/cars_bought.js') }}"></script>
+    {% if is_admin %}
+    <script src="{{ static_url('js/vehicle_metrics.js') }}"></script>
+    {% endif %}
 </body>
 </html>

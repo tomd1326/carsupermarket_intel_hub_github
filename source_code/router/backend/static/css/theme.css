@@ -390,3 +390,26 @@ body.user-view col.admin-only { display: table-column !important; visibility: co
 .col-editor-item .btn { padding: 2px 7px; font-size: 0.72rem; flex-shrink: 0; }
 .col-editor-item.missing .col-editor-name { color: #b91c1c; }
 .col-editor-empty { padding: 6px; color: #64748b; font-size: 0.8rem; }
+
+/* Page settings popups: sections down the left, one pane showing on the right
+   (see static/js/settings_tabs.js). The box keeps one height whichever section
+   is open, so it does not jump. */
+.settings-body { display: grid; grid-template-columns: 170px minmax(0, 1fr); gap: 22px; min-height: 62vh; }
+.settings-tabs { display: flex; flex-direction: column; gap: 4px; border-right: 1px solid #e2e8f0; padding-right: 12px; }
+.settings-tabs button {
+    text-align: left; background: none; border: none; border-radius: 6px; padding: 8px 10px;
+    font-size: 0.88rem; font-weight: 600; color: #475569; cursor: pointer;
+}
+.settings-tabs button:hover { background: #f1f5f9; color: #0f172a; }
+.settings-tabs button.active { background: var(--c-table-header-bg); color: var(--c-table-header-text); }
+.settings-pane { display: none; }
+.settings-pane.active { display: block; }
+/* A section's sub-sections, listed under it in the left menu while it is open. */
+.settings-subtabs { display: none; flex-direction: column; gap: 2px; margin: 0 0 4px 10px; padding-left: 8px; border-left: 2px solid #e2e8f0; }
+.settings-subtabs.open { display: flex; }
+.settings-subtabs button {
+    text-align: left; background: none; border: none; border-radius: 6px; padding: 6px 10px;
+    font-size: 0.82rem; font-weight: 600; color: #64748b; cursor: pointer;
+}
+.settings-subtabs button:hover { background: #f1f5f9; color: #0f172a; }
+.settings-subtabs button.active { background: #e2e8f0; color: #0f172a; }

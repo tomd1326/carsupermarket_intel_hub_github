@@ -216,7 +216,7 @@ CATEGORY_POS_PREFIX = 'catpos__'
 
 # Pages hidden on Settings > Page Names, stored in the same table as
 # hide__<page_key> = '1'. A hidden page is left off the home tiles, the menu
-# and the Page Access grid, and nobody but the admin can open it (get_user_pages).
+# and the Page Access list on User Accounts, and nobody but the admin can open it (get_user_pages).
 # Saved grants are kept, so unhiding it gives everyone their access back.
 HIDDEN_PREFIX = 'hide__'
 

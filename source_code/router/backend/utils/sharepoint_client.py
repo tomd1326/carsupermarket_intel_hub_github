@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import logging
+import os
 import threading
 import time
 import requests
@@ -264,6 +265,63 @@ class SharePointClient:
         Graph has to open the workbook in Excel Online for that, and the
         download is a plain file read."""
         return self._get_by_url(sharepoint_url, "content", timeout).content
+
+    @classmethod
+    def folder_url(cls, subfolder: str) -> str:
+        """The link that opens a folder of the Documents library in a browser."""
+        return f"{cls.SITE_URL}{cls.TEAM_SITE}/Documents/{requests.utils.quote(subfolder.strip('/'))}"
+
+    def list_folder(self, subfolder: str, timeout: float = 20) -> tuple[str, list[dict]]:
+        """(drive_id, files directly inside subfolder) on this client's site.
+        Subfolders are left out. Each file has id, name, size and
+        lastModifiedDateTime."""
+        drive_id = self._get_drive_id(self._get_site_id())
+        encoded = requests.utils.quote(subfolder.strip("/"))
+        url = (f"https://graph.microsoft.com/v1.0/drives/{drive_id}/root:/{encoded}:/children"
+               "?$select=id,name,size,file,lastModifiedDateTime&$top=200")
+        files = []
+        while url:
+            resp = requests.get(url, headers=self._headers, timeout=timeout)
+            resp.raise_for_status()
+            body = resp.json()
+            files += [item for item in body.get("value", []) if "file" in item]
+            url = body.get("@odata.nextLink")
+        return drive_id, files
+
+    def get_item_content(self, drive_id: str, item_id: str, timeout: float = 120) -> bytes:
+        """The whole file with this ID."""
+        resp = requests.get(f"https://graph.microsoft.com/v1.0/drives/{drive_id}/items/{item_id}/content",
+                            headers=self._headers, timeout=timeout)
+        resp.raise_for_status()
+        return resp.content
+
+    def _subfolder_id(self, drive_id: str, parent: str, name: str) -> str:
+        """The ID of folder `name` inside `parent`, created if it is not there.
+        A 409 on creating means another read has just made it."""
+        base = f"https://graph.microsoft.com/v1.0/drives/{drive_id}/root:"
+        path = requests.utils.quote(f"{parent.strip('/')}/{name}")
+        resp = requests.get(f"{base}/{path}", headers=self._headers, timeout=30)
+        if resp.status_code == 404:
+            resp = requests.post(f"{base}/{requests.utils.quote(parent.strip('/'))}:/children", headers=self._headers,
+                                 json={"name": name, "folder": {}, "@microsoft.graph.conflictBehavior": "fail"},
+                                 timeout=30)
+            if resp.status_code == 409:
+                resp = requests.get(f"{base}/{path}", headers=self._headers, timeout=30)
+        resp.raise_for_status()
+        return resp.json()["id"]
+
+    def move_to_subfolder(self, drive_id: str, item_id: str, parent: str, name: str, filename: str) -> None:
+        """Move a file into folder `name` inside `parent`. A file of the same
+        name already there is kept: this one gets the end of its ID added. Needs
+        write access to the site, which reading the app's files does not."""
+        folder_id = self._subfolder_id(drive_id, parent, name)
+        url = f"https://graph.microsoft.com/v1.0/drives/{drive_id}/items/{item_id}"
+        resp = requests.patch(url, headers=self._headers, json={"parentReference": {"id": folder_id}}, timeout=30)
+        if resp.status_code == 409:
+            stem, ext = os.path.splitext(filename)
+            resp = requests.patch(url, headers=self._headers, timeout=30,
+                                  json={"parentReference": {"id": folder_id}, "name": f"{stem} ({item_id[-6:]}){ext}"})
+        resp.raise_for_status()
 
     def get_last_modified(self, subfolder: str, filename: str) -> str:
         """Same as get_last_modified_by_url, for a file found by folder and name
