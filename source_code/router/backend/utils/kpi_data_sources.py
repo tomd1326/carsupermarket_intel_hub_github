@@ -44,6 +44,7 @@ into SQL; dates and metric names are always bound as parameters.
 """
 
 import datetime
+import json
 import re
 
 SOURCE_ID = r"ds_[a-z0-9_]{1,40}"
@@ -89,6 +90,77 @@ def parse_column_metric(metric) -> tuple[str, str] | None:
 
 def column_metric(column: str, agg: str) -> str:
     return ROWS_COUNT if agg == "count" else f"col:{column}:{agg}"
+
+
+# A metric built in Edit Chart on a records table: Sum / Average / Count, of a
+# column or of column A minus column B, with filters on the rows it reads. It
+# is held whole in the chart's metric name, so targets, column names, Multiplied
+# By and Split At all treat it as any other metric. One with no filters and no
+# column B is the shorter 'col:' / 'rows:count' form; the rest are 'q:' + JSON,
+# always written the same way (query_metric; kpi.js buildQueryMetric matches it).
+QUERY_PREFIX = "q:"
+QUERY_METRIC_MAX = 2000
+
+
+def query_metric(agg: str, a: str = "", b: str = "", filters: list | None = None) -> str:
+    filters = [{"column": f["column"], "operator": f["operator"], "value": f.get("value") or ""} for f in filters or []]
+    if not filters and not b:
+        return column_metric(a, agg)
+    body = {"a": "" if agg == "count" else a, "agg": agg, "b": "" if agg == "count" else b or "", "f": filters}
+    return QUERY_PREFIX + json.dumps(body, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+
+
+def parse_query_metric(metric) -> dict | None:
+    """{agg, a, b, f} for any metric built from a table's columns, else None."""
+    parsed = parse_column_metric(metric)
+    if parsed:
+        column, agg = parsed
+        return {"agg": agg, "a": "" if agg == "count" else column, "b": "", "f": []}
+    if not isinstance(metric, str) or not metric.startswith(QUERY_PREFIX) or len(metric) > QUERY_METRIC_MAX:
+        return None
+    try:
+        body = json.loads(metric[len(QUERY_PREFIX):])
+    except ValueError:
+        return None
+    if not isinstance(body, dict) or set(body) != {"a", "agg", "b", "f"} or not isinstance(body["f"], list):
+        return None
+    return body
+
+
+def query_metric_error(metric, entry: dict, columns: dict) -> str | None:
+    """Why a built metric cannot be read from this table, or None. Every column
+    name is checked against the live table here, as they go into the SQL."""
+    from utils import vehicle_metrics as vm
+    q = parse_query_metric(metric)
+    if q is None:
+        return "Not a built metric"
+    if entry.get("shape") != "records":
+        return "Only a one-row-per-record table can build metrics"
+    agg, a, b = q["agg"], q["a"], q["b"]
+    if agg not in ("sum", "avg", "count"):
+        return f"Unknown figure: {agg}"
+    if agg == "count":
+        if a or b:
+            return "A count of rows has no column"
+    else:
+        if a not in columns or (b and b not in columns):
+            return f"{b if a in columns else a} is not in {entry.get('table')}"
+        if a == b:
+            return "Choose two different columns"
+        if difference_kind(columns[a], columns[b] if b else None) is None:
+            return f"{a} cannot be used here: it must be a number, or two dates or two numbers to subtract"
+    if len(q["f"]) > vm.FILTERS_MAX:
+        return f"At most {vm.FILTERS_MAX} filters"
+    for f in q["f"]:
+        if not isinstance(f, dict) or set(f) != {"column", "operator", "value"} or f["operator"] not in vm.OPERATORS:
+            return "Bad filter"
+        if f["column"] not in columns:
+            return f"{f['column']} is not in {entry.get('table')}"
+        if not isinstance(f["value"], str) or len(f["value"]) > vm.VALUE_MAX:
+            return f"Filter values must be text of at most {vm.VALUE_MAX} characters"
+        if f["operator"] not in vm.NO_VALUE_OPERATORS and not f["value"].strip():
+            return "Enter a value for each filter"
+    return None
 
 
 def column_metrics(entry: dict, columns: dict) -> list:
@@ -388,6 +460,17 @@ def sources_used(obj) -> set:
     return set()
 
 
+def built_metrics_used(obj) -> set:
+    """Every ('source', 'q:...') metric anywhere in a saved layout."""
+    if isinstance(obj, dict):
+        metric = obj.get("metric")
+        own = {(obj.get("source", "snowflake"), metric)} if isinstance(metric, str) and metric.startswith(QUERY_PREFIX) else set()
+        return own.union(*(built_metrics_used(v) for v in obj.values()))
+    if isinstance(obj, list):
+        return set().union(*(built_metrics_used(v) for v in obj))
+    return set()
+
+
 def _difference_selects(entry: dict, wanted: set, columns: dict, start, end) -> tuple[list, list]:
     """(SELECTs, bound values) giving each wanted difference metric per date.
     Rows missing either column are left out of both the total and the count."""
@@ -414,21 +497,28 @@ def _difference_selects(entry: dict, wanted: set, columns: dict, start, end) -> 
     return selects, params
 
 
-def _column_selects(entry: dict, wanted: list, start, end) -> tuple[list, list]:
-    """(SELECTs, bound values) giving each column aggregate per date. An
-    average comes with its row count per day under '<metric>#w', so the
-    weeks and months can be weighted by it. Column names are only ever those
-    column_metrics listed from INFORMATION_SCHEMA."""
+def _column_selects(entry: dict, wanted: list, columns: dict, start, end) -> tuple[list, list]:
+    """(SELECTs, bound values) giving each built metric per date. An average
+    comes with its row count per day under '<metric>#w', so the weeks and
+    months can be weighted by it. Only metrics query_metric_error has passed
+    get here, so every column name has been checked against the live table."""
+    from utils import vehicle_metrics as vm
     t, d = entry["table"], entry["date_column"]
-    where = f"{d}::DATE >= %s AND {d}::DATE <= %s"
     selects, params = [], []
     for metric in wanted:
-        column, agg = parse_column_metric(metric)
-        parts = [("COUNT(*)", metric)] if agg == "count" else [(f"SUM({column})", metric)] if agg == "sum" \
-            else [(f"AVG({column})", metric), (f"COUNT({column})", metric + WEIGHT_SUFFIX)]
+        q = parse_query_metric(metric)
+        agg, a, b = q["agg"], q["a"], q["b"]
+        filters, filter_params = vm.filter_sql(q["f"])
+        where = " AND ".join([f"{d}::DATE >= %s", f"{d}::DATE <= %s"] + filters)
+        value = a
+        if b:
+            kind = difference_kind(columns[a], columns[b])
+            value = f"({a} - {b})" if kind == "number" else f"DATEDIFF({'DAY' if kind == 'days' else 'MINUTE'}, {b}, {a})"
+        parts = [("COUNT(*)", metric)] if agg == "count" else [(f"SUM({value})", metric)] if agg == "sum" \
+            else [(f"AVG({value})", metric), (f"COUNT({value})", metric + WEIGHT_SUFFIX)]
         for expr, name in parts:
             selects.append(f"SELECT {d}::DATE AS D, %s AS S, {expr} AS V FROM {t} WHERE {where} GROUP BY 1")
-            params += [name, str(start), str(end)]
+            params += [name, str(start), str(end), *filter_params]
     return selects, params
 
 
@@ -451,11 +541,13 @@ def fetch_sql(entry: dict, metrics: list, start, end, columns: dict | None = Non
     # Records: each row counts as one.
     total = "COUNT(*)" if entry["shape"] == "records" else f"SUM({entry['value_column']})"
     differences = set(difference_metrics(entry))
-    aggregates = set(column_metrics(entry, columns or {}))
+    columns = columns or {}
     wanted = list(dict.fromkeys(metrics))
-    names = [m for m in wanted if m not in differences and m not in aggregates]
-    selects, params = _difference_selects(entry, set(wanted) & differences, columns or {}, start, end)
-    agg_selects, agg_params = _column_selects(entry, [m for m in wanted if m in aggregates], start, end)
+    # A built metric that fails its check is left out, never put in the SQL.
+    built = [m for m in wanted if parse_query_metric(m) and query_metric_error(m, entry, columns) is None]
+    names = [m for m in wanted if m not in differences and not parse_query_metric(m)]
+    selects, params = _difference_selects(entry, set(wanted) & differences, columns, start, end)
+    agg_selects, agg_params = _column_selects(entry, built, columns, start, end)
     selects += agg_selects
     params += agg_params
     if names:
@@ -494,7 +586,7 @@ def rows_to_by_date(entry: dict, metrics: list, rows, names) -> dict:
             out[_as_date(row.pop("D"))] = row
         return out
     # A day with rows but none for an average's column has no average, not 0.
-    blank = {m: (None if (parse_column_metric(m) or ("", ""))[1] == "avg" else 0) for m in metrics}
+    blank = {m: (None if (parse_query_metric(m) or {}).get("agg") == "avg" else 0) for m in metrics}
     for d, split, value in rows:
         day = out.setdefault(_as_date(d), dict(blank))
         if split is not None:

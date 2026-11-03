@@ -35,6 +35,10 @@
     let view = 'month_site';
     let category = '';             // '' = every supplier category
     let period = null;             // 'M:yyyy-MM-dd' or 'Y:yyyy'
+    // Date range on the invoice date, 'yyyy-MM-dd' or ''. While either is set
+    // it replaces the period, on every view.
+    let dateFrom = '';
+    let dateTo = '';
     let show = 'both';
     let charts = [];               // live Chart instances; destroyed on re-render
     let gridSort = { key: 'invoice_date', dir: -1 };
@@ -160,19 +164,37 @@
         return distinct(rows, r => r.financial_year).map(Number).sort((a, b) => a - b);
     }
 
-    // Rows for the chosen period and supplier category.
+    const rangeOn = () => !!(dateFrom || dateTo);
+
+    // Rows for the chosen date range or period, and supplier category.
     function scopeRows() {
-        if (!period) return [];
-        const [kind, value] = [period.slice(0, 1), period.slice(2)];
-        let list = kind === 'M' ? rows.filter(r => r.month === value) : rows.filter(r => String(r.financial_year) === value);
+        let list;
+        if (rangeOn()) {
+            // Dates are 'yyyy-MM-dd', so text order is date order.
+            list = rows.filter(r => {
+                const day = String(r.invoice_date || '').slice(0, 10);
+                return day && (!dateFrom || day >= dateFrom) && (!dateTo || day <= dateTo);
+            });
+        } else {
+            if (!period) return [];
+            const [kind, value] = [period.slice(0, 1), period.slice(2)];
+            list = kind === 'M' ? rows.filter(r => r.month === value) : rows.filter(r => String(r.financial_year) === value);
+        }
         if (category) list = list.filter(r => r.supplier_category === category);
         return list;
     }
     function periodIsYear() { return !!period && period.startsWith('Y'); }
     function periodValue() { return period ? period.slice(2) : null; }
     function periodText() {
+        if (rangeOn()) {
+            if (dateFrom && dateTo) return `${fmtDate(dateFrom)} to ${fmtDate(dateTo)}`;
+            return dateFrom ? `From ${fmtDate(dateFrom)}` : `Up To ${fmtDate(dateTo)}`;
+        }
         if (!period) return '';
         return periodIsYear() ? fyLabel(periodValue()) : monthLabel(periodValue());
+    }
+    function periodTotalLabel() {
+        return rangeOn() ? 'Total' : `${fyLabel(periodValue())} Total`;
     }
 
     // ── Tables ───────────────────────────────────────────────────────────────
@@ -330,8 +352,11 @@
     function siteColumns(list) {
         return siteNames().map(name => ({ label: name, rows: byBranch(list, name) }));
     }
+    // Across the top of a year view: the financial year's 12 months, or with a
+    // date range the months that range has sales in.
     function monthColumns(list, fy) {
-        return fyMonths(fy).map(m => ({ label: monthLabel(m, true), rows: list.filter(r => r.month === m) }));
+        const months = rangeOn() ? distinct(scopeRows(), r => r.month).sort() : fyMonths(fy);
+        return months.map(m => ({ label: monthLabel(m, true), rows: list.filter(r => r.month === m) }));
     }
 
     // Month By Site: the workbook's "MTD by site" sheet. With every category
@@ -390,8 +415,8 @@
         ];
         return blocks.map(([name, list]) => {
             const cols = monthColumns(list, fy);
-            return sectionHtml(`${name} - ${fyLabel(fy)}`, category || 'All supplier categories',
-                metricTableHtml({ columns: cols, totalRows: list, totalLabel: `${fyLabel(fy)} Total`, cornerLabel: name }),
+            return sectionHtml(`${name} - ${periodText()}`, category || 'All supplier categories',
+                metricTableHtml({ columns: cols, totalRows: list, totalLabel: periodTotalLabel(), cornerLabel: name }),
                 chartsHtml(cols, YEAR_CHARTS, name, 2));
         }).join('');
     }
@@ -402,16 +427,16 @@
         const fy = periodValue();
         const site = sitesOnly(scope);
         const note = category || 'All supplier categories';
-        let html = sectionHtml(`Sites Total - ${fyLabel(fy)}`, note, metricTableHtml({ columns: siteColumns(site), totalRows: site, cornerLabel: 'Site' }),
+        let html = sectionHtml(`Sites Total - ${periodText()}`, note, metricTableHtml({ columns: siteColumns(site), totalRows: site, cornerLabel: 'Site' }),
             chartsHtml(siteColumns(site), SITE_CHARTS));
         const bp = bcbPrepOnly(scope);
         const bpCols = bcbPrepNames().map(name => ({ label: name, rows: byBranch(bp, name) }));
-        html += sectionHtml(`BCB & Prep Centres - ${fyLabel(fy)}`, note, metricTableHtml({ columns: bpCols, totalRows: bp, cornerLabel: 'BCB & Prep' }));
+        html += sectionHtml(`BCB & Prep Centres - ${periodText()}`, note, metricTableHtml({ columns: bpCols, totalRows: bp, cornerLabel: 'BCB & Prep' }));
         siteNames().forEach(name => {
             const list = byBranch(site, name);
             const cols = monthColumns(list, fy);
-            html += sectionHtml(`${name} - ${fyLabel(fy)}`, note,
-                metricTableHtml({ columns: cols, totalRows: list, totalLabel: `${fyLabel(fy)} Total`, cornerLabel: name }),
+            html += sectionHtml(`${name} - ${periodText()}`, note,
+                metricTableHtml({ columns: cols, totalRows: list, totalLabel: periodTotalLabel(), cornerLabel: name }),
                 chartsHtml(cols, YEAR_CHARTS, name, 2));
         });
         return html;
@@ -425,12 +450,12 @@
         if (!names.length) return emptyHtml();
         const note = category || 'All supplier categories';
         const cols = names.map(a => ({ label: a, rows: scope.filter(r => (r.auction || 'Unknown') === a) }));
-        let html = sectionHtml(`Auctions Total - ${fyLabel(fy)}`, note, metricTableHtml({ columns: cols, totalRows: scope, cornerLabel: 'Auction' }),
+        let html = sectionHtml(`Auctions Total - ${periodText()}`, note, metricTableHtml({ columns: cols, totalRows: scope, cornerLabel: 'Auction' }),
             chartsHtml(cols, SITE_CHARTS));
         cols.forEach(c => {
             const months = monthColumns(c.rows, fy);
-            html += sectionHtml(`${c.label} - ${fyLabel(fy)}`, note,
-                metricTableHtml({ columns: months, totalRows: c.rows, totalLabel: `${fyLabel(fy)} Total`, cornerLabel: c.label }),
+            html += sectionHtml(`${c.label} - ${periodText()}`, note,
+                metricTableHtml({ columns: months, totalRows: c.rows, totalLabel: periodTotalLabel(), cornerLabel: c.label }),
                 chartsHtml(months, YEAR_CHARTS, c.label, 2));
         });
         return html;
@@ -518,7 +543,7 @@
         const blob = new Blob([lines.join('\n')], { type: 'text/csv;charset=utf-8;' });
         const a = document.createElement('a');
         a.href = URL.createObjectURL(blob);
-        a.download = `trade_sales_${periodText().replace(/\s+/g, '_')}.csv`;
+        a.download = `trade_sales_${periodText().replace(/[^A-Za-z0-9]+/g, '_')}.csv`;
         document.body.appendChild(a);
         a.click();
         document.body.removeChild(a);
@@ -593,7 +618,7 @@
             options = months.slice().reverse().map(m => `<option value="M:${m}">${escHtml(monthLabel(m))}</option>`);
         }
         sel.innerHTML = options.join('');
-        sel.disabled = !options.length;
+        sel.disabled = !options.length || rangeOn();
         // Keep the current choice where the new list still offers it,
         // otherwise the latest period of the right kind.
         const values = Array.from(sel.options).map(o => o.value);
@@ -609,7 +634,33 @@
         document.querySelectorAll(`#${groupId} button`).forEach(b => b.classList.toggle('active', b.dataset[attr] === value));
     }
 
+    // A date typed or cleared: the period dropdown is greyed while a range is
+    // on, as the range is what the page is showing.
+    function applyDateRange() {
+        dateFrom = document.getElementById('date-from').value;
+        dateTo = document.getElementById('date-to').value;
+        document.getElementById('date-clear').style.display = rangeOn() ? '' : 'none';
+        fillPeriodSelect();
+        renderReport();
+    }
+
+    // The boxes offer only the dates the data covers.
+    function setDateLimits() {
+        const days = distinct(rows, r => String(r.invoice_date || '').slice(0, 10)).sort();
+        ['date-from', 'date-to'].forEach(id => {
+            const box = document.getElementById(id);
+            box.min = days[0] || '';
+            box.max = days[days.length - 1] || '';
+        });
+    }
+
     function bindControls() {
+        ['date-from', 'date-to'].forEach(id => document.getElementById(id).addEventListener('change', applyDateRange));
+        document.getElementById('date-clear').addEventListener('click', () => {
+            document.getElementById('date-from').value = '';
+            document.getElementById('date-to').value = '';
+            applyDateRange();
+        });
         document.getElementById('report-area').addEventListener('click', e => {
             const btn = e.target.closest('button[data-view-group]');
             if (!btn) return;
@@ -701,6 +752,7 @@
             });
             cachedAt = data.cached_at || null;
             cacheNote();
+            setDateLimits();
             fillPeriodSelect();
             renderReport();
         } catch (e) {

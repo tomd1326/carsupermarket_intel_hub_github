@@ -40,9 +40,39 @@
     // table ('col:PRICE:avg', 'rows:count', see kpi_data_sources.py) as
     // "Average Of PRICE" / "Count Of Rows"; anything else as it is.
     function rawMetricName(column) {
-        if (column === 'rows:count') return 'Count Of Rows';
-        const m = /^col:([A-Z][A-Z0-9_$]*):(sum|avg)$/.exec(column || '');
-        return m ? `${m[2] === 'sum' ? 'Sum' : 'Average'} Of ${m[1]}` : column;
+        const q = parseQueryMetric(column);
+        if (!q) return column;
+        const what = q.agg === 'count' ? 'Count Of Rows'
+            : `${q.agg === 'sum' ? 'Sum' : 'Average'} Of ${q.a}${q.b ? ` - ${q.b}` : ''}`;
+        const label = op => (DS_FILTER_OPERATORS.find(([v]) => v === op) || [op, op])[1];
+        const filters = q.f.map(f => `${f.column} ${label(f.operator)}${f.value ? ` ${f.value}` : ''}`).join(' And ');
+        return filters ? `${what} Where ${filters}` : what;
+    }
+
+    // A metric built from a table's columns: 'col:<COLUMN>:sum' / ':avg',
+    // 'rows:count', or 'q:' + JSON with a column B or filters (kpi_data_sources.py
+    // query_metric, which this must match). { agg, a, b, f }, else null.
+    function parseQueryMetric(metric) {
+        if (metric === 'rows:count') return { agg: 'count', a: '', b: '', f: [] };
+        const m = /^col:([A-Z][A-Z0-9_$]*):(sum|avg)$/.exec(metric || '');
+        if (m) return { agg: m[2], a: m[1], b: '', f: [] };
+        if (!String(metric || '').startsWith('q:')) return null;
+        try {
+            const q = JSON.parse(metric.slice(2));
+            return Array.isArray(q.f) ? { agg: q.agg, a: q.a || '', b: q.b || '', f: q.f } : null;
+        } catch (err) { return null; }
+    }
+
+    // The metric for a builder's choices, or '' while something is still to pick.
+    function buildQueryMetric(q) {
+        const count = q.agg === 'count';
+        if (!count && !q.a) return '';
+        if (q.f.some(f => !f.column || (!DS_NO_VALUE_OPERATORS.includes(f.operator) && !String(f.value || '').trim()))) return '';
+        const f = q.f.map(x => ({ column: x.column, operator: x.operator,
+                                  value: DS_NO_VALUE_OPERATORS.includes(x.operator) ? '' : String(x.value).trim() }));
+        const b = count ? '' : q.b || '';
+        if (!f.length && !b) return count ? 'rows:count' : `col:${q.a}:${q.agg}`;
+        return 'q:' + JSON.stringify({ a: count ? '' : q.a, agg: q.agg, b, f });
     }
     function metricName(source, column) {
         return metricNames[metricKey(source || 'snowflake', column)] || rawMetricName(column);
@@ -4321,10 +4351,11 @@
         select.innerHTML = metricGroupHtml(source, true);
         if (keepKey && ![...select.options].some(o => o.value === keepKey) && keepKey.startsWith(source + '|')) {
             select.insertAdjacentHTML('afterbegin',
-                `<option value="${escHtml(keepKey)}">${escHtml(keepKey.slice(source.length + 1))}</option>`);
+                `<option value="${escHtml(keepKey)}">${escHtml(rawMetricName(keepKey.slice(source.length + 1)))}</option>`);
         }
         if (keepKey && [...select.options].some(o => o.value === keepKey)) select.value = keepKey;
         filterMetricSelect(document.getElementById('metricSearch').value);
+        renderLineQuery(keepKey);
     }
 
     function onMetricSourceChange() {
@@ -5234,7 +5265,7 @@
                     return `<option value="${escHtml(k)}" ${k === key ? 'selected' : ''}>${escHtml(metricOptionText(m.source, m.column))}</option>`;
                 }).join('') + '</optgroup>';
         };
-        const missing = key && !metricsByKey[key] ? `<option value="${escHtml(key)}" selected>${escHtml(s.metric)}</option>` : '';
+        const missing = key && !metricsByKey[key] ? `<option value="${escHtml(key)}" selected>${escHtml(rawMetricName(s.metric))}</option>` : '';
         return `<option value="">${blank}</option>` + missing + allMetricGroups(group);
     }
 
@@ -5253,8 +5284,152 @@
         return { table, html: none + sources.map(x => `<option value="${escHtml(x)}" ${x === table ? 'selected' : ''}>${escHtml(sourceLabel(x))}</option>`).join('') };
     }
 
+    // ── Building a metric from a table's columns (Edit Chart) ──
+    // A table that is just a table (one row per record, with none of the older
+    // name or Settings metrics) has no list of metrics: the chart says which
+    // column, Sum / Average / Count and filters it reads.
+    function isPlainTable(source) {
+        const items = metricsCatalogue.filter(m => m.source === source);
+        return items.some(m => m.column === 'rows:count') && items.every(m => m.aggregate);
+    }
+
+    const sourceColumnLists = {};   // source id -> [{ column, type }], or 'loading'
+
+    function loadSourceColumns(source) {
+        if (sourceColumnLists[source]) return;
+        sourceColumnLists[source] = 'loading';
+        fetch(`${BASE_URL}/kpi/source-columns?source=${encodeURIComponent(source)}`).then(r => r.json())
+            .then(resp => { sourceColumnLists[source] = resp.status === 'ok' ? resp.columns : []; })
+            .catch(() => { sourceColumnLists[source] = []; })
+            .finally(() => {
+                if (chartTypeValue() === 'stacked') renderSeriesList();
+                else renderLineQuery();
+            });
+    }
+
+    function queryAggHtml(ctx, q) {
+        const option = (value, label) => `<option value="${value}" ${q.agg === value ? 'selected' : ''}>${label}</option>`;
+        return `<select title="The figure" onchange="onQueryField('${ctx}', 'agg', this.value)">
+            ${option('sum', 'Sum Of')}${option('avg', 'Average Of')}${option('count', 'Count Of Rows')}</select>`;
+    }
+
+    // Column, Minus and filters, under the table and the figure.
+    function queryFieldsHtml(ctx, source, q) {
+        const columns = sourceColumnLists[source];
+        if (!columns || columns === 'loading') {
+            loadSourceColumns(source);
+            return '<div class="point-status">Loading columns...</div>';
+        }
+        const options = (list, value, blank) => `<option value="">${blank}</option>`
+            + list.map(c => `<option value="${escHtml(c)}" ${c === value ? 'selected' : ''}>${escHtml(c)}</option>`).join('');
+        const usable = columns.filter(c => DS_NUMBER_TYPES.includes(c.type) || DS_DATE_TYPES.includes(c.type)).map(c => c.column);
+        const all = columns.map(c => c.column);
+        const picks = q.agg === 'count' ? '' : `<div class="series-query-row">
+                <select title="The column" onchange="onQueryField('${ctx}', 'a', this.value)">${options(usable, q.a, '(Choose A Column)')}</select>
+                <span>Minus</span>
+                <select title="Optional: taken off the column on each row. Two dates or times give days or minutes (later one first)"
+                        onchange="onQueryField('${ctx}', 'b', this.value)">${options(usable, q.b, '(Nothing)')}</select>
+            </div>`;
+        const filters = q.f.map((f, n) => `<div class="series-query-row">
+                <span>Only Where</span>
+                <select onchange="onQueryFilter('${ctx}', ${n}, 'column', this.value, true)">${options(all, f.column, '(Choose A Column)')}</select>
+                <select onchange="onQueryFilter('${ctx}', ${n}, 'operator', this.value, true)">
+                    ${DS_FILTER_OPERATORS.map(([v, l]) => `<option value="${v}" ${v === f.operator ? 'selected' : ''}>${escHtml(l)}</option>`).join('')}
+                </select>
+                ${DS_NO_VALUE_OPERATORS.includes(f.operator) ? '' : `<input type="text" maxlength="200" value="${escHtml(f.value || '')}" placeholder="Value"
+                    oninput="onQueryFilter('${ctx}', ${n}, 'value', this.value, false)">`}
+                <button type="button" class="btn btn-remove-chart" title="Remove filter" onclick="removeQueryFilter('${ctx}', ${n})"><i class="fas fa-trash"></i></button>
+            </div>`).join('');
+        return `${picks}${filters}
+            <button type="button" class="btn btn-edit btn-sm" onclick="addQueryFilter('${ctx}')"><i class="fas fa-plus"></i> Filter</button>`;
+    }
+
+    // ctx: a series' number, or 'line' for a line chart's metric.
+    let lineQuery = null;
+    const queryOf = ctx => (ctx === 'line' ? lineQuery : seriesDraft[Number(ctx)]._q);
+
+    function onQueryField(ctx, field, value) {
+        const q = queryOf(ctx);
+        q[field] = value;
+        if (field === 'agg' && value === 'count') { q.a = ''; q.b = ''; }
+        applyQuery(ctx, true);
+    }
+
+    function onQueryFilter(ctx, n, field, value, redraw) {
+        queryOf(ctx).f[n][field] = value;
+        applyQuery(ctx, redraw);
+    }
+
+    function addQueryFilter(ctx) {
+        queryOf(ctx).f.push({ column: '', operator: 'equals', value: '' });
+        applyQuery(ctx, true);
+    }
+
+    function removeQueryFilter(ctx, n) {
+        queryOf(ctx).f.splice(n, 1);
+        applyQuery(ctx, true);
+    }
+
+    // The builder's choices onto the chart. redraw is false while a filter value
+    // is being typed, so the box keeps its focus.
+    function applyQuery(ctx, redraw) {
+        const metric = buildQueryMetric(queryOf(ctx));
+        if (ctx === 'line') {
+            setLineMetric(metric);
+            if (redraw) { renderLineQuery(); onMetricChange(); }
+            return;
+        }
+        const s = seriesDraft[Number(ctx)];
+        s.source = seriesTableOptions(s, s, '_table').table;
+        s.metric = metric;
+        s.label = metric ? seriesBoxName(s) : '';
+        if (redraw) renderSeriesList();
+    }
+
+    // Makes a built metric the line chart's chosen one, so the rest of the popup
+    // reads it from the metric list like any other.
+    function setLineMetric(metric) {
+        const source = document.getElementById('metricSourceSelect').value;
+        const select = document.getElementById('metricSelect');
+        if (!metric) { select.value = ''; return; }
+        const key = metricKey(source, metric);
+        if (!metricsByKey[key]) {
+            const q = parseQueryMetric(metric);
+            metricsByKey[key] = { source, column: metric, description: '', suggested_agg: q.agg === 'avg' ? 'avg' : 'sum',
+                                  aggregate: q.agg, has_n1: true, has_target: false };
+        }
+        if (![...select.options].some(o => o.value === key)) {
+            select.insertAdjacentHTML('afterbegin', `<option value="${escHtml(key)}">${escHtml(rawMetricName(metric))}</option>`);
+        }
+        select.value = key;
+    }
+
+    // The line chart's Metric box: the list, or for a plain table the builder.
+    function renderLineQuery(keepKey = null) {
+        const source = document.getElementById('metricSourceSelect').value;
+        const select = document.getElementById('metricSelect');
+        const box = document.getElementById('lineQueryBuilder');
+        const prefix = source + '|';
+        const key = keepKey !== null ? keepKey : (select.value || '');
+        const metric = key.startsWith(prefix) ? key.slice(prefix.length) : '';
+        const builder = isPlainTable(source) && (!metric || !!parseQueryMetric(metric));
+        document.getElementById('metricSearch').style.display = builder ? 'none' : '';
+        select.style.display = builder ? 'none' : '';
+        box.style.display = builder ? '' : 'none';
+        if (!builder) { lineQuery = null; box.innerHTML = ''; return; }
+        if (!lineQuery || keepKey !== null) lineQuery = parseQueryMetric(metric) || { agg: 'sum', a: '', b: '', f: [] };
+        setLineMetric(buildQueryMetric(lineQuery));
+        box.innerHTML = `<div class="series-query-row">${queryAggHtml('line', lineQuery)}</div>${queryFieldsHtml('line', source, lineQuery)}`;
+    }
+
     function seriesPick(s, i, cur, field, blank, onMetric, metricClass = '') {
         const t = seriesTableOptions(s, cur, field);
+        if (field === '_table' && isPlainTable(t.table) && (!s.metric || parseQueryMetric(s.metric))) {
+            s._q = s._q || parseQueryMetric(s.metric) || { agg: 'sum', a: '', b: '', f: [] };
+            return `<select title="Table" onchange="onSeriesTable(${i}, '${field}', this.value)">${t.html}</select>
+                        ${queryAggHtml(i, s._q)}
+                        <div class="series-query">${queryFieldsHtml(i, t.table, s._q)}</div>`;
+        }
         const metrics = field !== '_table' && !t.table
             ? `<select class="${metricClass}" disabled><option value="">${blank}</option></select>`
             : `<select class="${metricClass}" onchange="${onMetric}">${seriesMetricOptions(cur || {}, blank, t.table)}</select>`;
@@ -5266,7 +5441,7 @@
     function onSeriesTable(i, field, table) {
         const s = seriesDraft[i];
         s[field] = table;
-        if (field === '_table') { s.metric = ''; s.label = ''; }
+        if (field === '_table') { s.metric = ''; s.label = ''; s._q = null; }
         else if (field === '_mtable') s.multiply_by = null;
         else s.split_at = null;
         renderSeriesList();
@@ -5299,7 +5474,7 @@
                         ${splitRow(s, i, colour)}
                         <span class="series-field-label">Legend Name</span>
                         <input type="text" maxlength="60" value="${escHtml(s.label || '')}"
-                               placeholder="${escHtml(derivedKey(s) ? derivedDefaultName(s) : (s.metric || 'Legend name'))}"
+                               placeholder="${escHtml(derivedKey(s) ? derivedDefaultName(s) : (rawMetricName(s.metric) || 'Legend name'))}"
                                title="${derivedKey(s)
                                    ? 'Name of this multiplied metric. Saved under Settings > Column Names > Derived Column Names; the column itself keeps its own name'
                                    : 'Name in the legend. Shared: every chart using this column takes it (Settings > Column Names)'}"
