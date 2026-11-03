@@ -109,8 +109,18 @@
 .chart-tabs button:hover { background: #f1f5f9; }
 .chart-tabs button.active { background: #e8ecf3; border-color: #0f172a; font-weight: 700; color: #0f172a; }
 .chart-panes { flex: 1; min-width: 0; height: 66vh; overflow-y: auto; padding-right: 4px; }
+/* Light shading where the scrolling text is cut off (kpi.js sets the classes).
+   Sticky and zero net height, so it stays at the edge and moves nothing. */
+.chart-panes::before, .chart-panes::after {
+    content: ''; display: block; position: sticky; z-index: 4; height: 14px;
+    pointer-events: none; opacity: 0; transition: opacity 0.15s;
+}
+.chart-panes::before { top: 0; margin-bottom: -14px; background: linear-gradient(to bottom, rgba(15, 23, 42, 0.14), rgba(15, 23, 42, 0)); }
+.chart-panes::after { bottom: 0; margin-top: -14px; background: linear-gradient(to top, rgba(15, 23, 42, 0.14), rgba(15, 23, 42, 0)); }
+.chart-panes.shade-top::before, .chart-panes.shade-bottom::after { opacity: 1; }
 .chart-pane { display: none; }
 .chart-pane.active { display: block; }
+.chart-admin-only { display: flex; align-items: center; gap: 6px; margin: 2px 0 0; font-size: 0.86rem; font-weight: 700; color: #0f172a; cursor: pointer; }
 .chart-modal .modal-field { margin-bottom: 10px; }
 .chart-modal .modal-hint { margin-top: 3px; line-height: 1.35; }
 .chart-modal .modal-section-title { margin-top: 0; }
@@ -466,25 +476,40 @@
 .label-popup-field select { width: 150px; padding: 2px 6px; border: 1px solid #cbd5e1; border-radius: 5px; }
 .label-popup-note { color: #64748b; font-size: 12px; margin: 4px 0; }
 .series-row select.series-multiplied { border-color: #2a78d6; background: #eef5fd; }
-/* Table box over the metric box in a series row. */
-.series-pick { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
-.series-pick.series-multiplied select:last-child { border-color: #2a78d6; background: #eef5fd; }
-/* Split At: its own line under its series, indented with a bar on the left so
-   it reads as part of that series, not as another column of the grid above. */
-.series-split { margin: -2px 0 12px 14px; padding: 4px 8px; border-left: 3px solid #cbd5e1; font-size: 0.8rem; }
-.series-split-head { display: flex; align-items: center; gap: 10px; }
-.series-split-help { color: #64748b; margin: 4px 0 6px; }
+/* Edit Chart series: one card per series. Label | Table | Metric on each line,
+   so the two dropdowns get half the popup each and show their full names. */
+.series-card { margin-bottom: 10px; padding: 8px 10px 10px; border: 1px solid #cbd5e1; border-radius: 8px; background: #f8fafc; }
+.series-card-head { display: flex; align-items: center; gap: 5px; margin-bottom: 6px; }
+.series-card-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 0.86rem; font-weight: 700; color: #0f172a; }
+.series-card-head .btn { width: 32px; padding: 3px 0; font-size: 0.76rem; }
+.series-fields { display: grid; grid-template-columns: 96px minmax(0, 1fr) minmax(0, 1fr); gap: 5px 8px; align-items: center; }
+.series-field-col { font-size: 0.72rem; font-weight: 600; color: #94a3b8; }
+.series-field-label { font-size: 0.8rem; font-weight: 600; color: #475569; }
+.series-card .series-fields select, .series-card .series-fields > input[type="text"] {
+    width: 100%; min-width: 0; margin: 0; padding: 5px 8px; border: 1px solid #cbd5e1; border-radius: 6px; background: #fff; font-size: 0.82rem;
+}
+.series-card .series-fields select.series-multiplied { border-color: #2a78d6; background: #eef5fd; }
+.series-field-buttons { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.series-field-wide { grid-column: 2 / -1; }
+.series-card .series-field-buttons .btn { padding: 3px 10px; font-size: 0.76rem; }
+.series-card .series-field-buttons select.series-kind { width: 120px; padding: 4px 8px; border: 1px solid #cbd5e1; border-radius: 6px; background: #fff; font-size: 0.82rem; }
+.layout-history-row { display: flex; align-items: center; gap: 8px; }
+.layout-history-row select { flex: 1; min-width: 0; padding: 6px 10px; border: 1px solid #cbd5e1; border-radius: 6px; background: #fff; font-size: 0.84rem; }
+.series-check { display: flex; align-items: center; gap: 5px; margin: 0 0 0 6px; font-size: 0.82rem; font-weight: 400; color: #0f172a; cursor: pointer; white-space: nowrap; }
+.series-card .series-field-buttons input[type="color"] { width: 34px; height: 30px; margin: 0; padding: 1px 2px; border: 1px solid #cbd5e1; border-radius: 6px; background: #fff; cursor: pointer; }
+.series-card .series-field-buttons .series-own { outline: 2px solid #0f172a; outline-offset: 1px; }
+/* Split At: what sits under its dropdowns, lined up with them. */
+.series-split { grid-column: 2 / -1; font-size: 0.8rem; }
+.series-split-help { color: #64748b; margin: 0 0 4px; }
 /* Part | Colour | Name | reset, one line per part, top part first like the bar. */
 .series-split-grid { display: grid; grid-template-columns: 60px 44px 260px 40px; gap: 4px 8px; align-items: center; }
 .series-split-col { font-size: 0.72rem; font-weight: 600; color: #94a3b8; }
 .series-split-tag { font-weight: 600; color: #475569; white-space: nowrap; }
-.series-split select { width: 220px; padding: 4px 6px; border: 1px solid #cbd5e1; border-radius: 6px; font-size: inherit; }
 .series-split input[type="text"] { width: 100%; box-sizing: border-box; padding: 4px 6px; border: 1px solid #cbd5e1; border-radius: 6px; font-size: inherit; }
 .series-split input[type="color"] { width: 28px; height: 26px; padding: 1px 2px; border: 1px solid #cbd5e1; border-radius: 6px; background: #fff; cursor: pointer; }
 .series-split .series-own { outline: 2px solid #0f172a; outline-offset: 1px; }
 .series-split-swatch { width: 28px; height: 26px; border-radius: 6px; border: 1px solid #cbd5e1; display: inline-block; }
 .series-split .btn { padding: 3px 8px; font-size: 0.76rem; }
-.series-row.series-head { margin-bottom: 2px; font-size: 0.76rem; font-weight: 600; color: #475569; }
 .series-row .series-own { outline: 2px solid #0f172a; outline-offset: 1px; }
 /* Settings > Appearance colour themes: name, swatches, add / remove. */
 .theme-row { display: flex; align-items: center; gap: 8px; padding: 6px 0; border-bottom: 1px solid #f1f5f9; flex-wrap: wrap; }

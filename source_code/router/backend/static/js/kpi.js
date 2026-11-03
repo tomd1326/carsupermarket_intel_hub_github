@@ -36,13 +36,21 @@
     function derivedDefaultName(s) {
         return `${metricName(s.source, s.metric)} × ${metricName(s.multiply_by.source, s.multiply_by.metric)}`;
     }
+    // How a raw metric name reads: a column aggregate of a one-row-per-record
+    // table ('col:PRICE:avg', 'rows:count', see kpi_data_sources.py) as
+    // "Average Of PRICE" / "Count Of Rows"; anything else as it is.
+    function rawMetricName(column) {
+        if (column === 'rows:count') return 'Count Of Rows';
+        const m = /^col:([A-Z][A-Z0-9_$]*):(sum|avg)$/.exec(column || '');
+        return m ? `${m[2] === 'sum' ? 'Sum' : 'Average'} Of ${m[1]}` : column;
+    }
     function metricName(source, column) {
-        return metricNames[metricKey(source || 'snowflake', column)] || column;
+        return metricNames[metricKey(source || 'snowflake', column)] || rawMetricName(column);
     }
     // Dropdown text: the name with the raw column after it, or just the column.
     function metricOptionText(source, column) {
         const name = metricNames[metricKey(source || 'snowflake', column)];
-        return name ? `${name} (${column})` : column;
+        return name ? `${name} (${rawMetricName(column)})` : rawMetricName(column);
     }
     let rowCharts = {};        // rowId -> [Chart, Chart, Chart]
     const customRowEls = {};   // rowId -> element
@@ -1034,7 +1042,7 @@
     }
 
     function rowTitle(row) {
-        return row.title || row.metric;
+        return row.title || rawMetricName(row.metric);
     }
 
     // Daily charts showing the 7-day average instead of each day's figure.
@@ -1176,7 +1184,7 @@
         // The badge says so, and Show To Everyone releases it.
         const adminOnly = IS_ADMIN && row.admin_only ? `
             <span class="admin-only-badge" title="Only you can see this chart. Show To Everyone releases it to every user">
-                <i class="fas fa-user-lock"></i> Admins Only
+                <i class="fas fa-user-lock"></i> Admin only
             </span>
             <button type="button" class="chart-title-btn" title="Let every user see this chart"
                     onclick="setChartAdminOnly('${row.id}', false)">
@@ -1338,14 +1346,14 @@
         redrawDayWindow();
     }
 
-    // All / None on a stacked chart: shows or hides every series (bar) on
-    // that one chart ('m', 'w' or 'd'), as clicking each legend name would.
-    // The target line is left alone.
+    // All / None on a stacked chart: shows or hides every series (column or
+    // line) on that one chart ('m', 'w' or 'd'), as clicking each legend name
+    // would. The N-1 and target lines are left alone.
     function setAllSeries(rowId, k, show) {
         const chart = (rowCharts[rowId] || [])[{ m: 0, w: 1, d: 2 }[k]];
         if (!chart) return;
         chart.data.datasets.forEach((ds, i) => {
-            if (ds.type === 'bar') chart.setDatasetVisibility(i, show);
+            if (ds.$series) chart.setDatasetVisibility(i, show);
         });
         chart.update();
     }
@@ -1453,7 +1461,7 @@
         const cols = [...sets].sort((a, b) => rank(a.ds) - rank(b.ds)).map(s => ({ name: name(s.ds), data: s.data, rule: s.rule }));
         // Column charts: the column total before the target (not on 100% charts).
         if (stacked && !row.pct) {
-            const bars = sets.filter(s => s.ds.type === 'bar');
+            const bars = sets.filter(s => s.ds.type === 'bar' && s.ds.yAxisID !== 'y2');
             const total = labels.map((_, i) => {
                 const known = bars.map(s => s.data[i]).filter(v => v !== null && v !== undefined);
                 return known.length ? known.reduce((a, b) => a + b, 0) : null;
@@ -2948,10 +2956,13 @@
             // Each series, then the column total (not on a 100% chart, where
             // every column is 100), then the target.
             if (row.pct) fmt = v => withCommas(v, row.decimals || 0) + '%';
-            figures = chart.data.datasets.filter(ds => ds.type === 'bar')
+            figures = chart.data.datasets.filter(ds => ds.$series)
                 .map(ds => ({ label: ds.label, v: ds.data[localIndex] }));
-            if (!row.pct) {
-                const known = figures.map(f => f.v).filter(v => v !== null && v !== undefined && !isNaN(v));
+            // The total is of the left-hand axis columns only: a line, or a
+            // column on the secondary axis, is not part of them.
+            const totalled = chart.data.datasets.filter(ds => ds.$series && ds.type === 'bar' && ds.yAxisID !== 'y2');
+            if (!row.pct && totalled.length) {
+                const known = totalled.map(ds => ds.data[localIndex]).filter(v => v !== null && v !== undefined && !isNaN(v));
                 figures.push({ label: 'Total', v: known.length ? known.reduce((a, b) => a + b, 0) : null });
             }
             const target = chart.data.datasets.find(ds => ds.label === 'Target');
@@ -3725,8 +3736,13 @@
         // A multiplied series is a new metric: its own name, never the column's.
         const dk = derivedKey(s);
         if (dk) return derivedNames[dk] || derivedDefaultName(s);
-        return metricNames[metricKey(s.source || 'snowflake', s.metric)] || s.label || s.metric;
+        return metricNames[metricKey(s.source || 'snowflake', s.metric)] || s.label || rawMetricName(s.metric);
     }
+
+    // How a series is drawn: a column (stacked or side by side with the other
+    // columns) or a line. A series saved before kinds existed is a line when
+    // it is on the secondary axis, else a column - how it drew then.
+    const seriesKind = s => s.kind || (s.axis === 'secondary' ? 'line' : 'column');
 
     // What the Legend Name box holds for a series: its derived name when
     // multiplied, else the shared column name ('' when there is none).
@@ -3777,6 +3793,10 @@
     }
 
     // Targets and return as buildRowCharts.
+    // Gap between side by side columns, as a % of each column's space. 15 is
+    // what charts saved before this setting existed were drawn with.
+    const columnGapOf = row => (Number.isInteger(row.column_gap) ? row.column_gap : 15);
+
     function buildStackedCharts(row, d, targets) {
         const side = row.column_layout === 'side_by_side';
         const pct = !!row.pct && !side;
@@ -3809,9 +3829,13 @@
             d: { labels: d.dates.map(dateLabel), starts: d.dates,
                  series: adjusted('d', s => s.d).map(pastOnly).map(s => (rollingOn(row.id) ? rolling7(s, true) : s)) },
         };
-        // Series on the right-hand axis are lines: not in the columns, totals or 100%.
+        // Each series is a column or a line (Chart Type), on the left-hand or
+        // the secondary (right-hand) axis. Only the columns on the left-hand
+        // axis stack: they make the column totals and the 100% shares.
         const onRight = plotted.map(p => p.s.axis === 'secondary');
-        // N-1 line: only for a chart that is one plain column series (Show N-1 Line).
+        const kinds = plotted.map(p => seriesKind(p.s));
+        const inColumns = plotted.map((p, j) => kinds[j] === 'column' && !onRight[j]);
+        // N-1 line: only for a chart that is one plain series on the left-hand axis (Show N-1 Line).
         if (row.n1_line && plotted.length === 1 && !plotted[0].split && !onRight[0] && !pct) {
             const one = d.stacked[0];
             if (one.mn1) periods.m.n1 = one.mn1;
@@ -3821,22 +3845,34 @@
         const withN1 = (k, base) => periods[k].n1 ? [...base, periods[k].n1] : base;
         Object.values(periods).forEach(p => {
             p.totals = p.labels.map((_, i) => {
-                const known = p.series.filter((_s, j) => !onRight[j]).map(s => s[i]).filter(v => v !== null && v !== undefined);
+                const known = p.series.filter((_s, j) => inColumns[j]).map(s => s[i]).filter(v => v !== null && v !== undefined);
                 return known.length ? known.reduce((a, b) => a + b, 0) : null;
             });
             // 100%: each segment becomes its share of the column.
-            if (pct) p.series = p.series.map((s, j) => onRight[j] ? s : s.map((v, i) =>
+            if (pct) p.series = p.series.map((s, j) => !inColumns[j] ? s : s.map((v, i) =>
                 v === null || v === undefined || !p.totals[i] ? null : v / p.totals[i] * 100));
         });
+        // The secondary axis fits its lines and, when stacked, its columns' total.
+        const rightSeries = k => {
+            const onAxis = kind => periods[k].series.filter((_s, j) => onRight[j] && kinds[j] === kind);
+            const cols = onAxis('column');
+            return [...(side || cols.length < 2 ? cols : [cols.reduce(add)]), ...onAxis('line')];
+        };
         const rightRanges = onRight.some(Boolean)
-            ? calcRowRanges(['m', 'w', 'd'].map(k => ({ series: periods[k].series.filter((_s, j) => onRight[j]) })), 'sum')
+            ? calcRowRanges(['m', 'w', 'd'].map(k => ({ series: rightSeries(k) })), 'sum')
             : null;
         const targets_ = stackedTargets(row, d, periods);
+        // The left-hand axis fits the column totals (each column series on
+        // its own when side by side) and the lines drawn against it.
+        const leftSeries = k => [
+            ...(side ? periods[k].series.filter((_s, j) => inColumns[j]) : [periods[k].totals]),
+            ...periods[k].series.filter((_s, j) => kinds[j] === 'line' && !onRight[j]),
+        ];
         const ranges = pct
             ? ['m', 'w', 'd'].map(() => ({ yMin: 0, yMax: 100, unit: 20 }))
-            : calcRowRanges(['m', 'w', 'd'].map(k => ({ series: withN1(k, side ? periods[k].series.filter((_s, j) => !onRight[j]) : [periods[k].totals]), min: (row.y_min || {})[k], max: (row.y_max || {})[k] })),
+            : calcRowRanges(['m', 'w', 'd'].map(k => ({ series: withN1(k, leftSeries(k)), min: (row.y_min || {})[k], max: (row.y_max || {})[k] })),
                 row.agg, sharedAxisValue(row.y_min), sharedAxisValue(row.y_max));
-        const opts = { fmt, fullFmt: rowFullFormatter(row, pct), tickFmt, pct, side, colours: plotted.map(p => p.colour), names: plotted.map(p => p.name),
+        const opts = { fmt, fullFmt: rowFullFormatter(row, pct), tickFmt, pct, side, kinds, columnGap: columnGapOf(row), colours: plotted.map(p => p.colour), names: plotted.map(p => p.name),
                        splits: plotted.map(p => (p.split ? p.split.part : null)),
                        splitNames: plotted.map(p => (p.split ? ((p.s.split_at.lower_label || '').trim() || metricName(p.split.source, p.split.metric)) : null)),
                        transparency: themeById(row.theme).transparency || 0,
@@ -3877,9 +3913,11 @@
             afterDatasetsDraw(chart) {
                 if (!opts.dataLabels) return;
                 const { ctx } = chart;
+                // The left-hand axis columns: a column on the secondary axis
+                // is on another scale, so it is not part of these totals.
                 const bars = chart.data.datasets
                     .map((ds, i) => ({ ds, meta: chart.getDatasetMeta(i), visible: chart.isDatasetVisible(i) }))
-                    .filter(b => b.ds.type === 'bar' && b.visible);
+                    .filter(b => b.ds.type === 'bar' && b.ds.yAxisID !== 'y2' && b.visible);
                 if (!bars.length) return;
                 // Sizes and rules from KPI Settings > Labels.
                 const segPx = Number(settings.stack_seg_font_px) || 9;
@@ -3996,14 +4034,21 @@
         const { yMin, yMax, unit } = opts.range;
         const ctx = document.getElementById(canvasId).getContext('2d');
         if (existingChart) existingChart.destroy();
-        const datasets = p.series.map((data, i) => opts.onRight[i] ? {
+        // Each series as its Chart Type (opts.kinds: column or line) on its
+        // axis (opts.onRight). $series marks the chart's own series, apart
+        // from the N-1 and target lines, for clicks and hover.
+        const datasets = p.series.map((data, i) => (opts.kinds || [])[i] === 'line' ? {
             type: 'line',
             label: opts.names[i],
             data,
-            yAxisID: 'y2',
+            yAxisID: opts.onRight[i] ? 'y2' : 'y',
+            // Its own stack: on a stacked axis, lines sharing one would add
+            // up instead of each showing its own figure.
+            stack: 'line' + i,
             borderColor: opts.colours[i],
             backgroundColor: opts.colours[i],
             $hex: opts.colours[i],
+            $series: true,
             borderWidth: 2,
             pointRadius: 2,
             fill: false,
@@ -4014,18 +4059,23 @@
             type: 'bar',
             label: opts.names[i],
             data,
+            yAxisID: opts.onRight[i] ? 'y2' : 'y',
             backgroundColor: withTransparency(opts.colours[i], opts.transparency),
             $hex: opts.colours[i],   // solid colour, for the segment text
+            $series: true,
             // Split At: 'lower' / 'upper' part of one series (the upper part is
             // always the next dataset), and the name of the lower part's limit.
             $part: (opts.splits || [])[i] || null,
             $limitName: (opts.splitNames || [])[i] || null,
             borderWidth: 0,
             borderSkipped: false,
-            stack: opts.side ? 'series' + i : 'total',
+            // Stacked: the left-hand columns in one stack, the secondary axis
+            // columns in their own. Side by side: every column on its own.
+            stack: opts.side ? 'series' + i : opts.onRight[i] ? 'total2' : 'total',
             order: 2,
             categoryPercentage: 0.85,
-            barPercentage: 0.85,
+            // Side by side: Gap Between Columns in Edit Chart > Columns.
+            barPercentage: opts.side ? 1 - opts.columnGap / 100 : 0.85,
         }));
         if (hasValues(p.n1)) {
             datasets.push({
@@ -4052,12 +4102,12 @@
                 // above or between the columns does nothing and keeps the arrow.
                 onClick: (evt, elements, chart) => {
                     const hit = chart.getElementsAtEventForMode(evt, 'nearest', { intersect: true }, false)
-                        .filter(h => chart.data.datasets[h.datasetIndex].type === 'bar');
+                        .filter(h => chart.data.datasets[h.datasetIndex].$series);
                     if (opts.notes && hit.length) openPointModal(opts.notes, chart, hit[0].index);
                 },
                 onHover: (evt, elements, chart) => {
                     const over = chart.getElementsAtEventForMode(evt, 'nearest', { intersect: true }, false)
-                        .some(h => chart.data.datasets[h.datasetIndex].type === 'bar');
+                        .some(h => chart.data.datasets[h.datasetIndex].$series);
                     chart.canvas.style.cursor = over ? 'pointer' : 'default';
                 },
                 // The room for the totals above the tallest column is added
@@ -4092,7 +4142,7 @@
                             },
                             footer: items => {
                                 if (opts.pct || opts.side) return '';
-                                const segs = items.filter(i => i.dataset.type === 'bar' && i.parsed.y !== null && !isNaN(i.parsed.y));
+                                const segs = items.filter(i => i.dataset.type === 'bar' && i.dataset.yAxisID !== 'y2' && i.parsed.y !== null && !isNaN(i.parsed.y));
                                 return segs.length ? 'Total: ' + opts.fullFmt(segs.reduce((a, i) => a + i.parsed.y, 0)) : '';
                             },
                         },
@@ -4107,6 +4157,7 @@
                     },
                     ...(opts.rightRange ? { y2: {
                         position: 'right',
+                        stacked: !opts.side,
                         min: opts.rightRange.yMin,
                         max: opts.rightRange.yMax,
                         border: { display: false },
@@ -4225,7 +4276,7 @@
     }
 
     function sourceLabel(source) {
-        const builtIn = { snowflake: 'Snowflake - daily_summary', sharepoint: 'SharePoint - Daily Spend and Enquiries',
+        const builtIn = { snowflake: 'Daily Summary', sharepoint: 'SharePoint - Daily Spend and Enquiries',
                           autotrader: 'Autotrader Costs' }[source];
         if (builtIn) return builtIn;
         const m = metricsCatalogue.find(c => c.source === source);
@@ -5041,22 +5092,54 @@
         document.querySelectorAll('#chartModal .chart-pane').forEach(p => p.classList.toggle('active', p.dataset.pane === tab));
     }
 
+    // Light shading at the top or bottom of the Edit Chart scroll area, only
+    // while text is cut off at that edge. The observer catches a tab change or
+    // a series added, which change the height without any scrolling.
+    (function () {
+        const panes = document.querySelector('#chartModal .chart-panes');
+        if (!panes) return;
+        const update = () => {
+            panes.classList.toggle('shade-top', panes.scrollTop > 1);
+            panes.classList.toggle('shade-bottom', panes.scrollTop + panes.clientHeight < panes.scrollHeight - 1);
+        };
+        panes.addEventListener('scroll', update);
+        const observer = new ResizeObserver(update);
+        observer.observe(panes);
+        panes.querySelectorAll('.chart-pane').forEach(p => observer.observe(p));
+    })();
+
     function chartTypeValue() {
-        return document.getElementById('chartTypeSelect').value;
+        // Side by side and lines are saved as a stacked chart (several
+        // series): side by side with its own column_layout, lines with every
+        // series drawn as a line.
+        const value = document.getElementById('chartTypeSelect').value;
+        return value === 'line' ? 'line' : 'stacked';
+    }
+
+    function columnLayoutValue() {
+        return ['side_by_side', 'lines'].includes(document.getElementById('chartTypeSelect').value) ? 'side_by_side' : 'stacked';
+    }
+
+    // The Chart Type option a saved chart opens on.
+    function chartTypeOption(row) {
+        if (!row || !isStacked(row)) return 'line';
+        if ((row.series || []).length && row.series.every(s => seriesKind(s) === 'line')) return 'lines';
+        return row.column_layout === 'side_by_side' ? 'side_by_side' : 'stacked';
     }
 
     function openChartTypeSetup(row) {
         const stacked = !!row && isStacked(row);
-        document.getElementById('chartTypeSelect').value = stacked ? 'stacked' : 'line';
+        document.getElementById('chartTypeSelect').value = chartTypeOption(row);
         // Shown in the order the chart draws them (data source Value Orders applied).
         seriesDraft = stacked ? JSON.parse(JSON.stringify(orderedSeries(row.series || []))) : [];
-        // The name box shows the shared column name.
-        seriesDraft.forEach(s => { s.label = seriesBoxName(s); });
+        // The name box shows the shared column name; the kind is made explicit
+        // so the Chart Type box shows how the series draws.
+        seriesDraft.forEach(s => { s.label = seriesBoxName(s); s.kind = seriesKind(s); });
         fillAddAllSources();
         document.getElementById('themeSelect').innerHTML = themes.map(t =>
             `<option value="${escHtml(t.id)}">${escHtml(t.name)}</option>`).join('');
         document.getElementById('themeSelect').value = stacked && row.theme ? row.theme : (themes[0] ? themes[0].id : '');
-        document.getElementById('columnLayoutSelect').value = stacked && row.column_layout === 'side_by_side' ? 'side_by_side' : 'stacked';
+        document.getElementById('columnGapInput').value = columnGapOf(row || {});
         document.getElementById('pctInput').checked = stacked && !!row.pct;
         document.getElementById('segLabelsInput').checked = stacked && (!!row.seg_labels || !!row.pct);
         document.getElementById('segLabelPosSelect').value = stacked && row.seg_label_pos ? row.seg_label_pos : 'center';
@@ -5070,7 +5153,11 @@
     // so the box is ticked and fixed while 100% is on.
     function onPctChange() {
         // 100% needs stacked columns: side by side switches it off.
-        const side = document.getElementById('columnLayoutSelect').value === 'side_by_side';
+        const option = document.getElementById('chartTypeSelect').value;
+        const side = columnLayoutValue() === 'side_by_side';
+        document.getElementById('columnGapField').style.display = side && option !== 'lines' ? '' : 'none';
+        document.getElementById('seriesFieldLabel').textContent = option === 'lines' ? 'Series'
+            : side ? 'Series (First Is On The Left)' : 'Series (First Is The Bottom Of The Stack)';
         const pctBox = document.getElementById('pctInput');
         if (side) pctBox.checked = false;
         pctBox.disabled = side;
@@ -5087,7 +5174,18 @@
             const m = selectedMetric();
             if (m) seriesDraft.push({ source: m.source, metric: m.column, label: '', colour: null });
         }
+        // Lines draws every series as a line. Coming back from Lines they all
+        // become columns; going between Stacked and Side By Side keeps each
+        // series' own Chart Type, so a combo chart stays a combo chart.
+        if (newSeriesKind() === 'line') seriesDraft.forEach(s => { s.kind = 'line'; });
+        else if (seriesDraft.every(s => seriesKind(s) === 'line')) seriesDraft.forEach(s => { s.kind = 'column'; });
+        onPctChange();
         applyChartTypeUi();
+    }
+
+    // What a series added now is drawn as, from the Chart Type chosen.
+    function newSeriesKind() {
+        return document.getElementById('chartTypeSelect').value === 'lines' ? 'line' : 'column';
     }
 
     function applyChartTypeUi() {
@@ -5128,20 +5226,24 @@
     // metric list shows only that table's metrics. field is where the chosen
     // table is kept on the series (UI only, never saved): _table for the
     // metric, _mtable for Multiplied By, _stable for Split At. Until one is
-    // picked it follows the table of the metric already chosen.
+    // picked it follows the table of the metric already chosen. Multiplied By
+    // and Split At are optional, so they start on (None) with no metric list.
     function seriesTableOptions(s, cur, field) {
+        const optional = field !== '_table';
         const sources = metricSources().filter(x => metricsCatalogue.some(m => m.source === x));
-        const table = s[field] || (cur && cur.metric ? cur.source || 'snowflake' : '') || sources[0] || '';
+        const table = s[field] || (cur && cur.metric ? cur.source || 'snowflake' : '') || (optional ? '' : sources[0]) || '';
         if (table && !sources.includes(table)) sources.unshift(table);
-        return { table, html: sources.map(x => `<option value="${escHtml(x)}" ${x === table ? 'selected' : ''}>${escHtml(sourceLabel(x))}</option>`).join('') };
+        const none = optional ? `<option value="" ${table ? '' : 'selected'}>(None)</option>` : '';
+        return { table, html: none + sources.map(x => `<option value="${escHtml(x)}" ${x === table ? 'selected' : ''}>${escHtml(sourceLabel(x))}</option>`).join('') };
     }
 
-    function seriesPick(s, i, cur, field, blank, onMetric) {
+    function seriesPick(s, i, cur, field, blank, onMetric, metricClass = '') {
         const t = seriesTableOptions(s, cur, field);
-        return `<div class="series-pick">
-                        <select title="Table" onchange="onSeriesTable(${i}, '${field}', this.value)">${t.html}</select>
-                        <select onchange="${onMetric}">${seriesMetricOptions(cur || {}, blank, t.table)}</select>
-                    </div>`;
+        const metrics = field !== '_table' && !t.table
+            ? `<select class="${metricClass}" disabled><option value="">${blank}</option></select>`
+            : `<select class="${metricClass}" onchange="${onMetric}">${seriesMetricOptions(cur || {}, blank, t.table)}</select>`;
+        return `<select title="Table" onchange="onSeriesTable(${i}, '${field}', this.value)">${t.html}</select>
+                        ${metrics}`;
     }
 
     // A different table clears the metric chosen from the old one.
@@ -5157,54 +5259,68 @@
     function renderSeriesList() {
         const theme = themeById(document.getElementById('themeSelect').value);
         const last = seriesDraft.length - 1;
-        // Headings over the boxes, so it is clear the second list multiplies the first.
-        const head = seriesDraft.length ? `<div class="series-row series-head">
-                <span>Metric</span><span>Multiplied By</span><span>Legend Name</span>
-                <span></span><span></span><span></span><span></span><span></span><span></span><span></span></div>` : '';
-        document.getElementById('seriesList').innerHTML = head + seriesDraft.map((s, i) => {
+        document.getElementById('seriesList').innerHTML = seriesDraft.map((s, i) => {
             const themeColour = themeColourAt(theme, i);
             const colour = s.colour || themeColour;
+            const name = s.metric ? seriesLabel(s) : '';
             return `
-                <div class="series-row">
-                    ${seriesPick(s, i, s, '_table', '(choose a metric)', `onSeriesMetric(${i}, this.value)`)}
-                    <div class="series-pick ${s.multiply_by && s.multiply_by.metric ? 'series-multiplied' : ''}"
-                         title="Multiplied By: each day of the metric times the same day of this one">
-                        <select title="Table" onchange="onSeriesTable(${i}, '_mtable', this.value)">${seriesTableOptions(s, s.multiply_by, '_mtable').html}</select>
-                        <select onchange="onSeriesMultiply(${i}, this.value)">${seriesMetricOptions(s.multiply_by || {}, '(Not Multiplied)', seriesTableOptions(s, s.multiply_by, '_mtable').table)}</select>
+                <div class="series-card">
+                    <div class="series-card-head">
+                        <span class="series-card-title">Series ${i + 1}${name ? `: ${escHtml(name)}` : ''}</span>
+                        <button type="button" class="btn btn-edit" title="Move down the stack" onclick="moveSeries(${i}, -1)"
+                                ${i === 0 ? 'disabled' : ''}><i class="fas fa-arrow-up"></i></button>
+                        <button type="button" class="btn btn-edit" title="Move up the stack" onclick="moveSeries(${i}, 1)"
+                                ${i === last ? 'disabled' : ''}><i class="fas fa-arrow-down"></i></button>
+                        <button type="button" class="btn btn-remove-chart" title="Remove series" onclick="seriesDraft.splice(${i}, 1); renderSeriesList()">
+                            <i class="fas fa-trash"></i></button>
                     </div>
-                    <input type="text" maxlength="60" value="${escHtml(s.label || '')}"
-                           placeholder="${escHtml(derivedKey(s) ? derivedDefaultName(s) : (s.metric || 'Legend name'))}"
-                           title="${derivedKey(s)
-                               ? 'Name of this multiplied metric. Saved under Settings > Column Names > Derived Column Names; the column itself keeps its own name'
-                               : 'Name in the legend. Shared: every chart using this column takes it (Settings > Column Names)'}"
-                           class="${derivedKey(s) ? 'series-multiplied' : ''}"
-                           oninput="seriesDraft[${i}].label = this.value">
-                    <input type="color" value="${escHtml(colour)}" class="${s.colour ? 'series-own' : ''}"
-                           title="${s.colour ? 'Own colour - Reset goes back to the theme' : 'Theme colour - pick one to override it'}"
-                           onchange="seriesDraft[${i}].colour = this.value; renderSeriesList()">
-                    <button type="button" class="btn ${s.axis === 'secondary' ? 'btn-primary' : 'btn-edit'}"
-                            title="${s.axis === 'secondary' ? 'On the right-hand axis, drawn as a line - click to put it back in the columns' : 'Put on a second axis on the right, drawn as a line'}"
-                            onclick="seriesDraft[${i}].axis = seriesDraft[${i}].axis === 'secondary' ? 'primary' : 'secondary'; renderSeriesList()">
-                        <i class="fas fa-arrows-alt-h"></i></button>
-                    <button type="button" class="btn ${s.within_below ? 'btn-primary' : 'btn-edit'}"
-                            title="${i === 0 ? 'Nothing below to subtract' : 'Subtract the series below from this one, for when the series below is part of this one (this column then shows only the rest)'}"
-                            onclick="seriesDraft[${i}].within_below = !seriesDraft[${i}].within_below; renderSeriesList()"
-                            ${i === 0 ? 'disabled' : ''}><i class="fas fa-minus"></i></button>
-                    <button type="button" class="btn btn-edit" title="Back to the theme colour" onclick="seriesDraft[${i}].colour = null; renderSeriesList()"
-                            ${s.colour ? '' : 'disabled'}><i class="fas fa-undo"></i></button>
-                    <button type="button" class="btn btn-edit" title="Move down the stack" onclick="moveSeries(${i}, -1)"
-                            ${i === 0 ? 'disabled' : ''}><i class="fas fa-arrow-up"></i></button>
-                    <button type="button" class="btn btn-edit" title="Move up the stack" onclick="moveSeries(${i}, 1)"
-                            ${i === last ? 'disabled' : ''}><i class="fas fa-arrow-down"></i></button>
-                    <button type="button" class="btn btn-remove-chart" title="Remove series" onclick="seriesDraft.splice(${i}, 1); renderSeriesList()">
-                        <i class="fas fa-trash"></i></button>
-                </div>${splitRow(s, i, colour)}`;
+                    <div class="series-fields">
+                        <span></span><span class="series-field-col">Table</span><span class="series-field-col">Metric</span>
+                        <span class="series-field-label">Metric</span>
+                        ${seriesPick(s, i, s, '_table', '(Choose A Metric)', `onSeriesMetric(${i}, this.value)`)}
+                        <span class="series-field-label" title="Each day of the metric times the same day of this one">Multiplied By</span>
+                        ${seriesPick(s, i, s.multiply_by, '_mtable', '(Not Multiplied)', `onSeriesMultiply(${i}, this.value)`, s.multiply_by && s.multiply_by.metric ? 'series-multiplied' : '')}
+                        ${splitRow(s, i, colour)}
+                        <span class="series-field-label">Legend Name</span>
+                        <input type="text" maxlength="60" value="${escHtml(s.label || '')}"
+                               placeholder="${escHtml(derivedKey(s) ? derivedDefaultName(s) : (s.metric || 'Legend name'))}"
+                               title="${derivedKey(s)
+                                   ? 'Name of this multiplied metric. Saved under Settings > Column Names > Derived Column Names; the column itself keeps its own name'
+                                   : 'Name in the legend. Shared: every chart using this column takes it (Settings > Column Names)'}"
+                               class="${derivedKey(s) ? 'series-multiplied' : ''}"
+                               oninput="seriesDraft[${i}].label = this.value">
+                        <div class="series-field-buttons">
+                            <input type="color" value="${escHtml(colour)}" class="${s.colour ? 'series-own' : ''}"
+                                   title="${s.colour ? 'Own colour - Reset Colour goes back to the theme' : 'Theme colour - pick one to override it'}"
+                                   onchange="seriesDraft[${i}].colour = this.value; renderSeriesList()">
+                            <button type="button" class="btn btn-edit" title="Back to the theme colour" onclick="seriesDraft[${i}].colour = null; renderSeriesList()"
+                                    ${s.colour ? '' : 'disabled'}><i class="fas fa-undo"></i> Reset Colour</button>
+                        </div>
+                        <span class="series-field-label">Chart Type</span>
+                        <div class="series-field-buttons series-field-wide">
+                            <select class="series-kind" title="How this series is drawn" onchange="seriesDraft[${i}].kind = this.value; renderSeriesList()">
+                                <option value="column" ${seriesKind(s) === 'column' ? 'selected' : ''}>Column</option>
+                                <option value="line" ${seriesKind(s) === 'line' ? 'selected' : ''}>Line</option>
+                            </select>
+                            <label class="series-check" title="Plotted against a second axis on the right, so a series on a different scale (e.g. a margin next to prices) still reads">
+                                <input type="checkbox" ${s.axis === 'secondary' ? 'checked' : ''}
+                                       onchange="seriesDraft[${i}].axis = this.checked ? 'secondary' : 'primary'; renderSeriesList()"> Secondary Axis</label>
+                        </div>
+                        <span class="series-field-label">Options</span>
+                        <div class="series-field-buttons series-field-wide">
+                            <button type="button" class="btn ${s.within_below ? 'btn-primary' : 'btn-edit'}"
+                                    title="${i === 0 ? 'Nothing below to subtract' : 'Subtract the series below from this one, for when the series below is part of this one (this column then shows only the rest)'}"
+                                    onclick="seriesDraft[${i}].within_below = !seriesDraft[${i}].within_below; renderSeriesList()"
+                                    ${i === 0 ? 'disabled' : ''}><i class="fas fa-minus"></i> Subtract Series Below</button>
+                        </div>
+                    </div>
+                </div>`;
         }).join('') || '<div class="point-status" style="padding:2px 0 6px;">No series yet.</div>';
     }
 
-    // Under each series: Split At. Chosen, the series is drawn in two parts -
-    // up to that metric's figure each day, and the part above it stacked on
-    // top in its own (lighter) colour, with its own legend name.
+    // The Split At line of a series card. Chosen, the series is drawn in two
+    // parts - up to that metric's figure each day, and the part above it
+    // stacked on top in its own (lighter) colour, with its own legend name.
     function splitRow(s, i, colour) {
         const on = hasSplit(s);
         const own = on && s.split_at.colour;
@@ -5213,14 +5329,11 @@
         const name = seriesLabel(s) || 'this series';
         // Laid out like the bar: the top part above the bottom part.
         return `
+                <span class="series-field-label" title="Optional. Draws ${escHtml(name)} in two parts each day: up to the chosen metric's figure, and the part above it in a lighter colour on top. Leave as (Not Split) for a normal single bar.">Split At</span>
+                ${seriesPick(s, i, s.split_at, '_stable', '(Not Split)', `onSeriesSplit(${i}, this.value)`)}
                 <div class="series-split">
-                    <div class="series-split-head">
-                        <span class="series-split-tag">Split ${escHtml(name)} At</span>
-                        <select title="Table" onchange="onSeriesTable(${i}, '_stable', this.value)">${seriesTableOptions(s, s.split_at, '_stable').html}</select>
-                        <select onchange="onSeriesSplit(${i}, this.value)">${seriesMetricOptions(s.split_at || {}, '(Not Split)', seriesTableOptions(s, s.split_at, '_stable').table)}</select>
-                    </div>
                     ${on ? '' : `
-                    <div class="series-split-help">Optional. Choose a metric to draw ${escHtml(name)} in two parts each day: the part up to that metric's figure, and the part above it in a lighter colour on top. Leave as (Not Split) for a normal single bar.</div>`}
+                    <div class="series-split-help">Optional. Draws the bar in two parts: up to the chosen metric, then the rest in a lighter colour on top.</div>`}
                     ${on ? `
                     <div class="series-split-help">Each day, ${escHtml(name)} up to ${escHtml(at)} is the bottom part; anything above it is the top part.</div>
                     <div class="series-split-grid">
@@ -5236,7 +5349,7 @@
                         <button type="button" class="btn btn-edit" title="Back to a lighter shade of the series colour"
                                 onclick="seriesDraft[${i}].split_at.colour = null; renderSeriesList()" ${own ? '' : 'disabled'}><i class="fas fa-undo"></i></button>
                         <span class="series-split-tag">Bottom</span>
-                        <span class="series-split-swatch" style="background:${escHtml(colour)}" title="The series colour, set on the row above"></span>
+                        <span class="series-split-swatch" style="background:${escHtml(colour)}" title="The series colour, set next to Legend Name"></span>
                         <input type="text" maxlength="60" value="${escHtml(s.split_at.lower_label || '')}" placeholder="${escHtml(at)}"
                                title="Name for the part up to ${escHtml(at)}, e.g. Base + Flex"
                                oninput="seriesDraft[${i}].split_at.lower_label = this.value">
@@ -5272,7 +5385,7 @@
     }
 
     function addSeries() {
-        seriesDraft.push({ source: 'snowflake', metric: '', label: '', colour: null });
+        seriesDraft.push({ source: 'snowflake', metric: '', label: '', colour: null, kind: newSeriesKind() });
         renderSeriesList();
     }
 
@@ -5292,10 +5405,10 @@
         document.getElementById('addAllSource').value = '';
         if (!source) return;
         const have = new Set(seriesDraft.map(s => metricKey(s.source || 'snowflake', s.metric)));
-        const fresh = metricsCatalogue.filter(m => m.source === source && !m.is_difference && !have.has(metricKey(m.source, m.column)));
+        const fresh = metricsCatalogue.filter(m => m.source === source && !m.is_difference && !m.aggregate && !have.has(metricKey(m.source, m.column)));
         const room = SERIES_MAX - seriesDraft.length;
         fresh.slice(0, Math.max(room, 0)).forEach(m => {
-            const series = { source: m.source, metric: m.column, label: '', colour: null };
+            const series = { source: m.source, metric: m.column, label: '', colour: null, kind: newSeriesKind() };
             series.label = seriesBoxName(series);
             seriesDraft.push(series);
         });
@@ -5315,6 +5428,7 @@
         document.getElementById('chartModalError').classList.remove('show');
         const series = seriesDraft.filter(s => s.metric).map(s => ({
             source: s.source || 'snowflake', metric: s.metric, label: String(s.label || '').trim(), colour: s.colour || null,
+            kind: seriesKind(s),
             ...(s.multiply_by && s.multiply_by.metric ? { multiply_by: s.multiply_by } : {}),
             ...(s.within_below ? { within_below: true } : {}),
             ...(s.axis === 'secondary' ? { axis: 'secondary' } : {}),
@@ -5359,7 +5473,7 @@
         try { vehicles = readVehSetup(); } catch (err) { showChartError(err.message); return; }
 
         const title = document.getElementById('titleInput').value.trim()
-            || series.map(s => names[metricKey(s.source, s.metric)] || s.metric).join(' / ').slice(0, 100);
+            || series.map(s => names[metricKey(s.source, s.metric)] || rawMetricName(s.metric)).join(' / ').slice(0, 100);
         const updated = {
             ...(existing || { id: newChartId(), type: 'custom' }),
             chart_type: 'stacked',
@@ -5369,7 +5483,8 @@
             metric: series[0].metric,
             series,
             theme: document.getElementById('themeSelect').value || null,
-            column_layout: document.getElementById('columnLayoutSelect').value,
+            column_layout: columnLayoutValue(),
+            column_gap: Math.min(90, Math.max(0, Math.round(Number(document.getElementById('columnGapInput').value) || 0))),
             pct: document.getElementById('pctInput').checked,
             seg_labels: document.getElementById('segLabelsInput').checked,
             seg_label_pos: document.getElementById('segLabelPosSelect').value,
@@ -5505,7 +5620,7 @@
         if (mode !== 'calc') delete updated.target_calc;
         delete updated.vehicles;
         if (vehicles) updated.vehicles = vehicles;
-        ['chart_type', 'series', 'theme', 'pct', 'seg_labels', 'seg_label_pos', 'n1_line', 'column_layout', 'stack_target'].forEach(k => delete updated[k]);
+        ['chart_type', 'series', 'theme', 'pct', 'seg_labels', 'seg_label_pos', 'n1_line', 'column_layout', 'column_gap', 'stack_target'].forEach(k => delete updated[k]);
         delete updated.weight_by;
         const weightBy = readWeightBy();
         if (weightBy) updated.weight_by = weightBy;
@@ -5640,12 +5755,12 @@
         try {
             await saveLayout(rows);
         } catch (err) {
-            status.textContent = (on ? 'Admins Only' : 'Show To Everyone') + ' failed: ' + err.message;
+            status.textContent = (on ? 'Admin only' : 'Show To Everyone') + ' failed: ' + err.message;
             return;
         }
         layout.rows = rows;
         rebuildCustomRow(findRow(rowId), false);
-        status.textContent = on ? `${rowTitle(row)} is now Admins Only` : `${rowTitle(row)} is now shown to everyone`;
+        status.textContent = on ? `${rowTitle(row)} is now Admin only` : `${rowTitle(row)} is now shown to everyone`;
     }
 
     // A new chart id. Two made in the same millisecond (a copy, or a script
@@ -7205,16 +7320,29 @@
         document.getElementById('dataSourceBuiltIn').innerHTML = spBox + atBox;
     }
 
+    // Daily Summary is listed like any other table. Its table and layout are
+    // fixed in code (target columns and Weight By depend on them), so it has
+    // no Edit or Remove.
+    function dailySummaryRowHtml(s) {
+        const used = s.uses ? ` - used in ${s.uses} place${s.uses === 1 ? '' : 's'}` : '';
+        return `<div class="ds-row">
+            <strong>${escHtml(sourceLabel('snowflake'))}</strong>
+            <span class="ds-detail">${escHtml(`${s.detail} - one row per date${used}`)}</span>
+            <button type="button" class="btn btn-sm" disabled title="Its table and layout are fixed: the target columns and Weight By depend on them"><i class="fas fa-pen"></i></button>
+            <button type="button" class="btn btn-remove-chart" disabled title="Built into the page: cannot be removed"><i class="fas fa-trash"></i></button>
+        </div>`;
+    }
+
     function renderDataSourceList() {
         renderDataSourceBuiltIn();
         const dailySummary = dsState.builtIn.find(s => s.id === 'snowflake');
-        document.getElementById('dataSourceList').innerHTML = (dailySummary ? builtInRowHtml(dailySummary) : '') + dsState.sources.map(s => {
+        document.getElementById('dataSourceList').innerHTML = (dailySummary ? dailySummaryRowHtml(dailySummary) : '') + dsState.sources.map(s => {
             const uses = dsState.uses[s.id] || 0;
             const detail = s.shape === 'long'
                 ? `${s.table} - one row per date per ${s.split_column}, figures from ${s.value_column}`
                 : s.shape === 'records'
-                    ? (s.split_column ? `${s.table} - one row per record, counted per date by ${s.split_column}`
-                        : `${s.table} - one row per record, by ${s.date_column}`)
+                    ? (s.split_column ? `${s.table} - one row per record by ${s.date_column}, any column as Sum / Average / Count, counts by ${s.split_column}`
+                        : `${s.table} - one row per record by ${s.date_column}, any column as Sum / Average / Count`)
                     : `${s.table} - one row per date`;
             const used = uses ? ` - used in ${uses} place${uses === 1 ? '' : 's'}` : '';
             return `<div class="ds-row">
@@ -7297,7 +7425,7 @@
             el.innerHTML = '<div class="modal-hint">Save the data source, then edit it to set the order of its values.</div>';
             return;
         }
-        if (!dsState.order) dsState.order = metricsCatalogue.filter(m => m.source === s.id && !m.is_difference).map(m => m.column);
+        if (!dsState.order) dsState.order = metricsCatalogue.filter(m => m.source === s.id && !m.is_difference && !m.aggregate).map(m => m.column);
         const last = dsState.order.length - 1;
         el.innerHTML = dsState.order.map((n, i) => `
             <div class="ds-order-row">
@@ -7542,10 +7670,56 @@
     // Settings tabs. The popup reopens on the tab last used this visit.
     let settingsTab = 'setGroupCharts';
 
+    // ── Restore A Previous Layout (Settings > Charts > Chart List) ──
+    async function loadLayoutHistory() {
+        const select = document.getElementById('layoutHistorySelect');
+        const button = document.getElementById('layoutRestoreBtn');
+        select.innerHTML = '<option value="">Loading saved layouts...</option>';
+        button.disabled = true;
+        try {
+            const resp = await fetch(BASE_URL + '/kpi/layout-history').then(r => r.json());
+            if (resp.status !== 'ok') throw new Error(resp.message || 'The saved layouts could not be read');
+            const history = resp.history || [];
+            if (!history.length) { select.innerHTML = '<option value="">No saved layouts yet</option>'; return; }
+            select.innerHTML = '<option value="">(choose a saved layout)</option>' + history.map((h, i) => {
+                const when = h.saved_at ? new Date(h.saved_at) : null;
+                const stamp = when ? `${ukDate(when.toISOString())} ${String(when.getHours()).padStart(2, '0')}:${String(when.getMinutes()).padStart(2, '0')}` : '';
+                const who = h.note || (h.saved_by ? `by ${h.saved_by}` : '');
+                const charts = h.charts === null || h.charts === undefined ? '' : `${h.charts} chart${h.charts === 1 ? '' : 's'}`;
+                return `<option value="${h.id}">${escHtml([i === 0 ? 'Current' : '', stamp, who, charts].filter(Boolean).join(' - '))}</option>`;
+            }).join('');
+            select.onchange = () => { button.disabled = !select.value; };
+        } catch (err) {
+            select.innerHTML = `<option value="">${escHtml(err.message)}</option>`;
+        }
+    }
+
+    async function restoreLayout() {
+        const select = document.getElementById('layoutHistorySelect');
+        const id = Number(select.value);
+        if (!id) return;
+        const label = select.options[select.selectedIndex].textContent;
+        if (!confirm(`Put back the layout saved ${label}? The charts go back to how they were then, for everyone, and the page reloads.`)) return;
+        const button = document.getElementById('layoutRestoreBtn');
+        button.disabled = true;
+        try {
+            const resp = await fetch(BASE_URL + '/kpi/layout-restore', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ id }),
+            }).then(r => r.json());
+            if (resp.status !== 'ok') throw new Error(resp.message || 'The layout could not be restored');
+            location.reload();
+        } catch (err) {
+            alert('Restore failed: ' + err.message);
+            button.disabled = false;
+        }
+    }
+
     function showSettingsTab(id) {
         settingsTab = id;
         // Picks up section names typed on the Sections tab.
-        if (id === 'setGroupCharts') renderChartDraft();
+        if (id === 'setGroupCharts') { renderChartDraft(); loadLayoutHistory(); }
         if (id === 'setGroupTargets') loadTargetsTab();
         if (id === 'setGroupDataSources') loadDataSourcesTab();
         document.querySelectorAll('#settingsModal .settings-pane').forEach(p => p.classList.toggle('active', p.id === id));
@@ -8010,7 +8184,7 @@
                 return `
                 <div class="chart-item ${c.hidden ? 'is-hidden' : ''}">
                     <label><input type="checkbox" ${c.hidden ? '' : 'checked'} onchange="setChartHidden(${i}, !this.checked)"> Show</label>
-                    <label title="Untick to keep the chart Admins Only: no one else sees it until it is ticked">
+                    <label title="Untick to keep the chart Admin only: no one else sees it until it is ticked">
                         <input type="checkbox" ${c.admin_only ? '' : 'checked'} onchange="setChartDraftAdminOnly(${i}, !this.checked)"> Everyone</label>
                     <span class="chart-item-title" title="${escHtml(c.title)}">${escHtml(c.title)}</span>
                     <select onchange="setChartSection(${i}, this.value)">${options(s)}</select>

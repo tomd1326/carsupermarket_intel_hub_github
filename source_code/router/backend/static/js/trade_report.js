@@ -21,7 +21,8 @@
  * total is worked out from the pooled rows, which is the same for the counts
  * and margins and slightly truer for the CAP-only averages.
  *
- * Loads after Chart.js and charts.js (chart cards, escHtml).
+ * Loads after Chart.js, charts.js (chart cards, escHtml) and trade_vehicles.js
+ * (the View Vehicles popup and Settings).
  */
 (function () {
     'use strict';
@@ -182,8 +183,21 @@
         return `<td class="${extraClass}${neg}">${metric.fmt(v)}</td>`;
     }
 
+    // The rows behind each View button drawn, found again by its number when
+    // it is clicked (trade_vehicles.js shows them). Reset on every render.
+    let viewGroups = [];
+
+    function viewCellHtml(cornerLabel, label, list, extraClass = '') {
+        if (!list.length) return `<td class="blank ${extraClass}"></td>`;
+        const when = periodText();
+        const title = [cornerLabel, label, label.includes(when) ? '' : when].filter(Boolean).join(' - ');
+        viewGroups.push({ title, rows: list });
+        return `<td class="${extraClass}"><button type="button" class="btn btn-edit btn-view" data-view-group="${viewGroups.length - 1}" title="View the vehicles behind this column">View</button></td>`;
+    }
+
     // columns: [{label, rows}], one per site / month / auction. totalRows (if
-    // given) adds a Total column worked out from those pooled rows.
+    // given) adds a Total column worked out from those pooled rows. The last
+    // row holds a View button for each column's vehicles.
     function metricTableHtml({ columns, metricKeys = null, totalRows = null, totalLabel = 'Total', cornerLabel = '' }) {
         const metrics = (metricKeys || METRICS.map(m => m.key)).map(k => METRIC_BY_KEY[k]);
         const colMetrics = columns.map(c => calcMetrics(c.rows));
@@ -197,7 +211,10 @@
                 + (totalRows ? cellHtml(metric, totalMetrics, 'total') : '');
             return `<tr${metric.emphasis ? ' class="emphasis"' : ''}><td>${escHtml(metric.label)}</td>${cells}</tr>`;
         }).join('');
-        return `<div class="summary-table-wrap"><table class="summary"><thead>${head}</thead><tbody>${body}</tbody></table></div>`;
+        const viewCells = columns.map(c => viewCellHtml(cornerLabel, c.label, c.rows)).join('')
+            + (totalRows ? viewCellHtml(cornerLabel, totalLabel, totalRows, 'total') : '');
+        const viewRow = `<tr class="view-row"><td>View Vehicles</td>${viewCells}</tr>`;
+        return `<div class="summary-table-wrap"><table class="summary"><thead>${head}</thead><tbody>${body}${viewRow}</tbody></table></div>`;
     }
 
     // ── Charts ───────────────────────────────────────────────────────────────
@@ -517,6 +534,7 @@
         charts.forEach(c => c.destroy());
         charts = [];
         pendingCharts = [];
+        viewGroups = [];
         const area = document.getElementById('report-area');
         const scope = scopeRows();
         let html;
@@ -592,6 +610,12 @@
     }
 
     function bindControls() {
+        document.getElementById('report-area').addEventListener('click', e => {
+            const btn = e.target.closest('button[data-view-group]');
+            if (!btn) return;
+            const group = viewGroups[Number(btn.dataset.viewGroup)];
+            if (group) TV.open(group.title, group.rows);
+        });
         document.getElementById('view-toggle').addEventListener('click', e => {
             const btn = e.target.closest('button[data-view]');
             if (!btn || btn.dataset.view === view) return;

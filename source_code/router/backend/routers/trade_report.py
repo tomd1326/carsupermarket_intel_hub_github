@@ -8,9 +8,8 @@ then rebuilt the same tables five times over with COUNTIFS / AVERAGEIFS
 The page sends the whole table to the browser once and the browser does the
 slicing, the same way Orders & Deliveries works: every view on the page is a
 different cut of the same rows, so a change of view or period is instant and
-needs no server call. The table is small (one financial year of trade sales,
-plus the previous year during October) so the payload stays well under the
-Lambda response limit.
+needs no server call. The table holds every trade sale in the source (about
+4,000 rows a year) so the payload stays well under the Lambda response limit.
 
 Caching: memory -> S3 -> Snowflake build -> stale S3 fallback. The model is
 built once a day, so a payload is kept for _CACHE_SECONDS and the page's
@@ -29,6 +28,7 @@ from fastapi.responses import HTMLResponse
 
 from utils.db_utils import get_database_connection, get_user_preference
 from utils.snowflake_client import SnowflakeClient
+from . import kpi
 from .core import (BASE_URL, templates, _track, s3_bucketname,
                    s3_bucket_region, require_page, require_page_api, is_admin)
 
@@ -171,6 +171,60 @@ def _get_data(force_refresh: bool = False) -> dict:
     return {**result, "cached_at": now}
 
 
+# Settings > View Vehicles: the columns of the vehicle list, saved in kpi_layout
+# with the other pages' settings. Nothing saved yet = the page's default columns.
+_VIEW_KEY = 'trade_vehicle_view'
+_VIEW_FORMATS = {'number', 'gbp', 'pct', 'text', 'date', 'month'}
+_VIEW_SUMMARIES = {'none', 'sum', 'avg'}
+
+
+def _clean_view(view) -> dict:
+    """The setting as it is stored, or ValueError saying what is wrong with it."""
+    if not isinstance(view, dict):
+        raise ValueError("Nothing to save")
+    known = {key for _, key in _COLUMNS}
+
+    def label_of(item):
+        label = item.get("label") or ""
+        if not isinstance(label, str) or len(label.strip()) > 60:
+            raise ValueError("A heading can be at most 60 characters")
+        return label.strip()
+
+    columns, seen = [], set()
+    for c in view.get("columns") or []:
+        if not isinstance(c, dict) or c.get("column") not in known or c["column"] in seen:
+            raise ValueError(f"Unknown or repeated column: {c.get('column') if isinstance(c, dict) else c}")
+        seen.add(c["column"])
+        decimals = c.get("decimals")
+        # bool is an int in Python, and True is not a number of decimal places.
+        if isinstance(decimals, bool) or not isinstance(decimals, int) or not 0 <= decimals <= 4:
+            raise ValueError(f"Decimals must be 0 to 4 for {c['column']}")
+        if c.get("format") not in _VIEW_FORMATS:
+            raise ValueError(f"Unknown format for {c['column']}")
+        if c.get("summary", "none") not in _VIEW_SUMMARIES:
+            raise ValueError(f"Unknown total for {c['column']}")
+        columns.append({"column": c["column"], "label": label_of(c), "format": c["format"],
+                        "decimals": decimals, "summary": c.get("summary", "none")})
+    if not columns:
+        raise ValueError("Choose at least one column")
+
+    filters = []
+    for f in view.get("filters") or []:
+        if not isinstance(f, dict) or f.get("column") not in known:
+            raise ValueError("Choose a column for each quick filter, or remove it")
+        filters.append({"column": f["column"], "label": label_of(f)})
+    return {"columns": columns, "filters": filters}
+
+
+def _saved_view() -> dict | None:
+    try:
+        stored = kpi._read_kpi_layout_value(_VIEW_KEY)
+        return _clean_view(stored) if stored else None
+    except Exception as e:
+        logger.warning("Trade Report: could not load the View Vehicles columns: %s", e)
+        return None
+
+
 _FONT_DEFAULT = 13
 _FONT_MIN, _FONT_MAX = 8, 20
 _FONT_PREF = 'trade_report_font'
@@ -198,7 +252,7 @@ def trade_report_page(request: Request, user: str = Depends(require_page(PAGE_KE
     return templates.TemplateResponse("trade_report.html", {
         "request": request, "user": user, "BASE_URL": BASE_URL,
         "font_size": font_size, "font_pref": _FONT_PREF,
-        "is_admin": is_admin(user),
+        "is_admin": is_admin(user), "vehicle_view": _saved_view(),
     })
 
 
@@ -212,3 +266,21 @@ def trade_report_data(request: Request, refresh: int = 0,
     except Exception as e:
         logger.error("Trade Report data failed: %s", e)
         return {"status": "error", "message": str(e)}
+
+
+@router.post("/reports/trade/vehicle-view")
+def trade_report_vehicle_view_save(request: Request, payload: dict,
+                                   user: str = Depends(require_page_api(PAGE_KEY))):
+    """Settings > View Vehicles. Admin only."""
+    if not is_admin(user):
+        return {"status": "error", "message": "Only the admin can change the View Vehicles columns"}
+    try:
+        view = _clean_view((payload or {}).get("view"))
+    except ValueError as e:
+        return {"status": "error", "message": str(e)}
+    try:
+        kpi._write_kpi_layout_value(_VIEW_KEY, view)
+    except Exception as e:
+        logger.error("Trade Report View Vehicles save failed: %s", e)
+        return {"status": "error", "message": str(e)}
+    return {"status": "ok", "view": view}
