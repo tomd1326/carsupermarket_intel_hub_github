@@ -135,6 +135,13 @@
         return !!(m && m.difference && row.divide_by && row.divide_by.metric === m.difference.count);
     }
     function rowTopAgg(row) { return isOwnAverage(row) ? 'sum' : row.agg; }
+    // A figure averaged over a table's rows, either way it can be set up: its
+    // month, week and day each get their own axis, as one late call can make a
+    // day's average many times a month's.
+    function isRowAverage(row) {
+        const m = metricsByKey[metricKey(row.source || 'snowflake', row.metric)];
+        return !!(m && m.difference) || (parseQueryMetric(row.metric) || {}).agg === 'avg';
+    }
     // How many days' worth of the daily rate a week or month figure is, on a
     // ratio whose top and bottom add up differently: a week's Sum over its
     // Average is 7 days of the rate (e.g. price changes / average stock),
@@ -2242,7 +2249,8 @@
         if (!time) return 1;
         // A difference's unit is known from its columns, whatever is saved.
         const m = metricsByKey[metricKey(row.source || 'snowflake', row.metric)];
-        const from = m && m.difference ? { minutes: 'min', days: 'day' }[m.difference.kind] : null;
+        const kind = m && (m.difference ? m.difference.kind : m.built_kind);
+        const from = { minutes: 'min', days: 'day' }[kind] || null;
         return (TIME_FROM_MINUTES[from || row.time_from] || 1) / time.minutes;
     }
 
@@ -2488,8 +2496,7 @@
     // window moves: one very late call elsewhere in its history would otherwise
     // flatten every other day. A typed axis minimum or maximum still applies.
     function fitDifferenceDayAxis(row, chart) {
-        const isDifference = !!(metricsByKey[metricKey(row.source || 'snowflake', row.metric)] || {}).difference;
-        if (!chart || !chart.$dayFull || !isDifference || isStacked(row)) return;
+        if (!chart || !chart.$dayFull || !isRowAverage(row) || isStacked(row)) return;
         const f = timeFactor(fmtRow(row));
         const scale = v => (v === null || v === undefined ? v : v * f);
         chart.$fitWindow = () => {
@@ -2622,8 +2629,7 @@
         const scale = v => (v === null || v === undefined ? v : v * f);
         const specs = rangeSpecs(d, row.y_min, row.y_max).map(s => ({
             series: s.series.map(a => a && a.map(scale)), min: scale(s.min), max: scale(s.max) }));
-        const isDifference = !!(metricsByKey[metricKey(row.source || 'snowflake', row.metric)] || {}).difference;
-        return calcRowRanges(specs, isDifference ? 'sum' : row.agg,
+        return calcRowRanges(specs, isRowAverage(row) ? 'sum' : row.agg,
             scale(sharedAxisValue(row.y_min)), scale(sharedAxisValue(row.y_max)))
             .map(r => ({ ...r, yMin: r.yMin / f, yMax: r.yMax / f, unit: r.unit / f }));
     }
@@ -5285,12 +5291,13 @@
     }
 
     // ── Building a metric from a table's columns (Edit Chart) ──
-    // A table that is just a table (one row per record, with none of the older
-    // name or Settings metrics) has no list of metrics: the chart says which
-    // column, Sum / Average / Count and filters it reads.
+    // A one-row-per-record table has no list of metrics: the chart says which
+    // column, Sum / Average / Count and filters it reads. A table with a Count
+    // Rows By column keeps its list, for picking a value of that column; metrics
+    // set up in Settings do not stop the builder, as it can make the same figure.
     function isPlainTable(source) {
         const items = metricsCatalogue.filter(m => m.source === source);
-        return items.some(m => m.column === 'rows:count') && items.every(m => m.aggregate);
+        return items.some(m => m.column === 'rows:count') && items.every(m => m.aggregate || m.is_difference || m.is_count);
     }
 
     const sourceColumnLists = {};   // source id -> [{ column, type }], or 'loading'
@@ -7256,12 +7263,12 @@
     function renderNamesDraft() {
         const options = key => {
             const missing = key && !metricsByKey[key]
-                ? `<option value="${escHtml(key)}">${escHtml(key.slice(key.indexOf('|') + 1))}</option>` : '';
+                ? `<option value="${escHtml(key)}">${escHtml(rawMetricName(key.slice(key.indexOf('|') + 1)))}</option>` : '';
             const group = source => {
                 const items = metricsCatalogue.filter(m => m.source === source);
                 if (!items.length) return '';
                 return `<optgroup label="${escHtml(sourceLabel(source))}">`
-                    + items.map(m => `<option value="${escHtml(metricKey(m.source, m.column))}">${escHtml(m.column)}</option>`).join('')
+                    + items.map(m => `<option value="${escHtml(metricKey(m.source, m.column))}">${escHtml(rawMetricName(m.column))}</option>`).join('')
                     + '</optgroup>';
             };
             return '<option value="">(choose a column)</option>' + missing + allMetricGroups(group);

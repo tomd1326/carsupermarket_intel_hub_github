@@ -180,6 +180,25 @@ def test_running_it_twice_changes_nothing_more():
     assert again["summary"]["charts_on_new_metrics"] == [] and again["summary"]["series_marked"] == 0
 
 
+def test_old_charts_saved_back_over_new_ones_are_caught():
+    built = kds.query_metric("count", filters=[Z001])
+    layout = {"rows": [line("ok", "ds_plain", built), line("wide", "ds_wide", "A"), line("sold", "ds_sales", "SOLD"),
+                       line("old", "ds_plain", "DEAD"),
+                       {"id": "s", "series": [{"source": "ds_plain", "metric": "Margin - Total"}],
+                        "metric": built, "source": "ds_plain"}]}
+    assert kds.old_metrics_on_tables(layout, [PLAIN, WIDE, SALES]) == ["DEAD", "Margin - Total"]
+    assert kds.old_metrics_on_tables({"rows": [line("ok", "ds_plain", built)]}, [PLAIN]) == []
+
+
+def test_repairing_keeps_a_chart_added_since_and_needs_the_old_sources():
+    """The old names are converted using the sources as they were before."""
+    after_overwrite = {"rows": [line("a", "ds_sales", "Delivered"), line("new", "ds_wide", "A")]}
+    out = conv.plan_conversion(after_overwrite, [SALES, EVENTS, WIDE], {}, {}, {}, lambda e: [])
+    assert [r["id"] for r in out["layout"]["rows"]] == ["a", "new"]
+    assert out["layout"]["rows"][0]["metric"] == kds.query_metric("count", filters=[Z001])
+    assert out["layout"]["rows"][1]["metric"] == "A"
+
+
 def test_metric_pairs_lists_what_is_compared_before_writing():
     metric = kds.query_metric("avg", "PRICE", filters=[Z001])
     rows = [line("a", "ds_sales", "Margin - Total", divide_by={"source": "ds_sales", "metric": "Margin - Count"}),

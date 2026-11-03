@@ -6,6 +6,9 @@ Run from source_code/router/backend, with a valid AWS SSO session:
     python scripts/convert_kpi_charts.py                       dry run: writes nothing
     python scripts/convert_kpi_charts.py --apply-after-deploy  converts
     python scripts/convert_kpi_charts.py --undo                puts everything back
+    python scripts/convert_kpi_charts.py --repair              converts the charts again,
+        for when a page opened before the conversion has saved the old charts back
+        over the converted ones. Keeps every chart in the saved layout, new ones too.
 
 The dry run compares every changed metric's daily figures with the old ones in
 Snowflake. A source with any figure that differs is left as it is, with its
@@ -78,9 +81,30 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Move the KPI charts and data sources to the new method")
     parser.add_argument('--apply-after-deploy', action='store_true', help="write the changes; the website must be on the new code")
     parser.add_argument('--undo', action='store_true', help="put back what was saved before the conversion")
+    parser.add_argument('--repair', action='store_true', help="convert the charts again after old charts were saved back")
     args = parser.parse_args()
 
     stored = kpi._read_kpi_layout_values(list(KEYS) + [BACKUP_KEY])
+    if args.repair:
+        backup = stored.get(BACKUP_KEY)
+        if not backup:
+            print("Nothing to repair: no conversion has been run.")
+            return 1
+        # The old metric names only mean anything to the sources as they were.
+        layout = stored.get('layout') or {}
+        plan = conv.plan_conversion(layout, backup['data_sources'], stored.get('metric_names') or {},
+                                    stored.get('metric_formats') or {}, stored.get('derived_names') or {},
+                                    kpi._data_source_names)
+        err = kpi._validate_layout(plan['layout'], kpi._kpi_sections(layout), kpi._section_locks(kpi._kpi_sections(layout)))
+        if err:
+            print(f"The repaired layout fails the page's own check, so nothing was written: {err}")
+            return 1
+        kpi._write_kpi_layout_values({k: plan[k] for k in ('layout', 'metric_names', 'metric_formats', 'derived_names')},
+                                     saved_by="conversion script (repair)")
+        print(f"Repaired: {len(plan['layout'].get('rows', []))} charts, {plan['summary']['series_marked']} series marked, "
+              f"{len(plan['summary']['charts_on_new_metrics'])} charts back on the new metrics. Reload every KPI page.")
+        return 0
+
     if args.undo:
         backup = stored.get(BACKUP_KEY)
         if not backup:

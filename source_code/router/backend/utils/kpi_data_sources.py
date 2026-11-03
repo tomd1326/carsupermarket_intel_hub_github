@@ -460,6 +460,27 @@ def sources_used(obj) -> set:
     return set()
 
 
+def old_metrics_on_tables(obj, sources: list) -> list:
+    """Metrics in a layout that a table with nothing but its columns cannot
+    read: a name from before it was converted. A page opened before the
+    conversion would otherwise save the old charts back over the new ones."""
+    plain = {s["id"] for s in sources if s.get("shape") == "records" and not s.get("split_column") and not s.get("differences")}
+    found = []
+
+    def walk(item):
+        if isinstance(item, dict):
+            if "metric" in item and item.get("source", "snowflake") in plain and not parse_query_metric(item["metric"]):
+                found.append(item["metric"])
+            for value in item.values():
+                walk(value)
+        elif isinstance(item, list):
+            for value in item:
+                walk(value)
+
+    walk(obj)
+    return found
+
+
 def built_metrics_used(obj) -> set:
     """Every ('source', 'q:...') metric anywhere in a saved layout."""
     if isinstance(obj, dict):

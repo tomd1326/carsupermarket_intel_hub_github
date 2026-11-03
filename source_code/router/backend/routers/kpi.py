@@ -1442,10 +1442,19 @@ def kpi_metrics(request: Request, refresh: str = "", user: str = Depends(require
         q = kds.parse_query_metric(col)
         if q is None or source_id not in names_by_source or (source_id, col) in known:
             continue
+        # What one column minus another is in (minutes, days), so a time format
+        # shows it correctly whatever "Figure Is In" is saved on the chart.
+        built_kind = None
+        if q["b"]:
+            try:
+                columns = _source_columns(_data_source(source_id)["table"])
+                built_kind = kds.difference_kind(columns.get(q["a"]), columns.get(q["b"]))
+            except Exception as e:
+                logger.warning("KPI metric list could not read the columns of %s: %s", source_id, e)
         metrics.append({"source": source_id, "source_name": names_by_source[source_id], "column": col,
                         "description": "", "ordered": False, "suggested_agg": "avg" if q["agg"] == "avg" else "sum",
                         "is_difference": False, "is_count": False, "difference": None, "aggregate": q["agg"],
-                        "has_n1": True, "has_target": False})
+                        "built_kind": built_kind, "has_n1": True, "has_target": False})
     return {"status": "ok", "metrics": metrics}
 
 
@@ -3415,6 +3424,9 @@ def kpi_layout_save(request: Request, payload: dict, user: str = Depends(require
         err = _validate_layout(layout or {}, sections, _section_locks(sections))
         if err:
             return {"status": "error", "message": err}
+        if kds.old_metrics_on_tables(layout or {}, _data_sources()):
+            return {"status": "error", "message": "This page was opened before the charts were changed, so saving it "
+                                                  "would undo that. Reload the page and make the change again."}
         _write_kpi_layout_values({'layout': layout}, saved_by=user)
         return {"status": "ok"}
     except Exception as e:
