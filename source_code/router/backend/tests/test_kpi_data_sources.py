@@ -133,6 +133,32 @@ def test_one_number_column_needs_no_second_column():
     assert kds.validate_entry(a_date_alone, BCB_COLUMNS, []) is not None
 
 
+def test_count_rows_metric_needs_no_column():
+    z001 = {"name": " Z001 Deliveries ", "kind": "count", "column_a": "", "column_b": "",
+            "filters": [{"column": "VALUATION_STATUS", "operator": "equals", "value": "Z001"}]}
+    counts = {k: v for k, v in BCB.items() if k != "split_column"}
+    counts["differences"] = [z001, BCB["differences"][0]]
+    assert kds.validate_entry(counts, BCB_COLUMNS, []) is None
+    assert kds.validate_entry({**counts, "differences": [{**z001, "column_a": "FINAL"}]}, BCB_COLUMNS, []) is not None
+    assert kds.difference_metrics(counts) == ["Z001 Deliveries", "Mins To Call - Total", "Mins To Call - Count"]
+    assert kds.count_metrics(counts) == ["Z001 Deliveries"]
+    assert "Z001 Deliveries" not in kds.difference_info(counts, BCB_COLUMNS)
+    cleaned = kds.clean_entry(counts)["differences"]
+    assert cleaned[0] == {"name": "Z001 Deliveries", "kind": "count", "column_a": "", "column_b": "", "filters": z001["filters"]}
+    assert cleaned[1]["kind"] == "difference"
+    sql, params = kds.fetch_sql(counts, ["Z001 Deliveries"], D1, D2, BCB_COLUMNS)
+    assert "COUNT(*) AS V" in sql and "VALUATION_STATUS" in sql and sql.count("%s") == len(params)
+
+
+def test_metric_kind_is_worked_out_for_older_saved_metrics():
+    assert kds.metric_kind({"column_a": "FINAL", "column_b": ""}) == "average"
+    assert kds.metric_kind({"column_a": "CALL_AT", "column_b": "CREATED_AT"}) == "difference"
+    assert kds.metric_kind({"column_a": "", "column_b": ""}) == "count"
+    assert kds.metric_kind({"kind": "count", "column_a": "FINAL"}) == "count"
+    one = {**BCB, "differences": [{"name": "Final", "kind": "average", "column_a": "FINAL", "column_b": "SYSTEM", "filters": []}]}
+    assert kds.validate_entry(one, BCB_COLUMNS, []) is not None
+
+
 def test_is_true_and_is_false_filters_need_no_value():
     flagged = {**BCB, "differences": [{"name": "Final", "column_a": "FINAL", "column_b": "", "filters": [
         {"column": "VALUATION_STATUS", "operator": "is_false", "value": "old text"},

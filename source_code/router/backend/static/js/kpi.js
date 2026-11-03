@@ -88,14 +88,22 @@
     function rowDividePlus(row) { return row.divide_by ? (row.divide_plus || []) : []; }
     // The bottom of a ratio's Sum / Average for weeks and months: its own
     // (Edit Chart > Bottom Of Ratio) or, on charts saved before that, the chart's.
-    function rowDivideAgg(row) { return row.divide_agg || row.agg; }
+    function rowDivideAgg(row) { return isOwnAverage(row) ? 'sum' : row.divide_agg || row.agg; }
+    // A data source average: its total over its own count. Both always add up
+    // for a week or month, whatever the chart's Sum / Average says. Averaged, the
+    // result is the same but the point popup shows daily figures (a count of 0.33).
+    function isOwnAverage(row) {
+        const m = metricsByKey[metricKey(row.source || 'snowflake', row.metric)];
+        return !!(m && m.difference && row.divide_by && row.divide_by.metric === m.difference.count);
+    }
+    function rowTopAgg(row) { return isOwnAverage(row) ? 'sum' : row.agg; }
     // How many days' worth of the daily rate a week or month figure is, on a
     // ratio whose top and bottom add up differently: a week's Sum over its
     // Average is 7 days of the rate (e.g. price changes / average stock),
     // Average over Sum is a seventh of it. 1 when both sides match, as on
     // every chart saved before the bottom had its own setting.
     function ratioPeriodScale(row, days) {
-        if (!row.divide_by || row.agg === rowDivideAgg(row)) return 1;
+        if (!row.divide_by || rowTopAgg(row) === rowDivideAgg(row)) return 1;
         return row.agg === 'sum' ? days : 1 / days;
     }
     // Days in the month starting on an ISO date (YYYY-MM-01).
@@ -748,6 +756,14 @@
         if (id === 'wbrTabBudgets' && typeof WbrBudgets !== 'undefined') WbrBudgets.open();
         document.querySelectorAll('#wbrSettingsModal .settings-pane').forEach(p => p.classList.toggle('active', p.id === id));
         document.querySelectorAll('#wbrSettingsModal .settings-tabs > button').forEach(b => b.classList.toggle('active', b.dataset.tab === id));
+        settingsScrollTop('wbrSettingsModal');
+    }
+
+    // A settings section always opens at its top: the popup and the lists in it
+    // that scroll on their own.
+    function settingsScrollTop(modalId) {
+        document.querySelectorAll(`#${modalId} .modal-box, #${modalId} #chartList, #${modalId} .veh-col-list`)
+            .forEach(el => { el.scrollTop = 0; });
     }
 
     function openWbrSettings() {
@@ -1691,7 +1707,7 @@
         }
         // The bottom uses its own Sum / Average (rowDivideAgg), e.g. a week's
         // price changes over the week's average stock on sale.
-        return Promise.all([fetchSide(top, row.agg), fetchSide([row.divide_by, ...rowDividePlus(row)], rowDivideAgg(row))]).then(([num, den]) => {
+        return Promise.all([fetchSide(top, rowTopAgg(row)), fetchSide([row.divide_by, ...rowDividePlus(row)], rowDivideAgg(row))]).then(([num, den]) => {
             if (num.status !== 'ok') return num;
             if (den.status !== 'ok') return den;
             return ownDates(ratioData(row, num, den));
@@ -5292,7 +5308,7 @@
         document.getElementById('addAllSource').value = '';
         if (!source) return;
         const have = new Set(seriesDraft.map(s => metricKey(s.source || 'snowflake', s.metric)));
-        const fresh = metricsCatalogue.filter(m => m.source === source && !m.is_difference && !have.has(metricKey(m.source, m.column)));
+        const fresh = metricsCatalogue.filter(m => m.source === source && !m.is_difference && !m.is_count && !have.has(metricKey(m.source, m.column)));
         const room = SERIES_MAX - seriesDraft.length;
         fresh.slice(0, Math.max(room, 0)).forEach(m => {
             const series = { source: m.source, metric: m.column, label: '', colour: null };
@@ -7297,7 +7313,7 @@
             el.innerHTML = '<div class="modal-hint">Save the data source, then edit it to set the order of its values.</div>';
             return;
         }
-        if (!dsState.order) dsState.order = metricsCatalogue.filter(m => m.source === s.id && !m.is_difference).map(m => m.column);
+        if (!dsState.order) dsState.order = metricsCatalogue.filter(m => m.source === s.id && !m.is_difference && !m.is_count).map(m => m.column);
         const last = dsState.order.length - 1;
         el.innerHTML = dsState.order.map((n, i) => `
             <div class="ds-order-row">
@@ -7333,6 +7349,8 @@
         if (!s) return;
         dsState.order = null;
         dsState.differences = JSON.parse(JSON.stringify(s.differences || []));
+        // Metrics saved before Kind existed: worked out from their columns.
+        dsState.differences.forEach(d => { d.kind = d.kind || (!d.column_a ? 'count' : d.column_b ? 'difference' : 'average'); });
         document.getElementById('dataSourceForm').style.display = '';
         document.getElementById('dataSourceOpenBtn').style.display = 'none';
         dsState.editId = id;
@@ -7399,23 +7417,34 @@
         renderDsDifferences();
     }
 
-    // What column A minus column B gives, as kds.difference_kind works it out.
+    // What the metric gives, as kds.difference_kind works it out.
     function dsDifferenceKind(d) {
+        if (d.kind === 'count') return 'Rows That Pass The Filters';
         const type = name => (dsState.columns.find(c => c.column === name) || {}).type;
         const a = type(d.column_a), b = type(d.column_b);
-        if (a && !d.column_b) return DS_NUMBER_TYPES.includes(a) ? 'This Column' : 'Choose A Second Column';
+        if (d.kind === 'average') return !a ? '' : DS_NUMBER_TYPES.includes(a) ? 'Average Of This Column' : 'Not A Number Column';
         if (!a || !b) return '';
         if (DS_DATE_TYPES.includes(a) && DS_DATE_TYPES.includes(b)) return a === 'DATE' && b === 'DATE' ? 'Gives Days' : 'Gives Minutes';
         if (DS_NUMBER_TYPES.includes(a) && DS_NUMBER_TYPES.includes(b)) return 'Gives A Number';
         return 'Cannot Be Subtracted';
     }
 
+    const DS_METRIC_KINDS = [['count', 'Count Rows'], ['average', 'Average Of A Column'], ['difference', 'Average Of A Difference']];
+
     function renderDsDifferences() {
         const options = (list, value, blank) => `<option value="">${escHtml(blank)}</option>`
             + list.map(c => `<option value="${escHtml(c)}"${c === value ? ' selected' : ''}>${escHtml(c)}</option>`).join('');
+        const numbers = dsState.columns.filter(c => DS_NUMBER_TYPES.includes(c.type)).map(c => c.column);
         const usable = dsState.columns.filter(c => DS_DATE_TYPES.includes(c.type) || DS_NUMBER_TYPES.includes(c.type)).map(c => c.column);
         const all = dsState.columns.map(c => c.column);
         document.getElementById('dsDifferenceList').innerHTML = dsState.differences.map((d, i) => {
+            const kinds = DS_METRIC_KINDS.map(([v, l]) => `<option value="${v}"${v === d.kind ? ' selected' : ''}>${escHtml(l)}</option>`).join('');
+            // Count: no column. Average: one number column. Difference: two dates or two numbers.
+            const columns = d.kind === 'count' ? ''
+                : d.kind === 'average' ? `<select title="Column" onchange="dsState.differences[${i}].column_a = this.value; renderDsDifferences()">${options(numbers, d.column_a, '(choose a column)')}</select>`
+                : `<select title="Column A" onchange="dsState.differences[${i}].column_a = this.value; renderDsDifferences()">${options(usable, d.column_a, '(choose a column)')}</select>
+                    <span>Minus</span>
+                    <select title="Column B" onchange="dsState.differences[${i}].column_b = this.value; renderDsDifferences()">${options(usable, d.column_b, '(choose a column)')}</select>`;
             const filters = (d.filters || []).map((f, j) => `
                 <div class="ds-diff-row ds-diff-filter">
                     <span>Only Where</span>
@@ -7429,21 +7458,39 @@
                 </div>`).join('');
             return `<div class="ds-diff">
                 <div class="ds-diff-row">
-                    <input type="text" maxlength="40" value="${escHtml(d.name || '')}" placeholder="Name, e.g. Chassis Margin"
+                    <input type="text" maxlength="40" value="${escHtml(d.name || '')}" placeholder="Name, e.g. Z001 Deliveries"
                            oninput="dsState.differences[${i}].name = this.value">
-                    <select title="Column A" onchange="dsState.differences[${i}].column_a = this.value; renderDsDifferences()">${options(usable, d.column_a, '(choose a column)')}</select>
-                    <span>Minus</span>
-                    <select title="Column B" onchange="dsState.differences[${i}].column_b = this.value; renderDsDifferences()">${options(usable, d.column_b, '(nothing)')}</select>
+                    <select title="What To Chart" onchange="onDsMetricKind(${i}, this.value)">${kinds}</select>
+                    ${columns}
                     <span>${escHtml(dsDifferenceKind(d))}</span>
                     <button type="button" class="btn btn-edit btn-sm" onclick="addDsDifferenceFilter(${i})"><i class="fas fa-plus"></i> Filter</button>
-                    <button type="button" class="btn btn-remove-chart" title="Remove difference" onclick="dsState.differences.splice(${i}, 1); renderDsDifferences()"><i class="fas fa-trash"></i></button>
+                    <button type="button" class="btn btn-edit btn-sm" title="Copy this metric, to change a filter value" onclick="duplicateDsDifference(${i})"><i class="fas fa-copy"></i></button>
+                    <button type="button" class="btn btn-remove-chart" title="Remove metric" onclick="dsState.differences.splice(${i}, 1); renderDsDifferences()"><i class="fas fa-trash"></i></button>
                 </div>${filters}
             </div>`;
         }).join('');
     }
 
     function addDsDifference() {
-        dsState.differences.push({ name: '', column_a: '', column_b: '', filters: [] });
+        dsState.differences.push({ name: '', kind: 'count', column_a: '', column_b: '', filters: [] });
+        renderDsDifferences();
+    }
+
+    // Changing the kind drops the columns the new kind does not use.
+    function onDsMetricKind(i, kind) {
+        const d = dsState.differences[i];
+        d.kind = kind;
+        if (kind === 'count') d.column_a = '';
+        if (kind !== 'difference') d.column_b = '';
+        renderDsDifferences();
+    }
+
+    // A copy under the original, named "<name> 2", so similar metrics (one per
+    // supplier, say) are a filter value change each.
+    function duplicateDsDifference(i) {
+        const copy = JSON.parse(JSON.stringify(dsState.differences[i]));
+        copy.name = ((copy.name || '').trim() + ' 2').trim().slice(0, 40);
+        dsState.differences.splice(i + 1, 0, copy);
         renderDsDifferences();
     }
 
@@ -7552,6 +7599,7 @@
         document.querySelectorAll('#settingsModal .settings-tabs > button').forEach(b => b.classList.toggle('active', b.dataset.tab === id));
         // A tab with sub-sections opens them out under it in the menu.
         document.querySelectorAll('#settingsModal .settings-subtabs').forEach(g => g.classList.toggle('open', g.dataset.parent === id));
+        settingsScrollTop('settingsModal');
     }
 
     function restoreSettingsGroups() {
@@ -7570,6 +7618,7 @@
         document.querySelectorAll('#setGroupCharts .chart-subpane').forEach(p => p.classList.toggle('active', p.id === id));
         document.querySelectorAll('#settingsModal .settings-subtabs[data-parent="setGroupCharts"] button')
             .forEach(b => b.classList.toggle('active', b.dataset.sub === id));
+        settingsScrollTop('settingsModal');
     }
 
     // ── View Vehicles columns (edited in the Settings popup) ─────────────────
@@ -7866,6 +7915,7 @@
         if (j < 0 || j >= shown.length) return;
         [shown[i], shown[j]] = [shown[j], shown[i]];
         renderVehColumnDraft();
+        flashVehColumn(j);
     }
 
     // Move to top / Move to bottom: takes the column out and puts it at `to`.
@@ -7873,6 +7923,15 @@
         const shown = vehViewDraft.shown;
         shown.splice(to, 0, shown.splice(i, 1)[0]);
         renderVehColumnDraft();
+        flashVehColumn(to);
+    }
+
+    // The column just moved: kept in view and flashed, so it is easy to keep moving.
+    function flashVehColumn(i) {
+        const el = document.getElementById('vehShownList').children[i];
+        if (!el) return;
+        el.scrollIntoView({ block: 'nearest' });
+        el.classList.add('row-flash');
     }
 
     function hideVehColumn(i) {

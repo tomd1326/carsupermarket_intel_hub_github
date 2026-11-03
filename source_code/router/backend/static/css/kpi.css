@@ -84,6 +84,7 @@
     20%, 70% { box-shadow: 0 0 0 4px rgba(42, 120, 214, 0.55); background-color: rgba(42, 120, 214, 0.08); }
 }
 .chart-row.row-flash { animation: row-flash 2s ease-in-out; border-radius: 10px; }
+.veh-col-item.row-flash { animation: row-flash 2s ease-in-out; border-radius: 6px; }
 #sectionsContainer .category-header { display: none; }
 #sectionsContainer .category-body { margin-top: 0; }
 .chart-card h2 { font-size: var(--kpi-title-font, 0.88rem); }
@@ -511,6 +512,8 @@
 /* The rows popup sits above Settings, which is open underneath it. */
 .modal-overlay#atRowsModal { z-index: 1100; }
 .modal-box.settings-modal { width: 1500px; max-width: 96vw; max-height: 90vh; overflow-y: auto; }
+/* The left menu pins below the sticky heading (.chart-modal-head). */
+.settings-modal .settings-tabs { top: 36px; }
 /* minmax(0, ...): a plain 1fr column cannot be narrower than its longest
    unbroken column name, which pushed the grid past the box edge and
    hid the Add buttons. With 0 as the minimum the columns always fit the
@@ -518,7 +521,9 @@
    on hover). */
 .veh-cols { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); gap: 0 18px; }
 .veh-col-list { border: 1px solid #e2e8f0; border-radius: 6px; height: 340px; overflow-y: auto; padding: 4px; }
-.veh-col-item { display: flex; align-items: center; gap: 6px; padding: 3px 4px; font-size: 0.8rem; border-bottom: 1px solid #f8fafc; }
+/* scroll-margin: a moved column stops one row short of the list's edge, so the
+   next row it would swap with stays visible. */
+.veh-col-item { display: flex; align-items: center; gap: 6px; padding: 3px 4px; font-size: 0.8rem; border-bottom: 1px solid #f8fafc; scroll-margin-block: 36px; }
 .veh-col-item .veh-col-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #0f172a; }
 .veh-col-item .veh-col-type { color: #94a3b8; font-size: 0.72rem; flex-shrink: 0; }
 .veh-col-item input[type="text"] { width: 160px; flex-shrink: 0; padding: 3px 7px; border: 1px solid #cbd5e1; border-radius: 5px; font-size: 0.78rem; }
