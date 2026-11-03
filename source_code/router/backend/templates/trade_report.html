@@ -25,6 +25,11 @@
             <button class="btn btn-refresh ms-2" id="refresh-btn" onclick="refreshData()" title="Reload the latest data from Snowflake">
                 <i class="fas fa-rotate-right"></i> Refresh Data
             </button>
+            {% if is_admin %}
+            <button class="btn btn-edit ms-2" onclick="TV.openSettings()">
+                <i class="fas fa-cog"></i> Settings
+            </button>
+            {% endif %}
             <div class="d-flex align-items-center gap-1 ms-2">
                 <span class="text-muted">Font</span>
                 <button class="btn btn-outline-secondary px-2 py-0" onclick="changeFont(-1)">&minus;</button>
@@ -81,12 +86,93 @@
         </div>
     </div>
 
+    <!-- The View buttons: the vehicles behind one column of a table. -->
+    <div class="modal-overlay" id="vehiclesModal">
+        <div class="modal-box point-modal">
+            <div class="chart-modal-head">
+                <h2 id="vehiclesTitle"></h2>
+                <button type="button" class="modal-close-x" onclick="TV.close()" aria-label="Close">&times;</button>
+            </div>
+            <div class="point-actions">
+                <span class="point-status" id="vehiclesStatus"></span>
+                <div class="spacer" style="flex:1;"></div>
+                <button type="button" class="btn btn-edit" id="vehiclesColumnsBtn" onclick="TV.editColumns()" style="display:none;"
+                        title="Rename, reorder and format the columns in Settings">
+                    <i class="fas fa-cog"></i> Edit Columns
+                </button>
+                <button type="button" class="btn btn-csv" onclick="TV.downloadCsv()">
+                    <i class="fas fa-download"></i> CSV
+                </button>
+            </div>
+            <div class="veh-quick" id="vehiclesQuick"></div>
+            <div class="vehicles-wrap">
+                <table class="vehicles-table" id="vehiclesTable"></table>
+            </div>
+        </div>
+    </div>
+
+    {% if is_admin %}
+    <!-- Settings: tabs down the left, as in the KPI Settings popup. -->
+    <div class="modal-overlay" id="settingsModal">
+        <div class="modal-box settings-modal">
+            <div class="chart-modal-head">
+                <h2><i class="fas fa-cog"></i> Settings</h2>
+                <button type="button" class="modal-close-x" onclick="TV.closeSettings()" aria-label="Close">&times;</button>
+            </div>
+            <p class="modal-sub">Applies to the whole Trade Report, for everyone.</p>
+            <div class="modal-error" id="settingsError"></div>
+            <div class="settings-body">
+                <nav class="settings-tabs">
+                    <button type="button" class="active">View Vehicles</button>
+                </nav>
+                <div class="settings-panes">
+                    <div class="settings-pane active">
+                        <div class="modal-field">
+                            <label>Quick Filters At The Top Of The List</label>
+                            <div id="vehQuickList"></div>
+                            <button type="button" class="btn btn-edit section-add-btn" onclick="TV.addFilter()">
+                                <i class="fas fa-plus"></i> Add Filter
+                            </button>
+                            <div class="modal-hint">Each filter appears above the vehicle list: a tick-list of the values in the list for a text column (tick several, none ticked shows all), or a from / to box for a number or date column. The column does not have to be shown in the list. The name is the label above the filter (blank uses the column's own name).</div>
+                        </div>
+                        <div class="veh-cols">
+                            <div>
+                                <div class="veh-col-head" id="vehShownHead">Shown, In Order</div>
+                                <div class="veh-col-links">
+                                    <a href="#" onclick="TV.removeAllColumns(); return false;">Remove All</a>
+                                </div>
+                                <div class="veh-col-list" id="vehShownList"></div>
+                            </div>
+                            <div>
+                                <div class="veh-col-head">Not Shown</div>
+                                <input type="text" class="veh-col-search" id="vehColSearch" placeholder="Search Columns" oninput="TV.renderColumnDraft()">
+                                <div class="veh-col-list" id="vehHiddenList" style="height:302px;"></div>
+                            </div>
+                        </div>
+                        <div class="modal-hint">
+                            Type in a box to change the heading. Format sets how values show in the
+                            list; decimals apply to number, £ and %. The CSV keeps the raw values.
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-actions">
+                <button type="button" class="btn btn-edit" onclick="TV.closeSettings()">Cancel</button>
+                <button type="button" class="btn btn-apply" id="settingsSaveBtn" onclick="TV.saveSettings()">Save</button>
+            </div>
+        </div>
+    </div>
+    {% endif %}
+
     <script>
         window.BASE_URL = "{{ BASE_URL }}";
         window.TRADE_FONT = { size: {{ font_size }}, prefKey: "{{ font_pref }}" };
+        window.TRADE_IS_ADMIN = {{ 'true' if is_admin else 'false' }};
+        window.TRADE_VEHICLE_VIEW = {{ vehicle_view | tojson }};
     </script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
     <script src="{{ static_url('js/charts.js') }}"></script>
+    <script src="{{ static_url('js/trade_vehicles.js') }}"></script>
     <script src="{{ static_url('js/trade_report.js') }}"></script>
 </body>
 </html>

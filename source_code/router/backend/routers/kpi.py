@@ -1136,7 +1136,8 @@ def _data_source_metrics(entry: dict) -> list:
     _checked_data_source(entry)
     if entry["shape"] == "wide":
         return kds.wide_metric_columns(entry, _source_columns(entry["table"]))
-    return kds.order_names(_data_source_names(entry), entry.get("name_order")) + kds.difference_metrics(entry)
+    return (kds.order_names(_data_source_names(entry), entry.get("name_order")) + kds.difference_metrics(entry)
+            + kds.column_metrics(entry, _source_columns(entry["table"])))
 
 
 def _data_source_names(entry: dict) -> list:
@@ -1400,14 +1401,15 @@ def kpi_metrics(request: Request, refresh: str = "", user: str = Depends(require
         count_names = set(kds.count_metrics(entry))
         differences = kds.difference_info(entry, _source_columns(entry["table"])) if own_names else {}
         for col in names:
+            aggregate = kds.parse_column_metric(col)
             metrics.append({
                 "source": entry["id"],
                 "source_name": entry["name"],
                 "column": col,
                 "description": f"From {entry['table']}",
                 # Stacked charts draw this source's series in its Value Order.
-                "ordered": bool(entry.get("name_order")),
-                "suggested_agg": "sum" if col in own_names else _guess_agg(col),
+                "ordered": bool(entry.get("name_order")) and not aggregate,
+                "suggested_agg": "avg" if aggregate and aggregate[1] == "avg" else "sum" if col in own_names or aggregate else _guess_agg(col),
                 # An average's or difference's total and count: offered only as
                 # the average in the metric list. A count of rows is a plain
                 # metric, offered everywhere, but not a value of the name column.
@@ -1415,6 +1417,8 @@ def kpi_metrics(request: Request, refresh: str = "", user: str = Depends(require
                 "is_count": col in count_names,
                 # On a difference's total: its count and what the figure is in.
                 "difference": differences.get(col),
+                # A column aggregate (Sum Of / Average Of a column, Count Of Rows).
+                "aggregate": aggregate[1] if aggregate else None,
                 "has_n1": True,
                 "has_target": False,
             })
@@ -1970,15 +1974,26 @@ def _custom_data(metric: str, agg: str, source: str, target_mode: str, months: i
             }
             for d, row in (prefetched or {}).items()
         }
+        # Each day's weight for the weeks and months: Weight By on
+        # daily_summary, or the row count a data source sends with a column's
+        # Average (kpi_data_sources.column_metrics), so the period is the
+        # average over every row rather than of the daily averages.
+        weight_at = None
+        aggregate = kds.parse_column_metric(metric) if source in source_data else None
+        if weight_by:
+            weight_at = lambda d: by_date.get(d, {}).get('w')
+        elif aggregate and aggregate[1] == "avg":
+            weight_rows = source_data[source]
+            weight_at = lambda d: _num((weight_rows.get(d) or {}).get(metric + kds.WEIGHT_SUFFIX))
 
-        # One week's or month's figure from its days. With weight_by, each
+        # One week's or month's figure from its days. With a weight, each
         # day's average counts in proportion to that day's count: sum(average
         # x count) / sum(count), which is the average over every vehicle in the
         # period. Days with no average or no count are left out.
         def _period(period_dates):
-            if not weight_by:
+            if weight_at is None:
                 return _agg([value_at(d) for d in period_dates])
-            pairs = [(value_at(d), by_date.get(d, {}).get('w')) for d in period_dates]
+            pairs = [(value_at(d), weight_at(d)) for d in period_dates]
             pairs = [(v, w) for v, w in pairs if v is not None and w]
             total_weight = sum(w for _, w in pairs)
             return _round(sum(v * w for v, w in pairs) / total_weight) if total_weight else None
@@ -2056,8 +2071,8 @@ def _custom_data(metric: str, agg: str, source: str, target_mode: str, months: i
             "values_n1": values_n1,
             "values_target": values_target,
             # Each day's weight, so the page's 7-day view is weighted like weeks and months.
-            "weights": [by_date.get(d, {}).get('w') for d in dates] if weight_by else None,
-            "weights_n1": [by_date.get(_shift_years(d, -1), {}).get('w') for d in dates] if weight_by else None,
+            "weights": [weight_at(d) for d in dates] if weight_at else None,
+            "weights_n1": [weight_at(_shift_years(d, -1)) for d in dates] if weight_at else None,
             "monthly_labels": monthly_labels,
             "monthly_values": monthly_values,
             "monthly_values_n1": monthly_n1,
@@ -2440,11 +2455,15 @@ def _validate_layout_metric(source: str, metric) -> str | None:
 
 # ── Chart types ──────────────────────────────────────────────────────────────
 # "line" (the default): one metric with N-1 and a target, month / week / day.
-# "stacked": stacked columns, one segment per series, month / week / day, no
-# N-1. The page fetches each series with /kpi/custom-data and stacks them.
-# row["metric"] / row["source"] hold the first series, so code that reads a
-# chart's metric (titles, notes) still has one.
+# "stacked": several series, month / week / day, no N-1. The page fetches
+# each series with /kpi/custom-data and draws them together: the column
+# series stacked or side by side (column_layout) and the line series as lines
+# (each series' "kind", column or line; a series saved without one is a line
+# when on the secondary axis, else a column, which is how they drew before
+# kinds existed). row["metric"] / row["source"] hold the first series, so code
+# that reads a chart's metric (titles, notes) still has one.
 KPI_CHART_TYPES = ("line", "stacked")
+KPI_SERIES_KINDS = ("column", "line")
 _KPI_SERIES_MAX = 12
 _HEX_COLOUR = r"#[0-9a-fA-F]{6}"
 
@@ -2462,8 +2481,10 @@ def _validate_stacked_row(row: dict) -> str | None:
         return f"At most {_KPI_SERIES_MAX} series in a chart"
     for s in series:
         if not isinstance(s, dict) or set(s) - {"source", "metric", "label", "colour", "multiply_by", "within_below",
-                                                 "axis", "split_at"}:
+                                                 "axis", "split_at", "kind"}:
             return "bad series"
+        if s.get("kind", "column") not in KPI_SERIES_KINDS:
+            return "bad series kind"
         # Split At: the series drawn in two parts, up to and above a second
         # metric's figure each day (see _custom_data). The part above has its
         # own legend name and colour.
@@ -2507,6 +2528,10 @@ def _validate_stacked_row(row: dict) -> str | None:
         return "bad theme"
     if row.get("column_layout", "stacked") not in ("stacked", "side_by_side"):
         return "bad column_layout"
+    column_gap = row.get("column_gap", 15)
+    # bool is an int in Python, and True is not a gap.
+    if isinstance(column_gap, bool) or not isinstance(column_gap, int) or not 0 <= column_gap <= 90:
+        return "Gap between columns must be a whole number from 0 to 90"
     if row.get("seg_label_pos", "center") not in ("center", "start", "end"):
         return "bad seg_label_pos"
     for flag in ("pct", "seg_labels", "n1_line"):
@@ -2971,13 +2996,17 @@ def _write_kpi_layout_value(key: str, value) -> None:
     _write_kpi_layout_values({key: value})
 
 
-def _write_kpi_layout_values(values: dict) -> None:
-    """Write several keys in one transaction: all are saved or none are."""
+def _write_kpi_layout_values(values: dict, saved_by: str = "") -> None:
+    """Write several keys in one transaction: all are saved or none are. A
+    new 'layout' also goes into the history (see _layout_history_insert), so
+    it can be brought back from Settings > Charts > Restore A Previous Layout."""
     global _kpi_layout_table_ready
     with get_prod_pricer_connection() as conn:
         with conn.cursor() as cur:
             if not _kpi_layout_table_ready:
                 cur.execute("CREATE TABLE IF NOT EXISTS kpi_layout (key VARCHAR(50) PRIMARY KEY, value TEXT)")
+            if "layout" in values:
+                _layout_history_insert(cur, values["layout"], saved_by)
             for key, value in values.items():
                 cur.execute(
                     "INSERT INTO kpi_layout (key, value) VALUES (%s, %s) "
@@ -2986,6 +3015,125 @@ def _write_kpi_layout_values(values: dict) -> None:
                 )
         conn.commit()
     _kpi_layout_table_ready = True
+
+
+# ── Layout history ───────────────────────────────────────────────────────────
+# Every save of the chart layout keeps a copy, so a change that breaks the
+# charts can be undone in Settings > Charts > Restore A Previous Layout.
+# Nothing here can stop a save: a history problem is logged and the save
+# goes ahead.
+_LAYOUT_HISTORY_KEEP = 100
+_layout_history_table_ready = False
+
+
+def _layout_history_table(cur) -> None:
+    global _layout_history_table_ready
+    if _layout_history_table_ready:
+        return
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS kpi_layout_history (
+            id SERIAL PRIMARY KEY,
+            saved_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            saved_by VARCHAR(100) NOT NULL DEFAULT '',
+            note VARCHAR(100) NOT NULL DEFAULT '',
+            value TEXT NOT NULL
+        )
+    """)
+    _layout_history_table_ready = True
+
+
+def _layout_history_insert(cur, layout, saved_by: str) -> None:
+    """The layout being saved, after the one it replaces when the history is
+    empty (so the oldest entry is the layout as it was before any change
+    recorded here). The oldest beyond _LAYOUT_HISTORY_KEEP are dropped.
+
+    Runs inside the save's own transaction, where one failed statement would
+    abort the whole thing, so it has a savepoint to go back to: a history
+    problem must never stop the layout saving."""
+    global _layout_history_table_ready
+    try:
+        cur.execute("SAVEPOINT layout_history")
+        _layout_history_table(cur)
+        cur.execute("SELECT COUNT(*) FROM kpi_layout_history")
+        if cur.fetchone()[0] == 0:
+            cur.execute("SELECT value FROM kpi_layout WHERE key = 'layout'")
+            before = cur.fetchone()
+            if before:
+                cur.execute("INSERT INTO kpi_layout_history (saved_by, note, value) VALUES ('', %s, %s)",
+                            ("Before the first recorded change", before[0]))
+        cur.execute("INSERT INTO kpi_layout_history (saved_by, value) VALUES (%s, %s)",
+                    (str(saved_by or "")[:100], json.dumps(layout)))
+        cur.execute("DELETE FROM kpi_layout_history WHERE id NOT IN "
+                    "(SELECT id FROM kpi_layout_history ORDER BY id DESC LIMIT %s)", (_LAYOUT_HISTORY_KEEP,))
+        cur.execute("RELEASE SAVEPOINT layout_history")
+    except Exception as e:
+        logger.error("KPI layout history not recorded: %s", e)
+        # Going back undoes a CREATE TABLE too, so the next save checks again.
+        _layout_history_table_ready = False
+        cur.execute("ROLLBACK TO SAVEPOINT layout_history")
+
+
+def _layout_history_list() -> list:
+    """Newest first: {id, saved_at, saved_by, note, charts}."""
+    with get_prod_pricer_connection() as conn:
+        with conn.cursor() as cur:
+            _layout_history_table(cur)
+            cur.execute("SELECT id, saved_at, saved_by, note, value FROM kpi_layout_history ORDER BY id DESC")
+            rows = cur.fetchall()
+        conn.commit()
+    out = []
+    for row_id, saved_at, saved_by, note, value in rows:
+        try:
+            charts = len((json.loads(value) or {}).get("rows") or [])
+        except Exception:
+            charts = None
+        out.append({"id": row_id, "saved_at": saved_at.isoformat() if saved_at else None,
+                    "saved_by": saved_by, "note": note, "charts": charts})
+    return out
+
+
+def _layout_history_get(history_id: int):
+    with get_prod_pricer_connection() as conn:
+        with conn.cursor() as cur:
+            _layout_history_table(cur)
+            cur.execute("SELECT value FROM kpi_layout_history WHERE id = %s", (history_id,))
+            row = cur.fetchone()
+        conn.commit()
+    return json.loads(row[0]) if row else None
+
+
+@router.get("/kpi/layout-history")
+def kpi_layout_history(request: Request, user: str = Depends(require_page_api(*_KPI_PAGES))):
+    """The saved layouts that can be restored. Admin only."""
+    if not is_admin(user):
+        return {"status": "error", "message": "Only the admin can see the layout history"}
+    try:
+        return {"status": "ok", "history": _layout_history_list()}
+    except Exception as e:
+        logger.error("KPI layout history read failed: %s", e)
+        return {"status": "error", "message": str(e)}
+
+
+@router.post("/kpi/layout-restore")
+def kpi_layout_restore(request: Request, payload: dict, user: str = Depends(require_page_api(*_KPI_PAGES))):
+    """Puts a saved layout back as the live one. It is not re-checked: it was
+    accepted when it was saved, and the point of this is getting the charts
+    back when a change has broken them. The restore is itself recorded in
+    the history, so it can be undone too. Admin only."""
+    if not is_admin(user):
+        return {"status": "error", "message": "Only the admin can restore a layout"}
+    history_id = (payload or {}).get("id")
+    if isinstance(history_id, bool) or not isinstance(history_id, int):
+        return {"status": "error", "message": "Choose a saved layout"}
+    try:
+        layout = _layout_history_get(history_id)
+        if not isinstance(layout, dict) or not isinstance(layout.get("rows"), list):
+            return {"status": "error", "message": "That saved layout was not found"}
+        _write_kpi_layout_values({"layout": layout}, saved_by=f"{user} (restore)")
+        return {"status": "ok"}
+    except Exception as e:
+        logger.error("KPI layout restore failed: %s", e)
+        return {"status": "error", "message": str(e)}
 
 
 def _admin_only_ids(layout: dict) -> set:
@@ -3220,7 +3368,7 @@ def kpi_layout_save(request: Request, payload: dict, user: str = Depends(require
         err = _validate_layout(layout or {}, sections, _section_locks(sections))
         if err:
             return {"status": "error", "message": err}
-        _write_kpi_layout_value('layout', layout)
+        _write_kpi_layout_values({'layout': layout}, saved_by=user)
         return {"status": "ok"}
     except Exception as e:
         logger.error(f"KPI layout save failed: {e}")
@@ -3802,7 +3950,7 @@ def kpi_sections_save(request: Request, payload: dict, user: str = Depends(requi
         if err:
             return {"status": "error", "message": err}
         _write_kpi_layout_values({'layout': new_layout, 'sections': names, 'hidden_sections': hidden,
-                                  _SECTION_SOURCES_KEY: locks, _SECTION_COMPANIES_KEY: companies})
+                                  _SECTION_SOURCES_KEY: locks, _SECTION_COMPANIES_KEY: companies}, saved_by=user)
     except Exception as e:
         logger.error(f"KPI sections save failed: {e}")
         return {"status": "error", "message": str(e)}

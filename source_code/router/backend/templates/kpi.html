@@ -221,7 +221,7 @@
             <div class="wbr-settings-title">Report</div>
             <div class="wbr-settings-grid">
                 <div class="modal-field"><label for="setWbrReportOn">Report</label>
-                    <select id="setWbrReportOn"><option value="0">Off (Admin Only)</option><option value="1">On For Everyone</option></select></div>
+                    <select id="setWbrReportOn"><option value="0">Off (Admin only)</option><option value="1">On For Everyone</option></select></div>
                 <div class="modal-field"><label for="setWbrReportMonths">Complete Months Shown</label><input type="number" id="setWbrReportMonths" step="1"></div>
                 <div class="modal-field"><label for="setWbrReportWeeks">Weeks Shown</label><input type="number" id="setWbrReportWeeks" step="1"></div>
                 <div class="modal-field"><label for="setWbrReportWeeksPerMonth">Weeks Per Month</label><input type="number" id="setWbrReportWeeksPerMonth" step="0.1"></div>
@@ -410,6 +410,11 @@
                 <button type="button" class="modal-close-x" onclick="closeChartModal()" aria-label="Close">&times;</button>
             </div>
             <div class="modal-error" id="chartModalError"></div>
+            <!-- At the very top, above the tabs, so it shows on all of them. -->
+            <label class="chart-admin-only"
+                   title="No one else is sent the chart until this is unticked, or Show To Everyone is pressed on the chart. New charts and copies start ticked.">
+                <input type="checkbox" id="adminOnlyInput"> Admin only
+            </label>
 
             <!-- Tabs down the left, grouped by what gets changed together: what is
                  plotted, then its title and placement | how stacked columns look |
@@ -433,10 +438,13 @@
                     <select id="chartTypeSelect" onchange="onChartTypeChange()">
                         <option value="line">Line - one metric, with N-1 and target</option>
                         <option value="stacked">Stacked columns - several metrics</option>
+                        <option value="side_by_side">Side by side columns - several metrics</option>
+                        <option value="lines">Lines - several metrics</option>
                     </select>
+                    <div class="modal-hint stacked-only">Each series below has its own Chart Type (Column or Line) and Secondary Axis tick, so columns and lines can be mixed on one chart.</div>
                 </div>
                 <div class="modal-field span-2 stacked-only" id="seriesField">
-                    <label>Series (First Is The Bottom Of The Stack)</label>
+                    <label id="seriesFieldLabel">Series (First Is The Bottom Of The Stack)</label>
                     <div id="seriesList"></div>
                     <button type="button" class="btn btn-edit section-add-btn" onclick="addSeries()">
                         <i class="fas fa-plus"></i> Add Series
@@ -534,16 +542,6 @@
                 <div class="modal-field">
                     <label for="positionSelect">Position In Section</label>
                     <select id="positionSelect"></select>
-                </div>
-            </div>
-            <div class="modal-section-title">Who Can See It</div>
-            <div class="modal-grid">
-                <div class="modal-field span-2">
-                    <label><input type="checkbox" id="adminOnlyInput"> Admins Only</label>
-                    <div class="modal-hint">
-                        No one else is sent the chart until this is unticked, or Show To Everyone is
-                        pressed on the chart. New charts and copies start ticked.
-                    </div>
                 </div>
             </div>
             </div>
@@ -684,15 +682,13 @@
             <div class="modal-section-title">Columns</div>
             <div class="modal-grid">
                 <div class="modal-field">
-                    <label for="columnLayoutSelect">Columns</label>
-                    <select id="columnLayoutSelect" onchange="onPctChange()">
-                        <option value="stacked">Stacked</option>
-                        <option value="side_by_side">Side By Side</option>
-                    </select>
-                </div>
-                <div class="modal-field">
                     <label for="themeSelect">Colour Theme</label>
                     <select id="themeSelect" onchange="renderSeriesList()"></select>
+                </div>
+                <div class="modal-field span-2" id="columnGapField">
+                    <label for="columnGapInput">Gap Between Columns (%)</label>
+                    <input type="number" id="columnGapInput" min="0" max="90" step="1" style="max-width: 120px;">
+                    <div class="modal-hint">0 has the columns touching. The higher the figure, the thinner the columns and the wider the gap between them. 0 to 90.</div>
                 </div>
                 <div class="modal-field span-2">
                     <label>Show</label>
@@ -1044,6 +1040,19 @@
                 Change a chart's section here or in Edit Chart; a chart moved to another section
                 goes to the bottom of it. The arrows move a chart within its section.
             </div>
+            <!-- Every save of the charts is kept (kpi.py _layout_history_insert),
+                 so a change that breaks them can be undone here. -->
+            <div class="modal-section-title" style="margin-top: 16px;">Restore A Previous Layout</div>
+            <div class="layout-history-row">
+                <select id="layoutHistorySelect"></select>
+                <button type="button" class="btn btn-edit" id="layoutRestoreBtn" onclick="restoreLayout()" disabled>
+                    <i class="fas fa-history"></i> Restore</button>
+            </div>
+            <div class="modal-hint">
+                Every save of the charts is listed, newest first. Restore puts that saved layout back
+                as it was, for everyone, and reloads the page. Nothing is lost: the layout being
+                replaced is kept in the list too, so a restore can itself be undone.
+            </div>
             </div>
             <div class="chart-subpane" id="chartSubPeriods">
             <div class="settings-grid">
@@ -1251,7 +1260,7 @@
                     <select id="dsShape" onchange="renderDataSourceColumns()">
                         <option value="wide">One Row Per Date (Each Number Column Is A Metric)</option>
                         <option value="long">One Row Per Date Per Name (e.g. Per Event)</option>
-                        <option value="records">One Row Per Record (Each Row Is Counted, e.g. Per Valuation)</option>
+                        <option value="records">One Row Per Record (Sum, Average Or Count Any Column, e.g. Per Sale)</option>
                     </select>
                 </div>
                 <div class="modal-field">
@@ -1280,10 +1289,13 @@
                 <div id="dsDifferenceList"></div>
                 <button type="button" class="btn btn-edit btn-sm" onclick="addDsDifference()"><i class="fas fa-plus"></i> Add Metric</button>
                 <div class="modal-hint">
-                    Count Rows counts the rows that pass its filters, e.g. a filter of SUPPLIER_ID equals Z001 gives that
-                    supplier's deliveries per day. Average Of A Column averages a number column; Average Of A Difference
-                    averages one column minus another (two dates or times give days or minutes, later column first).
-                    Rows with a blank are left out. Averages show in Edit Chart as &lt;name&gt; - Average.
+                    Optional. Every number column of a one-row-per-record table is already offered in Edit Chart as
+                    Sum Of and Average Of that column, along with Count Of Rows (an Average over a week or month is the
+                    average over every row, not of the daily averages). Add a metric here when it needs filters or two
+                    columns. Count Rows counts the rows that pass its filters, e.g. a filter of SUPPLIER_ID equals Z001
+                    gives that supplier's deliveries per day. Average Of A Column averages a number column; Average Of A
+                    Difference averages one column minus another (two dates or times give days or minutes, later column
+                    first). Rows with a blank are left out. Averages show in Edit Chart as &lt;name&gt; - Average.
                     Leave Count Rows By on (none) unless you want a count per value of a column like a status.
                 </div>
             </div>
@@ -1299,14 +1311,16 @@
             <div id="dataSourceBuiltIn"></div>
             <div class="modal-hint">
                 Adds a COMPUTE_ or PRODUCT_ table from PROD_CARSUPERMARKET_DB. Its metrics then show in Edit Chart under
-                the name given here. One Row Per Date: each number column is a metric. One Row Per Date Per Name: each
+                the name given here. One Row Per Date: each number column is a metric. One Row Per Record: each number
+                column can be charted as its Sum or Average, and the rows counted. One Row Per Date Per Name: each
                 name in the Name Column is a metric (e.g. every event in COMPUTE_UX_TRACKING.GA4_DAILY_EVENTS), and a
                 date the table has but a name has no row for counts as 0. N-1 and fixed or per-date targets work as on
-                every chart; Weight By and target columns are for daily_summary only. A source used by a chart cannot
+                every chart; Weight By and target columns are for Daily Summary only. A source used by a chart cannot
                 be removed. Renaming keeps every chart and target using it. These save straight away.<br>
-                Daily Summary, the SharePoint spreadsheets and Autotrader Costs are built in and always there. The SharePoint spreadsheets are added, changed and switched on or
+                Daily Summary is always there and its table and layout are fixed, because the target columns and
+                Weight By depend on them. The SharePoint spreadsheets are added, changed and switched on or
                 off in Settings > SharePoint; charts read them as one source, so the counts are for all of them
-                together. Daily Summary stays fixed because target columns and Weight By depend on its layout.
+                together.
             </div>
             </div>
             <div class="settings-pane" id="setGroupTargets">
@@ -1315,7 +1329,7 @@
                     <label for="setTargetsForAll">Targets Button</label>
                     <select id="setTargetsForAll">
                         <option value="1">Every User</option>
-                        <option value="0">Admin Only</option>
+                        <option value="0">Admin only</option>
                     </select>
                     <div class="modal-hint">
                         Every User: anyone can open a chart's Targets and set its fixed figure or
@@ -1416,7 +1430,7 @@
                     <input type="number" id="setLegendFont" step="1">
                 </div>
                 <div class="modal-field">
-                    <label for="setAdminOnlyBadgeColour">Admins Only Badge Colour</label>
+                    <label for="setAdminOnlyBadgeColour">Admin only Badge Colour</label>
                     <input type="color" id="setAdminOnlyBadgeColour" class="setting-colour">
                 </div>
                 <div class="modal-field">

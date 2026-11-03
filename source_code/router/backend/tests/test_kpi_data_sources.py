@@ -111,7 +111,9 @@ def test_records_table_with_differences_needs_no_name_column():
     assert kds.validate_entry(no_name, BCB_COLUMNS, []) is None
     assert kds.validate_entry({**no_name, "split_column": ""}, BCB_COLUMNS, []) is None
     assert "split_column" not in kds.clean_entry({**no_name, "split_column": ""})
-    assert kds.validate_entry({**no_name, "differences": []}, BCB_COLUMNS, []) is not None
+    # No name column and no difference is fine too: the table's columns can
+    # still be charted as their Sum / Average, and the rows counted.
+    assert kds.validate_entry({**no_name, "differences": []}, BCB_COLUMNS, []) is None
     assert kds.validate_entry({**no_name, "split_column": "NOPE"}, BCB_COLUMNS, []) is not None
     sql, params = kds.fetch_sql(no_name, ["Price Gap - Total"], D1, D2, BCB_COLUMNS)
     assert "COUNT(*)" not in sql and sql.count("%s") == len(params)
