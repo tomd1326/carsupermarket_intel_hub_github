@@ -23,6 +23,7 @@ body { background-color: var(--c-page-bg); font-size: var(--page-font); }
 .control-group { display: flex; align-items: center; gap: 8px; }
 .control-label { font-size: 1em; font-weight: 600; color: var(--c-text-muted); white-space: nowrap; }
 .period-select { width: auto; min-width: 150px; }
+.date-range-input { width: auto; }
 
 .lens-toggle { display: inline-flex; background: var(--c-surface-sunken); border-radius: var(--radius-md); padding: 3px; }
 .lens-toggle button {

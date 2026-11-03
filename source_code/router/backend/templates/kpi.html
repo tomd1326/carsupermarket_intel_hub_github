@@ -460,6 +460,8 @@
                     <input type="text" id="metricSearch" class="metric-search" placeholder="Search Metrics"
                            oninput="filterMetricSelect(this.value)" autocomplete="off">
                     <select id="metricSelect" onchange="onMetricChange()"></select>
+                    <!-- A plain table has no list: the metric is built from its columns. -->
+                    <div class="series-query" id="lineQueryBuilder" style="display:none;"></div>
                     <div class="metric-desc" id="metricDesc"></div>
                     <div id="metricPlusList"></div>
                     <button type="button" class="btn btn-sm plus-add" id="metricPlusBtn" onclick="addPlus('metric')">

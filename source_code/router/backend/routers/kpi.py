@@ -3,6 +3,7 @@
 from fastapi import APIRouter, Request, Depends, HTTPException
 from fastapi.responses import HTMLResponse
 import calendar
+import hashlib
 import json
 import os
 import pickle
@@ -1027,6 +1028,9 @@ def _validate_metric(source: str, metric: str) -> str | None:
         except Exception as e:
             return f"{entry['name']}: {e}"
         if metric not in names:
+            if kds.parse_query_metric(metric):
+                error = kds.query_metric_error(metric, entry, _source_columns(entry["table"]))
+                return f"{entry['name']}: {error}" if error else None
             return f"Unknown metric in {entry['name']}: {metric}"
         return None
     if source == "snowflake":
@@ -1174,11 +1178,13 @@ def _fetch_data_source(entry: dict, metrics: list, fetch_start, fetch_end) -> di
     """{date: {metric: value}} for the given metrics of one data source, in
     one query. Metrics not in its live list are left out."""
     live = set(_data_source_metrics(entry))
-    metrics = [m for m in dict.fromkeys(metrics) if m in live]
+    columns = _source_columns(entry["table"])
+    metrics = [m for m in dict.fromkeys(metrics)
+               if m in live or (kds.parse_query_metric(m) and kds.query_metric_error(m, entry, columns) is None)]
     if not metrics:
         return {}
     sql, params = kds.fetch_sql({**entry, "table": f"{_VEHICLE_DB}.{entry['table']}"},
-                                metrics, fetch_start, fetch_end, _source_columns(entry["table"]))
+                                metrics, fetch_start, fetch_end, columns)
     with SnowflakeClient() as sf:
         rows, names = sf.execute(sql, params)
     return kds.rows_to_by_date(entry, metrics, rows, names)
@@ -1422,7 +1428,42 @@ def kpi_metrics(request: Request, refresh: str = "", user: str = Depends(require
                 "has_n1": True,
                 "has_target": False,
             })
+    # Metrics built in Edit Chart (filters, or one column minus another) are
+    # not in any list above: the ones charts use are added, so the Divided By
+    # and Multiplied By lists offer them and the page knows them.
+    known = {(m["source"], m["column"]) for m in metrics}
+    names_by_source = {e["id"]: e["name"] for e in _data_sources()}
+    try:
+        layout = _read_kpi_layout_value('layout') or {}
+    except Exception as e:
+        logger.warning("KPI metric list could not read the layout: %s", e)
+        layout = {}
+    for source_id, col in sorted(kds.built_metrics_used(layout)):
+        q = kds.parse_query_metric(col)
+        if q is None or source_id not in names_by_source or (source_id, col) in known:
+            continue
+        metrics.append({"source": source_id, "source_name": names_by_source[source_id], "column": col,
+                        "description": "", "ordered": False, "suggested_agg": "avg" if q["agg"] == "avg" else "sum",
+                        "is_difference": False, "is_count": False, "difference": None, "aggregate": q["agg"],
+                        "has_n1": True, "has_target": False})
     return {"status": "ok", "metrics": metrics}
+
+
+@router.get("/kpi/source-columns")
+def kpi_source_columns(request: Request, source: str, user: str = Depends(require_page_api(*_KPI_PAGES))):
+    """A one-row-per-record data source's columns, for building a metric in
+    Edit Chart. Admin only."""
+    if not is_admin(user):
+        return {"status": "error", "message": "Only the admin can edit charts"}
+    entry = _data_source(source)
+    if entry is None:
+        return {"status": "error", "message": f"Unknown data source: {source}"}
+    try:
+        columns = _source_columns(entry["table"])
+    except Exception as e:
+        logger.error("KPI source columns failed for %s: %s", source, e)
+        return {"status": "error", "message": str(e)}
+    return {"status": "ok", "columns": [{"column": c, "type": t} for c, t in columns.items()]}
 
 
 # ── KPI chart periods ────────────────────────────────────────────────────────
@@ -1658,7 +1699,12 @@ KPI_TARGET_MODES = ("none", "fixed", "import", "snowflake")
 
 
 def _kpi_target_key(kind: str, source: str, metric: str) -> str:
-    return f"kpi:{kind}:{source}:{metric}"
+    key = f"kpi:{kind}:{source}:{metric}"
+    # chart_key holds 200 characters and a metric built with filters can be
+    # longer. Every shorter key stays exactly as it has always been.
+    if len(key) > 200:
+        return f"kpi:{kind}:{source}:md5:{hashlib.md5(metric.encode()).hexdigest()}"
+    return key
 
 
 def _roll_up_kpi_targets(by_date: dict, dates: list, week_mondays: list,
@@ -1979,10 +2025,10 @@ def _custom_data(metric: str, agg: str, source: str, target_mode: str, months: i
         # Average (kpi_data_sources.column_metrics), so the period is the
         # average over every row rather than of the daily averages.
         weight_at = None
-        aggregate = kds.parse_column_metric(metric) if source in source_data else None
+        built = kds.parse_query_metric(metric) if source in source_data else None
         if weight_by:
             weight_at = lambda d: by_date.get(d, {}).get('w')
-        elif aggregate and aggregate[1] == "avg":
+        elif built and built["agg"] == "avg":
             weight_rows = source_data[source]
             weight_at = lambda d: _num((weight_rows.get(d) or {}).get(metric + kds.WEIGHT_SUFFIX))
 
@@ -2441,7 +2487,8 @@ def _validate_layout_metric(source: str, metric) -> str | None:
     if kds.is_source_id(source):
         if _data_source(source) is None:
             return f"Unknown data source: {source}"
-        if not isinstance(metric, str) or not metric.strip() or len(metric) > 200:
+        longest = kds.QUERY_METRIC_MAX if isinstance(metric, str) and metric.startswith(kds.QUERY_PREFIX) else 200
+        if not isinstance(metric, str) or not metric.strip() or len(metric) > longest:
             return f"Bad metric: {metric}"
         return None
     # A SharePoint column too: one chart on a column that left the file would
@@ -2615,7 +2662,7 @@ def kpi_themes_save(request: Request, payload: dict, user: str = Depends(require
 # series list or in Settings > Column Names. Until first saved, it is built
 # from the names already typed on stacked chart series.
 # SharePoint columns are spreadsheet headers, so any printable text.
-_METRIC_NAME_KEY = rf"(snowflake|sharepoint|autotrader|{kds.SOURCE_ID})\|[^\x00-\x1f]{{1,150}}"
+_METRIC_NAME_KEY = rf"(snowflake|sharepoint|autotrader|{kds.SOURCE_ID})\|[^\x00-\x1f]{{1,{kds.QUERY_METRIC_MAX}}}"
 
 
 def _seed_metric_names(layout: dict) -> dict:
@@ -2646,8 +2693,8 @@ def _validate_derived_names(names) -> str | None:
     if not isinstance(names, dict) or len(names) > 500:
         return "bad derived column names"
     for key, name in names.items():
-        parts = key.split('*') if isinstance(key, str) else []
-        if len(parts) != 2 or not all(re.fullmatch(_METRIC_NAME_KEY, p) for p in parts):
+        # As one match, not a split on '*': a built metric's filter value can hold a '*'.
+        if not isinstance(key, str) or not re.fullmatch(rf"{_METRIC_NAME_KEY}\*{_METRIC_NAME_KEY}", key):
             return f"bad derived column: {key}"
         if not isinstance(name, str) or not name.strip() or len(name) > 60:
             return f"{key}: names must be 1 to 60 characters"

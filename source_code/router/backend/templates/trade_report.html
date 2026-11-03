@@ -59,6 +59,14 @@
                     <span class="control-label" id="period-label">Month</span>
                     <select class="form-select form-select-sm period-select" id="period-select" disabled></select>
                 </div>
+                <!-- Set, this replaces the period above on every view. -->
+                <div class="control-group">
+                    <span class="control-label" title="Sales with an invoice date in this range. Replaces the period while either date is set">Invoice Date</span>
+                    <input type="date" class="form-control form-control-sm date-range-input" id="date-from" title="From" aria-label="Invoice date from">
+                    <span class="control-label">To</span>
+                    <input type="date" class="form-control form-control-sm date-range-input" id="date-to" title="To" aria-label="Invoice date to">
+                    <button type="button" class="btn btn-outline-secondary btn-sm" id="date-clear" style="display:none;">Clear</button>
+                </div>
                 <div class="control-group">
                     <span class="control-label">Supplier Category</span>
                     <div class="lens-toggle" id="category-toggle">
