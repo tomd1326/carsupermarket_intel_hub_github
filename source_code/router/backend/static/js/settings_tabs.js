@@ -22,7 +22,11 @@
             btn.type = 'button';
             btn.textContent = pane.dataset.title;
             btn.dataset.tab = pane.id;
-            btn.addEventListener('click', () => open(pane));
+            btn.addEventListener('click', () => {
+                open(pane);
+                // A section always opens at its top, whichever part of the popup scrolls.
+                for (let el = body; el && el !== document.body; el = el.parentElement) el.scrollTop = 0;
+            });
             nav.appendChild(btn);
             return btn;
         });
