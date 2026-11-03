@@ -393,9 +393,18 @@ body.user-view col.admin-only { display: table-column !important; visibility: co
 
 /* Page settings popups: sections down the left, one pane showing on the right
    (see static/js/settings_tabs.js). The box keeps one height whichever section
-   is open, so it does not jump. */
-.settings-body { display: grid; grid-template-columns: 170px minmax(0, 1fr); gap: 22px; min-height: 62vh; }
-.settings-tabs { display: flex; flex-direction: column; gap: 4px; border-right: 1px solid #e2e8f0; padding-right: 12px; }
+   is open, so it does not jump. The left menu stays in place while the popup
+   scrolls. Being sticky it is only as tall as its buttons, so the line beside it
+   is drawn on .settings-body to run the full height. A menu too tall for the
+   window scrolls on its own. */
+.settings-body {
+    display: grid; grid-template-columns: 170px minmax(0, 1fr); gap: 22px; min-height: 62vh;
+    background: linear-gradient(#e2e8f0, #e2e8f0) 169px 0 / 1px 100% no-repeat;
+}
+.settings-tabs {
+    display: flex; flex-direction: column; gap: 4px; padding-right: 12px;
+    position: sticky; top: 0; align-self: start; max-height: calc(88vh - 90px); overflow-y: auto;
+}
 .settings-tabs button {
     text-align: left; background: none; border: none; border-radius: 6px; padding: 8px 10px;
     font-size: 0.88rem; font-weight: 600; color: #475569; cursor: pointer;

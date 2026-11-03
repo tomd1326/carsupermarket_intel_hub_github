@@ -10,16 +10,24 @@ Three shapes of table:
   records - one row per record (e.g. one per valuation): the split column
             (valuation_status) gives the metric names and each metric's figure
             for a day is the number of rows with that name on that day. It can
-            also hold differences: one column minus another on each row, each
-            read as two metrics, '<name> - Total' and '<name> - Count', so a
-            chart's Divided By gives a true average for weeks and months
+            also hold metrics of its own (kept under 'differences', the name
+            they started with), each with filters on the rows it reads:
+              count      - the number of rows, read as one metric '<name>'
+              average    - a number column: read as two metrics,
+                           '<name> - Total' and '<name> - Count', so a chart's
+                           Divided By gives a true average for weeks and months
+              difference - column A minus column B on each row, read as the
+                           same two metrics (two dates give days or minutes)
 
 Each entry is stored in kpi_layout under 'data_sources':
     {id, name, table: 'SCHEMA.TABLE', shape, date_column,
      split_column, value_column,   (split_column for long and records tables,
                                     value_column for long tables only)
-     differences: [{name, column_a, column_b,
+     differences: [{name, kind, column_a, column_b,
                     filters: [{column, operator, value}]}]}   (records tables only)
+
+A metric saved before 'kind' existed has none: it is a difference when it has
+a column B, else an average (see metric_kind).
 
 The id is made once, when the source is added, and never changes, so a
 rename keeps every chart and stored target that uses it. Charts store it as
@@ -55,6 +63,18 @@ DIFFERENCES_MAX = 30
 DIFFERENCE_NAME_MAX = 40
 TOTAL_SUFFIX = " - Total"
 COUNT_SUFFIX = " - Count"
+METRIC_KINDS = ("count", "average", "difference")
+
+
+def metric_kind(d: dict) -> str:
+    """A records table metric's kind, worked out from its columns when it was
+    saved before 'kind' existed."""
+    kind = d.get("kind")
+    if kind:
+        return kind
+    if not d.get("column_a"):
+        return "count"
+    return "difference" if d.get("column_b") else "average"
 
 
 def order_names(names: list, order) -> list:
@@ -118,7 +138,7 @@ def validate_entry(entry, columns: dict, others: list) -> str | None:
         if value_column:
             return "A one-row-per-record table has no value column: each row counts as one"
         if not entry.get("differences"):
-            return "Choose a column to count rows by, or add a difference"
+            return "Add a metric, or choose a column to count rows by"
         return _validate_differences(entry["differences"], columns)
     if split_column not in columns or split_column == date_column:
         return "Choose the column holding the metric names (e.g. EVENT_NAME)"
@@ -160,24 +180,36 @@ def _validate_differences(differences, columns: dict) -> str | None:
         return f"At most {DIFFERENCES_MAX} differences"
     seen = set()
     for d in differences:
-        if not isinstance(d, dict) or set(d) - {"name", "column_a", "column_b", "filters"}:
-            return "bad difference"
+        if not isinstance(d, dict) or set(d) - {"name", "kind", "column_a", "column_b", "filters"}:
+            return "bad metric"
         name = d.get("name")
         if not isinstance(name, str) or not name.strip() or len(name.strip()) > DIFFERENCE_NAME_MAX:
-            return f"Difference names must be 1 to {DIFFERENCE_NAME_MAX} characters"
+            return f"Metric names must be 1 to {DIFFERENCE_NAME_MAX} characters"
         name = name.strip()
         if name.lower() in seen:
-            return f"There is already a difference called {name}"
+            return f"There is already a metric called {name}"
         seen.add(name.lower())
-        a, b = d.get("column_a"), d.get("column_b")
-        if a not in columns or (b and b not in columns):
-            return f"{name}: choose a column"
-        if a == b:
-            return f"{name}: choose two different columns"
-        if not b and difference_kind(columns[a], None) is None:
-            return f"{name}: {a} is not a number column, so it needs a second date column to subtract"
-        if b and difference_kind(columns[a], columns[b]) is None:
-            return f"{name}: {a} and {b} must both be dates or both be numbers"
+        kind = metric_kind(d)
+        if kind not in METRIC_KINDS:
+            return f"{name}: bad metric kind"
+        a, b = d.get("column_a") or "", d.get("column_b") or ""
+        if kind == "count":
+            if a or b:
+                return f"{name}: a count of rows has no column"
+        elif kind == "average":
+            if a not in columns:
+                return f"{name}: choose a column"
+            if b:
+                return f"{name}: an average of a column has no second column"
+            if difference_kind(columns[a], None) is None:
+                return f"{name}: {a} is not a number column. Choose a number column, or Difference for two dates"
+        else:
+            if a not in columns or b not in columns:
+                return f"{name}: choose both columns"
+            if a == b:
+                return f"{name}: choose two different columns"
+            if difference_kind(columns[a], columns[b]) is None:
+                return f"{name}: {a} and {b} must both be dates or both be numbers"
         filters = d.get("filters", [])
         if not isinstance(filters, list) or len(filters) > vm.FILTERS_MAX:
             return f"{name}: at most {vm.FILTERS_MAX} filters"
@@ -194,15 +226,28 @@ def _validate_differences(differences, columns: dict) -> str | None:
 
 
 def difference_metrics(entry: dict) -> list:
-    """The metric names a source's differences add."""
-    return [d["name"].strip() + suffix for d in entry.get("differences") or [] for suffix in (TOTAL_SUFFIX, COUNT_SUFFIX)]
+    """The metric names a source's own metrics add: a count's name as it is,
+    an average's or difference's '<name> - Total' and '<name> - Count'."""
+    out = []
+    for d in entry.get("differences") or []:
+        name = d["name"].strip()
+        out += [name] if metric_kind(d) == "count" else [name + TOTAL_SUFFIX, name + COUNT_SUFFIX]
+    return out
+
+
+def count_metrics(entry: dict) -> list:
+    """The names of a source's count-of-rows metrics: plain figures, offered
+    in Edit Chart like any other metric."""
+    return [d["name"].strip() for d in entry.get("differences") or [] if metric_kind(d) == "count"]
 
 
 def difference_info(entry: dict, columns: dict) -> dict:
     """{total metric: {count metric, kind}}, so Edit Chart can fill in Divided
-    By and the format when a difference's total is chosen."""
+    By and the format when an average's or difference's total is chosen."""
     out = {}
     for d in entry.get("differences") or []:
+        if metric_kind(d) == "count":
+            continue
         name = d["name"].strip()
         out[name + TOTAL_SUFFIX] = {"count": name + COUNT_SUFFIX,
                                     "kind": difference_kind(columns.get(d["column_a"]), columns.get(d.get("column_b")))}
@@ -232,7 +277,8 @@ def clean_entry(entry: dict) -> dict:
         out["value_column"] = entry["value_column"]
     if entry["shape"] == "records" and entry.get("differences"):
         from utils import vehicle_metrics as vm
-        out["differences"] = [{"name": d["name"].strip(), "column_a": d["column_a"], "column_b": d.get("column_b") or "",
+        out["differences"] = [{"name": d["name"].strip(), "kind": metric_kind(d),
+                               "column_a": d.get("column_a") or "", "column_b": d.get("column_b") or "",
                                "filters": [{"column": f["column"], "operator": f["operator"],
                                             "value": "" if f["operator"] in vm.NO_VALUE_OPERATORS else f["value"].strip()}
                                            for f in d.get("filters", [])]}
@@ -304,13 +350,19 @@ def _difference_selects(entry: dict, wanted: set, columns: dict, start, end) -> 
     t, d = entry["table"], entry["date_column"]
     selects, params = [], []
     for diff in entry.get("differences") or []:
+        filters, filter_params = vm.filter_sql(diff.get("filters", []))
+        where = " AND ".join([f"{d}::DATE >= %s", f"{d}::DATE <= %s"] + filters)
+        name = diff["name"].strip()
+        if metric_kind(diff) == "count":
+            if name in wanted:
+                selects.append(f"SELECT {d}::DATE AS D, %s AS S, COUNT(*) AS V FROM {t} WHERE {where} GROUP BY 1")
+                params += [name, str(start), str(end), *filter_params]
+            continue
         a, b = diff["column_a"], diff.get("column_b")
         kind = difference_kind(columns[a], columns[b] if b else None)
         value = a if not b else f"({a} - {b})" if kind == "number" else f"DATEDIFF({'DAY' if kind == 'days' else 'MINUTE'}, {b}, {a})"
-        filters, filter_params = vm.filter_sql(diff.get("filters", []))
-        where = " AND ".join([f"{d}::DATE >= %s", f"{d}::DATE <= %s"] + filters)
         for suffix, total in ((TOTAL_SUFFIX, "SUM"), (COUNT_SUFFIX, "COUNT")):
-            metric = diff["name"].strip() + suffix
+            metric = name + suffix
             if metric in wanted:
                 selects.append(f"SELECT {d}::DATE AS D, %s AS S, {total}({value}) AS V FROM {t} WHERE {where} GROUP BY 1")
                 params += [metric, str(start), str(end), *filter_params]

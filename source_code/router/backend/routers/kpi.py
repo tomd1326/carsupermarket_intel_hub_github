@@ -1295,7 +1295,7 @@ def kpi_data_source_save(request: Request, payload: dict, user: str = Depends(re
             if rows and rows[0][0] > kds.NAMES_MAX:
                 return {"status": "error", "message":
                         f"{s} has {rows[0][0]:,} different values, so each would be its own metric. "
-                        + ("Leave Count Rows By on (none), or choose a column like a status"
+                        + ("Leave Count Rows By on (none) and add a Count Rows metric, or choose a column like a status"
                            if entry["shape"] == "records"
                            else f"Choose a name column with at most {kds.NAMES_MAX} (e.g. a status column)")}
         entry = kds.clean_entry(entry)
@@ -1396,8 +1396,9 @@ def kpi_metrics(request: Request, refresh: str = "", user: str = Depends(require
         except Exception as e:
             logger.warning("KPI data source %s metric list failed: %s", entry["id"], e)
             continue
-        difference_names = set(kds.difference_metrics(entry))
-        differences = kds.difference_info(entry, _source_columns(entry["table"])) if difference_names else {}
+        own_names = set(kds.difference_metrics(entry))
+        count_names = set(kds.count_metrics(entry))
+        differences = kds.difference_info(entry, _source_columns(entry["table"])) if own_names else {}
         for col in names:
             metrics.append({
                 "source": entry["id"],
@@ -1406,8 +1407,12 @@ def kpi_metrics(request: Request, refresh: str = "", user: str = Depends(require
                 "description": f"From {entry['table']}",
                 # Stacked charts draw this source's series in its Value Order.
                 "ordered": bool(entry.get("name_order")),
-                "suggested_agg": "sum" if col in difference_names else _guess_agg(col),
-                "is_difference": col in difference_names,
+                "suggested_agg": "sum" if col in own_names else _guess_agg(col),
+                # An average's or difference's total and count: offered only as
+                # the average in the metric list. A count of rows is a plain
+                # metric, offered everywhere, but not a value of the name column.
+                "is_difference": col in own_names and col not in count_names,
+                "is_count": col in count_names,
                 # On a difference's total: its count and what the figure is in.
                 "difference": differences.get(col),
                 "has_n1": True,

@@ -1273,16 +1273,17 @@
                 <label>Value Order (Bottom Of The Stack First)</label>
                 <div id="dsOrderList"></div>
             </div>
-            <!-- One column minus another on each row. Each becomes a Total and a
-                 Count metric in Edit Chart. -->
+            <!-- The table's own metrics: a count of rows, or one column (or one
+                 minus another) averaged, each with filters on the rows it reads. -->
             <div class="modal-field ds-records-only">
-                <label>Metrics To Average</label>
+                <label>Metrics</label>
                 <div id="dsDifferenceList"></div>
                 <button type="button" class="btn btn-edit btn-sm" onclick="addDsDifference()"><i class="fas fa-plus"></i> Add Metric</button>
                 <div class="modal-hint">
-                    The metrics to chart from this table. Pick one number column and leave Minus on (nothing), or pick two
-                    columns to subtract: two dates or times give days or minutes (later column first), two numbers a plain
-                    subtraction. Rows with a blank are left out. Each shows in Edit Chart as &lt;name&gt; - Average.
+                    Count Rows counts the rows that pass its filters, e.g. a filter of SUPPLIER_ID equals Z001 gives that
+                    supplier's deliveries per day. Average Of A Column averages a number column; Average Of A Difference
+                    averages one column minus another (two dates or times give days or minutes, later column first).
+                    Rows with a blank are left out. Averages show in Edit Chart as &lt;name&gt; - Average.
                     Leave Count Rows By on (none) unless you want a count per value of a column like a status.
                 </div>
             </div>
