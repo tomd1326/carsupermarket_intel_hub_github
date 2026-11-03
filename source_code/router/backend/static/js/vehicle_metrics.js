@@ -10,7 +10,7 @@
     const FILTER_OPS = [
         ['equals', 'Equals'], ['not_equals', 'Does Not Equal'], ['in_list', 'Is One Of'], ['contains', 'Contains'],
         ['greater_than', 'Greater Than'], ['at_least', 'At Least'], ['less_than', 'Less Than'], ['at_most', 'At Most'],
-        ['is_blank', 'Is Blank'], ['is_not_blank', 'Is Not Blank'],
+        ['is_blank', 'Is Blank'], ['is_not_blank', 'Is Not Blank'], ['is_true', 'Is True'], ['is_false', 'Is False'],
     ];
     const VEHICLE_FIELDS = [['cap_id', 'CAP ID'], ['vrm', 'Reg'], ['make', 'Make'], ['model', 'Model'],
         ['derivative', 'Variant'], ['supplier_name', 'Supplier'], ['colour', 'Colour']];
@@ -48,7 +48,7 @@
             <select class="form-select form-select-sm" data-fcol="${i}">${colOptions(columns, f.column)}</select>
             <select class="form-select form-select-sm" data-fop="${i}">${options(FILTER_OPS, f.operator)}</select>
             <input class="form-control form-control-sm" data-fval="${i}" maxlength="200" value="${esc(f.value)}" placeholder="Value"
-                ${f.operator === 'is_blank' || f.operator === 'is_not_blank' ? 'disabled' : ''}>
+                ${['is_blank', 'is_not_blank', 'is_true', 'is_false'].includes(f.operator) ? 'disabled' : ''}>
             <button class="btn btn-sm btn-outline-danger" data-fdel="${i}" title="Remove"><i class="fas fa-times"></i></button>
         </div>`).join('');
     }

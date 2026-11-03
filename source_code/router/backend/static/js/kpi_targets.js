@@ -405,7 +405,8 @@ async function openTargetModal(rowId) {
         ? 'One figure for every point, in the chart\'s units (25 for 25%).'
         : 'One figure for every date: added up for weeks and months on Sum charts, the same figure on Average charts.';
     document.getElementById('fixedTargetUnit').textContent = kind === 'stacked' ? ''
-        : row.fmt === 'pct' ? '%' : row.fmt === 'pct100' ? 'as a decimal (0.12 = 12%)' : '';
+        : row.fmt === 'pct' ? '%' : row.fmt === 'pct100' ? 'as a decimal (0.12 = 12%)'
+        : ['mins', 'hours', 'days'].includes(row.fmt) ? ({ sec: 'seconds', hour: 'hours', day: 'days' }[row.time_from] || 'minutes') : '';
     const fixedInput = document.getElementById('fixedTargetInput');
     const own = kind === 'stacked' ? row.stack_target : kind === 'own' ? row.ratio_target : null;
     fixedInput.value = own === null || own === undefined ? '' : own;

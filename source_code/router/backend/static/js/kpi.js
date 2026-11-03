@@ -2003,7 +2003,7 @@
         container.classList.add('charts-loading');
         setPageLoading(true);
 
-        Promise.all(rows.map(row => fetchRowData(row).catch(err => ({ status: 'error', message: String(err) }))))
+        return Promise.all(rows.map(row => fetchRowData(row).catch(err => ({ status: 'error', message: String(err) }))))
             .then(results => {
                 const errors = [];
                 const staleDates = new Set();
@@ -2176,6 +2176,27 @@
         return row.divide_by && row.ratio_as !== 'dec' && row.fmt === 'pct100' ? { ...row, fmt: 'pct' } : row;
     }
 
+    // Time formats: the figure is a length of time. The data stays in the unit
+    // it is held in (time_from, Number Format > Figure Is In, minutes if unset)
+    // and is only converted for showing, as k and % are.
+    const TIME_FORMATS = { mins: { minutes: 1, suffix: ' mins' }, hours: { minutes: 60, suffix: ' hrs' }, days: { minutes: 1440, suffix: ' days' } };
+    const TIME_FROM_MINUTES = { sec: 1 / 60, min: 1, hour: 60, day: 1440 };
+
+    // What to times a figure by to show it; 1 when the format is not a time.
+    function timeFactor(row) {
+        const time = TIME_FORMATS[row.fmt];
+        if (!time) return 1;
+        // A difference's unit is known from its columns, whatever is saved.
+        const m = metricsByKey[metricKey(row.source || 'snowflake', row.metric)];
+        const from = m && m.difference ? { minutes: 'min', days: 'day' }[m.difference.kind] : null;
+        return (TIME_FROM_MINUTES[from || row.time_from] || 1) / time.minutes;
+    }
+
+    function timeFormatter(row, text) {
+        const factor = timeFactor(row), suffix = TIME_FORMATS[row.fmt].suffix;
+        return v => text(v * factor) + suffix;
+    }
+
     // labels = false for the hover box, which never takes the Data Labels popup's choices.
     function rowFormatter(row, labels = true) {
         if (labels) {
@@ -2184,6 +2205,7 @@
         }
         row = fmtRow(row);
         const decimals = row.decimals || 0;
+        if (TIME_FORMATS[row.fmt]) return timeFormatter(row, v => withCommas(v, decimals));
         if (row.fmt === 'pct') return v => withCommas(v, decimals) + '%';
         if (row.fmt === 'pct100') return v => withCommas(v * 100, decimals) + '%';
         if (row.fmt === 'k') return v => withCommas(v / 1000, decimals) + 'k';
@@ -2202,13 +2224,14 @@
     // the chart (label_scale, label_decimals) as everyone's default; anyone
     // else's is kept in their browser, like Data Labels On / Off.
     const LABEL_OPTIONS_KEY = 'kpiLabelOptions';
-    const BASE_UNIT_NAMES = { num: 'Number', gbp: 'Pounds (£)', pct: 'Percent (%)' };
+    const BASE_UNIT_NAMES = { num: 'Number', gbp: 'Pounds (£)', pct: 'Percent (%)', time: 'Time' };
     const LABEL_SCALES = [['', 'Chart Default'], ['auto', 'Auto (k / M By Size)'], ['none', 'None'], ['k', 'Thousands (k)'], ['M', 'Millions (M)']];
 
     function baseUnit(row) {
         const fmt = fmtRow(row).fmt;
         if (fmt === 'pct' || fmt === 'pct100') return 'pct';
         if (fmt === 'gbp' || fmt === 'gbpkm') return 'gbp';
+        if (TIME_FORMATS[fmt]) return 'time';
         return 'num';
     }
 
@@ -2221,13 +2244,14 @@
     function labelOptions(row) {
         const own = IS_ADMIN ? null : ownLabelOptions()[row.id];
         const src = own || { scale: row.label_scale, decimals: row.label_decimals };
-        return { scale: baseUnit(row) === 'pct' ? '' : (src.scale || ''),
+        return { scale: ['pct', 'time'].includes(baseUnit(row)) ? '' : (src.scale || ''),
                  decimals: Number.isInteger(src.decimals) ? src.decimals : null };
     }
 
     function labelFormatter(row, own) {
         const r = fmtRow(row);
         const d = own.decimals !== null ? own.decimals : (r.decimals || 0);
+        if (TIME_FORMATS[r.fmt]) return timeFormatter(r, v => withCommas(v, d));
         if (r.fmt === 'pct') return v => withCommas(v, d) + '%';
         if (r.fmt === 'pct100') return v => withCommas(v * 100, d) + '%';
         // The chart's own scale when only the decimals were changed.
@@ -2262,7 +2286,7 @@
             </div>
             <div class="label-popup-note">Unit: <strong>${BASE_UNIT_NAMES[unit]}</strong> (set by the chart)</div>
             <label class="label-popup-field">Scale
-                <select id="labelPopupScale" ${unit === 'pct' ? 'disabled title="Percent charts have no k / M"' : ''}>
+                <select id="labelPopupScale" ${unit === 'pct' || unit === 'time' ? 'disabled title="Percent and time charts have no k / M"' : ''}>
                     ${LABEL_SCALES.map(([v, l]) => `<option value="${v}"${v === own.scale ? ' selected' : ''}>${escHtml(l)}</option>`).join('')}
                 </select></label>
             <label class="label-popup-field">Decimals
@@ -2337,6 +2361,7 @@
         if (hd !== null && hd !== undefined) {
             const fixed = v => v.toLocaleString('en-GB', { minimumFractionDigits: hd, maximumFractionDigits: hd });
             row = fmtRow(row);
+            if (!pct && TIME_FORMATS[row.fmt]) return timeFormatter(row, fixed);
             if (pct || row.fmt === 'pct') return v => fixed(v) + '%';
             if (row.fmt === 'pct100') return v => fixed(v * 100) + '%';
             if (row.fmt === 'gbp' || row.fmt === 'gbpkm') return v => withPound(fixed(v));
@@ -2344,6 +2369,7 @@
         }
         row = fmtRow(row);
         const full = v => v.toLocaleString('en-GB', { maximumFractionDigits: 4 });
+        if (!pct && TIME_FORMATS[row.fmt]) return timeFormatter(row, full);
         if (pct || row.fmt === 'pct') return v => full(v) + '%';
         if (row.fmt === 'pct100') return v => full(Math.round(v * 100 * 1e6) / 1e6) + '%';
         if (row.fmt === 'gbp' || row.fmt === 'gbpkm') {
@@ -2358,12 +2384,24 @@
     function hoverFields() {
         const dec = document.getElementById('hoverDecimalsSelect').value;
         return { hover_fmt: document.getElementById('hoverFmtSelect').value,
-                 hover_decimals: dec === '' ? null : parseInt(dec, 10) };
+                 hover_decimals: dec === '' ? null : parseInt(dec, 10),
+                 time_from: document.getElementById('timeFromSelect').value };
+    }
+
+    // Figure Is In only shows when the labels or the hover box use a time format.
+    function updateTimeFromField() {
+        const on = TIME_FORMATS[document.getElementById('fmtSelect').value]
+            || TIME_FORMATS[document.getElementById('hoverFmtSelect').value];
+        // Not asked on a difference: its unit is known from its columns.
+        const known = (selectedMetric() || {}).difference;
+        document.getElementById('timeFromField').style.display = on && !known ? '' : 'none';
     }
 
     function rowTickFormatter(row) {
         row = fmtRow(row);
         const fmt = v => v.toLocaleString('en-GB', { maximumFractionDigits: 3 });
+        // Ticks stay in steps of the data's unit, so 2 decimals is plenty (200 mins = 3.33 hrs).
+        if (TIME_FORMATS[row.fmt]) return timeFormatter(row, v => v.toLocaleString('en-GB', { maximumFractionDigits: 2 }));
         if (row.fmt === 'pct') return v => fmt(v) + '%';
         // Rounded so 1.1 x 100 shows as 110%, not 110.00000000000001%.
         if (row.fmt === 'pct100') return v => fmt(Math.round(v * 100 * 1000) / 1000) + '%';
@@ -2385,10 +2423,31 @@
         const existing = rowCharts[row.id] || [];
         rowCharts[row.id] = buildRowCharts(row, d, ['m', 'w', 'd'].map((k, i) => ({
             k, canvasId: `cv-${row.id}-${k}`, existing: existing[i], first: k === 'd' ? 0 : wbrStart(row.id, k) })));
+        fitDifferenceDayAxis(row, rowCharts[row.id][2]);
         updateDayTitles();
         DayWindow.updateScrollers();
         // Slides draw their own copies of the row's charts (wbr_deck.js).
         if (WBR && typeof WbrDeck !== 'undefined') WbrDeck.rowLoaded(row, loaded);
+    }
+
+    // A difference's day chart scales to the days on screen, and again as the
+    // window moves: one very late call elsewhere in its history would otherwise
+    // flatten every other day. A typed axis minimum or maximum still applies.
+    function fitDifferenceDayAxis(row, chart) {
+        const isDifference = !!(metricsByKey[metricKey(row.source || 'snowflake', row.metric)] || {}).difference;
+        if (!chart || !chart.$dayFull || !isDifference || isStacked(row)) return;
+        const f = timeFactor(fmtRow(row));
+        const scale = v => (v === null || v === undefined ? v : v * f);
+        chart.$fitWindow = () => {
+            const series = chart.data.datasets.filter(ds => ds.label !== 'Target').map(ds => ds.data.map(scale));
+            const r = calcRowRanges([{ series, min: scale((row.y_min || {}).d), max: scale((row.y_max || {}).d) }], 'sum')[0];
+            const y = chart.options.scales.y;
+            y.min = r.yMin / f;
+            y.max = r.yMax / f;
+            y.ticks.stepSize = r.unit / f;
+        };
+        chart.$fitWindow();
+        chart.update('none');
     }
 
     // A row's charts, one per target: { k: 'm'|'w'|'d', canvasId, existing
@@ -2418,8 +2477,7 @@
             dataLabels: dataLabelsOn(row),
         };
 
-        const ranges = calcRowRanges(rangeSpecs(d, row.y_min, row.y_max), row.agg,
-            sharedAxisValue(row.y_min), sharedAxisValue(row.y_max));
+        const ranges = rowRanges(row, d);
 
         return targets.map(({ k, canvasId, existing, first }) => {
             const notes = (starts) => ({ rowId: row.id, kind: k, starts, first: first || 0 });
@@ -2499,6 +2557,21 @@
         if (aggType !== 'avg') return specs.map(spec => withFixedMax(range(values(spec), spec.min), spec.max));
         const shared = withFixedMax(range(specs.flatMap(values), sharedMin), sharedMax);
         return specs.map(() => shared);
+    }
+
+    // A plain chart's three ranges. A time format's are worked out in the unit
+    // shown, so its steps are round in that unit, then put back into the data's.
+    // A difference's month, week and day each get their own scale: one late
+    // call can make a day's average many times a month's.
+    function rowRanges(row, d) {
+        const f = timeFactor(fmtRow(row));
+        const scale = v => (v === null || v === undefined ? v : v * f);
+        const specs = rangeSpecs(d, row.y_min, row.y_max).map(s => ({
+            series: s.series.map(a => a && a.map(scale)), min: scale(s.min), max: scale(s.max) }));
+        const isDifference = !!(metricsByKey[metricKey(row.source || 'snowflake', row.metric)] || {}).difference;
+        return calcRowRanges(specs, isDifference ? 'sum' : row.agg,
+            scale(sharedAxisValue(row.y_min)), scale(sharedAxisValue(row.y_max)))
+            .map(r => ({ ...r, yMin: r.yMin / f, yMax: r.yMax / f, unit: r.unit / f }));
     }
 
     // A line round all four sides of the plot area. Chart.js only draws its
@@ -4101,12 +4174,19 @@
     }
 
     // One source's metrics as an <optgroup> for the metric dropdowns.
-    function metricGroupHtml(source) {
-        const items = metricsCatalogue.filter(m => m.source === source);
+    // A difference is offered once, as its average, and only in the Metric list
+    // (metricList): its total is the option, and its count is filled in as
+    // Divided By. Neither is offered anywhere else in these dropdowns.
+    function metricGroupHtml(source, metricList = false) {
+        const items = metricsCatalogue.filter(m => m.source === source && (!m.is_difference || (metricList && m.difference)));
         if (!items.length) return '';
         const options = items.map(m =>
-            `<option value="${escHtml(metricKey(m.source, m.column))}">${escHtml(metricOptionText(m.source, m.column))}</option>`).join('');
+            `<option value="${escHtml(metricKey(m.source, m.column))}">${escHtml(m.difference ? differenceAverageName(m) : metricOptionText(m.source, m.column))}</option>`).join('');
         return `<optgroup label="${escHtml(sourceLabel(source))}">${options}</optgroup>`;
+    }
+
+    function differenceAverageName(m) {
+        return m.column.replace(/ - Total$/, ' - Average');
     }
 
     // While the chart popup is open: the data source its section is locked
@@ -4154,7 +4234,7 @@
 
     // Every source's group of options, built by group(source).
     function allMetricGroups(group = metricGroupHtml) {
-        return metricSources().map(group).join('');
+        return metricSources().map(s => group(s)).join('');
     }
 
     // Edit Chart's Table list, then its Metric list showing only that table's
@@ -4171,8 +4251,8 @@
 
     function renderMetricSelect(source, keepKey = '') {
         const select = document.getElementById('metricSelect');
-        select.innerHTML = metricGroupHtml(source);
-        if (keepKey && !metricsByKey[keepKey] && keepKey.startsWith(source + '|')) {
+        select.innerHTML = metricGroupHtml(source, true);
+        if (keepKey && ![...select.options].some(o => o.value === keepKey) && keepKey.startsWith(source + '|')) {
             select.insertAdjacentHTML('afterbegin',
                 `<option value="${escHtml(keepKey)}">${escHtml(keepKey.slice(source.length + 1))}</option>`);
         }
@@ -4320,7 +4400,7 @@
         divideSelect.innerHTML = '<option value="">(nothing - plain chart)</option>' + allMetricGroups();
         const divideKey = row && row.divide_by
             ? metricKey(row.divide_by.source || 'snowflake', row.divide_by.metric) : '';
-        if (divideKey && !metricsByKey[divideKey]) {
+        if (divideKey && ![...divideSelect.options].some(o => o.value === divideKey)) {
             divideSelect.insertAdjacentHTML('beforeend',
                 `<option value="${escHtml(divideKey)}">${escHtml(row.divide_by.metric)}</option>`);
         }
@@ -4362,6 +4442,7 @@
         // overwrites these below.
         document.getElementById('hoverFmtSelect').value = '';
         document.getElementById('hoverDecimalsSelect').value = '';
+        document.getElementById('timeFromSelect').value = (row && row.time_from) || 'min';
         if (row) {
             metricSelect.value = metricKey(rowSource(row), row.metric);
             document.getElementById('metricDesc').textContent = rowMetricInfo(row).description || '';
@@ -4392,11 +4473,15 @@
             fillPositionOptions();
             onMetricChange();
         }
+        updateTimeFromField();
+        // A difference's total saved with no count under it is not the average
+        // the list says it is, so reopening sets it up as one.
+        if (row && !isStacked(row) && !row.divide_by) applyDifferenceDefaults(selectedMetric() || {});
         openVehSetup(row);
         openChartTypeSetup(row);
         // Reopens on the tab used last, for going through several charts
-        // changing the same thing. A new chart starts on Title & Placement.
-        showChartTab(row ? chartTab : 'title');
+        // changing the same thing. A new chart starts on Data, Title & Placement.
+        showChartTab(row ? chartTab : 'data');
         document.getElementById('chartModal').classList.add('open');
     }
 
@@ -4675,8 +4760,14 @@
     function onMetricChange() {
         const m = selectedMetric() || {};
         document.getElementById('metricDesc').textContent = m.description || '';
+        // Moving off a difference's average: its count is not this metric's bottom.
+        const divideNow = selectedDivide();
+        if (!m.difference && divideNow && (metricsByKey[metricKey(divideNow.source, divideNow.metric)] || {}).is_difference) {
+            document.getElementById('divideSelect').value = '';
+        }
         if (chartModalState && chartModalState.rowId) {
             onDivideChange();
+            applyDifferenceDefaults(m);
             return;
         }
         const suggested = m.suggested_agg || 'sum';
@@ -4686,10 +4777,36 @@
         showYMinInputs();
         document.getElementById('fmtSelect').value = 'num';
         document.getElementById('decimalsSelect').value = suggested === 'avg' ? '1' : '0';
+        updateTimeFromField();
         document.getElementById('invertSelect').value = '0';
         fillPositionOptions();
         chartModalState.autoTitle = null;   // title follows the metric again
         onDivideChange();
+        applyDifferenceDefaults(m);
+    }
+
+    // A difference's total (Settings > Data Sources) is charted as an average:
+    // divided by its count, as a decimal, in the unit the figure is in. Any of
+    // these can then be changed.
+    function applyDifferenceDefaults(m) {
+        if (!m.difference || !chartModalState) return;
+        setRadio('aggRadio', 'sum');
+        setCurrentInputs({ m: true, w: true, d: true });
+        showYMinInputs();
+        const divideSelect = document.getElementById('divideSelect');
+        const countKey = metricKey(m.source, m.difference.count);
+        if (![...divideSelect.options].some(o => o.value === countKey)) {
+            divideSelect.insertAdjacentHTML('beforeend', `<option value="${escHtml(countKey)}">${escHtml(m.difference.count)}</option>`);
+        }
+        divideSelect.value = countKey;
+        document.getElementById('ratioAsSelect').value = 'dec';
+        onDivideChange();
+        const time = { minutes: { fmt: 'mins', from: 'min', decimals: '0' }, days: { fmt: 'days', from: 'day', decimals: '1' } }[m.difference.kind];
+        document.getElementById('fmtSelect').value = time ? time.fmt : 'num';
+        document.getElementById('decimalsSelect').value = time ? time.decimals : '2';
+        if (time) document.getElementById('timeFromSelect').value = time.from;
+        updateTimeFromField();
+        updateYMaxPlaceholders();
     }
 
     function selectedMultiply() {
@@ -4709,6 +4826,8 @@
     // Shows the ratio settings when a divide-by metric is chosen.
     function updateRatioUi() {
         const show = selectedDivide() ? '' : 'none';
+        // A difference's average is always its total over its count.
+        document.getElementById('divideSelect').disabled = !!(selectedMetric() || {}).difference;
         document.getElementById('ratioAsField').style.display = show;
         document.getElementById('divideAggField').style.display = show;
     }
@@ -4723,7 +4842,7 @@
         if (!chartModalState) return;
         const m = selectedMetric() || {};
         const divide = selectedDivide();
-        const autoTitle = formulaText([m.column || '', ...selectedPlus('metric').map(p => p.metric)],
+        const autoTitle = m.difference ? differenceAverageName(m) : formulaText([m.column || '', ...selectedPlus('metric').map(p => p.metric)],
             divide ? [divide.metric, ...selectedPlus('divide').map(p => p.metric)] : [],
             plusOps(selectedPlus('metric')), plusOps(selectedPlus('divide')));
         const titleInput = document.getElementById('titleInput');
@@ -4744,6 +4863,7 @@
         const pct = document.getElementById('ratioAsSelect').value === 'pct';
         document.getElementById('fmtSelect').value = pct ? 'pct' : 'num';
         document.getElementById('decimalsSelect').value = pct ? '1' : '2';
+        updateTimeFromField();
         updateYMaxPlaceholders();
     }
 
@@ -4911,7 +5031,7 @@
     let seriesDraft = [];   // [{ source, metric, label, colour (null = theme) }]
 
     // ── Edit Chart tabs ──
-    let chartTab = 'title';
+    let chartTab = 'data';
 
     function showChartTab(tab) {
         // Columns is only there on a stacked chart.
@@ -5172,7 +5292,7 @@
         document.getElementById('addAllSource').value = '';
         if (!source) return;
         const have = new Set(seriesDraft.map(s => metricKey(s.source || 'snowflake', s.metric)));
-        const fresh = metricsCatalogue.filter(m => m.source === source && !have.has(metricKey(m.source, m.column)));
+        const fresh = metricsCatalogue.filter(m => m.source === source && !m.is_difference && !have.has(metricKey(m.source, m.column)));
         const room = SERIES_MAX - seriesDraft.length;
         fresh.slice(0, Math.max(room, 0)).forEach(m => {
             const series = { source: m.source, metric: m.column, label: '', colour: null };
@@ -6957,7 +7077,11 @@
     const DS_NUMBER_TYPES = ['NUMBER', 'FLOAT', 'DECIMAL', 'NUMERIC', 'INT', 'INTEGER', 'BIGINT', 'DOUBLE', 'REAL'];
     // tables: null until first read (only when the form opens, as listing
     // every table takes a few seconds), then kept for the visit.
-    const dsState = { builtIn: [], sources: [], uses: {}, tables: null, columns: [], editId: null, busy: 0 };
+    const dsState = { builtIn: [], sources: [], uses: {}, tables: null, columns: [], editId: null, busy: 0, differences: [] };
+    const DS_FILTER_OPERATORS = [['equals', 'Equals'], ['not_equals', 'Does Not Equal'], ['contains', 'Contains'], ['in_list', 'In List (Commas Between)'],
+        ['greater_than', 'Greater Than'], ['at_least', 'At Least'], ['less_than', 'Less Than'], ['at_most', 'At Most'],
+        ['is_blank', 'Is Blank'], ['is_not_blank', 'Is Not Blank'], ['is_true', 'Is True'], ['is_false', 'Is False']];
+    const DS_NO_VALUE_OPERATORS = ['is_blank', 'is_not_blank', 'is_true', 'is_false'];
     const DS_SPINNER = '<i class="fas fa-spinner fa-spin"></i> ';
 
     async function loadDataSourcesTab() {
@@ -6995,6 +7119,7 @@
 
     async function loadDataSourceTables() {
         if (dsState.tables) return;
+        fillDsSelect('dsSchema', [], '', 'Loading schemas...');
         fillDsSelect('dsTable', [], '', 'Loading tables...');
         setDataSourceBusy('Loading the table list from Snowflake...');
         try {
@@ -7088,7 +7213,8 @@
             const detail = s.shape === 'long'
                 ? `${s.table} - one row per date per ${s.split_column}, figures from ${s.value_column}`
                 : s.shape === 'records'
-                    ? `${s.table} - one row per record, counted per date by ${s.split_column}`
+                    ? (s.split_column ? `${s.table} - one row per record, counted per date by ${s.split_column}`
+                        : `${s.table} - one row per record, by ${s.date_column}`)
                     : `${s.table} - one row per date`;
             const used = uses ? ` - used in ${uses} place${uses === 1 ? '' : 's'}` : '';
             return `<div class="ds-row">
@@ -7116,6 +7242,31 @@
         select.value = values.includes(value) ? value : '';
     }
 
+    // Schema, then the tables in it. table ('SCHEMA.TABLE') is chosen, and is
+    // kept in the lists even if it has gone from Snowflake.
+    function fillDsSchemaAndTable(table) {
+        const schema = table ? table.split('.')[0] : '';
+        const schemas = [...new Set([...(dsState.tables || []), ...(table ? [table] : [])].map(t => t.split('.')[0]))].sort();
+        fillDsSelect('dsSchema', schemas, schema, '(choose a schema)');
+        fillDsTables(table);
+    }
+
+    // The option values stay 'SCHEMA.TABLE'; only the table part is shown.
+    function fillDsTables(table) {
+        const schema = document.getElementById('dsSchema').value;
+        const inSchema = (dsState.tables || []).filter(t => t.startsWith(schema + '.'));
+        if (table && !inSchema.includes(table)) inSchema.unshift(table);
+        const select = document.getElementById('dsTable');
+        select.innerHTML = `<option value="">${schema ? '(choose a table)' : '(choose a schema first)'}</option>`
+            + inSchema.map(t => `<option value="${escHtml(t)}">${escHtml(t.slice(schema.length + 1))}</option>`).join('');
+        select.value = table || '';
+    }
+
+    function onDsSchemaChange() {
+        fillDsTables('');
+        loadDataSourceColumns('');
+    }
+
     async function resetDataSourceForm() {
         dsState.editId = null;
         dsState.columns = [];
@@ -7124,10 +7275,11 @@
         document.getElementById('dataSourceSaveBtn').innerHTML = '<i class="fas fa-plus"></i> Add';
         document.getElementById('dsName').value = '';
         document.getElementById('dsShape').value = 'wide';
+        dsState.differences = [];
         renderDataSourceColumns();
         await loadDataSourceTables();
         if (dsState.editId) return;   // an edit was opened while the list loaded
-        fillDsSelect('dsTable', dsState.tables || [], '', '(choose a table)');
+        fillDsSchemaAndTable('');
     }
 
     // Value Order: the name column's values for the source being edited, in
@@ -7135,6 +7287,8 @@
     // source has no values until it is saved.
     function renderDsOrder() {
         const el = document.getElementById('dsOrderList');
+        // No name column, no values to order.
+        el.parentElement.style.display = document.getElementById('dsShape').value !== 'wide' && document.getElementById('dsSplit').value ? '' : 'none';
         const s = dsState.editId && dsState.sources.find(x => x.id === dsState.editId);
         const same = s && s.table === document.getElementById('dsTable').value
             && s.split_column === document.getElementById('dsSplit').value;
@@ -7143,7 +7297,7 @@
             el.innerHTML = '<div class="modal-hint">Save the data source, then edit it to set the order of its values.</div>';
             return;
         }
-        if (!dsState.order) dsState.order = metricsCatalogue.filter(m => m.source === s.id).map(m => m.column);
+        if (!dsState.order) dsState.order = metricsCatalogue.filter(m => m.source === s.id && !m.is_difference).map(m => m.column);
         const last = dsState.order.length - 1;
         el.innerHTML = dsState.order.map((n, i) => `
             <div class="ds-order-row">
@@ -7178,6 +7332,7 @@
         const s = dsState.sources.find(x => x.id === id);
         if (!s) return;
         dsState.order = null;
+        dsState.differences = JSON.parse(JSON.stringify(s.differences || []));
         document.getElementById('dataSourceForm').style.display = '';
         document.getElementById('dataSourceOpenBtn').style.display = 'none';
         dsState.editId = id;
@@ -7187,8 +7342,7 @@
         document.getElementById('dsName').value = s.name;
         document.getElementById('dsShape').value = s.shape;
         await loadDataSourceTables();
-        const all = dsState.tables || [];
-        fillDsSelect('dsTable', all.includes(s.table) ? all : [s.table, ...all], s.table, '(choose a table)');
+        fillDsSchemaAndTable(s.table);
         loadDataSourceColumns(s.table, s);
     }
 
@@ -7235,10 +7389,69 @@
         // No first-column fallback here: that is often an id column, one name per row.
         const splitWanted = keep ? keep.split_column
             : (names.includes(current('dsSplit')) ? current('dsSplit') : ['EVENT_NAME'].find(g => names.includes(g)) || '');
-        fillDsSelect('dsSplit', names, splitWanted, '(choose the name column)');
+        // Records tables only use it to count rows, so it is optional there.
+        document.getElementById('dsSplitLabel').textContent = shape === 'records' ? 'Count Rows By (Optional)' : 'Name Column';
+        fillDsSelect('dsSplit', names, splitWanted, shape === 'records' ? '(none)' : '(choose the name column)');
         const values = numbers.filter(c => c !== date && c !== current('dsSplit'));
         fillDsSelect('dsValue', values, pick('dsValue', values, 'value_column', ['EVENT_VOLUME']), '(choose the value column)');
         renderDsOrder();
+        document.querySelectorAll('#setGroupDataSources .ds-records-only').forEach(el => { el.style.display = shape === 'records' ? '' : 'none'; });
+        renderDsDifferences();
+    }
+
+    // What column A minus column B gives, as kds.difference_kind works it out.
+    function dsDifferenceKind(d) {
+        const type = name => (dsState.columns.find(c => c.column === name) || {}).type;
+        const a = type(d.column_a), b = type(d.column_b);
+        if (a && !d.column_b) return DS_NUMBER_TYPES.includes(a) ? 'This Column' : 'Choose A Second Column';
+        if (!a || !b) return '';
+        if (DS_DATE_TYPES.includes(a) && DS_DATE_TYPES.includes(b)) return a === 'DATE' && b === 'DATE' ? 'Gives Days' : 'Gives Minutes';
+        if (DS_NUMBER_TYPES.includes(a) && DS_NUMBER_TYPES.includes(b)) return 'Gives A Number';
+        return 'Cannot Be Subtracted';
+    }
+
+    function renderDsDifferences() {
+        const options = (list, value, blank) => `<option value="">${escHtml(blank)}</option>`
+            + list.map(c => `<option value="${escHtml(c)}"${c === value ? ' selected' : ''}>${escHtml(c)}</option>`).join('');
+        const usable = dsState.columns.filter(c => DS_DATE_TYPES.includes(c.type) || DS_NUMBER_TYPES.includes(c.type)).map(c => c.column);
+        const all = dsState.columns.map(c => c.column);
+        document.getElementById('dsDifferenceList').innerHTML = dsState.differences.map((d, i) => {
+            const filters = (d.filters || []).map((f, j) => `
+                <div class="ds-diff-row ds-diff-filter">
+                    <span>Only Where</span>
+                    <select onchange="dsState.differences[${i}].filters[${j}].column = this.value">${options(all, f.column, '(choose a column)')}</select>
+                    <select onchange="dsState.differences[${i}].filters[${j}].operator = this.value; renderDsDifferences()">
+                        ${DS_FILTER_OPERATORS.map(([v, l]) => `<option value="${v}"${v === f.operator ? ' selected' : ''}>${escHtml(l)}</option>`).join('')}
+                    </select>
+                    ${DS_NO_VALUE_OPERATORS.includes(f.operator) ? '' : `<input type="text" maxlength="200" value="${escHtml(f.value || '')}"
+                        placeholder="Value" oninput="dsState.differences[${i}].filters[${j}].value = this.value">`}
+                    <button type="button" class="btn btn-remove-chart" title="Remove filter" onclick="dsState.differences[${i}].filters.splice(${j}, 1); renderDsDifferences()"><i class="fas fa-trash"></i></button>
+                </div>`).join('');
+            return `<div class="ds-diff">
+                <div class="ds-diff-row">
+                    <input type="text" maxlength="40" value="${escHtml(d.name || '')}" placeholder="Name, e.g. Chassis Margin"
+                           oninput="dsState.differences[${i}].name = this.value">
+                    <select title="Column A" onchange="dsState.differences[${i}].column_a = this.value; renderDsDifferences()">${options(usable, d.column_a, '(choose a column)')}</select>
+                    <span>Minus</span>
+                    <select title="Column B" onchange="dsState.differences[${i}].column_b = this.value; renderDsDifferences()">${options(usable, d.column_b, '(nothing)')}</select>
+                    <span>${escHtml(dsDifferenceKind(d))}</span>
+                    <button type="button" class="btn btn-edit btn-sm" onclick="addDsDifferenceFilter(${i})"><i class="fas fa-plus"></i> Filter</button>
+                    <button type="button" class="btn btn-remove-chart" title="Remove difference" onclick="dsState.differences.splice(${i}, 1); renderDsDifferences()"><i class="fas fa-trash"></i></button>
+                </div>${filters}
+            </div>`;
+        }).join('');
+    }
+
+    function addDsDifference() {
+        dsState.differences.push({ name: '', column_a: '', column_b: '', filters: [] });
+        renderDsDifferences();
+    }
+
+    function addDsDifferenceFilter(i) {
+        const d = dsState.differences[i];
+        d.filters = d.filters || [];
+        d.filters.push({ column: '', operator: 'equals', value: '' });
+        renderDsDifferences();
     }
 
     // Reads the metric lists again, e.g. after a data source is added.
@@ -7259,33 +7472,56 @@
             shape,
             date_column: document.getElementById('dsDate').value,
         };
-        if (shape !== 'wide') entry.split_column = document.getElementById('dsSplit').value;
+        if (shape === 'long' || (shape === 'records' && document.getElementById('dsSplit').value)) entry.split_column = document.getElementById('dsSplit').value;
         if (shape === 'long') entry.value_column = document.getElementById('dsValue').value;
         if (shape !== 'wide' && dsState.order && dsState.order.length) entry.name_order = dsState.order;
+        if (shape === 'records') entry.differences = dsState.differences;
         if (dsState.editId) entry.id = dsState.editId;
         showDataSourceError('');
+        // Charts only need fetching again if what they read changed: a changed
+        // Value Order changes the stacks (their data is fetched in draw order),
+        // and a changed difference changes its figures.
+        const before = dsState.sources.find(s => s.id === dsState.editId) || {};
+        const same = (a, b) => JSON.stringify(a || []) === JSON.stringify(b || []);
+        const reload = !same(before.name_order, entry.name_order) || !same(before.differences, entry.differences);
         setDataSourceBusy(`Checking ${entry.table || 'the table'} and saving...`);
-        let saved = false;
+        // Nothing on the page can be used until the save has fully finished.
+        setSettingsSaving(true);
         try {
-            const resp = await fetch(BASE_URL + '/kpi/data-sources', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ source: entry }),
-            }).then(r => r.json());
-            if (resp.status !== 'ok') throw new Error(resp.message || 'The data source could not be saved');
-            saved = true;
-        } catch (err) {
-            showDataSourceError(err.message);
+            let saved = false;
+            try {
+                const resp = await fetch(BASE_URL + '/kpi/data-sources', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ source: entry }),
+                }).then(r => r.json());
+                if (resp.status !== 'ok') throw new Error(resp.message || 'The data source could not be saved');
+                saved = true;
+            } catch (err) {
+                showDataSourceError(err.message);
+            } finally {
+                setDataSourceBusy('');
+            }
+            if (!saved) return;
+            closeDataSourceForm();
+            await loadDataSourcesTab();
+            await reloadMetricsCatalogue();
+            if (reload) await loadAll();
         } finally {
-            setDataSourceBusy('');
+            setSettingsSaving(false);
         }
-        if (!saved) return;
-        closeDataSourceForm();
-        await loadDataSourcesTab();
-        await reloadMetricsCatalogue();
-        // A changed Value Order changes the stacks: their data is fetched in
-        // draw order, so fetch again rather than redraw from the old data.
-        if (entry.name_order) loadAll();
+    }
+
+    // Covers the whole window with a Saving message while a save finishes.
+    function setSettingsSaving(on) {
+        let cover = document.getElementById('settingsSavingCover');
+        if (!on) { if (cover) cover.remove(); return; }
+        if (cover) return;
+        cover = document.createElement('div');
+        cover.id = 'settingsSavingCover';
+        cover.className = 'settings-saving-cover';
+        cover.innerHTML = '<i class="fas fa-sync-alt spin"></i> Saving...';
+        document.body.appendChild(cover);
     }
 
     async function deleteDataSource(id) {
