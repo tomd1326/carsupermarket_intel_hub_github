@@ -91,13 +91,8 @@ async function fetchData(force = false) {
         const sfEl = document.getElementById('sf-status');
         sfEl.title = data.cached_at ? 'Cached at ' + new Date(data.cached_at * 1000).toLocaleTimeString('en-GB') : '';
         if (data.missing && data.missing.length) sfEl.title += '\nNot in the table, so not shown: ' + data.missing.join(', ');
-        let maxApex = null;
-        allRows.forEach(r => {
-            const v = val(r, 'UPDATED_AT');
-            if (v && (!maxApex || v > maxApex)) maxApex = v;
-        });
-        if (maxApex) {
-            const d = new Date(String(maxApex).replace(' ', 'T'));
+        if (data.last_built) {
+            const d = new Date(data.last_built);
             document.getElementById('apex-updated-val').textContent =
                 d.toLocaleDateString('en-GB') + ' ' + d.toLocaleTimeString('en-GB');
             document.getElementById('apex-updated').style.display = '';

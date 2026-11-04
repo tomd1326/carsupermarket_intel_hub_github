@@ -19,12 +19,16 @@ submit is one purchase_batches row with a purchase_vehicles row per car.
 """
 
 import datetime
+import email
+import email.policy
+import email.utils
 import io
 import json
 import logging
 import os
 import re
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
+from html.parser import HTMLParser
 
 import psycopg2.extras
 
@@ -56,14 +60,23 @@ DEFAULT_COLUMN_NAMES = {
     "invoice_net": ["subtotal", "total net amount", "total gbp excl vat", "total excl vat", "net total", "total net"],
     "invoice_vat": ["total vat amount", "total vat", "vat total"],
     "invoice_gross": ["invoice total", "total gbp", "total due", "grand total", "gross total", "total"],
+    # Labels on a form with no table ("Vehicle price: 16,650.00"). The label must
+    # be the whole label, and these are never used to match a table column.
+    "form_vrm": ["vehicle registration", "registration", "vehicle reg"],
+    "form_description": ["make", "model", "variant", "derivative"],
+    "form_price": ["vehicle price", "car price", "sale price", "hammer price"],
+    "form_vat": ["vehicle vat", "car vat"],
 }
 COLUMN_FIELD_LABELS = {
     "vrm": "VRM", "mileage": "Mileage", "vin": "VIN", "first_registered": "First Registered",
     "description": "Description", "vehicle_net": "Vehicle Net", "vehicle_vat": "Vehicle VAT",
     "vehicle_gross": "Vehicle Gross", "fee_net": "Fee Columns (Net)",
     "invoice_net": "Invoice Total Net", "invoice_vat": "Invoice Total VAT", "invoice_gross": "Invoice Total Gross",
+    "form_vrm": "Form Label: VRM", "form_description": "Form Label: Vehicle Text",
+    "form_price": "Form Label: Car Price", "form_vat": "Form Label: Car VAT",
 }
 _TOTAL_FIELDS = ("invoice_net", "invoice_vat", "invoice_gross")
+_FORM_FIELDS = ("form_vrm", "form_description", "form_price", "form_vat")
 _AMOUNT_FIELDS = ("vehicle_net", "vehicle_vat", "vehicle_gross", "fee_net")
 # VAT % charged on a fee printed in its own column on a car's row (ERAC
 # Service Fee). The row's VAT and total include the fee, so the fee's VAT is
@@ -198,7 +211,96 @@ def file_kind(filename: str) -> str:
         return "pdf"
     if ext in (".jpg", ".jpeg", ".png"):
         return "image"
-    raise ValueError("Only CSV, XLSX, PDF, JPG and PNG files can be read")
+    if ext in (".html", ".htm"):
+        return "html"
+    if ext in (".msg", ".eml"):
+        return "email"
+    raise ValueError("Only CSV, XLSX, PDF, JPG, PNG, HTML and saved emails (MSG, EML) can be read")
+
+
+def file_kind_or_none(filename: str) -> str | None:
+    try:
+        return file_kind(filename)
+    except ValueError:
+        return None
+
+
+class _HtmlText(HTMLParser):
+    """An email's text: each table row or block on its own line, cells joined by
+    a space so a label in one cell stays with its value in the next."""
+    _BLOCKS = {"tr", "br", "p", "div", "li", "table", "h1", "h2", "h3", "h4", "h5", "h6"}
+
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.parts, self.skip = [], 0
+
+    def handle_starttag(self, tag, attrs):
+        if tag in ("style", "script", "head"):
+            self.skip += 1
+        elif tag in self._BLOCKS:
+            self.parts.append("\n")
+
+    def handle_endtag(self, tag):
+        if tag in ("style", "script", "head"):
+            self.skip = max(0, self.skip - 1)
+        elif tag in ("td", "th"):
+            self.parts.append(" ")
+        elif tag in self._BLOCKS:
+            self.parts.append("\n")
+
+    def handle_data(self, data):
+        if not self.skip:
+            self.parts.append(" ".join(data.split()))
+
+
+def html_text(data: bytes) -> str:
+    parser = _HtmlText()
+    parser.feed(data.decode("utf-8-sig", errors="replace"))
+    return "\n".join(l.strip() for l in "".join(parser.parts).replace("\xa0", " ").splitlines() if l.strip())
+
+
+def _msg_parts(data: bytes) -> tuple:
+    """(html bytes, plain text, received date) of an Outlook .msg file."""
+    import olefile
+    try:
+        ole = olefile.OleFileIO(io.BytesIO(data))
+    except OSError as e:
+        raise ValueError("This email file could not be opened") from e
+
+    def stream(name):
+        return ole.openstream(name).read() if ole.exists(name) else None
+
+    with ole:
+        html = stream("__substg1.0_10130102") or stream("__substg1.0_1013001F")
+        unicode_text, ansi_text = stream("__substg1.0_1000001F"), stream("__substg1.0_1000001E")
+        properties = stream("__properties_version1.0") or b""
+    plain = unicode_text.decode("utf-16-le", errors="replace") if unicode_text else (ansi_text or b"").decode("cp1252", errors="replace")
+    received = None
+    # After a 32-byte header, each entry is 16 bytes: tag, flags, value.
+    for i in range(32, len(properties) - 15, 16):
+        if properties[i:i + 4] == b"\x40\x00\x06\x0e":     # PR_MESSAGE_DELIVERY_TIME, a Windows file time
+            ticks = int.from_bytes(properties[i + 8:i + 16], "little")
+            received = datetime.datetime(1601, 1, 1) + datetime.timedelta(microseconds=ticks // 10)
+    return html, plain, received
+
+
+def _eml_parts(data: bytes) -> tuple:
+    """(html bytes, plain text, received date) of a saved .eml file."""
+    message = email.message_from_bytes(data, policy=email.policy.default)
+    html, plain = message.get_body(("html",)), message.get_body(("plain",))
+    try:
+        received = email.utils.parsedate_to_datetime(message["date"])
+    except (TypeError, ValueError):
+        received = None
+    return html.get_content().encode("utf-8") if html else None, plain.get_content() if plain else "", received
+
+
+def email_texts(filename: str, data: bytes) -> list:
+    """A saved email's body as text, HTML version first, to try in turn. The date
+    received goes last, so a date printed in the email itself is used first."""
+    html, plain, received = (_msg_parts if filename.lower().endswith(".msg") else _eml_parts)(data)
+    after = f"\nDate: {received:%d/%m/%Y}" if received else ""
+    return [text + after for text in (html_text(html) if html else "", plain) if text.strip()]
 
 
 # ── Matching column headings ─────────────────────────────────────────────────
@@ -231,7 +333,7 @@ def match_field(label, names: dict):
     lab = norm_label(label)
     if not lab:
         return None
-    names = {k: v for k, v in names.items() if k not in _TOTAL_FIELDS}
+    names = {k: v for k, v in names.items() if k not in _TOTAL_FIELDS and k not in _FORM_FIELDS}
     for field, aliases in names.items():
         if lab in {norm_label(a) for a in aliases}:
             return field
@@ -507,14 +609,20 @@ _DATE_TOKEN = re.compile(r"\b\d{1,2}/\d{1,2}/\d{2,4}\b")
 _MILEAGE_TOKEN = re.compile(r"^(?:\d{1,3}(?:,\d{3})+|\d{3,6})$")
 _INVOICE_NO = re.compile(r"invoice\s*(?:no\.?|number|#)?\s*:?\s*([A-Z0-9/\-]*\d[A-Z0-9/\-]*)", re.I)
 # Not a car's "Registration Date" or "Reg. Date".
-_INVOICE_DATE = re.compile(r"(?<!registration )(?<!reg )(?<!reg\. )(?:invoice date|tax point date|document date|date)\s*:?\s*(\d{1,2}/\d{1,2}/\d{2,4})", re.I)
+_INVOICE_DATE = re.compile(r"(?<!registration )(?<!reg )(?<!reg\. )(?:invoice date|tax point date|tax point|document date|date)\s*:?\s*(\d{1,2}/\d{1,2}/\d{2,4})", re.I)
 _FORM_VRM = re.compile(r"(?:reg(?:istration)?\.?\s*(?:no|number)\.?|vrm|licen[cs]e)\s*:?\s*([A-Z0-9]{2,4} ?[A-Z0-9]{3})\b", re.I)
 _FORM_VEHICLE = re.compile(r"^\s*vehicle\s*:\s*(.+)$", re.I | re.M)
 
 
 def pdf_layout_pages(data: bytes) -> list:
     from pypdf import PdfReader
-    return [p.extract_text(extraction_mode="layout") or "" for p in PdfReader(io.BytesIO(data)).pages]
+    # Layout mode finds nothing when the page's text sits in an embedded form
+    # (MAG), though plain mode reads it. Not a scan, so it must not go to Textract.
+    pages = []
+    for page in PdfReader(io.BytesIO(data)).pages:
+        layout = page.extract_text(extraction_mode="layout") or ""
+        pages.append(layout if layout.strip() else page.extract_text() or "")
+    return pages
 
 
 def _cells(line: str) -> list:
@@ -757,10 +865,15 @@ def parse_layout(pages: list, names: dict, fee_words: list, supplier_names: list
         agreement = _sale_agreement(lines, names)
         if agreement:
             return agreement
-        vehicles = _form_vehicle(lines, names)
+        vehicles, row_totals = _priced_rows(lines, names, fee_words)
         if vehicles:
+            totals = {**_form_totals(lines, names), **totals, **row_totals}
+        else:
+            vehicles = _form_vehicle(lines, names)
+        if vehicles and not any(v.get("vehicle_gross") for v in vehicles):
             totals = {**_form_totals(lines, names), **totals}
             v = vehicles[0]
+            _form_prices(v, lines, names, fee_words)
             v.setdefault("vehicle_net", totals.get("invoice_net"))
             v.setdefault("vehicle_vat", totals.get("invoice_vat"))
             v.setdefault("vehicle_gross", totals.get("invoice_gross"))
@@ -790,19 +903,128 @@ def _form_totals(lines: list, names: dict) -> dict:
 
 def _form_vehicle(lines: list, names: dict) -> list:
     """One car from a form with labels and no table (SMC: 'Reg No: HY72 ODU')."""
-    text = "\n".join(lines)
-    # 'VAT Reg No: 492 349 715' also has the label, so take the first that is a VRM.
-    vrm = next((clean_vrm(m.group(1)) for m in _FORM_VRM.finditer(text)
-                if _VRM_FULL.fullmatch(clean_vrm(m.group(1)))), None)
+    vrm = _labelled_vrm(lines, names)
     if not vrm:
         return []
     v = {"vrm": vrm, "fees": []}
+    _fill_form_details(v, lines, names)
+    return [v]
+
+
+def _labelled(lines: list) -> list:
+    """[(label, value)] for every 'Label: value' on the lines. '|' or a wide gap
+    before another label separates several on one line."""
+    out = []
+    for line in lines:
+        for part in re.split(r"\||\s{2,}(?=[A-Za-z][^:|]{0,40}:)", line):
+            label, colon, value = part.partition(":")
+            if colon and label.strip() and value.strip():
+                out.append((norm_label(label), value.strip()))
+    return out
+
+
+def _form_labels(names: dict, field: str) -> set:
+    return {norm_label(a) for a in names.get(field, [])}
+
+
+def _labelled_vrm(lines: list, names: dict) -> str | None:
+    # 'VAT Reg No: 492 349 715' also has the label, so take the first that is a VRM.
+    found = [m.group(1) for m in _FORM_VRM.finditer("\n".join(lines))]
+    wanted = _form_labels(names or {}, "form_vrm")
+    found += [value for label, value in _labelled(lines) if label in wanted]
+    return next((clean_vrm(x) for x in found if _VRM_FULL.fullmatch(clean_vrm(x))), None)
+
+
+def _fill_form_details(v: dict, lines: list, names: dict) -> None:
+    text = "\n".join(lines)
     d = _FORM_VEHICLE.search(text)
     if d:
         # Up to the next wide gap: another label can sit on the same line.
         v["description"] = " ".join(re.split(r"\s{2,}", d.group(1).strip())[0].split())
+    else:
+        wanted = _form_labels(names or {}, "form_description")
+        parts = [value for label, value in _labelled(lines) if label in wanted]
+        if parts:
+            v["description"] = " ".join(" ".join(parts).split())
     _fill_from_text(v, text)
-    return [v]
+
+
+def _form_prices(v: dict, lines: list, names: dict, fee_words: list) -> None:
+    """A form's prices from labels: the car's price, and each amount whose label
+    has a fee word ('Delivery cost: 185.00', 'Delivery VAT: 37.00'). A car with
+    no VAT shown has the same gross as net (filled in by normalise_extract)."""
+    prices, vats = _form_labels(names, "form_price"), _form_labels(names, "form_vat")
+    fees = {}
+    for label, value in _labelled(lines):
+        found = _MONEY_TOKEN.search(value)
+        if not found:
+            continue
+        amount = found.group()
+        if label in prices:
+            v.setdefault("vehicle_net", amount)
+        elif label in vats:
+            v.setdefault("vehicle_vat", amount)
+        elif is_fee(label, fee_words) and not _total_field(label, names):
+            words = label.split()
+            name = " ".join(w for w in words if w not in ("vat", "cost", "net")) or label
+            fee = fees.setdefault(name, {"description": name.title(), "net": None, "vat": None, "gross": None})
+            fee["vat" if "vat" in words else "net"] = amount
+    if v.get("vehicle_net") not in (None, ""):
+        net = money(v["vehicle_net"])
+        v.setdefault("vehicle_gross", str(net + (money(v.get("vehicle_vat")) or Decimal("0"))))
+    for fee in fees.values():
+        if fee["net"] is not None:
+            fee["gross"] = str(money(fee["net"]) + (money(fee["vat"]) or Decimal("0")))
+            v["fees"].append(fee)
+
+
+def _priced_rows(lines: list, names: dict, fee_words: list) -> tuple:
+    """(vehicles, totals) from a table the headings could not be matched on, using
+    only the sums. A line ending in net, VAT and gross where net + VAT = gross is a
+    priced row. A row with a VRM is a car and the rows after it are its fees; the
+    row that is the sum of all the others is the invoice's total. The VRM can be
+    printed above or below its prices, whichever the first row shows."""
+    rows = []
+    for i, line in enumerate(lines):
+        found = list(_MONEY_TOKEN.finditer(line))
+        amounts = [money(m.group()) for m in found[-3:]]
+        if len(found) >= 3 and abs(amounts[0] + amounts[1] - amounts[2]) <= Decimal("0.01"):
+            rows.append({"i": i, "text": line[:found[-3].start()], "net": amounts[0], "vat": amounts[1], "gross": amounts[2]})
+    if not rows:
+        return [], {}
+
+    def block(k, above):
+        row = rows[k]
+        if above:
+            start = rows[k - 1]["i"] + 1 if k else 0
+            return lines[start:row["i"]] + [row["text"]]
+        end = rows[k + 1]["i"] if k + 1 < len(rows) else len(lines)
+        return [row["text"]] + lines[row["i"] + 1:end]
+
+    def vrm_in(part):
+        return _labelled_vrm(part, names) or find_vrm("\n".join(part))
+
+    above = bool(vrm_in(block(0, True)))
+    vehicles, totals = {}, {}
+    last = rows[-1]
+    others = rows[:-1]
+    if others and abs(sum((r["net"] for r in others), Decimal("0")) - last["net"]) <= Decimal("0.01") and \
+            abs(sum((r["gross"] for r in others), Decimal("0")) - last["gross"]) <= Decimal("0.01"):
+        totals = {"invoice_net": str(last["net"]), "invoice_vat": str(last["vat"]), "invoice_gross": str(last["gross"])}
+        rows = others
+    current = None
+    for k, row in enumerate(rows):
+        part = block(k, above)
+        vrm = vrm_in(part)
+        description = re.sub(r"^\S*\d\S*\s+", "", " ".join(row["text"].split()))
+        if vrm and vrm not in vehicles and not is_fee(description, fee_words):
+            current = vehicles[vrm] = {"vrm": vrm, "fees": [], "vehicle_net": str(row["net"]),
+                                       "vehicle_vat": str(row["vat"]), "vehicle_gross": str(row["gross"])}
+            _fill_form_details(current, part, names)
+        elif current and (row["net"] or row["vat"] or row["gross"]):
+            current["fees"].append({"description": description or "Fee", "net": str(row["net"]),
+                                    "vat": str(row["vat"]), "gross": str(row["gross"])})
+    return list(vehicles.values()), totals if vehicles else {}
 
 
 def _sale_agreement(lines: list, names: dict) -> dict | None:
@@ -843,6 +1065,14 @@ def read_invoice(filename: str, data: bytes, names: dict, fee_words: list, suppl
     kind = file_kind(filename)
     if kind in ("csv", "excel"):
         return normalise_extract(parse_sheet(filename, data, names, fee_words), fee_vat_rate), "sheet"
+    if kind in ("html", "email"):
+        # An email's text is never a scan, so it never goes to Textract.
+        raw = {}
+        for text in [html_text(data)] if kind == "html" else email_texts(filename, data):
+            raw = parse_layout([text], names, fee_words, supplier_names, supplier_rules)
+            if raw["vehicles"]:
+                break
+        return normalise_extract(raw, fee_vat_rate), "text"
     if kind == "pdf":
         pages = pdf_layout_pages(data)
         if len("".join(pages).split()) > 20:
@@ -913,6 +1143,7 @@ def normalise_extract(raw: dict, fee_vat_rate: float = DEFAULT_FEE_VAT_RATE) -> 
             # Margin: no VAT on the car, so its net and gross are the same.
             vehicle_net = vehicle_gross if vehicle_net is None else vehicle_net
             vehicle_gross = vehicle_net if vehicle_gross is None else vehicle_gross
+            vehicle_vat = 0.0 if vehicle_net is not None else vehicle_vat
         reg = to_date(v.get("first_registered"))
         vehicles.append({
             "vrm": vrm,
@@ -1139,8 +1370,19 @@ def clean_custom_fields(fields: list) -> list:
             key += "_2"
         keys.add(key)
         ftype = f.get("type") if f.get("type") in CUSTOM_FIELD_TYPES else "text"
-        out.append({"key": key, "label": label, "type": ftype, "required": bool(f.get("required"))})
+        field = {"key": key, "label": label, "type": ftype, "required": bool(f.get("required"))}
+        suppliers = [str(s).strip()[:200] for s in f.get("suppliers") or [] if str(s).strip()]
+        if suppliers:
+            field["suppliers"] = suppliers
+        out.append(field)
     return out
+
+
+def field_applies(field: dict, supplier: str) -> bool:
+    """Whether a custom field is for this supplier. No suppliers set means all
+    of them. Same as fieldApplies() in cars_bought.js."""
+    names = field.get("suppliers") or []
+    return not names or str(supplier or "").strip().lower() in {str(n).strip().lower() for n in names}
 
 
 def add_sheet_fields(fields: list) -> list:

@@ -250,7 +250,7 @@ def test_layout_openlane_car_with_no_vat_amount():
         "                                                     Subtotal          9,409.00    81.80  9,490.80\n")
     out = _layout([page])
     v = out["vehicles"][0]
-    assert (v["vehicle_net"], v["vehicle_vat"], v["vehicle_gross"]) == (9000.0, None, 9000.0)
+    assert (v["vehicle_net"], v["vehicle_vat"], v["vehicle_gross"]) == (9000.0, 0.0, 9000.0)
     assert [f["description"] for f in v["fees"]] == ["Buyer's fee for HT22XLZ", "Mechanical Indicator for HT22XLZ"]
     assert out["invoice_date"] == "2026-10-29"
     assert _all_match(out)
@@ -295,7 +295,7 @@ def test_layout_motorspace_sale_agreement():
     assert (out["supplier_name"], out["invoice_date"], out["invoice_gross"]) == ("Cromford Cars", "2026-10-13", None)
     assert (v["vrm"], v["mileage"], v["first_registered"]) == ("MW23BZF", 14400, "2023-05-31")
     assert v["supplier_description"] == "VOLKSWAGEN POLO 1.0 TSI R-Line 5dr DSG"
-    assert (v["vehicle_net"], v["vehicle_vat"], v["vehicle_gross"]) == (14850.0, None, 14850.0)
+    assert (v["vehicle_net"], v["vehicle_vat"], v["vehicle_gross"]) == (14850.0, 0.0, 14850.0)
     assert (v["fees_net"], v["fees_vat"], v["fees_gross"]) == (150.0, 30.0, 180.0)
     assert cb.vat_status(v) == "Margin" and cb.purchase_total(v) == 15030.0
 
@@ -356,6 +356,126 @@ def test_add_sheet_fields_keeps_what_is_there_and_adds_the_rest():
 def test_clean_custom_fields_keeps_yes_no():
     assert cb.clean_custom_fields([{"label": "Sat Nav", "type": "yesno", "required": True}])[0] == {
         "key": "sat_nav", "label": "Sat Nav", "type": "yesno", "required": True}
+
+
+def test_clean_custom_fields_keeps_suppliers_and_drops_blanks():
+    out = cb.clean_custom_fields([{"label": "Lot", "type": "text", "suppliers": [" Enterprise ", "", "Motability"]},
+                                  {"label": "Spec", "type": "text", "suppliers": ["  "]}])
+    assert out[0]["suppliers"] == ["Enterprise", "Motability"]
+    assert "suppliers" not in out[1]
+
+
+def test_field_applies_to_its_suppliers_only():
+    assert cb.field_applies({"key": "spec"}, "Enterprise")
+    assert cb.field_applies({"key": "spec", "suppliers": []}, "")
+    assert cb.field_applies({"key": "lot", "suppliers": ["Enterprise"]}, " enterprise ")
+    assert not cb.field_applies({"key": "lot", "suppliers": ["Enterprise"]}, "Motability")
+    assert not cb.field_applies({"key": "lot", "suppliers": ["Enterprise"]}, "")
+
+
+MAG_PLAIN_PAGE = """SALES INVOICE
+Motor Depot T/A Car Supermarket
+Greasbrough Rd,
+Rotherham
+S61 4QQ
+Invoice No.: 30377
+Date/Tax Point: 04/11/2026
+Ref No Description Amount VAT@20% Total
+2610/01148
+LOT 129
+Rotherham Physical & Online Sale 04 Nov 2026
+Reg No: NL73RMY | Chassis No: WAUZZZGB8RR002951
+Vehicle: Audi A1 SPORTBACK 30 TFSI 110 S Line 5dr...
+Mileage: 26804 Warranted | V5 Status: Yes | Keys: 2 | VAT: Qualifying
+x
+13,416.67 2,683.33 16,100.00
+2610/01148 Buyer On Line Fee 30.00 6.00 36.00
+2610/01148 MAG Inspection Check 30.00 6.00 36.00
+2610/01148 Storage Charge 0.00 0.00 0.00
+2610/01148 Taxi & Salvage 4.00 0.80 4.80
+2610/01148 Purchase Premium 464.00 92.80 556.80
+2610/01148 Delivery 0.00 0.00 0.00
+VEHICLE LOCATION: ROTHERHAM , S61 4QQ 13,944.67 2,788.93 16,733.60
+Balance:
+£16,733.60
+"""
+
+
+def test_priced_rows_finds_the_car_fees_and_total_from_the_sums():
+    out = cb.normalise_extract(cb.parse_layout([MAG_PLAIN_PAGE], NAMES, cb.DEFAULT_FEE_WORDS, cb.DEFAULT_SUPPLIER_NAMES))
+    assert (out["invoice_number"], out["invoice_date"]) == ("30377", "2026-11-04")
+    assert (out["invoice_net"], out["invoice_vat"], out["invoice_gross"]) == (13944.67, 2788.93, 16733.60)
+    assert len(out["vehicles"]) == 1
+    v = out["vehicles"][0]
+    assert (v["vrm"], v["mileage"], v["vin"]) == ("NL73RMY", 26804, "WAUZZZGB8RR002951")
+    assert (v["vehicle_net"], v["vehicle_vat"], v["vehicle_gross"]) == (13416.67, 2683.33, 16100.0)
+    assert [f["description"] for f in v["fees"]] == ["Buyer On Line Fee", "MAG Inspection Check", "Taxi & Salvage", "Purchase Premium"]
+    assert (v["fees_net"], v["fees_vat"], v["fees_gross"]) == (528.0, 105.6, 633.6)
+    assert cb.purchase_total(v) == 16733.6
+
+
+def test_priced_rows_two_cars_with_vrm_below_the_prices():
+    page = """Item Amount VAT@20% Total
+Lot 1 9,000.00 1,800.00 10,800.00
+Reg No: NL73RMY
+Buyer Fee 100.00 20.00 120.00
+Lot 2 5,000.00 0.00 5,000.00
+Reg No: HJ73LYV
+Buyer Fee 50.00 10.00 60.00
+Total 14,150.00 1,830.00 15,980.00
+"""
+    v = cb.normalise_extract(cb.parse_layout([page], NAMES, cb.DEFAULT_FEE_WORDS, []))["vehicles"]
+    assert [x["vrm"] for x in v] == ["NL73RMY", "HJ73LYV"]
+    assert [x["fees_gross"] for x in v] == [120.0, 60.0]
+    assert (v[1]["vehicle_net"], v[1]["vehicle_vat"], v[1]["vehicle_gross"]) == (5000.0, 0.0, 5000.0)
+
+
+MOTABILITY_EMAIL = """<html><head><style>p {color: red}</style></head><body>
+<h2>Purchase confirmation</h2><p>Thank you for buying through mfldirect - here's your receipt and order details.</p>
+<table><tr><td>Company name:</td><td>Motor Depot Ltd</td></tr>
+<tr><td>Vehicle registration:</td><td>HJ73LYV</td></tr>
+<tr><td>Make:</td><td>Renault</td></tr><tr><td>Model:</td><td>AUSTRAL</td></tr>
+<tr><td>Variant:</td><td>AUSTRAL E-Tech FHEV Techno Esprit Alpine 5dr Auto SUV</td></tr>
+<tr><td>Colour:</td><td>Grey</td></tr><tr><td>Current mileage:</td><td>23,398</td></tr>
+<tr><td>Vehicle price:</td><td>&pound;16,650.00</td></tr><tr><td>Delivery cost:</td><td>&pound;185.00</td></tr>
+<tr><td>Delivery VAT:</td><td>&pound;37.00</td></tr><tr><td>Total costs:</td><td>&pound;16,872.00</td></tr></table>
+<p>Delivery location</p><p>Motor Depot Ltd</p><p>Stockholm Road</p><p>Hull</p><p>HU7 0XW</p></body></html>"""
+
+
+def test_labelled_email_is_read_with_no_textract_and_is_margin():
+    def no_scan():
+        raise AssertionError("an email must not go to Textract")
+    supplier_names = [{"text": "mfldirect", "supplier": "Motability"}]
+    out, read_by = cb.read_invoice("confirmation.html", MOTABILITY_EMAIL.encode(), NAMES, cb.DEFAULT_FEE_WORDS, supplier_names, on_scan=no_scan)
+    assert read_by == "text"
+    assert (out["supplier_name"], out["invoice_gross"]) == ("Motability", 16872.0)
+    v = out["vehicles"][0]
+    assert (v["vrm"], v["mileage"]) == ("HJ73LYV", 23398)
+    assert v["supplier_description"] == "Renault AUSTRAL AUSTRAL E-Tech FHEV Techno Esprit Alpine 5dr Auto SUV"
+    assert (v["vehicle_net"], v["vehicle_vat"], v["vehicle_gross"]) == (16650.0, 0.0, 16650.0)
+    assert (v["fees_net"], v["fees_vat"], v["fees_gross"]) == (185.0, 37.0, 222.0)
+    assert cb.vat_status(v) == "Margin"
+    assert cb.purchase_total(v) == 16872.0
+
+
+def test_saved_eml_is_read_with_the_date_it_was_received():
+    data = ("From: mfldirect <a@example.com>\r\nDate: Wed, 04 Nov 2026 10:00:00 +0000\r\nSubject: Purchase confirmation\r\n"
+            "MIME-Version: 1.0\r\nContent-Type: text/html; charset=utf-8\r\n\r\n" + MOTABILITY_EMAIL).encode()
+    out, read_by = cb.read_invoice("confirmation.eml", data, NAMES, cb.DEFAULT_FEE_WORDS, [{"text": "mfldirect", "supplier": "Motability"}])
+    assert (read_by, out["invoice_date"], out["vehicles"][0]["vrm"]) == ("text", "2026-11-04", "HJ73LYV")
+
+
+def test_margin_car_has_net_zero_vat_and_the_same_gross():
+    for given in ({"vehicle_net": "9000.00"}, {"vehicle_gross": "9000.00"}, {"vehicle_net": "9000.00", "vehicle_vat": "0.00"}):
+        v = cb.normalise_extract({"vehicles": [{"vrm": "NL73RMY", **given}]})["vehicles"][0]
+        assert (v["vehicle_net"], v["vehicle_vat"], v["vehicle_gross"]) == (9000.0, 0.0, 9000.0)
+    v = cb.normalise_extract({"vehicles": [{"vrm": "NL73RMY"}]})["vehicles"][0]
+    assert v["vehicle_net"] is None and v["vehicle_vat"] is None
+
+
+def test_form_labels_never_match_a_table_column():
+    assert cb.match_field("Make", NAMES) is None
+    assert cb.match_field("Registration", NAMES) == "vrm"
 
 
 def test_clean_custom_value_fits_the_field_type():

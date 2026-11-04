@@ -2537,7 +2537,7 @@ def _validate_stacked_row(row: dict) -> str | None:
         return f"At most {_KPI_SERIES_MAX} series in a chart"
     for s in series:
         if not isinstance(s, dict) or set(s) - {"source", "metric", "label", "colour", "multiply_by", "within_below",
-                                                 "axis", "split_at", "kind"}:
+                                                 "axis", "split_at", "kind", "no_chart_filters"}:
             return "bad series"
         if s.get("kind", "column") not in KPI_SERIES_KINDS:
             return "bad series kind"
@@ -2561,6 +2561,8 @@ def _validate_stacked_row(row: dict) -> str | None:
             return "bad series axis"
         if not isinstance(s.get("within_below", False), bool):
             return "bad within_below"
+        if not isinstance(s.get("no_chart_filters", False), bool):
+            return "bad no_chart_filters"
         error = _validate_layout_metric(s.get("source", "snowflake"), s.get("metric"))
         if error:
             return error

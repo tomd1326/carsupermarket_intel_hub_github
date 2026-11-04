@@ -431,6 +431,17 @@
             </nav>
             <div class="chart-panes">
             <div class="chart-pane" data-pane="data">
+            <div class="modal-section-title">Title</div>
+            <div class="modal-grid">
+                <div class="modal-field span-2">
+                    <label for="titleInput">Title</label>
+                    <input type="text" id="titleInput" maxlength="100">
+                </div>
+                <div class="modal-field span-2">
+                    <label for="subtitleInput">Subtitle (Optional)</label>
+                    <input type="text" id="subtitleInput" maxlength="200">
+                </div>
+            </div>
             <div class="modal-section-title">Data</div>
             <div class="modal-grid">
                 <div class="modal-field span-2">
@@ -442,6 +453,14 @@
                         <option value="lines">Lines - several metrics</option>
                     </select>
                     <div class="modal-hint stacked-only">Each series below has its own Chart Type (Column or Line) and Secondary Axis tick, so columns and lines can be mixed on one chart.</div>
+                </div>
+                <div class="modal-field span-2 stacked-only" id="chartFilterField">
+                    <label>Filters For All Series</label>
+                    <div id="chartFilterList"></div>
+                    <button type="button" class="btn btn-edit section-add-btn" onclick="addChartFilter()">
+                        <i class="fas fa-plus"></i> Filter
+                    </button>
+                    <div class="modal-hint">Set once here and added to every series that is built from a table's columns. Tick Ignore Chart Filters on a series that needs different ones.</div>
                 </div>
                 <div class="modal-field span-2 stacked-only" id="seriesField">
                     <label id="seriesFieldLabel">Series (First Is The Bottom Of The Stack)</label>
@@ -471,7 +490,9 @@
                 </div>
                 <div class="modal-field line-only">
                     <label for="divideSelect">Divided By</label>
-                    <select id="divideSelect" onchange="onDivideChange()"></select>
+                    <select id="divideSelect" onchange="onDivideChange(); renderDivideQuery()"></select>
+                    <!-- Built from a plain table's columns, with its own filters. -->
+                    <div class="series-query" id="divideQueryBuilder"></div>
                     <div id="dividePlusList"></div>
                     <button type="button" class="btn btn-sm plus-add" id="dividePlusBtn" onclick="addPlus('divide')">
                         <i class="fas fa-plus"></i> Add Metric</button>
@@ -522,17 +543,6 @@
                         The count behind each day's average, so a week or month matches the
                         average over every vehicle in View Vehicles.
                     </div>
-                </div>
-            </div>
-            <div class="modal-section-title">Title</div>
-            <div class="modal-grid">
-                <div class="modal-field span-2">
-                    <label for="titleInput">Title</label>
-                    <input type="text" id="titleInput" maxlength="100">
-                </div>
-                <div class="modal-field span-2">
-                    <label for="subtitleInput">Subtitle (Optional)</label>
-                    <input type="text" id="subtitleInput" maxlength="200">
                 </div>
             </div>
             <div class="modal-section-title">Placement</div>
