@@ -3,6 +3,7 @@ CREATE TABLE IF NOT EXISTS vehicles (
     at_description              TEXT,
     at_factory_fitted_features  TEXT,
     at_first_registration_date  DATE,
+    at_colour                   VARCHAR(50),
     at_derivative_id            VARCHAR(64),
     cap_capid                   INTEGER,
     cap_capcode                 VARCHAR(50),

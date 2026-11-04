@@ -525,6 +525,7 @@ def _at_lookup(vrm: str, mileage: int, spec_confirmed: bool = False) -> dict:
         'derivative':       derivative,
         'vin':              info.get('vin', ''),
         'first_registered': first_reg,
+        'colour':           info.get('colour', ''),
         'retail_valuation': retail_valuation,
         'retail_rating':    metrics.get('rating', {}).get('value'),
         'days_to_sell':     metrics.get('daysToSell', {}).get('value'),

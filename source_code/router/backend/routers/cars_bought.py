@@ -22,6 +22,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import HTMLResponse, Response, StreamingResponse
 
 from utils import cars_bought as cb
+from utils import cars_bought_import as cb_import
 from utils import cars_bought_inbox as inbox
 from utils import supplier_store as ss
 from utils import vehicle_metrics as vm
@@ -137,8 +138,21 @@ def _buyer_config(conn, user: str) -> dict:
 
 
 @router.get("/cars-bought", response_class=HTMLResponse)
-def cars_bought_page(request: Request, user: str = Depends(require_page(_PAGE))):
+def cars_bought_table_page(request: Request, user: str = Depends(require_page(_PAGE))):
+    """All Cars Bought: the full table of cars submitted on this site."""
     _track(request, 'page_view', '/cars-bought')
+    with get_database_connection() as conn:
+        grid_colour = _grid_colour(conn)
+        missing_colour = _missing_colour(conn)
+        not_used_colour = _not_used_colour(conn)
+    return templates.TemplateResponse("cars_bought_table.html", {"request": request, "user": user, "BASE_URL": BASE_URL,
+                                                                 "is_admin": is_admin(user), "grid_colour": grid_colour,
+                                                                 "missing_colour": missing_colour, "not_used_colour": not_used_colour})
+
+
+@router.get("/cars-bought/add", response_class=HTMLResponse)
+def cars_bought_page(request: Request, user: str = Depends(require_page(_PAGE))):
+    _track(request, 'page_view', '/cars-bought/add')
     with get_database_connection() as conn:
         inbox_cfg = _inbox_settings(conn)
         grid_colour = _grid_colour(conn)
@@ -432,6 +446,7 @@ def _evaluator_data(vrms: list, supplier_id=None) -> dict:
         hours = _max_age_hours(conn)
     try:
         with get_vehicle_database_connection() as conn:
+            vs.ensure_colour_column(conn)
             return cb.evaluator_lookup(conn, vrms, supplier_id, hours)
     except Exception as e:
         logger.warning(f"Cars Bought: evaluator lookup failed: {e}")
@@ -932,6 +947,64 @@ def cars_bought_vehicles(user: str = Depends(require_page_api(_PAGE))):
     with get_database_connection() as conn:
         rows = cb.read_vehicles(conn)
     return {"status": "ok", "vehicles": [_json_row(r) for r in cb.table_rows(rows)]}
+
+
+@router.post("/cars-bought/import-csv")
+def cars_bought_import_csv(payload: dict, user: str = Depends(require_page_api(_PAGE))):
+    """Admin only: the old Cars Bought sheet as a CSV. {filename, data (base64),
+    mapping, save}. Without save, only says what importing would do. With it,
+    saves purchases until the time runs out and says how many are left: the page
+    asks again, and what is already saved is skipped, so nothing goes in twice."""
+    if not is_admin(user):
+        return {"status": "error", "message": "Only the admin can import"}
+    filename = str((payload or {}).get("filename") or "")[:200]
+    try:
+        data = base64.b64decode(str((payload or {}).get("data") or ""), validate=True)
+    except (binascii.Error, ValueError):
+        return {"status": "error", "message": f"{filename}: the file could not be read"}
+    if not data or len(data) > cb.MAX_UPLOAD_BYTES:
+        return {"status": "error", "message": f"{filename}: empty, or larger than 4 MB"}
+    try:
+        headings, rows = cb_import.read_csv(data)
+    except ValueError as e:
+        return {"status": "error", "message": f"{filename}: {e}"}
+    with get_database_connection() as conn:
+        fields = _custom_fields(conn)
+        stored = cb_import.stored_purchases(conn)
+    mapping = (payload or {}).get("mapping")
+    if not isinstance(mapping, dict):
+        mapping = cb_import.suggest_mapping(headings, fields)
+    planned = cb_import.plan(headings, rows, mapping, fields, stored)
+    known = _supplier_ids()
+    if not payload.get("save"):
+        names = {b["supplier_name"].lower(): b["supplier_name"] for b in planned["batches"]}
+        return {"status": "ok", "headings": headings, "first_row": rows[0] if rows else [], "mapping": mapping,
+                "options": cb_import.field_options(fields), "missing": planned["missing"], "rows": planned["rows"],
+                "cars": planned["cars"], "batches": len(planned["batches"]), "already_here": planned["already_here"],
+                "bought_on_another_date": planned["bought_on_another_date"],
+                "new_suppliers": sorted(n for low, n in names.items() if low not in known),
+                "problems": planned["problems"][:200], "problems_total": len(planned["problems"])}
+    if planned["missing"]:
+        return {"status": "error", "message": "Choose a column for: " + ", ".join(planned["missing"])}
+
+    # Well inside the 29 second limit, with room for the file to be read first.
+    _connect_to_shared_tables()
+    stop_at = time.monotonic() + 15
+    saved_batches = saved_cars = 0
+    for batch in planned["batches"]:
+        if time.monotonic() > stop_at:
+            break
+        with get_vehicle_database_connection() as conn:
+            supplier_id = ss.find_or_add_supplier(conn, batch["supplier_name"])
+            # Stubs only: an old RRP or prep cost must not replace a buyer's current figure.
+            vs.ensure_vehicles_exist(conn, [v["vrm"] for v in batch["vehicles"]])
+            conn.commit()
+        with get_database_connection() as conn:
+            cb.save_batch(conn, {**{k: v for k, v in batch.items() if k != "vehicles"}, "supplier_id": supplier_id,
+                                 "source": cb_import.SOURCE, "filename": filename}, batch["vehicles"], user, _uk_now())
+        saved_batches += 1
+        saved_cars += len(batch["vehicles"])
+    return {"status": "ok", "saved_cars": saved_cars, "batches_left": len(planned["batches"]) - saved_batches}
 
 
 @router.post("/cars-bought/vehicles/{vehicle_id}/custom")

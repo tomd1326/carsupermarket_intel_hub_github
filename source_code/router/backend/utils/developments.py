@@ -7,15 +7,13 @@ development everywhere. A new entry starts as a draft: only live entries appear
 on What's New or can go in an email.
 
 Emails are built here as HTML that Outlook desktop can draw (tables and inline
-styles, see templates/emails/development_update.html) and handed over as a .eml
-file marked unsent, which Outlook opens as a draft ready to address and send.
+styles, see templates/emails/development_update.html) and sent through
+utils/email_client.py from the page, after a confirmation box.
 """
 import datetime
-import email.policy
 import logging
 import os
 import re
-from email.message import EmailMessage
 from urllib.parse import urlparse
 from zoneinfo import ZoneInfo
 
@@ -39,6 +37,7 @@ _EMAILS_LISTED = 50
 # Everything about the email's wording and look that can be changed on the page.
 TEMPLATE_DEFAULTS = {
     "site_url": "https://uk-intel-hub.aramis-group.eu",
+    "default_send_to": "",
     "subject": "Intelligence Hub Update",
     "heading": "Intelligence Hub Update",
     "intro": "Hello all,\n\nHere is the latest on what has changed in the Intelligence Hub.",
@@ -67,7 +66,7 @@ _COLOUR_KEYS = {k for k in TEMPLATE_DEFAULTS if k.endswith("_colour")}
 _NUMBER_LIMITS = {"font_size": (10, 24), "heading_size": (14, 40), "title_size": (12, 30), "footer_size": (9, 18),
                   "email_width": (480, 900)}
 # Blank is allowed for these; every other wording box must hold something.
-_MAY_BE_BLANK = {"sign_off", "footer", "intro", "replaces_label"}
+_MAY_BE_BLANK = {"sign_off", "footer", "intro", "replaces_label", "default_send_to"}
 _TEMPLATE_TEXT_MAX = 2000
 
 # The first entry, added once when the table is first made. A draft, for checking.
@@ -441,20 +440,20 @@ def email_problem(ids: list, developments: list) -> str | None:
     return None
 
 
-def build_eml(subject: str, html: str, text: str) -> bytes:
-    """An email file with no sender or recipient. X-Unsent makes Outlook open it
-    as a draft that can be addressed and sent, not as a received message."""
-    message = EmailMessage(policy=email.policy.SMTP)
-    message["Subject"] = " ".join(subject.split())
-    message["X-Unsent"] = "1"
-    message.set_content(text)
-    message.add_alternative(html, subtype="html")
-    return message.as_bytes()
-
-
-def eml_filename(subject: str) -> str:
-    name = re.sub(r"[^A-Za-z0-9 _-]", "", subject).strip()[:80]
-    return f"{name or 'Update'}.eml"
+def clean_recipients(value) -> list:
+    """The addresses in a send-to box, each once. Semicolons, commas or spaces
+    may separate them, so a list pasted from Outlook or the Users page works."""
+    recipients, seen = [], set()
+    for address in re.split(r"[;,\s]+", str(value or "").strip()):
+        if not address or address.lower() in seen:
+            continue
+        if not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", address):
+            raise ValueError(f"This is not an email address: {address}")
+        seen.add(address.lower())
+        recipients.append(address)
+    if not recipients:
+        raise ValueError("Enter at least one address to send to.")
+    return recipients
 
 
 # ── Past emails ──────────────────────────────────────────────────────────────

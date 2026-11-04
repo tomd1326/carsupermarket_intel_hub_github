@@ -24,6 +24,12 @@ body { background-color: var(--c-page-bg); font-size: var(--page-font); }
 .control-label { font-size: 1em; font-weight: 600; color: var(--c-text-muted); white-space: nowrap; }
 .period-select { width: auto; min-width: 150px; }
 .date-range-input { width: auto; }
+/* A control with a filter on, and the line saying what is filtered. The colour
+   is set in Settings > Appearance. */
+.filter-on, .veh-multi summary.filter-on, .form-control.filter-on { background: var(--filter-on); border-color: #b58900; font-weight: 600; }
+.lens-toggle.filter-on { outline: 2px solid #b58900; }
+.filter-banner { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; padding: 8px 14px; margin-bottom: 16px; border: 1px solid #b58900;
+                 border-radius: var(--radius-md); background: var(--filter-on); font-weight: 600; }
 
 .lens-toggle { display: inline-flex; background: var(--c-surface-sunken); border-radius: var(--radius-md); padding: 3px; }
 .lens-toggle button {
@@ -96,8 +102,6 @@ table.summary tbody tr:last-child td:last-child { border-bottom-right-radius: va
 .charts-row.even { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .charts-row.even.two { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .chart-wrap { height: 240px; }
-body.show-tables .charts-block { display: none; }
-body.show-charts .tables-block { display: none; }
 
 /* ── Vehicles grid ───────────────────────────────────────────────────────── */
 .grid-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 8px; }
@@ -121,7 +125,7 @@ table.grid tbody tr:nth-child(even) { background: var(--c-surface-alt); }
 table.grid tbody tr:hover { background: var(--c-table-total-bg); }
 table.grid td.num { text-align: right; font-variant-numeric: tabular-nums; }
 table.grid td.neg { color: var(--c-text-danger); }
-table.grid td.vrm { font-family: ui-monospace, Consolas, monospace; text-transform: uppercase; }
+table.grid td.vrm { text-transform: uppercase; }
 
 /* ── View buttons (bottom row of each metric table) ──────────────────────── */
 table.summary tr.view-row td { border-top: 1px solid var(--c-border-strong); padding-top: 0.45em; padding-bottom: 0.45em; }

@@ -711,6 +711,7 @@ class AutoTraderClient(metaclass=Singleton):
                 'market_condition': market_condition,
                 'factory_fitted_feature_names': ', '.join(factory_fitted_feature_names),
                 'at_first_registration_date': first_registration_date,
+                'at_colour': vehicle_info.get('colour', ''),
                 'derivative_id': derivative_id,
                 'vin': vehicle_info.get('vin', ''),
             }
@@ -738,6 +739,7 @@ class AutoTraderClient(metaclass=Singleton):
                 'market_condition': 'N/A',
                 'factory_fitted_feature_names': 'N/A',
                 'at_first_registration_date': 'N/A',
+                'at_colour': '',
                 'derivative_id': '',
                 'vin': '',
             }

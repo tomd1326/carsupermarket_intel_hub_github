@@ -1,0 +1,46 @@
+/* Vehicle comments popup and button (vehicle_comments.js). Styled like the
+   Google Slides comments on the Weekly Business Review. */
+.vc-btn { border: 1px solid var(--c-border); background: #fff; border-radius: 12px; padding: 1px 8px; cursor: pointer; color: var(--c-text-muted); font-size: 0.85em; white-space: nowrap; }
+.vc-btn.has { color: #1a73e8; border-color: #1a73e8; font-weight: 600; }
+.vc-btn:hover { background: #f1f5f9; }
+/* Everything the popup needs is here, as not every page loads charts.css. */
+#vcModal { position: fixed; inset: 0; background: rgba(15, 23, 42, 0.45); display: none; align-items: flex-start; justify-content: center; padding-top: 6vh; z-index: 3000; }
+#vcModal.open { display: flex; }
+.vc-box { background: #fff; border-radius: 12px; padding: 22px 24px; box-shadow: 0 10px 40px rgba(0,0,0,0.25); width: 640px; max-width: 94vw; max-height: 88vh; display: flex; flex-direction: column; }
+#vcModal .chart-modal-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+#vcModal h2 { font-size: 1rem; font-weight: 700; color: #0f172a; margin-bottom: 12px; }
+#vcModal .modal-close-x { border: 0; background: none; font-size: 1.4rem; line-height: 1; color: #64748b; cursor: pointer; }
+#vcModal .modal-error { font-size: 0.78rem; color: #e53e3e; margin-bottom: 10px; display: none; }
+#vcModal .modal-error.show { display: block; }
+.vc-history { overflow-y: auto; flex: 1 1 auto; padding: 4px 2px; display: flex; flex-direction: column; gap: 10px; }
+.vc-thread { border: 1px solid var(--c-border); border-radius: 8px; padding: 10px 12px; background: #fff; }
+.vc-thread.resolved { background: #f8fafc; opacity: 0.8; }
+.vc-comment + .vc-comment { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--c-border-soft, #e2e8f0); }
+.vc-comment.reply { margin-left: 18px; }
+.vc-head { display: flex; align-items: baseline; gap: 8px; }
+.vc-author { font-weight: 600; }
+.vc-when { color: var(--c-text-muted); font-size: 0.85em; }
+.vc-body { white-space: pre-wrap; margin-top: 4px; overflow-wrap: anywhere; }
+.vc-mention { color: #1a73e8; }
+.vc-assigned, .vc-resolved { color: var(--c-text-muted); font-size: 0.85em; margin-top: 4px; }
+.vc-actions { display: flex; align-items: center; gap: 12px; margin-top: 6px; }
+.vc-link { border: 0; background: none; padding: 0; color: #1a73e8; cursor: pointer; font-size: 0.9em; }
+.vc-link:hover { text-decoration: underline; }
+.vc-text { width: 100%; min-height: 64px; resize: vertical; border: 1px solid var(--c-border); border-radius: 6px; padding: 6px 8px; font: inherit; box-sizing: border-box; }
+.vc-chips { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; }
+.vc-chip { border: 1px solid var(--c-border); background: #fff; border-radius: 10px; padding: 0 8px; font-size: 0.8em; cursor: pointer; }
+.vc-chip:hover { background: #eef4ff; }
+.vc-composer { border-top: 1px solid var(--c-border); padding-top: 10px; margin-top: 10px; }
+.vc-composer .vc-actions { justify-content: space-between; }
+.vc-assign { font-size: 0.9em; color: var(--c-text-muted); display: flex; align-items: center; gap: 6px; }
+.vc-empty { color: var(--c-text-muted); padding: 12px 4px; }
+.vc-btn.vc-site { border: 0; background: none; padding: 0 0 0 4px; color: #1a73e8; }
+.vc-site-change { border-left: 4px solid #1a73e8; }
+.vc-site-line { font-weight: 600; margin-top: 4px; }
+.site-changed { background: var(--site-changed, #dbeafe); }
+.sc-box { width: 680px; max-width: 94vw; max-height: 90vh; overflow-y: auto; }
+.sc-field { margin-bottom: 10px; }
+.sc-field label { display: block; font-weight: 600; margin-bottom: 3px; }
+.sc-match { display: flex; gap: 8px; align-items: center; padding: 2px 0; font-weight: 400; }
+.sc-current { width: 100%; border-collapse: collapse; margin-top: 4px; }
+.sc-current th, .sc-current td { border-bottom: 1px solid var(--c-border); padding: 4px 6px; text-align: left; vertical-align: top; }

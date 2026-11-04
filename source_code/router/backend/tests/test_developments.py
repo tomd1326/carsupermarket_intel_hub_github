@@ -2,7 +2,7 @@
 
 The risks covered: a bad address turning an email link into something else,
 typed text being read as HTML, a draft reaching an email or What's New, the wrong
-developments going in an email, the .eml not opening as a draft, the records
+developments going in an email, recipients seeing each other, the records
 landing in the wrong database, and someone other than the admin using the page.
 
 No test touches a real database.
@@ -11,8 +11,6 @@ Run from source_code/router/backend:
     poetry run pytest tests/test_developments.py
 """
 
-import email
-import email.policy
 import os
 import re
 import sys
@@ -153,28 +151,39 @@ def test_subject_is_one_line():
         dv.clean_subject(" ")
 
 
-# ── The .eml file ────────────────────────────────────────────────────────────
+# ── Sending ──────────────────────────────────────────────────────────────────
 
-def test_eml_opens_as_a_draft_with_both_versions():
-    built = build([dev(title="Café Report")])
-    message = email.message_from_bytes(dv.build_eml("My Update", built["html"], built["text"]),
-                                       policy=email.policy.default)
-    assert message["X-Unsent"] == "1"
-    assert message["Subject"] == "My Update"
-    assert message["From"] is None and message["To"] is None
-    assert "Café Report" in message.get_body(("html",)).get_content()
-    assert "Café Report" in message.get_body(("plain",)).get_content()
+def test_recipients_are_split_and_each_kept_once():
+    assert dv.clean_recipients("a@x.com; b@x.com,\nA@x.com") == ["a@x.com", "b@x.com"]
 
 
-def test_eml_header_cannot_be_added_to_through_the_subject():
-    message = email.message_from_bytes(dv.build_eml("One\r\nBcc: a@example.com", "<p>x</p>", "x"),
-                                       policy=email.policy.default)
-    assert message["Bcc"] is None
+@pytest.mark.parametrize("value", ["", "  ; ", None, "a@x.com; not-an-address"])
+def test_recipients_refuse_blank_or_bad_addresses(value):
+    with pytest.raises(ValueError):
+        dv.clean_recipients(value)
 
 
-def test_eml_filename_is_safe():
-    assert dv.eml_filename('A "Good" / Update\r\nX') == "A Good  UpdateX.eml"
-    assert dv.eml_filename('"/') == "Update.eml"
+def test_past_email_is_sent_on_bcc_only(monkeypatch):
+    sent = {}
+    monkeypatch.setattr(router, "is_admin", lambda user: True)
+    monkeypatch.setattr(router.dv, "get_email", lambda i: {"subject": "S", "html": "<p>x</p>", "text": "x"})
+    monkeypatch.setattr(router.email_client, "configured_sender", lambda: "hub@x.com")
+    monkeypatch.setattr(router.email_client, "send_email",
+                        lambda to, subject, html, sender=None, bcc=None: sent.update(to=to, bcc=bcc, sender=sender))
+    result = router.developments_email_resend(1, None, {"to": "a@x.com; b@x.com"}, user="admin")
+    assert result["status"] == "ok"
+    assert sent == {"to": "hub@x.com", "bcc": ["a@x.com", "b@x.com"], "sender": "hub@x.com"}
+
+
+def test_failed_send_is_reported(monkeypatch):
+    def fail(*args, **kwargs):
+        raise RuntimeError("403 from Graph")
+    monkeypatch.setattr(router, "is_admin", lambda user: True)
+    monkeypatch.setattr(router.dv, "get_email", lambda i: {"subject": "S", "html": "<p>x</p>", "text": "x"})
+    monkeypatch.setattr(router.email_client, "configured_sender", lambda: "hub@x.com")
+    monkeypatch.setattr(router.email_client, "send_email", fail)
+    result = router.developments_email_resend(1, None, {"to": "a@x.com"}, user="admin")
+    assert result["status"] == "error" and "403" in result["message"]
 
 
 # ── Which database, who, and what shows ──────────────────────────────────────
@@ -279,7 +288,8 @@ def test_seed_page_exists():
     lambda: router.developments_email_preview(None, {}, user="someone"),
     lambda: router.developments_email_generate(None, {}, user="someone"),
     lambda: router.developments_email_get(1, None, user="someone"),
-    lambda: router.developments_email_download(1, None, user="someone"),
+    lambda: router.developments_email_send(None, {}, user="someone"),
+    lambda: router.developments_email_resend(1, None, {}, user="someone"),
     lambda: router.developments_data(None, user=None),
 ])
 def test_admin_routes_refuse_everyone_else(call):

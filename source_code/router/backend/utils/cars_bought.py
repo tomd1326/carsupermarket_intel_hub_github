@@ -139,6 +139,8 @@ DEFAULT_TABLE_ORDER = ["PURCHASE_DATE", "BUYER", "SUPPLIER_NAME", "CUSTOM:VENDOR
                        "DERIVATIVE", "CAP_ID", "CUSTOM:NOTES", "COLOUR", "MILEAGE", "CUSTOM:SAT_NAV", "CUSTOM:SPEC",
                        "CUSTOM:REPLACEABLE", "PURCHASE_TOTAL", "CUSTOM:RRP", "CUSTOM:EST_PREP_COST"]
 DEFAULT_TABLE_ROWS = 500
+# purchase_batches.source of a purchase imported from the old Cars Bought sheet.
+IMPORT_SOURCE = "import"
 
 # The Buyer dropdown lists the users given this role on the Users page.
 BUYER_ROLE = "buyer"
@@ -1112,8 +1114,12 @@ def split_row_fees(fees: list, vehicle_vat, vehicle_gross, rate: float) -> tuple
 
 def vat_status(vehicle: dict) -> str:
     """A car with no VAT shown on it is margin. Its fees have their own VAT,
-    which can be different, and do not count."""
-    return "VAT Qualifying" if money(vehicle.get("vehicle_vat")) else "Margin"
+    which can be different, and do not count. The old sheet says nothing about
+    VAT, so a car imported from it with none given is not known to be margin."""
+    vat = money(vehicle.get("vehicle_vat"))
+    if vat is None and vehicle.get("source") == IMPORT_SOURCE:
+        return "Unknown"
+    return "VAT Qualifying" if vat else "Margin"
 
 
 def purchase_total(vehicle: dict) -> float:
@@ -1224,7 +1230,7 @@ def evaluator_lookup(conn, vrms: list, supplier_id=None, max_age_hours=None) -> 
                 ORDER BY vrm, fetched_at DESC
             )
             SELECT v.vrm, v.cap_capid, v.cap_manufacturer, v.cap_model, v.cap_derivative,
-                   v.at_first_registration_date, v.at_vin,
+                   v.at_first_registration_date, v.at_colour, v.at_vin,
                    l.supplier_id, l.supplier_name, l.imported_at, l.mileage, l.asking_price,
                    val.fetched_at, val.at_retail_valuation, val.at_rating,
                    COALESCE(val.cap_live_clean, val.cap_monthly_clean) AS cap_clean
@@ -1249,6 +1255,7 @@ def evaluator_lookup(conn, vrms: list, supplier_id=None, max_age_hours=None) -> 
             "cap_id": r["cap_capid"], "make": r["cap_manufacturer"], "model": r["cap_model"],
             "derivative": r["cap_derivative"], "vin": r["at_vin"],
             "first_registered": reg.isoformat() if isinstance(reg, datetime.date) else (str(reg) if reg else None),
+            "colour": r["at_colour"],
             "evaluator_supplier": r["supplier_name"],
             "evaluator_seen_at": r["imported_at"].isoformat(timespec="minutes") if r["imported_at"] else None,
             "evaluator_mileage": r["mileage"],
@@ -1262,29 +1269,31 @@ def evaluator_lookup(conn, vrms: list, supplier_id=None, max_age_hours=None) -> 
 def stored_results(vrms_mileage: list, cached: dict, known: dict) -> dict:
     """The same results as manual_check, from what the shared store already
     holds: fetch_cached_valuations and fetch_known_vehicles. Only a car with a
-    CAP ID, a CAP value and an Autotrader value, as a car missing one still
-    needs the live call."""
+    CAP ID, a CAP value, an Autotrader value and a colour, as a car missing one
+    still needs the live call."""
     out = {}
     for vrm, mileage in vrms_mileage:
         if not mileage:
             continue
         val = cached.get((vrm, round_mileage_to_nearest_thousand(mileage)))
         car = known.get(vrm)
-        if not val or not car or not car.get("cap_capid"):
+        if not val or not car or not car.get("cap_capid") or not car.get("at_colour"):
             continue
         clean = val.get("cap_live_clean") if val.get("cap_live_clean") is not None else val.get("cap_monthly_clean")
         if clean is None or val.get("at_retail_valuation") is None:
             continue
+        reg = car.get("at_first_registration_date")
         out[vrm] = {"cap_id": car["cap_capid"], "make": car.get("cap_manufacturer"), "model": car.get("cap_model"),
                     "derivative": car.get("cap_derivative"), "cap_clean": _num(clean),
                     "at_retail_valuation": _num(val["at_retail_valuation"]), "at_rating": _num(val.get("at_rating")),
-                    "note": None, "from_store": True}
+                    "first_registered": reg.isoformat() if isinstance(reg, datetime.date) else (str(reg) if reg else None),
+                    "colour": car["at_colour"], "note": None, "from_store": True}
     return out
 
 
 def manual_check(vrms_mileage: list, on_result=None) -> dict:
     """{vrm: {cap_id, make, model, derivative, cap_clean, at_retail_valuation,
-    at_rating, note}} from live CAP and Autotrader, using the Assess Vehicle
+    at_rating, first_registered, colour, note}} from live CAP and Autotrader, using the Assess Vehicle
     page's own lookups. Autotrader needs a mileage. on_result(vrm, mileage, cap,
     at) gets the full answers of each car that has a mileage and where neither
     call failed, for storing."""
@@ -1313,7 +1322,8 @@ def manual_check(vrms_mileage: list, on_result=None) -> dict:
             return {}, f"Autotrader failed: {e}", None
         if not a.get("found"):
             return {}, "Autotrader: not found", a
-        return {"at_retail_valuation": _num(a.get("retail_valuation")), "at_rating": _num(a.get("retail_rating"))}, None, a
+        return {"at_retail_valuation": _num(a.get("retail_valuation")), "at_rating": _num(a.get("retail_rating")),
+                "first_registered": a.get("first_registered") or None, "colour": a.get("colour") or None}, None, a
 
     if not vrms_mileage:
         return {}
@@ -1633,7 +1643,7 @@ def read_vehicles(conn, batch_id=None, date_from=None, date_to=None) -> list:
     with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
         cur.execute(f"""
             SELECT b.batch_id, b.buyer, b.supplier_name, b.invoice_number, b.purchase_date, b.submitted_by, b.submitted_at,
-                   v.id AS vehicle_id, b.s3_key IS NOT NULL AS has_file,
+                   b.source, v.id AS vehicle_id, b.s3_key IS NOT NULL AS has_file,
                    {', '.join('v.' + c for c in VEHICLE_COLS)}
             FROM purchase_vehicles v JOIN purchase_batches b ON b.batch_id = v.batch_id
             {('WHERE ' + ' AND '.join(where)) if where else ''}

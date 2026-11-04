@@ -25,7 +25,7 @@ PEOPLE = [{"username": "tdrayson", "name": "Tom Drayson", "email": "tom.drayson@
 
 @pytest.fixture(autouse=True)
 def people(monkeypatch):
-    monkeypatch.setattr(wc, "_commenters", lambda: PEOPLE)
+    monkeypatch.setattr(wc, "_commenters", lambda pages=None: PEOPLE)
 
 
 def test_mentions_in_order_once_each_any_case():

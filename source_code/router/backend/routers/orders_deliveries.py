@@ -89,6 +89,8 @@ _COLUMNS = [
     ("MILEAGE", "mileage"),
     ("DATE_FIRST_REGISTERED", "dfr"),
     ("DEAL_SITE_CLEAN", "site"),
+    # Not displayed: the key of the vehicle's notes (routers/vehicle_comments.py).
+    ("AUTOVIEW_STOCK_ID", "autoview_stock_id"),
     ("SALES_TYPE", "sales_type"),
     # Rate/Cash vs 0% split, bucketed in the model so the browser does not
     # redo it on every slicer click.
@@ -160,7 +162,7 @@ def _fetch_start() -> datetime.date:
 #
 # Version the S3 key: bump _CACHE_VERSION whenever _COLUMNS changes, otherwise
 # an old cached payload (missing the new columns) is served until it expires.
-_CACHE_VERSION = 13
+_CACHE_VERSION = 14
 _S3_KEY = (f"applications/pricing/uk-vehicle-list-evaluator/shared/cache/"
            f"orders_deliveries_v{_CACHE_VERSION}.json")
 

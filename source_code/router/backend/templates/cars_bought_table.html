@@ -1,0 +1,136 @@
+{% from '_navigation.html' import page_header with context %}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ page_name('cars_bought') }}</title>
+    <link rel="icon" type="image/png" href="{{ BASE_URL }}/static/icon.png">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css" rel="stylesheet">
+    <link href="{{ static_url('css/theme.css') }}" rel="stylesheet">
+    <style>
+        @font-face { font-family: 'DM Sans'; src: url('{{ BASE_URL }}/static/fonts/DMSans-Regular.ttf');  font-weight: 400; }
+        @font-face { font-family: 'DM Sans'; src: url('{{ BASE_URL }}/static/fonts/DMSans-Medium.ttf');   font-weight: 500; }
+        @font-face { font-family: 'DM Sans'; src: url('{{ BASE_URL }}/static/fonts/DMSans-SemiBold.ttf'); font-weight: 600; }
+        @font-face { font-family: 'DM Sans'; src: url('{{ BASE_URL }}/static/fonts/DMSans-Bold.ttf');     font-weight: 700; }
+        body, button, input, select, textarea { font-family: 'DM Sans', system-ui, sans-serif; }
+        /* The page is exactly the window's height, and only the table scrolls. */
+        html, body { height: 100%; }
+        body { background-color: var(--c-page-bg); color: var(--c-text); display: flex; flex-direction: column; overflow: hidden; }
+        .table-page { flex: 1; min-height: 0; display: flex; flex-direction: column; padding: 10px 16px; gap: 8px; }
+        .table-bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 0.85rem; }
+        :root { --cb-grid: {{ grid_colour }}; --cb-missing: {{ missing_colour }}; --cb-not-used: {{ not_used_colour }}; }
+        td.cb-missing { background-color: var(--cb-missing); color: #842029; font-weight: 600; }
+        td.cb-not-used { background-color: var(--cb-not-used); }
+        /* Borders are not collapsed, as collapsed borders do not stay with a
+           sticky heading when the rows scroll. */
+        .all-scroll { flex: 1; min-height: 0; overflow: auto; background: #fff; }
+        .all-table { font-size: 0.8rem; width: max-content; min-width: 100%; border-collapse: separate; border-spacing: 0;
+                     border-top: 1px solid var(--cb-grid); border-left: 1px solid var(--cb-grid); }
+        .all-table th, .all-table td { border-right: 1px solid var(--cb-grid); border-bottom: 1px solid var(--cb-grid); padding: 3px 6px; white-space: nowrap; }
+        .all-table thead { position: sticky; top: 0; z-index: 2; }
+        .all-table th { background: var(--c-table-header-bg, #dbeafe); color: var(--c-table-header-text, #1e3a5f); font-weight: 600; }
+        .all-table th[data-sort] { cursor: pointer; user-select: none; }
+        .all-table th input { font-size: 0.75rem; height: 24px; padding: 1px 4px; min-width: 60px; }
+        .all-table td input, .all-table td select { font-size: 0.8rem; height: 24px; padding: 1px 4px; background-color: transparent; border-color: transparent; min-width: 70px; }
+        .all-table td input:focus, .all-table td select:focus { background-color: #fff; }
+        .all-table td.notes-wide input { min-width: 160px; }
+        .veh-scroll { overflow-x: auto; }
+        .veh-table { font-size: 0.8rem; width: max-content; min-width: 100%; }
+        .veh-table th { background: var(--c-table-header-bg, #dbeafe); color: var(--c-table-header-text, #1e3a5f); white-space: nowrap; padding: 6px; font-weight: 600; }
+        .veh-table th, .veh-table td { border: 1px solid var(--cb-grid); }
+    </style>
+</head>
+<body>
+    {{ page_header(page_name('cars_bought'), user) }}
+
+    <div class="table-page">
+        <a id="inboxSummary" class="alert alert-danger py-1 px-2 mb-0 fw-bold text-decoration-none" href="{{ BASE_URL }}/cars-bought/add" title="Open the invoices waiting to be reviewed" style="display:none;"></a>
+        <div class="table-bar">
+            <select id="allSearchBy" class="form-select form-select-sm" style="width:130px;" title="What the search looks in">
+                <option value="vrm" selected>VRM</option>
+                <option value="supplier">Supplier</option>
+                <option value="cap">CAP ID</option>
+                <option value="all">All Columns</option>
+            </select>
+            <input id="allSearch" class="form-control form-control-sm" style="width:220px;" placeholder="Search VRM">
+            <span class="text-muted">From</span><input type="date" id="allFrom" class="form-control form-control-sm" style="width:145px;">
+            <span class="text-muted">To</span><input type="date" id="allTo" class="form-control form-control-sm" style="width:145px;">
+            <button class="btn btn-sm btn-outline-secondary text-nowrap" id="allClearBtn">Clear Filters</button>
+            <span class="text-muted text-nowrap" id="allCount"></span>
+            <div class="flex-grow-1"></div>
+            <button class="btn btn-sm btn-success fw-bold text-nowrap" id="allExportBtn"><i class="fas fa-download me-1"></i>Export CSV</button>
+            <a class="btn btn-sm btn-primary fw-bold text-nowrap" href="{{ BASE_URL }}/cars-bought/add"><i class="fas fa-plus me-1"></i>Add Cars</a>
+            {% if is_admin %}
+            <button class="btn btn-sm btn-outline-secondary text-nowrap" id="importOpenBtn"><i class="fas fa-file-import me-1"></i>Import Old CSV</button>
+            <a class="btn btn-sm btn-outline-secondary text-nowrap" href="{{ BASE_URL }}/cars-bought/add#settings"><i class="fas fa-cog me-1"></i>Settings</a>
+            {% endif %}
+        </div>
+        <div id="allFilterNote" class="alert alert-warning py-1 px-2 mb-0 small fw-semibold" style="display:none;"></div>
+        <div id="allMetricErrors" class="small text-danger" style="display:none;"></div>
+        <div class="all-scroll">
+            <table class="all-table">
+                <thead id="allHead"></thead>
+                <tbody id="allBody"><tr><td class="text-muted">Loading...</td></tr></tbody>
+            </table>
+            <div class="text-center my-2"><button class="btn btn-sm btn-outline-primary" id="allMoreBtn" style="display:none;">Show More</button></div>
+        </div>
+        <datalist id="allFilterValues"></datalist>
+    </div>
+
+    <!-- Batch detail -->
+    <div class="modal fade" id="batchModal" tabindex="-1">
+        <div class="modal-dialog modal-xl modal-dialog-scrollable">
+            <div class="modal-content">
+                <div class="modal-header"><h6 class="modal-title fw-bold" id="batchModalTitle"></h6>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
+                <div class="modal-body"><div class="veh-scroll" id="batchModalBody"></div></div>
+            </div>
+        </div>
+    </div>
+
+    {% if is_admin %}
+    <!-- Import the old Cars Bought sheet, saved as a CSV. Nothing is saved until Import is pressed. -->
+    <div class="modal fade" id="importModal" tabindex="-1">
+        <div class="modal-dialog modal-xl modal-dialog-scrollable">
+            <div class="modal-content">
+                <div class="modal-header"><h6 class="modal-title fw-bold">Import Old Cars Bought CSV</h6>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
+                <div class="modal-body">
+                    <div class="small text-muted mb-2">Save the sheet as a CSV, up to 4 MB, and choose it here. Cars are grouped into one purchase per date, supplier and buyer. A car with the same VRM and date as one already here is left out, so importing the same file twice adds nothing. With no VAT column, VAT Status shows Unknown.</div>
+                    <input type="file" id="importFile" accept=".csv" class="form-control form-control-sm mb-2">
+                    <div id="importError" class="alert alert-danger py-1 small" style="display:none;"></div>
+                    <div id="importSummary" class="small mb-2"></div>
+                    <div class="row g-3" id="importDetail" style="display:none;">
+                        <div class="col-md-7">
+                            <div class="small fw-bold mb-1">Which Column Goes Where</div>
+                            <table class="table table-sm small mb-0">
+                                <thead><tr><th>Column In The CSV</th><th>First Value</th><th>Goes Into</th></tr></thead>
+                                <tbody id="importMapBody"></tbody>
+                            </table>
+                        </div>
+                        <div class="col-md-5">
+                            <div class="small fw-bold mb-1">Rows Left Out Or Changed</div>
+                            <div id="importProblems" class="small" style="max-height:50vh;overflow:auto;"></div>
+                        </div>
+                    </div>
+                </div>
+                <div class="modal-footer"><button class="btn btn-primary fw-bold" id="importSaveBtn" style="display:none;"></button></div>
+            </div>
+        </div>
+    </div>
+    {% endif %}
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
+    <script>
+        window.BASE_URL = "{{ BASE_URL }}";
+        window.IS_ADMIN = {{ 'true' if is_admin else 'false' }};
+    </script>
+    <script src="{{ static_url('js/cars_bought_common.js') }}"></script>
+    <script src="{{ static_url('js/cars_bought_table.js') }}"></script>
+    {% if is_admin %}
+    <script src="{{ static_url('js/cars_bought_import.js') }}"></script>
+    {% endif %}
+</body>
+</html>

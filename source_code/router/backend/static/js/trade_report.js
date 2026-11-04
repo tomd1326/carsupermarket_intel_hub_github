@@ -32,14 +32,15 @@
     // ── State ────────────────────────────────────────────────────────────────
     let rows = [];                 // every trade sale, as objects
     let cachedAt = null;
-    let view = 'month_site';
+    let view = 'vehicles';
     let category = '';             // '' = every supplier category
+    // Ticked in the Site and Customer filters; none ticked means all.
+    const ticked = { site: new Set(), customer: new Set() };
     let period = null;             // 'M:yyyy-MM-dd' or 'Y:yyyy'
     // Date range on the invoice date, 'yyyy-MM-dd' or ''. While either is set
     // it replaces the period, on every view.
     let dateFrom = '';
     let dateTo = '';
-    let show = 'both';
     let charts = [];               // live Chart instances; destroyed on re-render
     let gridSort = { key: 'invoice_date', dir: -1 };
     let gridSearch = '';
@@ -144,11 +145,13 @@
     }
     // Columns are taken from the whole dataset, not the period, so a site with
     // nothing sold this month still shows (as the workbook's fixed lists did).
+    // With sites ticked in the filter, only those, so the rest are not empty columns.
+    const siteTicked = r => !ticked.site.size || ticked.site.has(r.branch_name);
     function siteNames() {
-        return distinct(rows.filter(r => r.branch_category === SITE), r => r.branch_name).sort();
+        return distinct(rows.filter(r => r.branch_category === SITE && siteTicked(r)), r => r.branch_name).sort();
     }
     function bcbPrepNames() {
-        const names = distinct(rows.filter(r => r.branch_category === 'BCB' || r.branch_category === 'Prep'), r => r.branch_name);
+        const names = distinct(rows.filter(r => (r.branch_category === 'BCB' || r.branch_category === 'Prep') && siteTicked(r)), r => r.branch_name);
         return names.sort((a, b) => (a === 'BCB' ? -1 : b === 'BCB' ? 1 : a.localeCompare(b)));
     }
     // Auctions in the rows given, busiest first.
@@ -166,22 +169,37 @@
 
     const rangeOn = () => !!(dateFrom || dateTo);
 
-    // Rows for the chosen date range or period, and supplier category.
-    function scopeRows() {
-        let list;
+    const customerOf = r => r.auction || 'Unknown';
+
+    // Rows for the chosen date range or period.
+    function periodRows() {
         if (rangeOn()) {
             // Dates are 'yyyy-MM-dd', so text order is date order.
-            list = rows.filter(r => {
+            return rows.filter(r => {
                 const day = String(r.invoice_date || '').slice(0, 10);
                 return day && (!dateFrom || day >= dateFrom) && (!dateTo || day <= dateTo);
             });
-        } else {
-            if (!period) return [];
-            const [kind, value] = [period.slice(0, 1), period.slice(2)];
-            list = kind === 'M' ? rows.filter(r => r.month === value) : rows.filter(r => String(r.financial_year) === value);
         }
-        if (category) list = list.filter(r => r.supplier_category === category);
-        return list;
+        if (!period) return [];
+        const [kind, value] = [period.slice(0, 1), period.slice(2)];
+        return kind === 'M' ? rows.filter(r => r.month === value) : rows.filter(r => String(r.financial_year) === value);
+    }
+
+    // Those rows, narrowed by supplier category, site and customer.
+    function scopeRows() {
+        return periodRows().filter(r => (!category || r.supplier_category === category) && siteTicked(r)
+            && (!ticked.customer.size || ticked.customer.has(customerOf(r))));
+    }
+
+    // Every filter on now, in words. The period is not one: it is always set.
+    function activeFilters() {
+        const out = [];
+        if (rangeOn()) out.push(`Invoice Date: ${periodText()}`);
+        if (ticked.site.size) out.push(`Site: ${[...ticked.site].join(', ')}`);
+        if (ticked.customer.size) out.push(`Customer: ${[...ticked.customer].join(', ')}`);
+        if (category) out.push(`Supplier Category: ${category}`);
+        if (view === 'vehicles' && gridSearch.trim()) out.push(`Search: ${gridSearch.trim()}`);
+        return out;
     }
     function periodIsYear() { return !!period && period.startsWith('Y'); }
     function periodValue() { return period ? period.slice(2) : null; }
@@ -514,21 +532,26 @@
         const list = gridRows(scope);
         const head = GRID_COLUMNS.map(c => {
             const caret = gridSort.key === c.key ? `<span class="sort-caret">${gridSort.dir > 0 ? '&#9650;' : '&#9660;'}</span>` : '';
-            return `<th class="${c.num ? 'num' : ''}" data-sort="${c.key}">${escHtml(c.label)}${caret}</th>`;
+            const th = `<th class="${c.num ? 'num' : ''}" data-sort="${c.key}">${escHtml(c.label)}${caret}</th>`;
+            return c.key === 'vrm' ? `${th}<th>Notes</th>` : th;
         }).join('');
+        // Notes sits to the right of VRM (vehicle_comments.js). A changed site is
+        // coloured, with an i that opens the same history.
         const body = list.map(r => '<tr>' + GRID_COLUMNS.map(c => {
             const v = r[c.key];
             const text = c.fmt ? c.fmt(v) : (v === null || v === undefined ? '' : String(v));
             const neg = c.num && num(v) !== null && num(v) < 0 ? ' neg' : '';
-            return `<td class="${c.num ? 'num' : ''}${c.cls ? ' ' + c.cls : ''}${neg}">${escHtml(text)}</td>`;
+            const changed = c.key === 'branch_name' && r.site_change;
+            const td = `<td class="${c.num ? 'num' : ''}${c.cls ? ' ' + c.cls : ''}${neg}${changed ? ' site-changed' : ''}">${escHtml(text)}${changed ? VehicleComments.siteButton(r.stock_id, r.vrm, `Site Changed From ${r.site_change.old_site || 'Unknown'}`) : ''}</td>`;
+            return c.key === 'vrm' ? `${td}<td>${VehicleComments.button(r.stock_id, r.vrm)}</td>` : td;
         }).join('') + '</tr>').join('');
         return `
         <div class="report-section">
             <h3 class="section-title">Vehicles - ${escHtml(periodText())}<span class="section-note">${escHtml(category || 'All supplier categories')} - ${list.length.toLocaleString('en-GB')} vehicles</span></h3>
             <div class="panel shadow-sm" style="width: 100%;">
                 <div class="grid-toolbar">
-                    <input type="search" class="grid-search" id="grid-search" placeholder="Search VRM, stock ID, supplier, site, customer, make or model" value="${escHtml(gridSearch)}" autocomplete="off" spellcheck="false">
-                    <button class="btn btn-csv" id="csv-btn"><i class="fas fa-download"></i> CSV</button>
+                    <input type="search" class="grid-search${gridSearch.trim() ? ' filter-on' : ''}" id="grid-search" placeholder="Search VRM, stock ID, supplier, site, customer, make or model" value="${escHtml(gridSearch)}" autocomplete="off" spellcheck="false">
+                    <button class="btn btn-csv${activeFilters().length ? ' filter-on' : ''}" id="csv-btn"><i class="fas fa-download"></i> ${activeFilters().length ? 'CSV (Filtered)' : 'CSV'}</button>
                 </div>
                 <div class="grid-wrap"><table class="grid"><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table></div>
             </div>
@@ -543,7 +566,7 @@
         const blob = new Blob([lines.join('\n')], { type: 'text/csv;charset=utf-8;' });
         const a = document.createElement('a');
         a.href = URL.createObjectURL(blob);
-        a.download = `trade_sales_${periodText().replace(/[^A-Za-z0-9]+/g, '_')}.csv`;
+        a.download = `trade_sales_${periodText().replace(/[^A-Za-z0-9]+/g, '_')}${activeFilters().length ? '_filtered' : ''}.csv`;
         document.body.appendChild(a);
         a.click();
         document.body.removeChild(a);
@@ -573,6 +596,7 @@
         area.innerHTML = html;
         pendingCharts.forEach(buildBarChart);
         pendingCharts = [];
+        showFilterState(scope);
         if (view === 'vehicles') {
             const search = document.getElementById('grid-search');
             search.addEventListener('input', () => { gridSearch = search.value; renderVehiclesBodyOnly(); });
@@ -584,6 +608,68 @@
                 renderReport();
             }));
         }
+    }
+
+    // Colours each control with a filter on, and says what is filtered and how
+    // many sales that leaves.
+    function showFilterState(scope) {
+        fillFilterLists();
+        const mark = (id, on) => document.getElementById(id).classList.toggle('filter-on', on);
+        document.querySelector('#site-filter summary').classList.toggle('filter-on', ticked.site.size > 0);
+        document.querySelector('#customer-filter summary').classList.toggle('filter-on', ticked.customer.size > 0);
+        mark('date-from', !!dateFrom);
+        mark('date-to', !!dateTo);
+        document.querySelector('#category-filter summary').classList.toggle('filter-on', !!category);
+        const filters = activeFilters();
+        document.getElementById('filter-banner').style.display = filters.length ? '' : 'none';
+        if (!filters.length) return;
+        const shown = view === 'vehicles' ? gridRows(scope).length : scope.length;
+        const base = rangeOn() ? rows.length : periodRows().length;
+        document.getElementById('filter-banner-text').textContent =
+            `Filtered, Showing ${shown.toLocaleString('en-GB')} Of ${base.toLocaleString('en-GB')} Sales. ${filters.join(' | ')}`;
+    }
+
+    // The tick-lists offer only the sites and customers left in the data by the
+    // period (or dates), supplier category and the other tick-list. What is ticked
+    // always stays in its list so it can be unticked.
+    function fillFilterLists() {
+        const base = periodRows().filter(r => !category || r.supplier_category === category);
+        const lists = {
+            site: distinct(base.filter(r => !ticked.customer.size || ticked.customer.has(customerOf(r))), r => r.branch_name),
+            customer: distinct(base.filter(siteTicked), customerOf),
+        };
+        Object.keys(lists).forEach(kind => {
+            const values = [...new Set([...lists[kind].map(String), ...ticked[kind]])]
+                .sort((a, b) => a.localeCompare(b, 'en-GB', { numeric: true }));
+            const box = document.querySelector(`#${kind}-filter .veh-multi-list`);
+            // Rebuilt only when the choices change, so an open list keeps its scroll place.
+            const sig = values.join('\u0001');
+            if (box.dataset.sig !== sig) {
+                box.dataset.sig = sig;
+                box.innerHTML = '<a href="#" data-clear="1">Clear</a>' + values.map(v =>
+                    `<label><input type="checkbox" value="${escHtml(v)}"${ticked[kind].has(v) ? ' checked' : ''}> ${escHtml(v)}</label>`).join('');
+            }
+            showTickSummary(kind);
+        });
+    }
+
+    function showTickSummary(kind) {
+        const set = ticked[kind];
+        document.querySelector(`#${kind}-filter summary`).textContent =
+            !set.size ? 'All' : set.size === 1 ? [...set][0] : `${set.size} Selected`;
+    }
+
+    // The Supplier Category dropdown holds one choice; '' is every category.
+    function setCategory(value) {
+        category = value;
+        document.querySelectorAll('#category-filter input[type=radio]').forEach(b => { b.checked = b.value === value; });
+        document.querySelector('#category-filter summary').textContent = value || 'All';
+    }
+
+    function clearTicks(kind) {
+        ticked[kind].clear();
+        document.querySelectorAll(`#${kind}-filter input[type=checkbox]`).forEach(b => { b.checked = false; });
+        showTickSummary(kind);
     }
 
     // Typing in the search box re-renders the whole grid but keeps the box
@@ -655,6 +741,29 @@
     }
 
     function bindControls() {
+        ['site', 'customer'].forEach(kind => {
+            const box = document.getElementById(`${kind}-filter`);
+            box.addEventListener('change', e => {
+                if (e.target.checked) ticked[kind].add(e.target.value); else ticked[kind].delete(e.target.value);
+                showTickSummary(kind);
+                renderReport();
+            });
+            box.addEventListener('click', e => {
+                if (!e.target.dataset.clear) return;
+                e.preventDefault();
+                clearTicks(kind);
+                renderReport();
+            });
+        });
+        document.getElementById('filter-clear-all').addEventListener('click', () => {
+            clearTicks('site');
+            clearTicks('customer');
+            setCategory('');
+            gridSearch = '';
+            document.getElementById('date-from').value = '';
+            document.getElementById('date-to').value = '';
+            applyDateRange();
+        });
         ['date-from', 'date-to'].forEach(id => document.getElementById(id).addEventListener('change', applyDateRange));
         document.getElementById('date-clear').addEventListener('click', () => {
             document.getElementById('date-from').value = '';
@@ -675,22 +784,11 @@
             fillPeriodSelect();
             renderReport();
         });
-        document.getElementById('category-toggle').addEventListener('click', e => {
-            const btn = e.target.closest('button[data-category]');
-            if (!btn) return;
-            category = btn.dataset.category;
-            setActive('category-toggle', 'category', category);
+        document.getElementById('category-filter').addEventListener('change', e => {
+            if (e.target.type !== 'radio') return;
+            setCategory(e.target.value);
+            document.getElementById('category-filter').open = false;
             renderReport();
-        });
-        document.getElementById('show-toggle').addEventListener('click', e => {
-            const btn = e.target.closest('button[data-show]');
-            if (!btn) return;
-            show = btn.dataset.show;
-            setActive('show-toggle', 'show', show);
-            document.body.classList.toggle('show-tables', show === 'tables');
-            document.body.classList.toggle('show-charts', show === 'charts');
-            // Charts drawn while hidden have no size; redraw them.
-            if (show !== 'tables') renderReport();
         });
         document.getElementById('period-select').addEventListener('change', e => {
             period = e.target.value;
@@ -745,16 +843,23 @@
             const data = await resp.json();
             if (data.status !== 'ok') throw new Error(data.message || 'Failed to load');
             const cols = data.columns;
+            const changes = data.site_changes || {};
             rows = data.rows.map(arr => {
                 const o = {};
                 cols.forEach((c, i) => { o[c] = arr[i]; });
+                o.site_change = changes[String(o.stock_id)] || null;
                 return o;
             });
+            const warning = document.getElementById('site-changes-warning');
+            warning.textContent = data.site_changes_error || '';
+            warning.style.display = data.site_changes_error ? '' : 'none';
             cachedAt = data.cached_at || null;
             cacheNote();
             setDateLimits();
+            fillFilterLists();
             fillPeriodSelect();
             renderReport();
+            renderSiteChanges();
         } catch (e) {
             document.getElementById('report-area').innerHTML = `<div class="panel shadow-sm"><div class="error-state">Could not load the trade sales: ${escHtml(e.message || e)}</div></div>`;
         } finally {
@@ -763,8 +868,92 @@
     }
     window.refreshData = function () { loadData(true); };
 
+    // ── Site Changes popup (only there with the Approve Site Changes permission) ──
+    const plate = s => String(s || '').replace(/\s+/g, '').toUpperCase();
+
+    function scError(message) {
+        const box = document.getElementById('sc-error');
+        box.textContent = message || '';
+        box.classList.toggle('show', !!message);
+    }
+
+    // Every sale with the typed VRM. A VRM with several stock ids must be picked from.
+    function renderSiteMatches() {
+        const typed = plate(document.getElementById('sc-vrm').value);
+        const matches = typed ? rows.filter(r => plate(r.vrm) === typed) : [];
+        document.getElementById('sc-matches').innerHTML = !typed ? ''
+            : !matches.length ? '<div class="text-muted">No sale with that VRM in the Trade Report.</div>'
+            : '<label>Stock ID</label>' + matches.map((r, i) => `
+                <label class="sc-match"><input type="radio" name="sc-stock" value="${escHtml(r.stock_id)}"${i === 0 ? ' checked' : ''}>
+                    ${escHtml(r.stock_id)} - ${escHtml(r.branch_name || '')} - ${escHtml([r.make, r.model].filter(Boolean).join(' '))} - ${escHtml(fmtDate(r.invoice_date))}</label>`).join('');
+    }
+
+    function renderSiteChanges() {
+        const holder = document.getElementById('sc-current');
+        if (!holder) return;
+        const site = document.getElementById('sc-site');
+        const chosen = site.value;
+        site.innerHTML = '<option value="">(Choose A Site)</option>' + distinct(rows, r => r.branch_name).filter(Boolean).sort()
+            .map(n => `<option value="${escHtml(n)}">${escHtml(n)}</option>`).join('');
+        site.value = chosen;
+        renderSiteMatches();
+        const changed = rows.filter(r => r.site_change);
+        holder.innerHTML = !changed.length ? '<div class="text-muted">None.</div>'
+            : `<table class="sc-current"><thead><tr><th>VRM</th><th>From</th><th>To</th><th>Reason</th><th>By</th><th></th></tr></thead><tbody>${
+                changed.map(r => `<tr><td>${escHtml(r.vrm)}</td><td>${escHtml(r.site_change.old_site || '')}</td><td>${escHtml(r.site_change.new_site)}</td>
+                    <td>${escHtml(r.site_change.reason)}</td><td>${escHtml(r.site_change.changed_by_name)}</td>
+                    <td><button type="button" class="vc-link" data-remove="${r.site_change.id}">Remove</button></td></tr>`).join('')
+            }</tbody></table>`;
+    }
+
+    async function postSiteChange(path, body) {
+        const resp = await fetch(`${BASE_URL}/reports/trade/site-changes${path}`, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+        }).then(r => r.json());
+        if (resp.status !== 'ok') throw new Error(resp.message || 'Save failed');
+    }
+
+    function bindSiteChanges() {
+        const modal = document.getElementById('siteChangesModal');
+        if (!modal) return;
+        document.getElementById('site-changes-btn').addEventListener('click', () => {
+            scError('');
+            renderSiteChanges();
+            modal.classList.add('open');
+        });
+        document.getElementById('sc-close').addEventListener('click', () => modal.classList.remove('open'));
+        document.getElementById('sc-vrm').addEventListener('input', renderSiteMatches);
+        document.getElementById('sc-save').addEventListener('click', async () => {
+            scError('');
+            const picked = document.querySelector('input[name="sc-stock"]:checked');
+            try {
+                if (!picked) throw new Error('Type a VRM and pick the vehicle');
+                await postSiteChange('', {
+                    stock_id: picked.value,
+                    new_site: document.getElementById('sc-site').value,
+                    reason: document.getElementById('sc-reason').value,
+                });
+                document.getElementById('sc-vrm').value = '';
+                document.getElementById('sc-site').value = '';
+                document.getElementById('sc-reason').value = '';
+                await loadData(false);
+                VehicleComments.loadCounts();
+            } catch (err) { scError(err.message); }
+        });
+        document.getElementById('sc-current').addEventListener('click', async e => {
+            const id = e.target.dataset.remove;
+            if (!id || !confirm('Remove this site change? The car goes back to its Autoview site.')) return;
+            scError('');
+            try {
+                await postSiteChange(`/${id}/remove`, {});
+                await loadData(false);
+            } catch (err) { scError(err.message); }
+        });
+    }
+
     document.addEventListener('DOMContentLoaded', () => {
         bindControls();
+        bindSiteChanges();
         applyFont();
         loadData(false);
     });

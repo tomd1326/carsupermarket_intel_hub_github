@@ -20,6 +20,7 @@
     <style>
         :root { --vehicle-font: {{ font_vehicle }}px; --page-font: {{ font_summary }}px; }
     </style>
+    <link href="{{ static_url('css/vehicle_comments.css') }}" rel="stylesheet">
     <link href="{{ static_url('css/orders_deliveries.css') }}" rel="stylesheet">
 </head>
 <body>
@@ -243,6 +244,8 @@
          red/amber/green scale stays identical everywhere. Must load before
          orders_deliveries.js, which wraps them. -->
     <script src="{{ static_url('js/shading.js') }}"></script>
+    <script>window.VEHICLE_COMMENTS_PAGE = "orders_deliveries";</script>
+    <script src="{{ static_url('js/vehicle_comments.js') }}"></script>
     <script src="{{ static_url('js/orders_deliveries.js') }}"></script>
     {% if is_admin %}
     <script src="{{ static_url('js/settings_tabs.js') }}"></script>

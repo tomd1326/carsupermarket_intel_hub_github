@@ -114,7 +114,7 @@ def stock_list(request: Request, user: str = Depends(require_page('stock_list'))
 _STOCK_TABLE = "PRODUCT_VEHICLE_JOURNEY.CURRENT_STOCK"
 # Always fetched, shown or not: the Status and Missing filters, summary counts,
 # search, the interest-free row colour and the "Apex data updated" time read them.
-_STOCK_FIXED_COLUMNS = ["VEHICLE_STATUS", "PRICE_BAND",
+_STOCK_FIXED_COLUMNS = ["VEHICLE_STATUS", "PRICE_BAND", "AUTOVIEW_STOCK_ID",
                         "VRM", "MAKE_MODEL", "CAP_DERIVATIVE", "VEHICLE_UPDATED_AT",
                         "CAP_LIVE_CLEAN_LATEST", "AUTOTRADER_LATEST_RETAIL_VALUATION"]
 _STOCK_FORMATS = {"text", "number", "gbp", "pct", "date", "link", "status"}

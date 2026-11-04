@@ -53,6 +53,15 @@ def _to_float(value):
         return None
 
 
+@once_per_database
+def ensure_colour_column(conn) -> None:
+    """The colour Autotrader's /vehicles lookup gives. Called before anything
+    reads or writes it, so the evaluator does not fail on a database without it."""
+    with conn.cursor() as cur:
+        cur.execute("ALTER TABLE vehicles ADD COLUMN IF NOT EXISTS at_colour VARCHAR(50)")
+    conn.commit()
+
+
 def ensure_manual_check_columns(conn) -> None:
     """Add the columns manual (Assess Vehicle) checks need.
 
@@ -617,10 +626,11 @@ def fetch_known_vehicles(conn, vrms: list[str]) -> dict[str, dict]:
     if not vrms:
         return {}
 
+    ensure_colour_column(conn)
     with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
         cur.execute(
             """
-            SELECT vrm, at_description, at_factory_fitted_features, at_first_registration_date,
+            SELECT vrm, at_description, at_factory_fitted_features, at_first_registration_date, at_colour,
                    at_derivative_id, cap_capid, cap_capcode, cap_manufacturer, cap_model, cap_derivative,
                    cap_registration_date
             FROM vehicles WHERE vrm IN %s
@@ -723,12 +733,14 @@ def upsert_vehicles(conn, vehicles: list[dict]) -> None:
     if not vehicles:
         return
 
+    ensure_colour_column(conn)
     rows = [
         (
             v['vrm'],
             v.get('at_description'),
             v.get('at_factory_fitted_features'),
             v.get('at_first_registration_date'),
+            (v.get('at_colour') or None),
             v.get('at_derivative_id'),
             _to_int(v.get('cap_capid')),
             v.get('cap_capcode'),
@@ -745,7 +757,7 @@ def upsert_vehicles(conn, vehicles: list[dict]) -> None:
             cur,
             """
             INSERT INTO vehicles
-                (vrm, at_description, at_factory_fitted_features, at_first_registration_date,
+                (vrm, at_description, at_factory_fitted_features, at_first_registration_date, at_colour,
                  at_derivative_id, cap_capid, cap_capcode, cap_manufacturer, cap_model, cap_derivative,
                  cap_registration_date)
             VALUES %s
@@ -753,6 +765,7 @@ def upsert_vehicles(conn, vehicles: list[dict]) -> None:
                 at_description              = EXCLUDED.at_description,
                 at_factory_fitted_features  = EXCLUDED.at_factory_fitted_features,
                 at_first_registration_date  = COALESCE(vehicles.at_first_registration_date, EXCLUDED.at_first_registration_date),
+                at_colour                   = COALESCE(EXCLUDED.at_colour, vehicles.at_colour),
                 at_derivative_id            = COALESCE(vehicles.at_derivative_id, EXCLUDED.at_derivative_id),
                 cap_capid                   = COALESCE(vehicles.cap_capid, EXCLUDED.cap_capid),
                 cap_capcode                 = EXCLUDED.cap_capcode,
@@ -819,18 +832,20 @@ def save_manual_check(conn, vrm: str, mileage: int, checked_by: str, cap: dict, 
     change (derivative id, CAP ID, first registration) are kept once set.
     """
     at_found = bool(at.get('found'))
+    ensure_colour_column(conn)
     with conn.cursor() as cur:
         cur.execute(
             """
             INSERT INTO vehicles
-                (vrm, at_description, at_factory_fitted_features, at_first_registration_date,
+                (vrm, at_description, at_factory_fitted_features, at_first_registration_date, at_colour,
                  at_derivative_id, at_vin, cap_capid, cap_capcode, cap_manufacturer,
                  cap_model, cap_derivative, cap_registration_date)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT (vrm) DO UPDATE SET
                 at_description             = COALESCE(EXCLUDED.at_description, vehicles.at_description),
                 at_factory_fitted_features = COALESCE(EXCLUDED.at_factory_fitted_features, vehicles.at_factory_fitted_features),
                 at_first_registration_date = COALESCE(vehicles.at_first_registration_date, EXCLUDED.at_first_registration_date),
+                at_colour                  = COALESCE(EXCLUDED.at_colour, vehicles.at_colour),
                 at_derivative_id           = COALESCE(vehicles.at_derivative_id, EXCLUDED.at_derivative_id),
                 at_vin                     = COALESCE(vehicles.at_vin, EXCLUDED.at_vin),
                 cap_capid                  = COALESCE(vehicles.cap_capid, EXCLUDED.cap_capid),
@@ -845,6 +860,7 @@ def save_manual_check(conn, vrm: str, mileage: int, checked_by: str, cap: dict, 
                 at.get('description') if at_found else None,
                 at.get('factory_fitted_features') if at_found else None,
                 _parse_at_date(at.get('first_registered')) if at_found else None,
+                (at.get('colour') or None) if at_found else None,
                 at.get('derivative_id') if at_found else None,
                 (at.get('vin') or None) if at_found else None,
                 _to_int(cap.get('cap_id')),

@@ -1,6 +1,7 @@
 """Cars Bought helpers. Run from source_code/router/backend:
     poetry run pytest tests/test_cars_bought.py
 """
+import datetime
 import os
 import sys
 
@@ -11,14 +12,16 @@ import pytest
 from utils import cars_bought as cb
 
 
-STORED_CAR = {"cap_capid": 99, "cap_manufacturer": "VW", "cap_model": "Golf", "cap_derivative": "1.5 Life"}
+STORED_CAR = {"cap_capid": 99, "cap_manufacturer": "VW", "cap_model": "Golf", "cap_derivative": "1.5 Life",
+              "at_colour": "Grey", "at_first_registration_date": datetime.date(2025, 9, 30)}
 
 
 def test_stored_results_reuses_a_complete_stored_valuation_at_the_same_rounded_mileage():
     cached = {("AB12CDE", 20000): {"cap_live_clean": 9000, "cap_monthly_clean": 8000, "at_retail_valuation": 12000, "at_rating": 71.5}}
     out = cb.stored_results([("AB12CDE", 20300)], cached, {"AB12CDE": STORED_CAR})
     assert out == {"AB12CDE": {"cap_id": 99, "make": "VW", "model": "Golf", "derivative": "1.5 Life", "cap_clean": 9000.0,
-                               "at_retail_valuation": 12000.0, "at_rating": 71.5, "note": None, "from_store": True}}
+                               "at_retail_valuation": 12000.0, "at_rating": 71.5, "first_registered": "2025-09-30",
+                               "colour": "Grey", "note": None, "from_store": True}}
 
 
 def test_stored_results_uses_monthly_clean_when_there_is_no_live_clean():
@@ -32,6 +35,7 @@ def test_stored_results_uses_monthly_clean_when_there_is_no_live_clean():
     ([("AB12CDE", 20000)], {"cap_live_clean": 9000, "at_retail_valuation": None}, STORED_CAR),     # no Autotrader value
     ([("AB12CDE", 20000)], {"cap_live_clean": 9000, "at_retail_valuation": 12000}, {"cap_capid": None}),   # no CAP ID
     ([("AB12CDE", 50000)], {"cap_live_clean": 9000, "at_retail_valuation": 12000}, STORED_CAR),    # other mileage
+    ([("AB12CDE", 20000)], {"cap_live_clean": 9000, "at_retail_valuation": 12000}, {**STORED_CAR, "at_colour": None}),   # no colour
 ])
 def test_stored_results_leaves_an_incomplete_car_for_a_live_call(items, val, car):
     assert cb.stored_results(items, {("AB12CDE", 20000): val}, {"AB12CDE": car}) == {}
