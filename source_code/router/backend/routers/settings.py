@@ -22,6 +22,7 @@ from utils.db_utils import (get_database_connection, get_settings, save_settings
                             user_sessions_ready, read_session_settings, read_user_details,
                             close_sessions, SESSION_LIST_LIMIT, upsert_user,
                             load_user_details, update_user_details, read_role_users, set_user_role,
+                            USER_PERMISSIONS, read_user_permissions, set_user_permissions,
                             load_all_page_access, set_page_access_many,
                             delete_user_and_access, ALWAYS_ENABLED_USERS,
                             APPEARANCE_COLOUR_SETTINGS,
@@ -519,7 +520,7 @@ def test_microsoft_photo(email: str = Form(...), user: str = Depends(get_current
     import requests
     from utils.email_client import _get_token
     try:
-        token = _get_token()
+        token = _get_token(use_mailer=False)
     except Exception as e:
         return {"status": "error", "message": f"Could not get a Graph token: {str(e)[:300]}"}
     # The token's 'roles' claim lists the application permissions granted.
@@ -1038,8 +1039,8 @@ def _users_source(q) -> tuple:
 
 
 def _read_prod_users() -> tuple:
-    """(people, last_logins, inactive, buyers, stored_access) from prod's
-    database. Read only: nothing is created or changed there. inactive is the
+    """(people, last_logins, inactive, buyers, stored_access, permissions) from
+    prod's database. Read only: nothing is created or changed there. inactive is the
     usernames that have not set a password yet; buyers those with the Buyer role."""
     with get_prod_activity_connection() as conn:
         try:
@@ -1051,10 +1052,11 @@ def _read_prod_users() -> tuple:
                 if username in people:
                     people[username].update(extra)
             stored_access = load_all_page_access(conn)
+            permissions = read_user_permissions(conn, ensure=False)
         except Exception:
             conn.rollback()
             raise
-    return people, last_logins, inactive, buyers, stored_access
+    return people, last_logins, inactive, buyers, stored_access, permissions
 
 
 @router.get("/settings/users", response_class=HTMLResponse)
@@ -1071,13 +1073,15 @@ def users_page(request: Request, user: str = Depends(get_current_user)):
     # None means it could not be read: the popup then hides the ticks, so a save
     # cannot overwrite access nobody was shown.
     stored_access = None
+    # The same for the Permissions ticks.
+    stored_permissions = None
     login_mode = 'both'
     link_settings = {}
     error = None
     if viewing_prod:
         # Never falls back to this environment's users under a Prod heading.
         try:
-            people, last_logins, inactive, buyers, stored_access = _read_prod_users()
+            people, last_logins, inactive, buyers, stored_access, stored_permissions = _read_prod_users()
             all_users = sorted(people)
         except Exception as e:
             logger.warning("Failed to load prod user accounts: %s", e)
@@ -1094,6 +1098,7 @@ def users_page(request: Request, user: str = Depends(get_current_user)):
                     if username in people:
                         people[username].update(extra)
                 stored_access = load_all_page_access(conn)
+                stored_permissions = read_user_permissions(conn)
         except Exception as e:
             logger.warning("Failed to load user accounts data: %s", e)
         all_users = sorted(VALID_USERS)
@@ -1125,6 +1130,8 @@ def users_page(request: Request, user: str = Depends(get_current_user)):
         "all_users": all_users, "people": people,
         "last_logins": last_logins, "error": error,
         "pages": pages, "access": access, "access_loaded": stored_access is not None,
+        "permission_list": USER_PERMISSIONS, "user_permissions": stored_permissions or {},
+        "permissions_loaded": stored_permissions is not None,
         "can_view_prod": can_view_prod, "source": source, "viewing_prod": viewing_prod,
         "this_env": core._ENV,
         "sections": SETTINGS_SECTIONS, "active_section": "users",
@@ -1140,7 +1147,7 @@ def users_export(request: Request, user: str = Depends(get_current_user)):
     can_view_prod, source = _users_source(request.query_params)
     try:
         if can_view_prod and source == 'prod':
-            people, last_logins, _inactive, _buyers, _access = _read_prod_users()
+            people, last_logins, _inactive, _buyers, _access, _permissions = _read_prod_users()
             usernames = sorted(people)
         else:
             with get_database_connection() as conn:
@@ -1631,7 +1638,7 @@ def page_access_batch_page(request: Request, user: str = Depends(get_current_use
     people, inactive, stored_access, error = {}, set(), None, None
     try:
         if viewing_prod:
-            people, _logins, inactive, _buyers, stored_access = _read_prod_users()
+            people, _logins, inactive, _buyers, stored_access, _permissions = _read_prod_users()
         else:
             with get_database_connection() as conn:
                 people = load_user_details(conn)
@@ -1766,7 +1773,7 @@ def _end_prod_sessions(conn, reason: str, target: str) -> int:
 
 
 def _save_prod_user(mode: str, target: str, details: dict, password: str, user: str, is_buyer: bool = False,
-                    org: dict = None, ticked: set = None):
+                    org: dict = None, ticked: set = None, permissions: set = None):
     """save_user against prod's database. Prod's containers pick the change up
     when their user cache next reloads (within about a minute)."""
     if mode not in ('add', 'edit'):
@@ -1788,6 +1795,8 @@ def _save_prod_user(mode: str, target: str, details: dict, password: str, user: 
                 add_pending_user(conn, target)
             update_user_details(conn, {target: details}, ensure=False)
             set_user_role(conn, target, 'buyer', is_buyer)
+            if permissions is not None:
+                set_user_permissions(conn, target, permissions)
             update_user_org(conn, target, org or {})
             _save_user_access(conn, target, ticked, user, is_new=mode == 'add')
         except Exception:
@@ -1821,6 +1830,8 @@ def save_user(
     company_type: str = Form(default=""),
     access: list[str] = Form(default=[]),
     access_shown: str = Form(default=""),
+    permissions: list[str] = Form(default=[]),
+    permissions_shown: str = Form(default=""),
     user: str = Depends(get_current_user),
 ):
     """The Add / Edit user popup on Settings > User Accounts.
@@ -1828,6 +1839,7 @@ def save_user(
     left blank. A changed password ends that user's open sessions.
     access holds one page key per ticked box; access_shown says the ticks were
     on the page, so none ticked means no pages rather than leave as it is.
+    permissions and permissions_shown work the same way.
     source 'prod' (local and dev only) saves to prod's database instead."""
     if user != ADMIN_USERNAME:
         raise HTTPException(status_code=403)
@@ -1848,8 +1860,12 @@ def save_user(
     if ticked and ticked - ALL_PAGE_KEYS:
         logger.warning("Page access: rejected unknown keys %s for %s", sorted(ticked - ALL_PAGE_KEYS), target)
         return back(pwderr="Unknown+page")
+    held = set(permissions) if permissions_shown else None
+    if held and held - set(USER_PERMISSIONS):
+        logger.warning("Permissions: rejected unknown keys %s for %s", sorted(held - set(USER_PERMISSIONS)), target)
+        return back(pwderr="Unknown+permission")
     if to_prod:
-        return _save_prod_user(mode, target, details, password, user, buyer, org, ticked)
+        return _save_prod_user(mode, target, details, password, user, buyer, org, ticked, held)
 
     if mode == 'add':
         if target in VALID_USERS:
@@ -1866,11 +1882,15 @@ def save_user(
                 pwd_hash = add_pending_user(conn, target)
             update_user_details(conn, {target: details})
             set_user_role(conn, target, 'buyer', buyer)
+            if held is not None:
+                set_user_permissions(conn, target, held)
             ensure_user_nexus_columns(conn)
             update_user_org(conn, target, org)
             saved_access = _save_user_access(conn, target, ticked, user, is_new=True)
         VALID_USERS[target] = pwd_hash
         core.USER_PAGE_ACCESS[target] = saved_access | {CONFIGURED_MARKER}
+        if held is not None:
+            core.USER_PERMISSIONS_HELD[target] = held
         core.reload_user_details()
         logger.info("User %s created by %s%s", target, user, "" if password else " (waiting for activation)")
         return _user_redirect("users", **{'useradded' if password else 'userpending': target})
@@ -1886,6 +1906,10 @@ def save_user(
     with get_database_connection() as conn:
         update_user_details(conn, {target: details})
         set_user_role(conn, target, 'buyer', buyer)
+        if held is not None:
+            set_user_permissions(conn, target, held)
+            # This container straight away; others within PERMISSION_TTL_SECONDS.
+            core.USER_PERMISSIONS_HELD[target] = held
         ensure_user_nexus_columns(conn)
         update_user_org(conn, target, org)
         saved_access = _save_user_access(conn, target, ticked, user)
@@ -1955,14 +1979,47 @@ def make_password_link(
     def filled(text: str) -> str:
         for placeholder, value in fill.items():
             text = text.replace(placeholder, value)
-        return text.replace("\r\n", "\n").replace("\n", "\r\n")   # Outlook wants Windows line breaks
+        return text
 
+    from utils.email_client import configured_sender
     return JSONResponse({
         "url": url, "purpose": purpose, "expires": expires,
         "email": person.get('email') or '',
+        "sender": configured_sender(),
         "subject": filled(wording[f'password_email_subject_{purpose}']),
         "body": filled(wording[f'password_email_body_{purpose}']),
     })
+
+
+@router.post("/settings/user/send-password-email")
+def send_password_email(
+    request: Request,
+    username: str = Form(...),
+    subject: str = Form(...),
+    body: str = Form(...),
+    source: str = Form(default="this"),
+    user: str = Depends(get_current_user),
+):
+    """Send the activation or reset email made by /settings/user/password-link.
+    The address comes from the user's record, not from the page."""
+    if user != ADMIN_USERNAME:
+        raise HTTPException(status_code=403)
+    from utils.email_client import send_email, configured_sender, text_to_html
+    target = username.strip()
+    try:
+        with (get_prod_activity_connection() if _writes_to_prod(source) else get_database_connection()) as conn:
+            address = (read_user_details(conn).get(target) or {}).get('email') or ''
+        if not address:
+            return JSONResponse({"error": "This user has no email address"}, status_code=400)
+        sender = configured_sender()
+        send_email(address, " ".join(subject.split()), text_to_html(body), sender=sender)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("Could not send the password email to %s", target)
+        return JSONResponse({"error": f"Not sent: {str(e)[:300]}"}, status_code=500)
+    logger.info("Password email for %s sent to %s by %s", target, address, user)
+    return JSONResponse({"email": address, "sender": sender})
 
 
 @router.post("/settings/password-links")

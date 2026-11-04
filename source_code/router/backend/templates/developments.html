@@ -122,6 +122,11 @@
                 <div class="card-header fw-semibold">Generate Email</div>
                 <div class="card-body">
                     <div class="mb-3">
+                        <label class="form-label mb-1" for="email-to">Send To</label>
+                        <input class="form-control" id="email-to" autocomplete="off">
+                        <div class="form-text">Separate addresses with semicolons. Everyone is sent a blind copy, so nobody sees the list.</div>
+                    </div>
+                    <div class="mb-3">
                         <label class="form-label mb-1" for="email-subject">Subject</label>
                         <input class="form-control" id="email-subject" maxlength="200" autocomplete="off">
                     </div>
@@ -130,11 +135,11 @@
                         <textarea class="form-control" id="email-intro" rows="4"></textarea>
                     </div>
                     <div class="d-flex align-items-center gap-2 flex-wrap mb-2">
-                        <button type="button" class="btn btn-primary" id="email-outlook-btn" disabled><i class="fas fa-envelope me-1"></i>Open In Outlook</button>
+                        <button type="button" class="btn btn-primary" id="email-send-btn" disabled><i class="fas fa-envelope me-1"></i>Send Email</button>
                         <button type="button" class="btn btn-outline-secondary" id="email-copy-btn" disabled><i class="fas fa-copy me-1"></i>Copy Email</button>
                         <span class="small" id="email-note"></span>
                     </div>
-                    <div class="form-text mb-3">Open In Outlook downloads an email file: open it from your browser's downloads and it opens as a draft to address and send. If it opens as a received message instead, use Copy Email and paste into a new email.</div>
+                    <div class="form-text mb-3">Send Email asks you to confirm, then sends from the address in Settings &gt; Email.</div>
                     <iframe id="email-preview" title="Email Preview" sandbox=""></iframe>
                 </div>
             </div>
@@ -148,6 +153,11 @@
                                 <label class="form-label mb-1" for="t-site_url">Website Address</label>
                                 <input class="form-control" id="t-site_url" data-template="site_url" autocomplete="off">
                                 <div class="form-text">Every link in the email starts with this, whichever site you generate it from. Must start https://</div>
+                            </div>
+                            <div class="template-wide">
+                                <label class="form-label mb-1" for="t-default_send_to">Default Send To</label>
+                                <input class="form-control" id="t-default_send_to" data-template="default_send_to" autocomplete="off">
+                                <div class="form-text">Fills the Send To box when the page opens.</div>
                             </div>
                             <div>
                                 <label class="form-label mb-1" for="t-subject">Default Subject</label>

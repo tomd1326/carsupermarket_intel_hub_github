@@ -75,19 +75,6 @@
         .hist-table th { background: #f0f4f8; font-weight: 600; padding: 6px 8px; white-space: nowrap; }
         .inbox-bar { height: 6px; min-width: 150px; border-radius: 3px; background: #e9eef5; overflow: hidden; margin-bottom: 3px; }
         .inbox-bar > div { height: 100%; background: var(--c-primary); border-radius: 3px; }
-        /* All Vehicles Bought. Borders are not collapsed, as collapsed borders do
-           not stay with a sticky heading when the rows scroll. */
-        .all-scroll { max-height: 70vh; overflow: auto; }
-        .all-table { font-size: 0.8rem; width: max-content; min-width: 100%; border-collapse: separate; border-spacing: 0;
-                     border-top: 1px solid var(--cb-grid); border-left: 1px solid var(--cb-grid); }
-        .all-table th, .all-table td { border-right: 1px solid var(--cb-grid); border-bottom: 1px solid var(--cb-grid); padding: 3px 6px; white-space: nowrap; }
-        .all-table thead { position: sticky; top: 0; z-index: 2; }
-        .all-table th { background: var(--c-table-header-bg, #dbeafe); color: var(--c-table-header-text, #1e3a5f); font-weight: 600; }
-        .all-table th[data-sort] { cursor: pointer; user-select: none; }
-        .all-table th input { font-size: 0.75rem; height: 24px; padding: 1px 4px; min-width: 60px; }
-        .all-table td input, .all-table td select { font-size: 0.8rem; height: 24px; padding: 1px 4px; background-color: transparent; border-color: transparent; min-width: 70px; }
-        .all-table td input:focus, .all-table td select:focus { background-color: #fff; }
-        .all-table td.notes-wide input { min-width: 160px; }
         .metric-editor { border: 1px solid var(--c-border); border-radius: var(--radius-md); padding: 12px; }
         .metric-row { display: flex; gap: 6px; align-items: center; margin-bottom: 4px; }
         .metric-row select, .metric-row input { flex: 1; min-width: 0; }
@@ -125,6 +112,7 @@
                 <div class="card mb-3 importer">
                     <div class="card-body">
                         <div class="importer-row">
+                            <a class="btn btn-outline-secondary fw-bold" href="{{ BASE_URL }}/cars-bought"><i class="fas fa-table me-1"></i>All Cars Bought</a>
                             <button type="button" class="btn btn-primary fw-bold" id="openUploadBtn"><i class="fas fa-file-invoice me-1"></i>Upload Invoice</button>
                             <button type="button" class="btn btn-outline-primary fw-bold" id="openEvaluatorBtn"><i class="fas fa-paste me-1"></i>From Evaluator</button>
                             <button type="button" class="btn btn-outline-primary fw-bold" id="inboxCheckBtn"{% if not inbox_enabled %} style="display:none;"{% endif %} title="Look for new invoices in the SharePoint folder"><i class="fas fa-folder-open me-1"></i>Check Folder</button>
@@ -218,27 +206,6 @@
                             <button class="btn btn-outline-secondary" id="clearBtn">Clear</button>
                             <button class="btn btn-success fw-bold px-4" id="submitBtn"><i class="fas fa-check me-1"></i>Confirm And Submit</button>
                         </div>
-                    </div>
-                </div>
-
-                <div class="card mb-3">
-                    <div class="card-body">
-                        <div class="d-flex justify-content-between align-items-center mb-2 flex-wrap gap-2">
-                            <div class="section-title mb-0">All Vehicles Bought</div>
-                            <div class="d-flex gap-2 align-items-center small">
-                                <span class="text-muted text-nowrap" id="allCount"></span>
-                                <input id="allSearch" class="form-control form-control-sm" style="width:240px;" placeholder="Search All Columns">
-                                <button class="btn btn-sm btn-outline-secondary text-nowrap" id="allClearBtn">Clear Filters</button>
-                            </div>
-                        </div>
-                        <div id="allMetricErrors" class="small text-danger mb-1" style="display:none;"></div>
-                        <div class="all-scroll">
-                            <table class="all-table">
-                                <thead id="allHead"></thead>
-                                <tbody id="allBody"><tr><td class="text-muted">Loading...</td></tr></tbody>
-                            </table>
-                        </div>
-                        <div class="text-center mt-2"><button class="btn btn-sm btn-outline-primary" id="allMoreBtn" style="display:none;">Show More</button></div>
                     </div>
                 </div>
 
@@ -539,6 +506,7 @@
     <script src="{{ static_url('js/searchable_select.js') }}"></script>
     <script src="{{ static_url('js/settings_tabs.js') }}"></script>
     <script src="{{ static_url('js/column_editor.js') }}"></script>
+    <script src="{{ static_url('js/cars_bought_common.js') }}"></script>
     <script src="{{ static_url('js/cars_bought.js') }}"></script>
     {% if is_admin %}
     <script src="{{ static_url('js/vehicle_metrics.js') }}"></script>

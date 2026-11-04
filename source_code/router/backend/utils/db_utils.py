@@ -194,16 +194,15 @@ SETTINGS_DEFAULTS = {
     'password_link_hours':              48,
     'password_link_base_prod':          'https://uk-intel-hub.aramis-group.eu',
     'password_link_base_dev':           'https://dev-uk-intel-hub.aramis-group.eu',
-    # The email the Users page opens in Outlook. Placeholders: {first_name}, {link}, {expires}.
-    # The sign-off name is Outlook's own default signature, added when the email opens.
+    # The email the Users page sends. Placeholders: {first_name}, {link}, {expires}.
     'password_email_subject_activate':  'Your Vehicle List Evaluator Account',
     'password_email_body_activate': (
         'Hi {first_name},\n\n'
         'Your Vehicle List Evaluator account has been created. Please use the link below to set your password:\n\n'
         '{link}\n\n'
         'The link works once and expires on {expires}.\n\n'
-        'If the link does not work, reply to this email and I will send you a new one.\n\n'
-        'Kind regards,\n'
+        'If the link does not work, reply to this email and we will send you a new one.\n\n'
+        'Kind regards,\nIntelligence Hub\n'
     ),
     'password_email_subject_reset':     'Reset Your Vehicle List Evaluator Password',
     'password_email_body_reset': (
@@ -211,8 +210,8 @@ SETTINGS_DEFAULTS = {
         'Please use the link below to set a new password:\n\n'
         '{link}\n\n'
         'The link works once and expires on {expires}.\n\n'
-        'If the link does not work, reply to this email and I will send you a new one.\n\n'
-        'Kind regards,\n'
+        'If the link does not work, reply to this email and we will send you a new one.\n\n'
+        'Kind regards,\nIntelligence Hub\n'
     ),
     'presence_max_circles':             5,
     'presence_border_width':            2,
@@ -1217,6 +1216,14 @@ def read_user_details(conn) -> dict:
 
 USER_ROLES = ('buyer',)
 
+# Special things a user can do, ticked under Permissions on Settings > User
+# Accounts and checked with core.user_has_permission. Held in user_roles too.
+# Add a line here for a new one: it needs code behind it, so the list cannot be
+# edited in the website. Key at most 30 characters: (name, what it allows).
+USER_PERMISSIONS = {
+    'approve_site_changes': ('Approve Site Changes', 'can approve a vehicle moving to another site'),
+}
+
 
 @once_per_database
 def _ensure_user_roles_table(conn) -> None:
@@ -1241,6 +1248,35 @@ def read_role_users(conn, role: str, ensure: bool = True) -> set:
     except psycopg2.ProgrammingError:      # no user_roles table on that database
         conn.rollback()
         return set()
+
+
+def read_user_permissions(conn, ensure: bool = True) -> dict:
+    """{username: set(permission key)}. ensure=False reads only (prod from local
+    or dev): a database without the table gives an empty dict."""
+    if ensure:
+        _ensure_user_roles_table(conn)
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT username, role FROM user_roles WHERE role = ANY(%s)", (list(USER_PERMISSIONS),))
+            rows = cur.fetchall()
+    except psycopg2.ProgrammingError:      # no user_roles table on that database
+        conn.rollback()
+        return {}
+    out = {}
+    for username, role in rows:
+        out.setdefault(username, set()).add(role)
+    return out
+
+
+def set_user_permissions(conn, username: str, permissions: set) -> None:
+    """Replace this user's permissions. Other roles (buyer) are left alone."""
+    _ensure_user_roles_table(conn)
+    with conn.cursor() as cur:
+        cur.execute("DELETE FROM user_roles WHERE username = %s AND role = ANY(%s)",
+                    (username, list(USER_PERMISSIONS)))
+        for role in sorted(permissions):
+            cur.execute("INSERT INTO user_roles (username, role) VALUES (%s, %s)", (username, role))
+    conn.commit()
 
 
 def set_user_role(conn, username: str, role: str, on: bool) -> None:
@@ -1753,6 +1789,12 @@ def delete_user_and_access(conn, username: str) -> None:
             except psycopg2.errors.UndefinedTable:
                 # No access has ever been saved, so there is nothing to clear.
                 cur.execute("ROLLBACK TO SAVEPOINT clear_page_access")
+            # Or a recreated username would get the old permissions back.
+            cur.execute("SAVEPOINT clear_roles")
+            try:
+                cur.execute("DELETE FROM user_roles WHERE username = %s", (username,))
+            except psycopg2.errors.UndefinedTable:
+                cur.execute("ROLLBACK TO SAVEPOINT clear_roles")
         conn.commit()
     except Exception:
         conn.rollback()

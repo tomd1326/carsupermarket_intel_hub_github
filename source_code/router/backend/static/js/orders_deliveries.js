@@ -13,6 +13,8 @@ const BASE_URL = window.BASE_URL;
         // type: 'text' | 'num' | 'money' | 'pct' | 'date' | 'link' (link uses linkKey)
         const COLS = [
             { key: 'vrm', label: 'VRM' },
+            // The vehicle's notes (vehicle_comments.js). Left out of the CSV.
+            { key: 'notes', label: 'Notes', type: 'notes', derived: () => '' },
             { key: 'order_date', label: 'Order Date', type: 'date' },
             { key: 'delivered', label: 'Delivered', type: 'date' },
             // Make, model and derivative in one column — built by vehicleDesc()
@@ -1120,6 +1122,7 @@ const BASE_URL = window.BASE_URL;
             const body = rows.length
                 ? rows.map(r => '<tr>' + MODAL_COLS.map(c => {
                     const v = cellValue(c, r);
+                    if (c.type === 'notes') return `<td>${VehicleComments.button(r.autoview_stock_id, r.vrm)}</td>`;
                     // Link columns (Apex Vehicle/Order/Invoice) render as an icon, same as
                     // the vehicle grid — otherwise the raw URL prints as text.
                     if (c.type === 'link') {
@@ -1542,6 +1545,7 @@ const BASE_URL = window.BASE_URL;
 
             const body = rows.map(r => '<tr>' + COLS.map(c => {
                 const v = cellValue(c, r);
+                if (c.type === 'notes') return `<td>${VehicleComments.button(r.autoview_stock_id, r.vrm)}</td>`;
                 if (c.type === 'link') {
                     return v ? `<td><a href="${escapeHtml(v)}" target="_blank" rel="noopener"><i class="fas fa-external-link-alt"></i></a></td>` : '<td></td>';
                 }
@@ -1604,8 +1608,9 @@ const BASE_URL = window.BASE_URL;
         // columns (COLS === MODAL_COLS), same row/column shape, just a
         // different row source and filename suffix.
         function downloadCsvRows(rows, filenameSuffix) {
-            const header = COLS.map(c => csvEscape(c.label)).join(',');
-            const lines = rows.map(r => COLS.map(c => {
+            const csvCols = COLS.filter(c => c.type !== 'notes');
+            const header = csvCols.map(c => csvEscape(c.label)).join(',');
+            const lines = rows.map(r => csvCols.map(c => {
                 // Raw values in the CSV (not the formatted display) so numbers stay numeric
                 return csvEscape(cellValue(c, r));
             }).join(','));

@@ -95,6 +95,7 @@ def _write_to_db(supplier_id: int, supplier_name: str, vehicle_rows, api_results
                     'at_description': result.get('at_description'),
                     'at_factory_fitted_features': result.get('at_factory_fitted_features'),
                     'at_first_registration_date': result.get('at_first_registration_date'),
+                    'at_colour': result.get('at_colour'),
                     'at_derivative_id': result.get('at_derivative_id'),
                     'cap_capid': result.get('cap_capid'),
                     'cap_capcode': result.get('cap_capcode'),
@@ -313,6 +314,7 @@ def process_file_with_cache(
                     at_market_condition = _to_float(at_row.get('at_market_condition'))
                     at_factory_fitted_features = at_row.get('at_factory_fitted_feature_names') or None
                     at_first_registration_date = at_row.get('at_at_first_registration_date') or None
+                    at_colour = at_row.get('at_at_colour') or None
                     at_derivative_id = at_row.get('at_derivative_id') or None
                     at_description = description if has_at_data else None
                 else:
@@ -320,6 +322,7 @@ def process_file_with_cache(
                     at_description = known.get('at_description')
                     at_factory_fitted_features = known.get('at_factory_fitted_features')
                     at_first_registration_date = known.get('at_first_registration_date')
+                    at_colour = known.get('at_colour')
                     at_derivative_id = known.get('at_derivative_id')
                     at_retail_valuation = cached.get('at_retail_valuation')
                     at_rating = cached.get('at_rating')
@@ -357,6 +360,7 @@ def process_file_with_cache(
                     'at_description': at_description,
                     'at_factory_fitted_features': at_factory_fitted_features,
                     'at_first_registration_date': at_first_registration_date,
+                    'at_colour': at_colour,
                     'at_derivative_id': at_derivative_id,
                     'at_retail_valuation': at_retail_valuation,
                     'at_rating': at_rating,

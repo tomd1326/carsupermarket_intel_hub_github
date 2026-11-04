@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import html
 import logging
+import re
 import time
 import requests
 
@@ -9,17 +11,17 @@ from utils.sharepoint_client import _TOKEN_CACHE
 
 logger = logging.getLogger(__name__)
 
-# Same app registration and secret the SharePoint client uses — one set of
-# credentials for everything this app does against Microsoft Graph. Sending mail
-# needs the Mail.Send APPLICATION permission granted on that registration by an
-# Azure admin; without it Graph answers 403 and nothing is sent.
+# Mail is sent as the "Website Mailer" app registration, whose login is stored
+# as the mailer_* keys in the same secret the SharePoint client uses. It can only
+# send from the Intel-hub shared mailbox (set up by Intrasource); the client
+# secret expires 03/11/2027 and needs replacing before then.
 SECRET_NAME = "prod/carsupermarket/sharepoint/credentials"
 
 # The mailbox mail is sent as. Graph sends on behalf of a real mailbox rather
 # than an anonymous relay, so this address must exist in the tenant and the app
 # must be allowed to send as it. Set in Settings > Email; this is only the
 # fallback when that box is blank.
-DEFAULT_SENDER = "tom.drayson@carsupermarket.com"
+DEFAULT_SENDER = "Intel-hub@carsupermarket.com"
 
 
 def configured_sender() -> str:
@@ -34,12 +36,16 @@ def configured_sender() -> str:
     return sender.strip() or DEFAULT_SENDER
 
 
-def _get_token() -> str:
-    """Client-credentials token for Graph, sharing SharePointClient's cache."""
+def _get_token(use_mailer: bool = True) -> str:
+    """Client-credentials token for Graph, sharing SharePointClient's cache.
+
+    use_mailer=True logs in as the Website Mailer app registration (the
+    mailer_* keys in the secret); False uses the SharePoint app's login."""
     secret = get_secret(SECRET_NAME)
-    tenant_id = secret["tenant_id"]
-    client_id = secret["client_id"]
-    client_secret = secret["client_secret"]
+    prefix = "mailer_" if use_mailer else ""
+    tenant_id = secret[prefix + "tenant_id"]
+    client_id = secret[prefix + "client_id"]
+    client_secret = secret[prefix + "client_secret"]
 
     cache_key = (tenant_id, client_id)
     cached = _TOKEN_CACHE.get(cache_key)
@@ -61,8 +67,15 @@ def _get_token() -> str:
     return token
 
 
+def text_to_html(text: str) -> str:
+    """Plain wording as email HTML: line breaks kept, web addresses clickable."""
+    escaped = html.escape(text.replace("\r\n", "\n"))
+    linked = re.sub(r"https?://[^\s<]+", lambda m: f'<a href="{m.group(0)}">{m.group(0)}</a>', escaped)
+    return linked.replace("\n", "<br>")
+
+
 def send_email(to: str | list[str], subject: str, body_html: str,
-               sender: str | None = None) -> None:
+               sender: str | None = None, bcc: list[str] | None = None) -> None:
     """
     Send one email through Microsoft Graph.
 
@@ -70,6 +83,7 @@ def send_email(to: str | list[str], subject: str, body_html: str,
     failed send matters — it is never swallowed here.
     """
     recipients = [to] if isinstance(to, str) else list(to)
+    bcc = list(bcc or [])
     if not recipients:
         raise ValueError("send_email needs at least one recipient")
 
@@ -84,6 +98,7 @@ def send_email(to: str | list[str], subject: str, body_html: str,
                 "subject": subject,
                 "body": {"contentType": "HTML", "content": body_html},
                 "toRecipients": [{"emailAddress": {"address": a}} for a in recipients],
+                "bccRecipients": [{"emailAddress": {"address": a}} for a in bcc],
             },
             "saveToSentItems": True,
         },
@@ -95,4 +110,4 @@ def send_email(to: str | list[str], subject: str, body_html: str,
     if resp.status_code >= 400:
         logger.error("Graph sendMail failed (%s): %s", resp.status_code, resp.text[:500])
     resp.raise_for_status()
-    logger.info("Sent email '%s' to %s", subject, ", ".join(recipients))
+    logger.info("Sent email '%s' to %s", subject, ", ".join(recipients + bcc))

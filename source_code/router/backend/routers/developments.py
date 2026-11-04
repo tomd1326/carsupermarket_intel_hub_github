@@ -6,9 +6,10 @@ is admin-only, so What's New is where the people who get the email can read more
 import logging
 
 from fastapi import APIRouter, Request, Depends, HTTPException
-from fastapi.responses import HTMLResponse, RedirectResponse, Response
+from fastapi.responses import HTMLResponse, RedirectResponse
 
 from utils import developments as dv
+from utils import email_client
 from .core import BASE_URL, templates, get_current_user, is_admin, page_name, user_can, _track, PageRedirect
 from .page_registry import PAGES, ALL_PAGE_KEYS
 from .settings import SETTINGS_SECTIONS
@@ -55,6 +56,7 @@ def developments_data(request: Request, user: str = Depends(get_current_user)):
         "types": dv.type_list(template, developments),
         "pages": [{"key": key, "name": page["name"]} for key, page in _pages().items()],
         "emails": dv.list_emails(),
+        "sender": email_client.configured_sender(),
     }
 
 
@@ -138,17 +140,45 @@ def developments_email_get(email_id: int, request: Request, user: str = Depends(
     return stored
 
 
-@router.get("/settings/developments/email/{email_id}/download")
-def developments_email_download(email_id: int, request: Request, user: str = Depends(get_current_user)):
+def _send(subject: str, html: str, recipients: list, user: str) -> dict:
+    """Everyone goes on BCC, so nobody sees the list or can reply to all of it."""
+    sender = email_client.configured_sender()
+    try:
+        email_client.send_email(sender, subject, html, sender=sender, bcc=recipients)
+    except Exception as e:
+        logger.exception("Development email '%s' could not be sent", subject)
+        return {"status": "error", "message": f"Not sent: {str(e)[:300]}"}
+    logger.info("Development email '%s' sent to %s people by %s", subject, len(recipients), user)
+    return {"status": "ok", "message": f"Sent from {sender} to {len(recipients)} people."}
+
+
+@router.post("/settings/developments/email/send")
+def developments_email_send(request: Request, payload: dict, user: str = Depends(get_current_user)):
     _admin(user)
+    try:
+        recipients = dv.clean_recipients((payload or {}).get("to"))
+        subject, intro, developments, ids, built = _build(payload)
+    except ValueError as e:
+        return {"status": "error", "message": str(e)}
+    problem = dv.email_problem(ids, developments)
+    if problem:
+        return {"status": "error", "message": problem}
+    dv.record_email(subject, intro, developments, built, user)
+    return _send(subject, built["html"], recipients, user)
+
+
+@router.post("/settings/developments/email/{email_id}/send")
+def developments_email_resend(email_id: int, request: Request, payload: dict, user: str = Depends(get_current_user)):
+    """Send a past email again, exactly as it was kept."""
+    _admin(user)
+    try:
+        recipients = dv.clean_recipients((payload or {}).get("to"))
+    except ValueError as e:
+        return {"status": "error", "message": str(e)}
     stored = dv.get_email(email_id)
     if stored is None:
         raise HTTPException(status_code=404, detail="That email no longer exists.")
-    return Response(
-        content=dv.build_eml(stored["subject"], stored["html"], stored["text"]),
-        media_type="message/rfc822",
-        headers={"Content-Disposition": f'attachment; filename="{dv.eml_filename(stored["subject"])}"'},
-    )
+    return _send(stored["subject"], stored["html"], recipients, user)
 
 
 @router.get("/whats-new", response_class=HTMLResponse)

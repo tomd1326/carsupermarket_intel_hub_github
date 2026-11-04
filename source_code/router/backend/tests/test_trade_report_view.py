@@ -4,6 +4,12 @@ import pytest
 from routers import trade_report as tr
 
 
+@pytest.mark.parametrize("colour,expected", [("#AB12cd", "#AB12cd"), ("red", "#fff3b0"), ("#123", "#fff3b0"), (None, "#fff3b0"),
+                                             ("#123456;}", "#fff3b0")])
+def test_filter_colour_must_be_a_full_hex_colour(colour, expected):
+    assert tr._clean_filter_colour(colour) == expected
+
+
 def _col(column="vrm", **extra):
     return {"column": column, "label": "", "format": "text", "decimals": 0, "summary": "none", **extra}
 

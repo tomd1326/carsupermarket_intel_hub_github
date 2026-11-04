@@ -15,8 +15,9 @@
     <!-- The saved font size is rendered here so the page paints at the right
          size straight away instead of being resized by JS after load. -->
     <style>
-        :root { --page-font: {{ font_size }}px; }
+        :root { --page-font: {{ font_size }}px; --filter-on: {{ filter_colour }}; --site-changed: {{ site_changed_colour }}; }
     </style>
+    <link href="{{ static_url('css/vehicle_comments.css') }}" rel="stylesheet">
     <link href="{{ static_url('css/trade_report.css') }}" rel="stylesheet">
 </head>
 <body>
@@ -25,6 +26,11 @@
             <button class="btn btn-refresh ms-2" id="refresh-btn" onclick="refreshData()" title="Reload the latest data from Snowflake">
                 <i class="fas fa-rotate-right"></i> Refresh Data
             </button>
+            {% if can_change_sites %}
+            <button class="btn btn-edit ms-2" id="site-changes-btn">
+                <i class="fas fa-location-dot"></i> Site Changes
+            </button>
+            {% endif %}
             {% if is_admin %}
             <button class="btn btn-edit ms-2" onclick="TV.openSettings()">
                 <i class="fas fa-cog"></i> Settings
@@ -47,16 +53,16 @@
                 <div class="control-group">
                     <span class="control-label">View</span>
                     <div class="lens-toggle" id="view-toggle">
-                        <button data-view="month_site" class="active">Month By Site</button>
+                        <button data-view="vehicles" class="active">Vehicles</button>
+                        <button data-view="month_site">Month By Site</button>
                         <button data-view="month_auction">Month By Auction</button>
                         <button data-view="year_month">Year By Month</button>
                         <button data-view="year_site">Year By Site</button>
                         <button data-view="year_auction">Year By Auction</button>
-                        <button data-view="vehicles">Vehicles</button>
                     </div>
                 </div>
                 <div class="control-group">
-                    <span class="control-label" id="period-label">Month</span>
+                    <span class="control-label" id="period-label">Period</span>
                     <select class="form-select form-select-sm period-select" id="period-select" disabled></select>
                 </div>
                 <!-- Set, this replaces the period above on every view. -->
@@ -67,24 +73,33 @@
                     <input type="date" class="form-control form-control-sm date-range-input" id="date-to" title="To" aria-label="Invoice date to">
                     <button type="button" class="btn btn-outline-secondary btn-sm" id="date-clear" style="display:none;">Clear</button>
                 </div>
-                <div class="control-group">
-                    <span class="control-label">Supplier Category</span>
-                    <div class="lens-toggle" id="category-toggle">
-                        <button data-category="" class="active">All</button>
-                        <button data-category="PX/Buy In">PX/Buy In</button>
-                        <button data-category="Buy Back">Buy Back</button>
-                        <button data-category="B2B Purchase">B2B Purchase</button>
+                <div class="control-group" id="dropdown-filters" style="gap:16px;">
+                    <div class="control-group">
+                        <span class="control-label">Site</span>
+                        <details class="veh-multi" id="site-filter"><summary>All</summary><div class="veh-multi-list"></div></details>
                     </div>
-                </div>
-                <div class="control-group">
-                    <span class="control-label">Show</span>
-                    <div class="lens-toggle" id="show-toggle">
-                        <button data-show="both" class="active">Tables And Charts</button>
-                        <button data-show="tables">Tables</button>
-                        <button data-show="charts">Charts</button>
+                    <div class="control-group">
+                        <span class="control-label">Customer</span>
+                        <details class="veh-multi" id="customer-filter"><summary>All</summary><div class="veh-multi-list"></div></details>
+                    </div>
+                    <div class="control-group">
+                        <span class="control-label">Supplier Category</span>
+                        <details class="veh-multi" id="category-filter"><summary>All</summary><div class="veh-multi-list">
+                            <label><input type="radio" name="supplier-category" value="" checked> All</label>
+                            <label><input type="radio" name="supplier-category" value="PX/Buy In"> PX/Buy In</label>
+                            <label><input type="radio" name="supplier-category" value="Buy Back"> Buy Back</label>
+                            <label><input type="radio" name="supplier-category" value="B2B Purchase"> B2B Purchase</label>
+                        </div></details>
                     </div>
                 </div>
             </div>
+        </div>
+
+        <div class="alert alert-warning py-2" id="site-changes-warning" style="display:none;"></div>
+
+        <div class="filter-banner" id="filter-banner" style="display:none;">
+            <span id="filter-banner-text"></span>
+            <button type="button" class="btn btn-outline-secondary btn-sm" id="filter-clear-all">Clear All Filters</button>
         </div>
 
         <div id="report-area">
@@ -119,6 +134,36 @@
         </div>
     </div>
 
+    {% if can_change_sites %}
+    <!-- Site Changes: filled by trade_report.js. -->
+    <div class="modal-overlay" id="siteChangesModal">
+        <div class="modal-box sc-box">
+            <div class="chart-modal-head">
+                <h2><i class="fas fa-location-dot"></i> Site Changes</h2>
+                <button type="button" class="modal-close-x" id="sc-close" aria-label="Close">&times;</button>
+            </div>
+            <p class="modal-sub">Moves a car to another site on this report, for good. Applies straight away, for everyone. Figures on other reports keep the Autoview site.</p>
+            <div class="modal-error" id="sc-error"></div>
+            <div class="sc-field">
+                <label for="sc-vrm">VRM</label>
+                <input type="text" class="form-control form-control-sm" id="sc-vrm" maxlength="12" autocomplete="off" spellcheck="false" style="width:140px;">
+            </div>
+            <div class="sc-field" id="sc-matches"></div>
+            <div class="sc-field">
+                <label for="sc-site">New Site</label>
+                <select class="form-select form-select-sm" id="sc-site" style="width:220px;"></select>
+            </div>
+            <div class="sc-field">
+                <label for="sc-reason">Reason</label>
+                <textarea class="form-control form-control-sm" id="sc-reason" rows="2" maxlength="2000"></textarea>
+            </div>
+            <button type="button" class="btn btn-apply" id="sc-save">Save Site Change</button>
+            <h3 class="section-title mt-3">Current Site Changes</h3>
+            <div id="sc-current"></div>
+        </div>
+    </div>
+    {% endif %}
+
     {% if is_admin %}
     <!-- Settings: tabs down the left, as in the KPI Settings popup. -->
     <div class="modal-overlay" id="settingsModal">
@@ -129,12 +174,10 @@
             </div>
             <p class="modal-sub">Applies to the whole Trade Report, for everyone.</p>
             <div class="modal-error" id="settingsError"></div>
-            <div class="settings-body">
-                <nav class="settings-tabs">
-                    <button type="button" class="active">View Vehicles</button>
-                </nav>
+            <div class="settings-body" data-auto-tabs>
+                <nav class="settings-tabs"></nav>
                 <div class="settings-panes">
-                    <div class="settings-pane active">
+                    <div class="settings-pane" data-title="View Vehicles">
                         <div class="modal-field">
                             <label>Quick Filters At The Top Of The List</label>
                             <div id="vehQuickList"></div>
@@ -162,6 +205,28 @@
                             list; decimals apply to number, £ and %. The CSV keeps the raw values.
                         </div>
                     </div>
+                    <div class="settings-pane" data-title="Highlighting">
+                        <div class="modal-field">
+                            <label>Highlight Rules</label>
+                            <div id="hlRuleList"></div>
+                            <button type="button" class="btn btn-edit section-add-btn" onclick="TV.addRule()">
+                                <i class="fas fa-plus"></i> Add Rule
+                            </button>
+                            <div class="modal-hint">Each rule colours the cell in the vehicle list when its test is true, e.g. Mileage = 0 in red. Text tests ignore capitals. The rules apply to the vehicle list only.</div>
+                        </div>
+                    </div>
+                    <div class="settings-pane" data-title="Appearance">
+                        <div class="modal-field">
+                            <label for="filterColourInput">Filter On Colour</label>
+                            <input type="color" id="filterColourInput">
+                            <div class="modal-hint">The colour of a control with a filter on, and of the line listing the filters.</div>
+                        </div>
+                        <div class="modal-field">
+                            <label for="siteChangedColourInput">Changed Site Colour</label>
+                            <input type="color" id="siteChangedColourInput">
+                            <div class="modal-hint">The colour of the Site cell on a car whose site has been changed.</div>
+                        </div>
+                    </div>
                 </div>
             </div>
             <div class="modal-actions">
@@ -175,11 +240,15 @@
     <script>
         window.BASE_URL = "{{ BASE_URL }}";
         window.TRADE_FONT = { size: {{ font_size }}, prefKey: "{{ font_pref }}" };
+        window.VEHICLE_COMMENTS_PAGE = "trade_report";
         window.TRADE_IS_ADMIN = {{ 'true' if is_admin else 'false' }};
         window.TRADE_VEHICLE_VIEW = {{ vehicle_view | tojson }};
+        window.TRADE_HIGHLIGHT_RULES = {{ highlight_rules | tojson }};
     </script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+    <script src="{{ static_url('js/settings_tabs.js') }}"></script>
     <script src="{{ static_url('js/charts.js') }}"></script>
+    <script src="{{ static_url('js/vehicle_comments.js') }}"></script>
     <script src="{{ static_url('js/trade_vehicles.js') }}"></script>
     <script src="{{ static_url('js/trade_report.js') }}"></script>
 </body>

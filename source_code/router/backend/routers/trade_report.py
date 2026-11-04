@@ -19,6 +19,7 @@ import datetime
 import decimal
 import json
 import logging
+import re
 import time
 
 import boto3
@@ -26,11 +27,11 @@ import boto3
 from fastapi import APIRouter, Request, Depends
 from fastapi.responses import HTMLResponse
 
-from utils.db_utils import get_database_connection, get_user_preference
+from utils.db_utils import get_database_connection, get_prod_pricer_connection, get_user_preference
 from utils.snowflake_client import SnowflakeClient
-from . import kpi
-from .core import (BASE_URL, templates, _track, s3_bucketname,
-                   s3_bucket_region, require_page, require_page_api, is_admin)
+from . import kpi, vehicle_comments as vc
+from .core import (BASE_URL, templates, _track, s3_bucketname, s3_bucket_region,
+                   require_page, require_page_api, is_admin, user_has_permission)
 
 logger = logging.getLogger(__name__)
 
@@ -225,6 +226,119 @@ def _saved_view() -> dict | None:
         return None
 
 
+# Settings > Highlighting: a rule colours the cell of its column in the vehicle
+# list when the value matches, e.g. Mileage = 0 in red.
+_HIGHLIGHT_KEY = 'trade_highlight_rules'
+_HIGHLIGHT_OPS = {'=', '!=', '>', '<', '>=', '<=', 'contains'}
+_HIGHLIGHT_NUMBER_OPS = {'>', '<', '>=', '<='}
+
+
+def _clean_highlight_rules(rules) -> list:
+    """The rules as they are stored, or ValueError saying what is wrong with one."""
+    if rules is None:
+        return []
+    if not isinstance(rules, list):
+        raise ValueError("Highlight rules must be a list")
+    known = {key for _, key in _COLUMNS}
+    cleaned = []
+    for r in rules:
+        if not isinstance(r, dict) or r.get("column") not in known:
+            raise ValueError("Choose a column for each highlight rule, or remove it")
+        if r.get("op") not in _HIGHLIGHT_OPS:
+            raise ValueError(f"Unknown test for {r['column']}")
+        value = str(r.get("value") if r.get("value") is not None else "").strip()
+        if not value or len(value) > 60:
+            raise ValueError(f"Give a value (at most 60 characters) for {r['column']}")
+        if r["op"] in _HIGHLIGHT_NUMBER_OPS:
+            try:
+                float(value)
+            except ValueError:
+                raise ValueError(f"{r['column']} {r['op']} needs a number, not '{value}'")
+        colour = r.get("colour")
+        if not re.fullmatch(r"#[0-9a-fA-F]{6}", str(colour or "")):
+            raise ValueError(f"Pick a colour for the {r['column']} rule")
+        cleaned.append({"column": r["column"], "op": r["op"], "value": value, "colour": colour})
+    return cleaned
+
+
+def _saved_highlight_rules() -> list:
+    try:
+        return _clean_highlight_rules(kpi._read_kpi_layout_value(_HIGHLIGHT_KEY) or [])
+    except Exception as e:
+        logger.warning("Trade Report: could not load the highlight rules: %s", e)
+        return []
+
+
+# Settings > Appearance: the colour of a control with a filter on, and of a site
+# that has been changed.
+_FILTER_COLOUR_KEY = 'trade_filter_colour'
+_FILTER_COLOUR_DEFAULT = '#fff3b0'
+_SITE_CHANGED_COLOUR_KEY = 'trade_site_changed_colour'
+_SITE_CHANGED_COLOUR_DEFAULT = '#dbeafe'
+
+
+def _clean_colour(colour, default: str) -> str:
+    return colour if re.fullmatch(r"#[0-9a-fA-F]{6}", str(colour or "")) else default
+
+
+def _clean_filter_colour(colour) -> str:
+    return _clean_colour(colour, _FILTER_COLOUR_DEFAULT)
+
+
+def _saved_colour(key: str, default: str) -> str:
+    try:
+        return _clean_colour(kpi._read_kpi_layout_value(key), default)
+    except Exception as e:
+        logger.warning("Trade Report: could not load the colour %s: %s", key, e)
+        return default
+
+
+def _saved_filter_colour() -> str:
+    return _saved_colour(_FILTER_COLOUR_KEY, _FILTER_COLOUR_DEFAULT)
+
+
+# Site changes: a car on the wrong site in Autoview that cannot be put right
+# there. Saved in the Hub (routers/vehicle_comments.py) and swapped in here each
+# time the data is sent, so the shared cache keeps the rows as the model has them.
+# The dbt tables keep the old site. Needs the Approve Site Changes permission.
+_SITE_PERMISSION = 'approve_site_changes'
+_REASON_MAX = 2000
+
+
+def _site_lookup(data: dict) -> dict:
+    """{site name: (branch id, branch category)} from the rows themselves."""
+    cols = data["columns"]
+    i_id, i_name, i_cat = cols.index("branch_id"), cols.index("branch_name"), cols.index("branch_category")
+    return {r[i_name]: (r[i_id], r[i_cat]) for r in data["rows"] if r[i_name]}
+
+
+def _with_site_changes(data: dict) -> dict:
+    """The data with each changed car's site swapped. If the changes cannot be
+    read the page is told, rather than showing the old sites as if correct."""
+    if data.get("status") != "ok":
+        return data
+    try:
+        with get_prod_pricer_connection() as conn:
+            changes = vc.read_current_site_changes(conn)
+    except Exception as e:
+        logger.error("Trade Report: could not load site changes: %s", e)
+        return {**data, "site_changes": {}, "site_changes_error": "Site changes could not be loaded, so sites show as in Autoview."}
+    cols = data["columns"]
+    i_stock, i_id, i_name, i_cat = (cols.index("stock_id"), cols.index("branch_id"),
+                                    cols.index("branch_name"), cols.index("branch_category"))
+    sites = _site_lookup(data)
+    rows, applied = [], {}
+    for r in data["rows"]:
+        change = changes.get(str(r[i_stock]))
+        if change and change["new_site"] in sites:
+            r = list(r)
+            r[i_id], r[i_cat] = sites[change["new_site"]]
+            r[i_name] = change["new_site"]
+            applied[str(r[i_stock])] = change
+        rows.append(r)
+    return {**data, "rows": rows, "site_changes": applied}
+
+
 _FONT_DEFAULT = 13
 _FONT_MIN, _FONT_MAX = 8, 20
 _FONT_PREF = 'trade_report_font'
@@ -252,7 +366,10 @@ def trade_report_page(request: Request, user: str = Depends(require_page(PAGE_KE
     return templates.TemplateResponse("trade_report.html", {
         "request": request, "user": user, "BASE_URL": BASE_URL,
         "font_size": font_size, "font_pref": _FONT_PREF,
-        "is_admin": is_admin(user), "vehicle_view": _saved_view(),
+        "is_admin": is_admin(user), "vehicle_view": _saved_view(), "filter_colour": _saved_filter_colour(),
+        "highlight_rules": _saved_highlight_rules(),
+        "site_changed_colour": _saved_colour(_SITE_CHANGED_COLOUR_KEY, _SITE_CHANGED_COLOUR_DEFAULT),
+        "can_change_sites": user_has_permission(user, _SITE_PERMISSION),
     })
 
 
@@ -262,10 +379,70 @@ def trade_report_data(request: Request, refresh: int = 0,
     """Every trade sale row in the model. `refresh=1` forces a rebuild from
     Snowflake (the page's Refresh button)."""
     try:
-        return _get_data(force_refresh=bool(refresh))
+        return _with_site_changes(_get_data(force_refresh=bool(refresh)))
     except Exception as e:
         logger.error("Trade Report data failed: %s", e)
         return {"status": "error", "message": str(e)}
+
+
+@router.post("/reports/trade/site-changes")
+def trade_report_site_change_save(request: Request, payload: dict,
+                                  user: str = Depends(require_page_api(PAGE_KEY))):
+    """{stock_id, new_site, reason}. Takes effect straight away, for good."""
+    if not user_has_permission(user, _SITE_PERMISSION):
+        return {"status": "error", "message": "You do not have the Approve Site Changes permission"}
+    payload = payload or {}
+    stock_id = str(payload.get("stock_id") or "").strip()
+    new_site = str(payload.get("new_site") or "").strip()
+    reason = str(payload.get("reason") or "").strip()
+    if not reason or len(reason) > _REASON_MAX:
+        return {"status": "error", "message": f"Give a reason (at most {_REASON_MAX} characters)"}
+    try:
+        data = _with_site_changes(_get_data())
+        if data.get("status") != "ok" or data.get("site_changes_error"):
+            return {"status": "error", "message": "Could not check the vehicle, so nothing was saved. Please try again"}
+        cols = data["columns"]
+        i_stock, i_vrm, i_name = cols.index("stock_id"), cols.index("vrm"), cols.index("branch_name")
+        row = next((r for r in data["rows"] if str(r[i_stock]) == stock_id), None)
+        if row is None:
+            return {"status": "error", "message": "That vehicle is not in the Trade Report"}
+        if new_site not in _site_lookup(data):
+            return {"status": "error", "message": "Choose a site from the list"}
+        if new_site == row[i_name]:
+            return {"status": "error", "message": f"That vehicle is already on {new_site}"}
+        with get_prod_pricer_connection() as conn:
+            vc.ensure_site_changes_table(conn)
+            with conn.cursor() as cur:
+                cur.execute(
+                    """INSERT INTO vehicle_site_changes (stock_id, vrm, old_site, new_site, reason, changed_by)
+                       VALUES (%s, %s, %s, %s, %s, %s)""",
+                    (stock_id, row[i_vrm], row[i_name], new_site, reason, user))
+            conn.commit()
+    except Exception as e:
+        logger.error("Trade Report site change save failed: %s", e)
+        return {"status": "error", "message": str(e)}
+    _track(request, 'trade_site_change', '/reports/trade')
+    return {"status": "ok"}
+
+
+@router.post("/reports/trade/site-changes/{change_id}/remove")
+def trade_report_site_change_remove(change_id: int, request: Request,
+                                    user: str = Depends(require_page_api(PAGE_KEY))):
+    """Puts the car back. The row stays, marked removed, for the notes history."""
+    if not user_has_permission(user, _SITE_PERMISSION):
+        return {"status": "error", "message": "You do not have the Approve Site Changes permission"}
+    try:
+        with get_prod_pricer_connection() as conn:
+            vc.ensure_site_changes_table(conn)
+            with conn.cursor() as cur:
+                cur.execute(
+                    "UPDATE vehicle_site_changes SET removed_at = NOW(), removed_by = %s WHERE id = %s AND removed_at IS NULL",
+                    (user, change_id))
+            conn.commit()
+    except Exception as e:
+        logger.error("Trade Report site change remove failed: %s", e)
+        return {"status": "error", "message": str(e)}
+    return {"status": "ok"}
 
 
 @router.post("/reports/trade/vehicle-view")
@@ -278,9 +455,19 @@ def trade_report_vehicle_view_save(request: Request, payload: dict,
         view = _clean_view((payload or {}).get("view"))
     except ValueError as e:
         return {"status": "error", "message": str(e)}
+    colour = _clean_filter_colour((payload or {}).get("filter_colour"))
+    site_colour = _clean_colour((payload or {}).get("site_changed_colour"), _SITE_CHANGED_COLOUR_DEFAULT)
+    try:
+        rules = _clean_highlight_rules((payload or {}).get("highlight_rules"))
+    except ValueError as e:
+        return {"status": "error", "message": str(e)}
     try:
         kpi._write_kpi_layout_value(_VIEW_KEY, view)
+        kpi._write_kpi_layout_value(_FILTER_COLOUR_KEY, colour)
+        kpi._write_kpi_layout_value(_SITE_CHANGED_COLOUR_KEY, site_colour)
+        kpi._write_kpi_layout_value(_HIGHLIGHT_KEY, rules)
     except Exception as e:
         logger.error("Trade Report View Vehicles save failed: %s", e)
         return {"status": "error", "message": str(e)}
-    return {"status": "ok", "view": view}
+    return {"status": "ok", "view": view, "filter_colour": colour, "site_changed_colour": site_colour,
+            "highlight_rules": rules}

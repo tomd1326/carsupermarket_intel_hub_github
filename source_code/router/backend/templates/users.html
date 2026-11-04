@@ -109,8 +109,8 @@
                 <form method="post" action="{{ BASE_URL }}/settings/password-email-wording">
                     <input type="hidden" name="source" value="{{ source }}">
                     <details>
-                        <summary class="small">Activation And Reset Emails (Open In Outlook From The Edit Popup)</summary>
-                        <div class="form-text mb-2">One version for prod and dev. Use {first_name}, {link} and {expires}. Your own signature is added by Outlook. Leave a box empty to use the built-in wording.</div>
+                        <summary class="small">Activation And Reset Emails (Sent From The Edit Popup)</summary>
+                        <div class="form-text mb-2">One version for prod and dev. Use {first_name}, {link} and {expires}. No signature is added, so include the sign-off here. Leave a box empty to use the built-in wording.</div>
                         <div class="row g-2 mb-2">
                             <div class="col-md-6">
                                 <label for="password_email_subject_activate" class="form-label mb-1">Activation Email Subject</label>
@@ -172,7 +172,6 @@
                             <th>Name</th>
                             <th>Email</th>
                             <th class="text-nowrap">Company Name</th>
-                            <th class="text-nowrap">Site Name</th>
                             <th class="text-nowrap">Last Login</th>
                             <th class="text-nowrap">Pages</th>
                             <th></th>
@@ -189,12 +188,12 @@
                             <td class="text-nowrap">{{ ((d.first_name or '') ~ ' ' ~ (d.last_name or ''))|trim }}
                                 {% if u in inactive %}<span class="badge bg-warning text-dark ms-1">Not Activated</span>{% endif %}
                                 {% if u in buyers %}<span class="badge bg-info text-dark ms-1">Buyer</span>{% endif %}
+                                {% for key, info in (permission_list or {}).items() %}{% if key in (user_permissions or {}).get(u, []) %}<span class="badge bg-info text-dark ms-1">{{ info[0] }}</span>{% endif %}{% endfor %}
                             </td>
                             <td>
                                 {% if d.email %}{{ d.email }}{% else %}<span class="text-muted">{{ u }}</span>{% endif %}
                             </td>
                             <td class="text-nowrap">{{ d.company_name or '' }}</td>
-                            <td class="text-nowrap">{{ d.site_name or '' }}</td>
                             <td class="text-muted text-nowrap">{{ ll.last_login or 'Never' }}</td>
                             <td class="text-nowrap">
                                 {% if u == admin_username %}All
@@ -218,6 +217,7 @@
                                         data-pending="{{ '1' if u in inactive else '0' }}"
                                         data-buyer="{{ '1' if u in buyers else '0' }}"
                                         data-pages="{{ user_pages|sort|join(',') }}"
+                                        data-permissions="{{ (user_permissions or {}).get(u, [])|sort|join(',') }}"
                                         data-admin="{{ '1' if u == admin_username else '0' }}">Edit</button>
                             </td>
                         </tr>
@@ -296,9 +296,24 @@
                             </div>
                             <div class="col-12 form-text mt-0">Ids come from the Nexus import. Type a company here for users Nexus does not hold (e.g. Aramis).</div>
                         </div>
-                        <div class="form-check mb-2" id="um-buyer-row">
-                            <input class="form-check-input" type="checkbox" id="um-buyer" name="is_buyer">
-                            <label class="form-check-label" for="um-buyer">Buyer <span class="text-muted">(listed in the Cars Bought Buyer dropdown)</span></label>
+                        <div class="border rounded p-2 mb-2" id="um-permissions-row">
+                            <div class="fw-semibold mb-1">Permissions</div>
+                            <div class="form-check mb-0" id="um-buyer-row">
+                                <input class="form-check-input" type="checkbox" id="um-buyer" name="is_buyer">
+                                <label class="form-check-label" for="um-buyer">Buyer <span class="text-muted">(listed in the Cars Bought Buyer dropdown)</span></label>
+                            </div>
+                            {% if permissions_loaded %}
+                            <input type="hidden" name="permissions_shown" value="1">
+                            {% for key, info in permission_list.items() %}
+                            <div class="form-check mb-0">
+                                <input class="form-check-input um-permission" type="checkbox" name="permissions" value="{{ key }}" id="um-permission-{{ key }}">
+                                <label class="form-check-label" for="um-permission-{{ key }}">{{ info[0] }} <span class="text-muted">({{ info[1] }})</span></label>
+                            </div>
+                            {% endfor %}
+                            <div class="form-text mb-0">A change takes effect within a minute.</div>
+                            {% else %}
+                            <div class="small text-danger">Permissions could not be loaded, so saving here leaves them as they are.</div>
+                            {% endif %}
                         </div>
                         <div class="border rounded p-2 mb-2" id="um-access-row">
                             {% if access_loaded %}
@@ -334,7 +349,7 @@
                             <button type="button" class="btn btn-outline-primary btn-sm" id="um-link-btn">Make Link</button>
                             <div id="um-link-result" class="mt-2" style="display: none;">
                                 <input type="text" class="form-control form-control-sm" id="um-link-url" readonly>
-                                <button type="button" class="btn btn-outline-secondary btn-sm mt-2" id="um-email-btn">Create Email In Outlook</button>
+                                <button type="button" class="btn btn-outline-secondary btn-sm mt-2" id="um-email-btn">Send Email</button>
                                 <div class="form-text" id="um-link-note"></div>
                             </div>
                             <div class="form-text text-danger" id="um-link-error"></div>
@@ -431,7 +446,9 @@
                 .forEach(k => { $('um-' + k).value = (opts.org || {})[k] || ''; });
             show($('um-org-row'), !isAdmin);
             $('um-buyer').checked = !!opts.buyer;
-            show($('um-buyer-row'), !isAdmin);
+            show($('um-permissions-row'), !isAdmin);
+            const held = (opts.permissions || '').split(',');
+            document.querySelectorAll('.um-permission').forEach(box => { box.checked = held.includes(box.value); });
             const ticked = (opts.pages || '').split(',');
             document.querySelectorAll('.um-access').forEach(box => { box.checked = ticked.includes(box.value); });
             show($('um-access-row'), !isAdmin);
@@ -482,6 +499,7 @@
                 pending: btn.dataset.pending === '1',
                 buyer: btn.dataset.buyer === '1',
                 pages: btn.dataset.pages,
+                permissions: btn.dataset.permissions,
             }));
         });
         {% if access_loaded %}
@@ -523,12 +541,28 @@
         });
         // The last link made, so the email button can build the message from it.
         let emailDraft = null;
-        // A new message to the user in whichever mail program is the computer's default (Outlook), with the link in it.
-        $('um-email-btn').addEventListener('click', () => {
+        // Sends the email with the link in it, after a confirmation box.
+        $('um-email-btn').addEventListener('click', async () => {
             if (!emailDraft || !emailDraft.email) return;
-            window.location.href = 'mailto:' + encodeURIComponent(emailDraft.email)
-                + '?subject=' + encodeURIComponent(emailDraft.subject)
-                + '&body=' + encodeURIComponent(emailDraft.body);
+            const kind = emailDraft.purpose === 'activate' ? 'activation' : 'password reset';
+            if (!confirm('Send the ' + kind + ' email to ' + emailDraft.email + ' from ' + emailDraft.sender + '?')) return;
+            const btn = $('um-email-btn');
+            btn.disabled = true;
+            $('um-link-error').textContent = '';
+            try {
+                const body = new URLSearchParams({
+                    username: emailDraft.username, subject: emailDraft.subject,
+                    body: emailDraft.body, source: '{{ source }}',
+                });
+                const resp = await fetch('{{ BASE_URL }}/settings/user/send-password-email', { method: 'POST', body: body });
+                const data = await resp.json();
+                if (!resp.ok) throw new Error(data.error || 'Could not send the email');
+                $('um-link-note').textContent = 'Email sent to ' + data.email + ' from ' + data.sender + '.';
+            } catch (e) {
+                $('um-link-error').textContent = e.message;
+            } finally {
+                btn.disabled = false;
+            }
         });
         // Makes a link and shows it for copying. The link is shown once: only a hash of it is stored.
         $('um-link-btn').addEventListener('click', async () => {
@@ -546,7 +580,7 @@
                 $('um-link-url').value = data.url;
                 $('um-link-note').textContent = (data.purpose === 'activate' ? 'Activation link' : 'Password reset link')
                     + ' for ' + username + '. Works once, until ' + data.expires + '. Copy it now: it cannot be shown again.';
-                emailDraft = data;
+                emailDraft = { ...data, username: username };
                 $('um-email-btn').disabled = !data.email;
                 $('um-email-btn').title = data.email ? '' : 'This user has no email address';
                 $('um-link-result').style.display = '';

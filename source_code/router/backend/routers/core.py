@@ -16,7 +16,7 @@ from fastapi import HTTPException, Request
 from fastapi.templating import Jinja2Templates
 
 from utils.db_utils import (get_database_connection, get_prod_pricer_connection,
-                            load_all_users, load_all_page_access, load_page_names,
+                            load_all_users, load_all_page_access, load_page_names, read_user_permissions,
                             record_event, get_settings, read_user_details,
                             touch_session, close_sessions, read_session_settings,
                             new_session_id, SETTINGS_DEFAULTS)
@@ -384,6 +384,7 @@ ADMIN_USERNAME = 'tdrayson'
 # USER_PAGE_ACCESS holds what was stored, including the CONFIGURED_MARKER —
 # get_user_pages is what turns that into a usable set of pages.
 USER_PAGE_ACCESS: dict = {}
+USER_PERMISSIONS_HELD: dict = {}     # {username: set(key in db_utils.USER_PERMISSIONS)}
 _PERMISSIONS_LOADED_AT: float = 0.0
 PERMISSION_TTL_SECONDS = 60
 
@@ -401,8 +402,18 @@ def _reload_users_from_aurora():
             VALID_USERS.update(users)
             logger.info("Loaded %d users from Aurora", len(users))
             access = load_all_page_access(conn)
+            # A failure here must not stop page access: nobody holds a
+            # permission until it can be read again.
+            try:
+                held = read_user_permissions(conn)
+            except Exception as e:
+                conn.rollback()
+                logger.warning("Could not load user permissions - denying them for now: %s", e)
+                held = {}
         USER_PAGE_ACCESS.clear()          # replace wholesale, so removed grants disappear
         USER_PAGE_ACCESS.update(access)
+        USER_PERMISSIONS_HELD.clear()
+        USER_PERMISSIONS_HELD.update(held)
         _PERMISSIONS_LOADED_AT = time.time()
     except Exception as e:
         logger.warning("Could not load users/page access from Aurora — falling back to hardcoded admin only: %s", e)
@@ -506,6 +517,25 @@ def _hidden_page_keys() -> set:
 
 def user_can(user: str | None, page_key: str) -> bool:
     return page_key in get_user_pages(user)
+
+
+def user_has_permission(user: str | None, permission: str) -> bool:
+    """A special permission (db_utils.USER_PERMISSIONS). The admin holds them all.
+    Same rules as get_user_pages: denied if the cache cannot be refreshed, and
+    for a deleted account."""
+    if is_admin(user):
+        return True
+    if not user:
+        return False
+    if not _permissions_are_fresh():
+        _reload_users_from_aurora()
+        if not _permissions_are_fresh():
+            logger.warning("Permissions could not be refreshed - denying %s", user)
+            return False
+    return user in VALID_USERS and permission in USER_PERMISSIONS_HELD.get(user, ())
+
+
+templates.env.globals['user_has_permission'] = user_has_permission
 
 
 class PageRedirect(Exception):

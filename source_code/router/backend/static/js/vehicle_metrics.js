@@ -4,7 +4,7 @@
  *
  * Only table and column names are read here. Snowflake's rows are read only by
  * Test, or once a metric is switched on. Loaded after cars_bought.js, whose
- * $, esc, postJSON, buyerCfg, openTableColumnEditor and loadMetricValues this uses.
+ * $, esc, postJSON, buyerCfg, openTableColumnEditor and readMetricsAgain this uses.
  */
 (function () {
     const FILTER_OPS = [
@@ -159,14 +159,13 @@
         buyerCfg.table_live = res.table_live;
         renderList();
         openTableColumnEditor();
-        renderAllHead();
-        renderAllBody();
-        loadMetricValues();
     }
 
     $('metricAddBtn').addEventListener('click', () => openEditor(null));
     $('mCancelBtn').addEventListener('click', closeEditor);
-    $('metricRefreshBtn').addEventListener('click', () => loadMetricValues(true));
+    $('metricRefreshBtn').addEventListener('click', () => {
+        readMetricsAgain().then(() => showError('')).catch(err => showError(err.message));
+    });
     $('mDateMode').addEventListener('change', showDateInputs);
     $('mCalculation').addEventListener('change', () => { draft.column = $('mColumn').value; renderColumnChoices(); });
     $('mColumn').addEventListener('change', () => { draft.column = $('mColumn').value; });

@@ -1,25 +1,11 @@
-/* Cars Bought: build a purchase batch from an invoice or from the Supplier
- * Stock Evaluator, let the buyer check and complete it, then submit. */
+/* Cars Bought, Add Cars: build a purchase batch from an invoice or from the
+ * Supplier Stock Evaluator, let the buyer check and complete it, then submit.
+ * Loaded after cars_bought_common.js. */
 
-const BASE = window.BASE_URL || '';
-let customFields = [];
 let suppliers = [];
 let rows = [];          // vehicle rows being edited
 let batchMeta = {};     // source, filename, s3_key, supplier_id
-let buyerCfg = {buyers: [], lock_buyer: false, me: ''};
 let capChecked = new Set();   // VRMs CAP has been asked about in this batch
-
-const $ = id => document.getElementById(id);
-const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[c]));
-const num = v => { if (v === null || v === undefined || v === '') return null; const n = parseFloat(String(v).replace(/[,£\s]/g, '')); return isNaN(n) ? null : n; };
-const gbp = v => v === null || v === undefined ? '—' : '£' + Number(v).toLocaleString('en-GB', {minimumFractionDigits: 2, maximumFractionDigits: 2});
-const r2 = v => Math.round(v * 100) / 100;
-const ukDate = iso => { if (!iso) return ''; const [y, m, d] = iso.slice(0, 10).split('-'); return `${d}/${m}/${y}`; };
-
-function postJSON(url, body) {
-    return fetch(BASE + url, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)})
-        .then(r => r.json());
-}
 
 function busy(text) {
     $('busy').style.display = text ? 'block' : 'none';
@@ -37,25 +23,6 @@ const MONEY_COLS = [
     ['fees_net', 'Fees Net', true], ['fees_vat', 'Fees VAT'], ['fees_gross', 'Fees Gross'],
 ];
 
-/* A car with no VAT shown on it is margin. Its fees have their own VAT, which
-   can be different, and do not count. Same as vat_status() in utils/cars_bought.py. */
-const vatStatus = r => num(r.vehicle_vat) ? 'VAT Qualifying' : 'Margin';
-
-/* What the car cost in all: the car, every fee and all VAT. Same as
-   purchase_total() in utils/cars_bought.py. */
-function purchaseTotal(r) {
-    const gross = num(r.vehicle_gross);
-    const car = gross !== null ? gross : (num(r.vehicle_net) || 0) + (num(r.vehicle_vat) || 0);
-    return r2(car + (num(r.fees_gross) || 0));
-}
-
-const isSumField = f => f.type === 'money' || f.type === 'number';
-const yesNoOptions = v => ['', 'Yes', 'No'].map(o => `<option value="${o}"${o === v ? ' selected' : ''}>${o}</option>`).join('');
-
-/* Whether a custom field is for this supplier. No suppliers set means all of
-   them. Same as field_applies() in utils/cars_bought.py. */
-const sameName = (a, b) => String(a || '').trim().toLowerCase() === String(b || '').trim().toLowerCase();
-const fieldApplies = (f, supplier) => !(f.suppliers || []).length || f.suppliers.some(n => sameName(n, supplier));
 const batchFields = () => customFields.filter(f => fieldApplies(f, $('bSupplier').value));
 let batchFieldKeys = '';
 
@@ -197,7 +164,6 @@ function markMissingBatch() {
     $(id).addEventListener('change', markMissingBatch);
 });
 ['input', 'change'].forEach(type => $('bSupplier').addEventListener(type, refreshBatchFields));
-const missingCell = value => (value || '').trim() ? `<td>${esc(value)}</td>` : '<td class="cb-missing">Missing</td>';
 
 /* Under the Supplier box: the text the supplier was matched from, or a way to add it. */
 let batchInvoice = {};
@@ -622,6 +588,8 @@ async function runLookup(todo) {
             const c = res.results[r.vrm] || {};
             capChecked.add(r.vrm);
             LOOKUP_FIELDS.forEach(k => { if (!blank(c[k])) r[k] = c[k]; });
+            // Autotrader's /vehicles only fills these gaps: what the invoice said is kept.
+            ['colour', 'first_registered'].forEach(k => { if (blank(r[k]) && !blank(c[k])) r[k] = c[k]; });
             if (!blank(c.cap_id)) r.cap_source = c.from_store ? 'stored' : 'live';
             r.lookup_note = c.note || null;
         } catch (e) {
@@ -686,199 +654,7 @@ $('submitBtn').addEventListener('click', () => {
 
 /* ── History and export ────────────────────────────────── */
 
-/* ── All Vehicles Bought: sort, filter and search in the browser ── */
-
-let allRows = [];
-let allSort = {column: 'PURCHASE_DATE', dir: -1};
-let allFilters = {};
-let allLimit = 0;
-let allFilterTimer = null;
-
-const customKey = c => c.column.startsWith('CUSTOM:') ? c.column.slice(7).toLowerCase() : null;
-const customField = c => customFields.find(f => f.key === customKey(c));
-const metricKey = c => c.column.startsWith('METRIC:') ? c.column.slice(7).toLowerCase() : null;
-const metricOf = c => (buyerCfg.metrics || []).find(m => m.id === metricKey(c));
-const isFigure = c => ['gbp', 'number', 'pct'].includes(c.format);
-let metricValues = {};     // {metric id: {vehicle id: {value, rows, matched, level}}}
-let metricErrors = {};     // {metric id: message}
-
-// Columns chosen in Settings, less any whose custom field or metric has gone or is off.
-const allColumns = () => (buyerCfg.table_columns || []).filter(c => {
-    if (customKey(c)) return !!customField(c);
-    if (metricKey(c)) { const m = metricOf(c); return !!(m && m.enabled); }
-    return true;
-});
-
-function allValue(r, c) {
-    const key = customKey(c);
-    if (key) return (r.custom || {})[key];
-    const metric = metricKey(c);
-    if (metric) { const hit = (metricValues[metric] || {})[r.vehicle_id]; return hit ? hit.value : null; }
-    return r[c.column.toLowerCase()];
-}
-
-function allText(r, c) {
-    const v = allValue(r, c);
-    if (v === null || v === undefined || v === '') return '';
-    if (c.format === 'date') return ukDate(String(v));
-    const n = num(v);
-    if (n !== null && c.format === 'gbp') return '£' + n.toLocaleString('en-GB', {minimumFractionDigits: c.decimals ?? 2, maximumFractionDigits: c.decimals ?? 2});
-    if (n !== null && (c.format === 'number' || c.format === 'pct')) {
-        return n.toLocaleString('en-GB', {minimumFractionDigits: c.decimals ?? 0, maximumFractionDigits: c.decimals ?? 0}) + (c.format === 'pct' ? '%' : '');
-    }
-    return String(v);
-}
-
-// What a figure is based on, for hovering over it.
-function metricTitle(r, c) {
-    const m = metricOf(c);
-    const hit = (metricValues[m.id] || {})[r.vehicle_id];
-    const about = m.description ? m.description + '\n' : '';
-    return about + (hit ? `From ${hit.rows} rows, matched on ${hit.matched}` : `No figure: fewer than ${m.min_rows} rows matched`);
-}
-
-/* One request per metric that is on the table. Nothing is asked for when no
-   metric is switched on. force reads Snowflake again (admin). */
-function loadMetricValues(force) {
-    const wanted = allColumns().filter(metricKey).map(metricOf);
-    metricErrors = {};
-    wanted.forEach(m => {
-        fetch(`${BASE}/cars-bought/metric-values/${encodeURIComponent(m.id)}${force ? '?force=true' : ''}`).then(r => r.json()).then(res => {
-            if (res.status === 'ok') { metricValues[m.id] = res.values || {}; delete metricErrors[m.id]; }
-            else metricErrors[m.id] = res.message;
-            refreshAllBody();
-        }).catch(err => { metricErrors[m.id] = `${m.label}: ${err.message}`; refreshAllBody(); });
-    });
-}
-
-// Figures can arrive while a buyer is typing in the table, and redrawing would lose the box.
-function refreshAllBody() {
-    const typing = document.activeElement;
-    if (typing && $('allBody').contains(typing)) { setTimeout(refreshAllBody, 1500); return; }
-    renderAllBody();
-}
-
-function allCompare(a, b, c) {
-    const x = allValue(a, c), y = allValue(b, c);
-    const blankX = x === null || x === undefined || x === '', blankY = y === null || y === undefined || y === '';
-    if (blankX || blankY) return blankX === blankY ? 0 : (blankX ? 1 : -1) * allSort.dir;   // blanks always last
-    if (isFigure(c)) return (num(x) ?? 0) - (num(y) ?? 0);
-    return String(x).localeCompare(String(y));
-}
-
-function allFiltered() {
-    const cols = allColumns();
-    const search = $('allSearch').value.trim().toLowerCase();
-    const active = cols.filter(c => (allFilters[c.column] || '').trim());
-    const out = allRows.filter(r =>
-        active.every(c => allText(r, c).toLowerCase().includes(allFilters[c.column].trim().toLowerCase()))
-        && (!search || cols.some(c => allText(r, c).toLowerCase().includes(search))));
-    const sortCol = cols.find(c => c.column === allSort.column);
-    if (sortCol) out.sort((a, b) => allCompare(a, b, sortCol) * allSort.dir);
-    return out;
-}
-
-function renderAllHead() {
-    const cols = allColumns();
-    const arrow = c => c.column !== allSort.column ? '' : ` <i class="fas fa-sort-${allSort.dir > 0 ? 'up' : 'down'}"></i>`;
-    $('allHead').innerHTML = '<tr>' + cols.map(c => {
-        const f = customField(c);
-        return `<th data-sort="${esc(c.column)}">${esc(c.label || c.column)}${f && f.required ? ' *' : ''}${arrow(c)}</th>`;
-    }).join('') + '<th></th></tr><tr>' +
-        cols.map(c => `<th><input class="form-control" data-filter="${esc(c.column)}" value="${esc(allFilters[c.column] || '')}" placeholder="Filter"></th>`).join('') + '<th></th></tr>';
-}
-
-function allCell(r, c) {
-    const f = customField(c);
-    // Not for this car's supplier: greyed out, showing anything saved before the field was limited.
-    if (f && !fieldApplies(f, r.supplier_name)) return `<td class="cb-not-used${isSumField(f) ? ' text-end' : ''}">${esc(allText(r, c))}</td>`;
-    if (f) {
-        const v = allValue(r, c) ?? '';
-        const missing = f.required && v === '' ? 'cb-missing' : '';
-        const box = f.type === 'yesno'
-            ? `<select class="form-select" data-vid="${r.vehicle_id}" data-ckey="${esc(f.key)}">${yesNoOptions(v)}</select>`
-            : `<input class="form-control${isSumField(f) ? ' text-end' : ''}" data-vid="${r.vehicle_id}" data-ckey="${esc(f.key)}" value="${esc(v)}">`;
-        return `<td class="${missing}${f.key === 'notes' ? ' notes-wide' : ''}">${box}</td>`;
-    }
-    if (c.column === 'BUYER' || c.column === 'SUPPLIER_NAME') return missingCell(allText(r, c));
-    const title = metricKey(c) ? ` title="${esc(metricTitle(r, c))}"` : '';
-    return `<td class="${isFigure(c) ? 'text-end' : ''}"${title}>${esc(allText(r, c))}</td>`;
-}
-
-function renderAllBody() {
-    const cols = allColumns();
-    const rowsNow = allFiltered();
-    const shown = rowsNow.slice(0, allLimit);
-    const total = r2(rowsNow.reduce((s, r) => s + (num(r.purchase_total) || 0), 0));
-    $('allBody').innerHTML = shown.length ? shown.map(r => `<tr>${cols.map(c => allCell(r, c)).join('')}
-        <td class="text-nowrap"><button class="btn btn-sm btn-outline-secondary py-0" data-openbatch="${r.batch_id}" title="Open the batch"><i class="fas fa-list"></i></button>
-        ${r.has_file ? `<a class="btn btn-sm btn-outline-secondary py-0" href="${BASE}/cars-bought/batches/${r.batch_id}/view" target="_blank" rel="noopener" title="Open the file"><i class="fas fa-file-invoice"></i></a>` : ''}</td></tr>`).join('')
-        : `<tr><td colspan="${cols.length + 1}" class="text-muted">${allRows.length ? 'No vehicles match' : 'No purchases yet'}</td></tr>`;
-    $('allCount').textContent = `${rowsNow.length} of ${allRows.length} vehicles, ${gbp(total)}`;
-    const problems = Object.values(metricErrors);
-    $('allMetricErrors').textContent = problems.join(' ');
-    $('allMetricErrors').style.display = problems.length ? '' : 'none';
-    $('allMoreBtn').style.display = rowsNow.length > shown.length ? '' : 'none';
-}
-
-function loadAllVehicles() {
-    return fetch(BASE + '/cars-bought/vehicles').then(r => r.json()).then(res => {
-        allRows = res.vehicles || [];
-        allLimit = allLimit || buyerCfg.table_rows || 500;
-        if (buyerCfg.table_columns) { renderAllHead(); renderAllBody(); }
-    }).catch(() => { $('allBody').innerHTML = '<tr><td class="text-danger">Could not load the vehicles</td></tr>'; });
-}
-
-$('allHead').addEventListener('click', e => {
-    const th = e.target.closest('[data-sort]');
-    if (!th) return;
-    allSort = {column: th.dataset.sort, dir: allSort.column === th.dataset.sort ? -allSort.dir : 1};
-    renderAllHead();
-    renderAllBody();
-});
-// Only the rows are rebuilt while typing, so the filter box keeps the cursor.
-$('allHead').addEventListener('input', e => {
-    if (!e.target.dataset.filter) return;
-    allFilters[e.target.dataset.filter] = e.target.value;
-    allLimit = buyerCfg.table_rows || 500;
-    clearTimeout(allFilterTimer);
-    allFilterTimer = setTimeout(renderAllBody, 150);
-});
-$('allSearch').addEventListener('input', () => {
-    allLimit = buyerCfg.table_rows || 500;
-    clearTimeout(allFilterTimer);
-    allFilterTimer = setTimeout(renderAllBody, 150);
-});
-$('allClearBtn').addEventListener('click', () => {
-    allFilters = {};
-    $('allSearch').value = '';
-    renderAllHead();
-    renderAllBody();
-});
-$('allMoreBtn').addEventListener('click', () => {
-    allLimit += buyerCfg.table_rows || 500;
-    renderAllBody();
-});
-$('allBody').addEventListener('click', e => {
-    const open = e.target.closest('[data-openbatch]');
-    if (open) openBatch(open.dataset.openbatch);
-});
-// A buyer filling in a field: saved as soon as they leave the box.
-$('allBody').addEventListener('change', e => {
-    const el = e.target;
-    if (!el.dataset.vid) return;
-    const row = allRows.find(r => String(r.vehicle_id) === el.dataset.vid);
-    const field = customFields.find(f => f.key === el.dataset.ckey);
-    postJSON(`/cars-bought/vehicles/${el.dataset.vid}/custom`, {key: el.dataset.ckey, value: el.value}).then(res => {
-        if (res.status !== 'ok') { alert(res.message); el.value = (row.custom || {})[el.dataset.ckey] ?? ''; return; }
-        row.custom = {...(row.custom || {}), [el.dataset.ckey]: res.value};
-        el.value = res.value ?? '';
-        el.closest('td').classList.toggle('cb-missing', !!(field && field.required && el.value === ''));
-    }).catch(err => { alert('Error: ' + err.message); el.value = (row.custom || {})[el.dataset.ckey] ?? ''; });
-});
-
 function loadHistory() {
-    loadAllVehicles();
     fetch(BASE + '/cars-bought/batches').then(r => r.json()).then(res => {
         const b = res.batches || [];
         $('histBody').innerHTML = b.length ? b.map(x => `<tr data-batch="${x.batch_id}">
@@ -907,24 +683,6 @@ $('histBody').addEventListener('click', e => {
     const tr = e.target.closest('[data-batch]');
     if (tr) openBatch(tr.dataset.batch);
 });
-
-function openBatch(id) {
-    fetch(BASE + '/cars-bought/batches/' + id).then(r => r.json()).then(res => {
-        const v = res.vehicles || [];
-        $('batchModalTitle').textContent = v.length ? `Batch ${id}: ${v[0].supplier_name}, ${ukDate(v[0].purchase_date)}` : `Batch ${id}`;
-        v.forEach(r => { r.vat_status = vatStatus(r); r.purchase_total = purchaseTotal(r); });
-        const cols = [['vrm', 'VRM'], ['mileage', 'Mileage'], ['cap_id', 'CAP ID'], ['make', 'Make'], ['model', 'Model'],
-            ['derivative', 'Derivative'], ['vat_status', 'VAT Status'], ['vehicle_net', 'Vehicle Net', 1], ['vehicle_vat', 'Vehicle VAT', 1],
-            ['vehicle_gross', 'Vehicle Gross', 1], ['fees_net', 'Fees Net', 1], ['fees_vat', 'Fees VAT', 1], ['fees_gross', 'Fees Gross', 1],
-            ['purchase_total', 'Total Purchase', 1]];
-        // The supplier's fields, plus any other that already holds a value.
-        const fields = customFields.filter(f => fieldApplies(f, v.length ? v[0].supplier_name : '') || v.some(r => ((r.custom || {})[f.key] ?? '') !== ''));
-        $('batchModalBody').innerHTML = `<table class="table table-sm veh-table"><thead><tr>${cols.map(c => `<th>${c[1]}</th>`).join('')}${fields.map(f => `<th>${esc(f.label)}</th>`).join('')}</tr></thead><tbody>` +
-            v.map(r => `<tr>${cols.map(([k, , m]) => `<td class="${m ? 'text-end' : ''}">${m ? gbp(r[k]) : esc(r[k] ?? '')}</td>`).join('')}${fields.map(f => `<td>${esc((r.custom || {})[f.key] ?? '')}</td>`).join('')}</tr>`).join('') +
-            '</tbody></table>';
-        bootstrap.Modal.getOrCreateInstance($('batchModal')).show();
-    });
-}
 
 $('exportBtn').addEventListener('click', () => {
     const q = new URLSearchParams();
@@ -999,6 +757,15 @@ function filterSupplierNames() {
         const line = (tr.querySelector('.sn-text').value + ' ' + tr.querySelector('.sn-supplier').value).toLowerCase();
         tr.style.display = !q || line.includes(q) ? '' : 'none';
     });
+}
+
+/* Read Figures Again: read Snowflake now for every metric that is on the All
+   Cars Bought table. That page shows the new figures when it next opens. */
+function readMetricsAgain() {
+    const wanted = (buyerCfg.table_columns || []).filter(c => c.column.startsWith('METRIC:'))
+        .map(c => (buyerCfg.metrics || []).find(m => m.id === c.column.slice(7).toLowerCase())).filter(m => m && m.enabled);
+    return Promise.all(wanted.map(m => fetch(`${BASE}/cars-bought/metric-values/${encodeURIComponent(m.id)}?force=true`).then(r => r.json())
+        .then(res => { if (res.status !== 'ok') throw new Error(res.message); })));
 }
 
 let tableColumnEditor = null;
@@ -1124,9 +891,6 @@ if (window.IS_ADMIN) {
             document.documentElement.style.setProperty('--cb-missing', res.missing_colour);
             document.documentElement.style.setProperty('--cb-not-used', res.not_used_colour);
             markMissingBatch();
-            allLimit = res.table_rows;
-            renderAllHead();
-            renderAllBody();
             loadInbox().catch(() => {});
             bootstrap.Modal.getOrCreateInstance($('settingsModal')).hide();
             if (rows.length) { renderHead(); renderRows(); }
@@ -1144,11 +908,8 @@ fetch(BASE + '/cars-bought/config').then(r => r.json()).then(res => {
     $('evSupplier').innerHTML = '<option value="">Any Supplier</option>' +
         suppliers.filter(s => s.has_stock_list).map(s => `<option value="${s.supplier_id}">${esc(s.supplier_name)}</option>`).join('');
     $('supplierList').innerHTML = suppliers.map(s => `<option value="${esc(s.supplier_name)}">`).join('');
-    // Whichever of this and the vehicles arrives second draws the table.
-    allLimit = allLimit || res.table_rows || 500;
-    renderAllHead();
-    renderAllBody();
-    loadMetricValues();
+    // From the Settings link on the All Cars Bought page.
+    if (window.IS_ADMIN && location.hash === '#settings') $('settingsBtn').click();
 });
 loadHistory();
 // What is already pending shows first; the slower look in the folder follows.

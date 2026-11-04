@@ -12,6 +12,7 @@
     let editingId = null;
     let previewTimer = null;
     let previewRun = 0;
+    let sender = '';
 
     async function call(path, body) {
         const options = body === undefined ? {} : {
@@ -201,7 +202,7 @@
     }
 
     function setEmailButtons(enabled) {
-        $('email-outlook-btn').disabled = !enabled;
+        $('email-send-btn').disabled = !enabled;
         $('email-copy-btn').disabled = !enabled;
     }
 
@@ -240,8 +241,29 @@
         })]);
     }
 
-    function download(emailId) {
-        window.location.href = `${API}/email/${emailId}/download`;
+    // The confirmation box every send goes through. Nothing is sent without it.
+    function confirmSend(subject, to) {
+        const recipients = [...new Set(to.split(/[;,\s]+/).filter(Boolean))];
+        if (!recipients.length) {
+            setNote('email-note', 'Enter at least one address to send to.', true);
+            return false;
+        }
+        return confirm(`Send "${subject}" from ${sender} to ${recipients.length} people?\n\n${recipients.join('\n')}`);
+    }
+
+    async function sendTicked() {
+        const to = $('email-to').value;
+        if (!confirmSend($('email-subject').value, to)) return;
+        setEmailButtons(false);
+        try {
+            const data = await call('/email/send', { ...emailBody(), to });
+            setNote('email-note', data.message);
+            await loadEmails();
+        } catch (e) {
+            setNote('email-note', e.message, true);
+        } finally {
+            setEmailButtons(true);
+        }
     }
 
     async function generate(useEmail) {
@@ -257,21 +279,14 @@
         }
     }
 
-    function openInOutlook() {
-        return generate(async data => {
-            download(data.id);
-            setNote('email-note', 'Downloaded. Open the file from your browser\'s downloads.');
-        });
-    }
-
     function copyTicked() {
         return generate(async data => {
             try {
                 await copyEmail(data.html, data.text);
             } catch (e) {
-                throw new Error(`Could not copy: ${e.message}. Use Open In Outlook instead.`);
+                throw new Error(`Could not copy: ${e.message}. Use Send Email instead.`);
             }
-            setNote('email-note', 'Copied. Paste it into a new email in Outlook.');
+            setNote('email-note', 'Copied. Paste it into a new email.');
         });
     }
 
@@ -289,13 +304,13 @@
             const view = make('button', 'View', 'btn btn-sm btn-outline-secondary me-1');
             view.type = 'button';
             view.addEventListener('click', () => viewEmail(item));
-            const outlook = make('button', 'Open In Outlook', 'btn btn-sm btn-outline-secondary me-1');
-            outlook.type = 'button';
-            outlook.addEventListener('click', () => download(item.id));
+            const send = make('button', 'Send', 'btn btn-sm btn-outline-secondary me-1');
+            send.type = 'button';
+            send.addEventListener('click', () => sendPast(item));
             const copy = make('button', 'Copy', 'btn btn-sm btn-outline-secondary');
             copy.type = 'button';
             copy.addEventListener('click', () => copyPast(item));
-            actions.append(view, outlook, copy);
+            actions.append(view, send, copy);
             row.appendChild(actions);
             body.appendChild(row);
         });
@@ -315,13 +330,24 @@
         }
     }
 
+    async function sendPast(item) {
+        const to = $('email-to').value;
+        if (!confirmSend(item.subject, to)) return;
+        try {
+            const data = await call(`/email/${item.id}/send`, { to });
+            setNote('email-note', data.message);
+        } catch (e) {
+            setNote('email-note', e.message, true);
+        }
+    }
+
     async function copyPast(item) {
         try {
             const stored = await call(`/email/${item.id}`);
             await copyEmail(stored.html, stored.text);
-            setNote('email-note', 'Copied. Paste it into a new email in Outlook.');
+            setNote('email-note', 'Copied. Paste it into a new email.');
         } catch (e) {
-            setNote('email-note', `Could not copy: ${e.message}. Use Open In Outlook instead.`, true);
+            setNote('email-note', `Could not copy: ${e.message}. Use Send instead.`, true);
         }
     }
 
@@ -364,6 +390,7 @@
     async function load(isFirst) {
         const data = await call('/data');
         developments = data.developments;
+        sender = data.sender;
         // A development deleted elsewhere must not stay ticked out of sight.
         const known = new Set(developments.map(d => d.id));
         [...ticked].forEach(id => { if (!known.has(id)) ticked.delete(id); });
@@ -372,6 +399,7 @@
         renderEmails(data.emails);
         if (isFirst) {
             fillTemplate(data.template);
+            $('email-to').value = data.template.default_send_to;
             $('email-subject').value = data.template.subject;
             $('email-intro').value = data.template.intro;
         }
@@ -385,7 +413,7 @@
     $('faq-add-btn').addEventListener('click', () => addFaqRow());
     $('email-subject').addEventListener('input', refreshPreview);
     $('email-intro').addEventListener('input', refreshPreview);
-    $('email-outlook-btn').addEventListener('click', openInOutlook);
+    $('email-send-btn').addEventListener('click', sendTicked);
     $('email-copy-btn').addEventListener('click', copyTicked);
     $('template-save-btn').addEventListener('click', saveTemplate);
 
