@@ -1,0 +1,156 @@
+{% from '_navigation.html' import page_header with context %}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Page Access</title>
+    <link rel="icon" type="image/png" href="{{ BASE_URL }}/static/icon.png">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css" rel="stylesheet">
+    <link href="{{ static_url('css/theme.css') }}" rel="stylesheet">
+    {% include '_settings_head.html' %}
+</head>
+<body>
+    {{ page_header('Settings', user) }}
+    <div class="settings-card settings-card-wide">
+        <div class="settings-layout">
+        {% include '_settings_nav.html' %}
+
+        <div class="settings-content">
+
+        {% if can_view_prod %}
+        <div class="btn-group mb-3" role="group" aria-label="Which database">
+            <a href="{{ BASE_URL }}/settings/users/page-access?source=prod"
+               class="btn btn-sm {% if viewing_prod %}btn-dark{% else %}btn-outline-secondary{% endif %}">Prod</a>
+            <a href="{{ BASE_URL }}/settings/users/page-access?source=this"
+               class="btn btn-sm {% if not viewing_prod %}btn-dark{% else %}btn-outline-secondary{% endif %}">This Environment ({{ this_env }})</a>
+        </div>
+        {% endif %}
+
+        {% if error or not access_loaded %}
+        <div class="alert alert-danger py-2">Could not load page access{% if error %}: {{ error }}{% endif %}</div>
+        {% else %}
+        <div class="card">
+            <div class="card-header fw-semibold d-flex align-items-center gap-2 flex-wrap">
+                <label for="pa-page" class="mb-0">Page{% if viewing_prod %} <span class="text-muted fw-normal small">(prod)</span>{% endif %}</label>
+                <select class="form-select form-select-sm" id="pa-page" style="width: 280px;">
+                    {% for page in pages %}
+                    <option value="{{ page.key }}" {% if page.key == selected_page %}selected{% endif %}>{{ page_name(page.key) }}</option>
+                    {% endfor %}
+                </select>
+                <input type="search" class="form-control form-control-sm fw-normal" id="pa-filter" placeholder="Filter Users" style="width: 220px;">
+                <button type="button" class="btn btn-outline-secondary btn-sm" id="pa-all">Tick All Shown</button>
+                <button type="button" class="btn btn-outline-secondary btn-sm" id="pa-none">Clear All Shown</button>
+                <span class="small text-muted fw-normal" id="pa-count"></span>
+                <button type="button" class="btn btn-primary btn-sm ms-auto" id="pa-save" disabled>Save</button>
+            </div>
+            {% if request.query_params.get('changed') %}
+            <div class="alert alert-success mb-0 rounded-0 border-0 py-2 px-3">{{ request.query_params.get('changed') }} user(s) changed. A change takes effect within a minute.</div>
+            {% endif %}
+            <div class="alert alert-danger mb-0 rounded-0 border-0 py-2 px-3" id="pa-error" style="display: none;"></div>
+            <div class="card-body p-0 table-responsive">
+                <table class="table table-sm table-hover mb-0 align-middle">
+                    <thead class="table-light">
+                        <tr>
+                            <th></th>
+                            <th>Name</th>
+                            <th>Email</th>
+                            <th class="text-nowrap">Company Name</th>
+                            <th class="text-nowrap">Site Name</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for u in usernames %}
+                        {% set d = people.get(u, {}) %}
+                        <tr class="pa-row" data-pages="{{ access.get(u, [])|sort|join(',') }}">
+                            <td><input class="form-check-input pa-tick" type="checkbox" value="{{ u }}" aria-label="Give {{ u }} this page"></td>
+                            <td class="text-nowrap">{{ ((d.first_name or '') ~ ' ' ~ (d.last_name or ''))|trim }}
+                                {% if u in inactive %}<span class="badge bg-warning text-dark ms-1">Not Activated</span>{% endif %}
+                            </td>
+                            <td>{% if d.email %}{{ d.email }}{% else %}<span class="text-muted">{{ u }}</span>{% endif %}</td>
+                            <td class="text-nowrap">{{ d.company_name or '' }}</td>
+                            <td class="text-nowrap">{{ d.site_name or '' }}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+        {% endif %}
+
+        </div><!-- /.settings-content -->
+        </div><!-- /.settings-layout -->
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
+    {% if access_loaded and not error %}
+    <script>
+    (function () {
+        const $ = id => document.getElementById(id);
+        const rows = [...document.querySelectorAll('.pa-row')];
+        const tick = tr => tr.querySelector('.pa-tick');
+        const hasPage = tr => tr.dataset.pages.split(',').includes($('pa-page').value);
+        const isDirty = () => rows.some(tr => tick(tr).checked !== hasPage(tr));
+        const shown = () => rows.filter(tr => tr.style.display !== 'none');
+        let currentPage = $('pa-page').value;
+
+        function refresh() {
+            const ticked = rows.filter(tr => tick(tr).checked).length;
+            const changed = rows.filter(tr => tick(tr).checked !== hasPage(tr)).length;
+            $('pa-count').textContent = ticked + ' of ' + rows.length + ' users have this page'
+                + (changed ? ', ' + changed + ' unsaved' : '');
+            $('pa-save').disabled = !changed;
+        }
+        function loadPage() {
+            rows.forEach(tr => { tick(tr).checked = hasPage(tr); });
+            currentPage = $('pa-page').value;
+            refresh();
+        }
+        $('pa-page').addEventListener('change', e => {
+            const next = e.target.value;
+            e.target.value = currentPage;
+            if (isDirty() && !confirm('Discard the unsaved ticks for this page?')) return;
+            e.target.value = next;
+            loadPage();
+        });
+        $('pa-filter').addEventListener('input', e => {
+            const f = e.target.value.trim().toLowerCase();
+            rows.forEach(tr => { tr.style.display = !f || tr.textContent.toLowerCase().includes(f) ? '' : 'none'; });
+        });
+        document.addEventListener('change', e => { if (e.target.classList.contains('pa-tick')) refresh(); });
+        const tickShown = on => { shown().forEach(tr => { tick(tr).checked = on; }); refresh(); };
+        $('pa-all').addEventListener('click', () => tickShown(true));
+        $('pa-none').addEventListener('click', () => tickShown(false));
+        $('pa-save').addEventListener('click', async () => {
+            const page = $('pa-page').value;
+            const label = $('pa-page').selectedOptions[0].textContent;
+            {% if viewing_prod %}
+            if (!confirm('You are changing PROD users. Save access to ' + label + ' on prod?')) return;
+            {% endif %}
+            $('pa-save').disabled = true;
+            $('pa-error').style.display = 'none';
+            try {
+                const resp = await fetch('{{ BASE_URL }}/settings/users/page-access', {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        source: '{{ source }}', page_key: page,
+                        usernames: rows.filter(tr => tick(tr).checked).map(tr => tick(tr).value),
+                    }),
+                });
+                const data = await resp.json();
+                if (!resp.ok) throw new Error(data.detail || 'Could not save');
+                window.location.href = '{{ BASE_URL }}/settings/users/page-access?source={{ source }}&page='
+                    + encodeURIComponent(page) + '&changed=' + data.changed;
+            } catch (e) {
+                $('pa-error').textContent = e.message;
+                $('pa-error').style.display = '';
+                refresh();
+            }
+        });
+        loadPage();
+    })();
+    </script>
+    {% endif %}
+</body>
+</html>

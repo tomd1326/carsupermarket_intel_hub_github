@@ -1621,6 +1621,88 @@ def page_access_page(user: str = Depends(get_current_user)):
     return RedirectResponse(url=BASE_URL + "/settings/users", status_code=303)
 
 
+@router.get("/settings/users/page-access", response_class=HTMLResponse)
+def page_access_batch_page(request: Request, user: str = Depends(get_current_user)):
+    """Settings > Users > Page Access: pick one page, tick the users who have it."""
+    if user != ADMIN_USERNAME:
+        return RedirectResponse(url=BASE_URL + "/home", status_code=303)
+    can_view_prod, source = _users_source(request.query_params)
+    viewing_prod = can_view_prod and source == 'prod'
+    people, inactive, stored_access, error = {}, set(), None, None
+    try:
+        if viewing_prod:
+            people, _logins, inactive, _buyers, stored_access = _read_prod_users()
+        else:
+            with get_database_connection() as conn:
+                people = load_user_details(conn)
+                inactive = read_inactive_users(conn)
+                ensure_user_nexus_columns(conn)
+                for username, extra in read_user_nexus_details(conn).items():
+                    if username in people:
+                        people[username].update(extra)
+                stored_access = load_all_page_access(conn)
+    except Exception as e:
+        logger.warning("Failed to load page access: %s", e)
+        error = str(getattr(e, 'detail', None) or e)[:300]
+    usernames = sorted(people) if viewing_prod else sorted(VALID_USERS)
+    usernames = [u for u in usernames if u != ADMIN_USERNAME]
+    access = {u: shown_page_access(stored_access.get(u), u in inactive)
+              for u in usernames} if stored_access is not None else {}
+    pages = core.visible_pages()
+    wanted = request.query_params.get('page')
+    selected = wanted if wanted in {p.key for p in pages} else (pages[0].key if pages else '')
+    return templates.TemplateResponse("page_access.html", {
+        "request": request, "user": user, "BASE_URL": BASE_URL,
+        "usernames": usernames, "people": people, "inactive": inactive, "access": access,
+        "access_loaded": stored_access is not None, "error": error,
+        "pages": pages, "selected_page": selected,
+        "can_view_prod": can_view_prod, "source": source, "viewing_prod": viewing_prod,
+        "this_env": core._ENV,
+        "sections": SETTINGS_SECTIONS, "active_section": "page_access",
+    })
+
+
+@router.post("/settings/users/page-access")
+def page_access_batch_save(data: dict, user: str = Depends(get_current_user)):
+    """Give one page to the ticked users and take it from the unticked ones.
+    data {source, page_key, usernames}. Each user's other pages are left as they
+    are, and all the changes save together or not at all."""
+    if user != ADMIN_USERNAME:
+        raise HTTPException(status_code=403)
+    page_key = data.get('page_key')
+    ticked = data.get('usernames')
+    if page_key not in {p.key for p in core.visible_pages()}:
+        raise HTTPException(status_code=400, detail="Unknown page")
+    if not isinstance(ticked, list):
+        raise HTTPException(status_code=400, detail="Bad user list")
+    ticked = set(ticked)
+    to_prod = _writes_to_prod(str(data.get('source') or 'this'))
+
+    with (get_prod_activity_connection() if to_prod else get_database_connection()) as conn:
+        try:
+            known = set(read_user_details(conn) if to_prod else VALID_USERS) - {ADMIN_USERNAME}
+            if ticked - known:
+                raise HTTPException(status_code=400, detail="Unknown user: " + ', '.join(sorted(ticked - known)))
+            stored = load_all_page_access(conn)
+            inactive = read_inactive_users(conn)
+            changes = {}
+            for username in known:
+                current = shown_page_access(stored.get(username), username in inactive)
+                keys = current | {page_key} if username in ticked else current - {page_key}
+                if keys != current:
+                    changes[username] = keys
+            set_page_access_many(conn, changes, granted_by=user)
+        except Exception:
+            conn.rollback()
+            raise
+    if not to_prod:
+        for username, keys in changes.items():
+            core.USER_PAGE_ACCESS[username] = keys | {CONFIGURED_MARKER}
+    logger.info("Page access for %s changed for %s%s by %s", page_key, sorted(changes),
+                " on PROD" if to_prod else "", user)
+    return {"status": "ok", "changed": len(changes)}
+
+
 def _save_user_access(conn, target: str, ticked: set | None, user: str, is_new: bool = False) -> set | None:
     """Save the Page Access ticks from the Add / Edit popup. Returns what was
     saved, or None when nothing changed. ticked None means the popup did not show

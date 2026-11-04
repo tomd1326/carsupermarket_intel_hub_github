@@ -1,0 +1,274 @@
+{% from '_navigation.html' import page_header with context %}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Settings — Developments</title>
+    <link rel="icon" type="image/png" href="{{ BASE_URL }}/static/icon.png">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css" rel="stylesheet">
+    <link href="{{ static_url('css/theme.css') }}" rel="stylesheet">
+    {% include '_settings_head.html' %}
+    <style>
+        #dev-table th, #email-table th { font-weight: 600; white-space: nowrap; padding: .5rem .6rem; }
+        #dev-table td, #email-table td { padding: .4rem .6rem; vertical-align: middle; }
+        #email-preview { width: 100%; height: 720px; border: 1px solid var(--c-border); border-radius: 4px; background: #fff; }
+        .faq-row { display: flex; gap: 8px; margin-bottom: 8px; align-items: flex-start; }
+        .faq-row .faq-q { flex: 1 1 35%; }
+        .faq-row .faq-a { flex: 1 1 65%; }
+        .template-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 12px; }
+        .template-wide { grid-column: 1 / -1; }
+        .template-summary { cursor: pointer; font-weight: 600; }
+        .form-control-color { width: 60px; }
+    </style>
+</head>
+<body>
+    {{ page_header('Settings', user) }}
+    <div class="settings-card settings-card-wide">
+        <div class="settings-layout">
+        {% include '_settings_nav.html' %}
+
+        <div class="settings-content" id="developments-page" data-base="{{ BASE_URL }}">
+            <div class="alert alert-danger py-2" id="dev-load-error" style="display:none"></div>
+
+            <div class="card mb-4">
+                <div class="card-header fw-semibold d-flex align-items-center justify-content-between">
+                    <span>Developments</span>
+                    <span class="d-flex gap-2">
+                        <a class="btn btn-sm btn-outline-secondary" href="{{ BASE_URL }}/whats-new" target="_blank">Open What's New</a>
+                        <button type="button" class="btn btn-sm btn-primary" id="dev-add-btn"><i class="fas fa-plus me-1"></i>Add Development</button>
+                    </span>
+                </div>
+                <div class="card-body">
+                    <p class="form-text mt-0">Tick the developments to include in an email. Only live ones can be sent, and only live ones show on What's New.</p>
+                    <div class="table-responsive">
+                        <table class="table table-sm mb-0" id="dev-table">
+                            <thead>
+                                <tr><th></th><th>Title</th><th>Type</th><th>Page</th><th>Released</th><th>Status</th><th>Last Emailed</th><th></th></tr>
+                            </thead>
+                            <tbody></tbody>
+                        </table>
+                    </div>
+                    <div class="text-muted small mt-2" id="dev-empty" style="display:none">No developments yet.</div>
+                </div>
+            </div>
+
+            <div class="card mb-4" id="dev-editor" style="display:none">
+                <div class="card-header fw-semibold" id="dev-editor-title">Add Development</div>
+                <div class="card-body">
+                    <div class="row g-3">
+                        <div class="col-md-6">
+                            <label class="form-label mb-1" for="dev-title">Title</label>
+                            <input class="form-control" id="dev-title" maxlength="200" autocomplete="off">
+                        </div>
+                        <div class="col-md-3">
+                            <label class="form-label mb-1" for="dev-type">Type</label>
+                            <input class="form-control" id="dev-type" list="dev-type-list" maxlength="60" autocomplete="off">
+                            <datalist id="dev-type-list"></datalist>
+                            <div class="form-text">Pick one or type a new one.</div>
+                        </div>
+                        <div class="col-md-3">
+                            <label class="form-label mb-1" for="dev-status">Status</label>
+                            <select class="form-select" id="dev-status">
+                                <option value="draft">Draft</option>
+                                <option value="live">Live</option>
+                            </select>
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label mb-1" for="dev-page">Page</label>
+                            <select class="form-select" id="dev-page"></select>
+                            <div class="form-text">The email gets a button to this page.</div>
+                        </div>
+                        <div class="col-md-3">
+                            <label class="form-label mb-1" for="dev-released">Released</label>
+                            <input class="form-control" type="date" id="dev-released">
+                        </div>
+                        <div class="col-md-3">
+                            <label class="form-label mb-1" for="dev-replaces">Replaces</label>
+                            <input class="form-control" id="dev-replaces" maxlength="200" autocomplete="off">
+                        </div>
+                        <div class="col-12">
+                            <label class="form-label mb-1" for="dev-summary">Summary</label>
+                            <textarea class="form-control" id="dev-summary" rows="3"></textarea>
+                            <div class="form-text">Shown in the email and on What's New.</div>
+                        </div>
+                        <div class="col-12">
+                            <label class="form-label mb-1" for="dev-details">Details</label>
+                            <textarea class="form-control" id="dev-details" rows="4"></textarea>
+                            <div class="form-text">Shown on What's New only.</div>
+                        </div>
+                        <div class="col-12">
+                            <label class="form-label mb-1" for="dev-guide">User Guide</label>
+                            <textarea class="form-control" id="dev-guide" rows="6"></textarea>
+                            <div class="form-text">Shown on What's New only.</div>
+                        </div>
+                        <div class="col-12">
+                            <label class="form-label mb-1">FAQs</label>
+                            <div id="faq-rows"></div>
+                            <button type="button" class="btn btn-sm btn-outline-secondary" id="faq-add-btn"><i class="fas fa-plus me-1"></i>Add FAQ</button>
+                        </div>
+                    </div>
+                    <div class="d-flex align-items-center gap-2 mt-3">
+                        <button type="button" class="btn btn-primary" id="dev-save-btn">Save</button>
+                        <button type="button" class="btn btn-outline-secondary" id="dev-cancel-btn">Cancel</button>
+                        <button type="button" class="btn btn-outline-danger ms-auto" id="dev-delete-btn">Delete</button>
+                    </div>
+                    <div class="text-danger small mt-2" id="dev-editor-error"></div>
+                </div>
+            </div>
+
+            <div class="card mb-4">
+                <div class="card-header fw-semibold">Generate Email</div>
+                <div class="card-body">
+                    <div class="mb-3">
+                        <label class="form-label mb-1" for="email-subject">Subject</label>
+                        <input class="form-control" id="email-subject" maxlength="200" autocomplete="off">
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label mb-1" for="email-intro">Introduction</label>
+                        <textarea class="form-control" id="email-intro" rows="4"></textarea>
+                    </div>
+                    <div class="d-flex align-items-center gap-2 flex-wrap mb-2">
+                        <button type="button" class="btn btn-primary" id="email-outlook-btn" disabled><i class="fas fa-envelope me-1"></i>Open In Outlook</button>
+                        <button type="button" class="btn btn-outline-secondary" id="email-copy-btn" disabled><i class="fas fa-copy me-1"></i>Copy Email</button>
+                        <span class="small" id="email-note"></span>
+                    </div>
+                    <div class="form-text mb-3">Open In Outlook downloads an email file: open it from your browser's downloads and it opens as a draft to address and send. If it opens as a received message instead, use Copy Email and paste into a new email.</div>
+                    <iframe id="email-preview" title="Email Preview" sandbox=""></iframe>
+                </div>
+            </div>
+
+            <div class="card mb-4">
+                <div class="card-body">
+                    <details>
+                        <summary class="template-summary">Email Template</summary>
+                        <div class="template-grid mt-3">
+                            <div class="template-wide">
+                                <label class="form-label mb-1" for="t-site_url">Website Address</label>
+                                <input class="form-control" id="t-site_url" data-template="site_url" autocomplete="off">
+                                <div class="form-text">Every link in the email starts with this, whichever site you generate it from. Must start https://</div>
+                            </div>
+                            <div>
+                                <label class="form-label mb-1" for="t-subject">Default Subject</label>
+                                <input class="form-control" id="t-subject" data-template="subject" autocomplete="off">
+                            </div>
+                            <div>
+                                <label class="form-label mb-1" for="t-heading">Heading</label>
+                                <input class="form-control" id="t-heading" data-template="heading" autocomplete="off">
+                            </div>
+                            <div>
+                                <label class="form-label mb-1" for="t-page_button_label">Page Button Wording</label>
+                                <input class="form-control" id="t-page_button_label" data-template="page_button_label" autocomplete="off">
+                                <div class="form-text">{page} becomes the page's name.</div>
+                            </div>
+                            <div>
+                                <label class="form-label mb-1" for="t-more_link_label">Read More Wording</label>
+                                <input class="form-control" id="t-more_link_label" data-template="more_link_label" autocomplete="off">
+                            </div>
+                            <div>
+                                <label class="form-label mb-1" for="t-replaces_label">Replaces Wording</label>
+                                <input class="form-control" id="t-replaces_label" data-template="replaces_label" autocomplete="off">
+                            </div>
+                            <div class="template-wide">
+                                <label class="form-label mb-1" for="t-intro">Default Introduction</label>
+                                <textarea class="form-control" id="t-intro" data-template="intro" rows="3"></textarea>
+                            </div>
+                            <div class="template-wide">
+                                <label class="form-label mb-1" for="t-sign_off">Sign Off</label>
+                                <textarea class="form-control" id="t-sign_off" data-template="sign_off" rows="3"></textarea>
+                            </div>
+                            <div class="template-wide">
+                                <label class="form-label mb-1" for="t-footer">Footer</label>
+                                <textarea class="form-control" id="t-footer" data-template="footer" rows="2"></textarea>
+                            </div>
+                            <div class="template-wide">
+                                <label class="form-label mb-1" for="t-no_access_text">What's New: No Access Message</label>
+                                <input class="form-control" id="t-no_access_text" data-template="no_access_text" autocomplete="off">
+                            </div>
+                            <div class="template-wide">
+                                <label class="form-label mb-1" for="t-types">Types</label>
+                                <textarea class="form-control" id="t-types" data-template="types" rows="4"></textarea>
+                                <div class="form-text">One per line. The email groups developments under these, in this order.</div>
+                            </div>
+                            <div>
+                                <label class="form-label mb-1" for="t-header_colour">Header Colour</label>
+                                <input class="form-control form-control-color" type="color" id="t-header_colour" data-template="header_colour">
+                            </div>
+                            <div>
+                                <label class="form-label mb-1" for="t-header_text_colour">Header Text Colour</label>
+                                <input class="form-control form-control-color" type="color" id="t-header_text_colour" data-template="header_text_colour">
+                            </div>
+                            <div>
+                                <label class="form-label mb-1" for="t-accent_colour">Accent Colour</label>
+                                <input class="form-control form-control-color" type="color" id="t-accent_colour" data-template="accent_colour">
+                            </div>
+                            <div>
+                                <label class="form-label mb-1" for="t-button_colour">Button Colour</label>
+                                <input class="form-control form-control-color" type="color" id="t-button_colour" data-template="button_colour">
+                            </div>
+                            <div>
+                                <label class="form-label mb-1" for="t-button_edge_colour">Button Edge Colour</label>
+                                <input class="form-control form-control-color" type="color" id="t-button_edge_colour" data-template="button_edge_colour">
+                            </div>
+                            <div>
+                                <label class="form-label mb-1" for="t-button_text_colour">Button Text Colour</label>
+                                <input class="form-control form-control-color" type="color" id="t-button_text_colour" data-template="button_text_colour">
+                            </div>
+                            <div>
+                                <label class="form-label mb-1" for="t-text_colour">Text Colour</label>
+                                <input class="form-control form-control-color" type="color" id="t-text_colour" data-template="text_colour">
+                            </div>
+                            <div>
+                                <label class="form-label mb-1" for="t-background_colour">Background Colour</label>
+                                <input class="form-control form-control-color" type="color" id="t-background_colour" data-template="background_colour">
+                            </div>
+                            <div>
+                                <label class="form-label mb-1" for="t-font_size">Text Size</label>
+                                <input class="form-control" type="number" min="10" max="24" id="t-font_size" data-template="font_size">
+                            </div>
+                            <div>
+                                <label class="form-label mb-1" for="t-heading_size">Heading Size</label>
+                                <input class="form-control" type="number" min="14" max="40" id="t-heading_size" data-template="heading_size">
+                            </div>
+                            <div>
+                                <label class="form-label mb-1" for="t-title_size">Title Size</label>
+                                <input class="form-control" type="number" min="12" max="30" id="t-title_size" data-template="title_size">
+                            </div>
+                            <div>
+                                <label class="form-label mb-1" for="t-footer_size">Footer Size</label>
+                                <input class="form-control" type="number" min="9" max="18" id="t-footer_size" data-template="footer_size">
+                            </div>
+                            <div>
+                                <label class="form-label mb-1" for="t-email_width">Email Width</label>
+                                <input class="form-control" type="number" min="480" max="900" id="t-email_width" data-template="email_width">
+                            </div>
+                        </div>
+                        <div class="d-flex align-items-center gap-2 mt-3">
+                            <button type="button" class="btn btn-primary" id="template-save-btn">Save Template</button>
+                            <span class="small" id="template-note"></span>
+                        </div>
+                    </details>
+                </div>
+            </div>
+
+            <div class="card mb-4">
+                <div class="card-header fw-semibold">Past Emails</div>
+                <div class="card-body">
+                    <div class="table-responsive">
+                        <table class="table table-sm mb-0" id="email-table">
+                            <thead>
+                                <tr><th>Generated</th><th>Subject</th><th>Developments</th><th></th></tr>
+                            </thead>
+                            <tbody></tbody>
+                        </table>
+                    </div>
+                    <div class="text-muted small mt-2" id="email-empty" style="display:none">No emails generated yet.</div>
+                </div>
+            </div>
+        </div>
+        </div>
+    </div>
+    <script src="{{ static_url('js/developments.js') }}"></script>
+</body>
+</html>

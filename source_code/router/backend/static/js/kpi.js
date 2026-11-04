@@ -4509,6 +4509,9 @@
                 `<option value="${escHtml(divideKey)}">${escHtml(row.divide_by.metric)}</option>`);
         }
         divideSelect.value = divideKey;
+        divideQuery = null;
+        divideOpen = false;
+        renderDivideQuery();
 
         // Multiplied-by list: the same metrics, plus "nothing".
         const multiplySelect = document.getElementById('multiplySelect');
@@ -5185,10 +5188,12 @@
         document.getElementById('chartTypeSelect').value = chartTypeOption(row);
         // Shown in the order the chart draws them (data source Value Orders applied).
         seriesDraft = stacked ? JSON.parse(JSON.stringify(orderedSeries(row.series || []))) : [];
+        chartFilters = stacked ? JSON.parse(JSON.stringify(row.chart_filters || [])) : [];
         // The name box shows the shared column name; the kind is made explicit
         // so the Chart Type box shows how the series draws.
         seriesDraft.forEach(s => { s.label = seriesBoxName(s); s.kind = seriesKind(s); });
         fillAddAllSources();
+        renderChartFilters();
         document.getElementById('themeSelect').innerHTML = themes.map(t =>
             `<option value="${escHtml(t.id)}">${escHtml(t.name)}</option>`).join('');
         document.getElementById('themeSelect').value = stacked && row.theme ? row.theme : (themes[0] ? themes[0].id : '');
@@ -5309,8 +5314,8 @@
             .then(resp => { sourceColumnLists[source] = resp.status === 'ok' ? resp.columns : []; })
             .catch(() => { sourceColumnLists[source] = []; })
             .finally(() => {
-                if (chartTypeValue() === 'stacked') renderSeriesList();
-                else renderLineQuery();
+                if (chartTypeValue() === 'stacked') { renderSeriesList(); renderChartFilters(); }
+                else { renderLineQuery(); renderDivideQuery(); }
             });
     }
 
@@ -5351,9 +5356,11 @@
             <button type="button" class="btn btn-edit btn-sm" onclick="addQueryFilter('${ctx}')"><i class="fas fa-plus"></i> Filter</button>`;
     }
 
-    // ctx: a series' number, or 'line' for a line chart's metric.
+    // ctx: a series' number, 'line' for a line chart's metric, or 'divide' for
+    // the metric it is divided by.
     let lineQuery = null;
-    const queryOf = ctx => (ctx === 'line' ? lineQuery : seriesDraft[Number(ctx)]._q);
+    const queryOf = ctx => (ctx === 'line' ? lineQuery : ctx === 'divide' ? divideQuery : seriesDraft[Number(ctx)]._q);
+    const queryOwner = ctx => seriesDraft[Number(ctx)];
 
     function onQueryField(ctx, field, value) {
         const q = queryOf(ctx);
@@ -5379,8 +5386,69 @@
 
     // The builder's choices onto the chart. redraw is false while a filter value
     // is being typed, so the box keeps its focus.
+    // A series' metric: its own filters plus the chart's, unless it opted out.
+    function seriesMetricFrom(s) {
+        const extra = s.no_chart_filters ? [] : chartFilters;
+        return buildQueryMetric({ ...s._q, f: [...s._q.f, ...extra] });
+    }
+
+    // Filters set once for the chart, added to every built series.
+    let chartFilters = [];
+
+    function renderChartFilters() {
+        const box = document.getElementById('chartFilterList');
+        if (!box) return;
+        const columns = new Set();
+        seriesDraft.forEach(s => {
+            const list = sourceColumnLists[s._table || s.source || ''];
+            if (Array.isArray(list)) list.forEach(c => columns.add(c.column));
+        });
+        const options = (value) => `<option value="">(Choose A Column)</option>`
+            + [...columns].sort().map(c => `<option value="${escHtml(c)}" ${c === value ? 'selected' : ''}>${escHtml(c)}</option>`).join('');
+        box.innerHTML = chartFilters.map((f, n) => `<div class="series-query-row">
+                <span>Only Where</span>
+                <select onchange="onChartFilter(${n}, 'column', this.value, true)">${options(f.column)}</select>
+                <select onchange="onChartFilter(${n}, 'operator', this.value, true)">
+                    ${DS_FILTER_OPERATORS.map(([v, l]) => `<option value="${v}" ${v === f.operator ? 'selected' : ''}>${escHtml(l)}</option>`).join('')}
+                </select>
+                ${DS_NO_VALUE_OPERATORS.includes(f.operator) ? '' : `<input type="text" maxlength="200" value="${escHtml(f.value || '')}" placeholder="Value"
+                    oninput="onChartFilter(${n}, 'value', this.value, false)">`}
+                <button type="button" class="btn btn-remove-chart" title="Remove filter" onclick="removeChartFilter(${n})"><i class="fas fa-trash"></i></button>
+            </div>`).join('');
+    }
+
+    function addChartFilter() {
+        chartFilters.push({ column: '', operator: 'equals', value: '' });
+        refreshChartFilters(true);
+    }
+
+    function removeChartFilter(n) {
+        chartFilters.splice(n, 1);
+        refreshChartFilters(true);
+    }
+
+    function onChartFilter(n, field, value, redraw) {
+        chartFilters[n][field] = value;
+        refreshChartFilters(redraw);
+    }
+
+    // Every built series takes the chart's filters again.
+    function refreshChartFilters(redraw) {
+        seriesDraft.forEach(s => {
+            if (!s._q) return;
+            s.metric = seriesMetricFrom(s);
+            s.label = s.metric ? seriesBoxName(s) : '';
+        });
+        if (redraw) { renderChartFilters(); renderSeriesList(); }
+    }
+
     function applyQuery(ctx, redraw) {
-        const metric = buildQueryMetric(queryOf(ctx));
+        const metric = ctx === 'line' || ctx === 'divide' ? buildQueryMetric(queryOf(ctx)) : seriesMetricFrom(queryOwner(ctx));
+        if (ctx === 'divide') {
+            setDivideMetric(metric);
+            if (redraw) renderDivideQuery();
+            return;
+        }
         if (ctx === 'line') {
             setLineMetric(metric);
             if (redraw) { renderLineQuery(); onMetricChange(); }
@@ -5411,6 +5479,90 @@
         select.value = key;
     }
 
+    // The Divided By metric, built from a plain table's columns like the Metric
+    // above it. divideSource is the table; divideOpen keeps the builder showing
+    // while its metric is still incomplete.
+    let divideQuery = null;
+    let divideSource = '';
+    let divideOpen = false;
+
+    function setDivideMetric(metric) {
+        const select = document.getElementById('divideSelect');
+        if (!metric) { select.value = ''; onDivideChange(); return; }
+        const key = metricKey(divideSource, metric);
+        if (!metricsByKey[key]) {
+            const q = parseQueryMetric(metric);
+            metricsByKey[key] = { source: divideSource, column: metric, description: '', suggested_agg: q.agg === 'avg' ? 'avg' : 'sum',
+                                  aggregate: q.agg, has_n1: true, has_target: false };
+        }
+        if (![...select.options].some(o => o.value === key)) {
+            select.insertAdjacentHTML('beforeend', `<option value="${escHtml(key)}">${escHtml(rawMetricName(metric))}</option>`);
+        }
+        select.value = key;
+        onDivideChange();
+    }
+
+    // Under the Divided By list: a button to build it from columns, or the builder.
+    function renderDivideQuery() {
+        const box = document.getElementById('divideQueryBuilder');
+        if (!box) return;
+        const select = document.getElementById('divideSelect');
+        const key = select.value || '';
+        const cut = key.indexOf('|');
+        const keySource = cut > 0 ? key.slice(0, cut) : '';
+        const metric = cut > 0 ? key.slice(cut + 1) : '';
+        const parsed = metric ? parseQueryMetric(metric) : null;
+        if (parsed && isPlainTable(keySource) && !(divideQuery && buildQueryMetric(divideQuery) === metric)) {
+            divideQuery = parsed;
+            divideSource = keySource;
+        }
+        const on = divideOpen || (!!parsed && isPlainTable(keySource));
+        if (!on) { divideQuery = null; box.innerHTML = '<button type="button" class="btn btn-sm plus-add" onclick="openDivideBuilder()"><i class="fas fa-plus"></i> Build From Columns</button>'; return; }
+        if (!divideQuery) divideQuery = { agg: 'avg', a: '', b: '', f: [] };
+        const tables = metricSources().filter(s => metricsCatalogue.some(m => m.source === s) && isPlainTable(s));
+        if (!divideSource || !tables.includes(divideSource)) divideSource = tables.includes(document.getElementById('metricSourceSelect').value)
+            ? document.getElementById('metricSourceSelect').value : (tables[0] || '');
+        const tableOptions = tables.map(s => `<option value="${escHtml(s)}" ${s === divideSource ? 'selected' : ''}>${escHtml(sourceLabel(s))}</option>`).join('');
+        box.innerHTML = `<div class="series-query-row">
+                <select title="Table" onchange="onDivideSource(this.value)">${tableOptions}</select>
+                ${queryAggHtml('divide', divideQuery)}
+            </div>
+            ${queryFieldsHtml('divide', divideSource, divideQuery)}
+            <div class="series-query-row">
+                <button type="button" class="btn btn-edit btn-sm" title="Use the same table and filters as the Metric above" onclick="copyMetricFiltersToDivide()"><i class="fas fa-copy"></i> Copy Filters From Metric</button>
+                <button type="button" class="btn btn-remove-chart" title="Remove Divided By" onclick="closeDivideBuilder()"><i class="fas fa-trash"></i></button>
+            </div>`;
+    }
+
+    function openDivideBuilder() {
+        divideOpen = true;
+        divideQuery = { agg: 'avg', a: '', b: '', f: [] };
+        renderDivideQuery();
+    }
+
+    function closeDivideBuilder() {
+        divideOpen = false;
+        divideQuery = null;
+        setDivideMetric('');
+        renderDivideQuery();
+    }
+
+    function onDivideSource(source) {
+        divideSource = source;
+        divideQuery = { agg: divideQuery ? divideQuery.agg : 'avg', a: '', b: '', f: [] };
+        setDivideMetric('');
+        renderDivideQuery();
+    }
+
+    // The Metric's table and filters onto the bottom, so the two cover the same cars.
+    function copyMetricFiltersToDivide() {
+        const top = lineQuery || parseQueryMetric((selectedMetric() || {}).column || '');
+        if (!top) return;
+        divideSource = document.getElementById('metricSourceSelect').value;
+        divideQuery = { ...(divideQuery || { agg: 'avg', a: '', b: '' }), f: JSON.parse(JSON.stringify(top.f)) };
+        applyQuery('divide', true);
+    }
+
     // The line chart's Metric box: the list, or for a plain table the builder.
     function renderLineQuery(keepKey = null) {
         const source = document.getElementById('metricSourceSelect').value;
@@ -5432,16 +5584,35 @@
     function seriesPick(s, i, cur, field, blank, onMetric, metricClass = '') {
         const t = seriesTableOptions(s, cur, field);
         if (field === '_table' && isPlainTable(t.table) && (!s.metric || parseQueryMetric(s.metric))) {
-            s._q = s._q || parseQueryMetric(s.metric) || { agg: 'sum', a: '', b: '', f: [] };
+            if (!s._q) {
+                s._q = parseQueryMetric(s.metric) || { agg: 'sum', a: '', b: '', f: [] };
+                // The chart's filters are held once, not in each series' own list.
+                if (!s.no_chart_filters) {
+                    const shared = chartFilters.map(f => JSON.stringify(f));
+                    s._q.f = s._q.f.filter(f => !shared.includes(JSON.stringify(f)));
+                }
+            }
+            const optOut = chartFilters.length ? `<label class="series-check" title="Leave this series out of the filters set for the whole chart">
+                <input type="checkbox" ${s.no_chart_filters ? 'checked' : ''}
+                       onchange="onSeriesNoChartFilters(${i}, this.checked)"> Ignore Chart Filters</label>` : '';
             return `<select title="Table" onchange="onSeriesTable(${i}, '${field}', this.value)">${t.html}</select>
                         ${queryAggHtml(i, s._q)}
-                        <div class="series-query">${queryFieldsHtml(i, t.table, s._q)}</div>`;
+                        <div class="series-query">${queryFieldsHtml(i, t.table, s._q)}${optOut}</div>`;
         }
         const metrics = field !== '_table' && !t.table
             ? `<select class="${metricClass}" disabled><option value="">${blank}</option></select>`
             : `<select class="${metricClass}" onchange="${onMetric}">${seriesMetricOptions(cur || {}, blank, t.table)}</select>`;
         return `<select title="Table" onchange="onSeriesTable(${i}, '${field}', this.value)">${t.html}</select>
                         ${metrics}`;
+    }
+
+    function onSeriesNoChartFilters(i, off) {
+        const s = seriesDraft[i];
+        s.no_chart_filters = off;
+        // s._q holds only the series' own filters either way.
+        s.metric = seriesMetricFrom(s);
+        s.label = s.metric ? seriesBoxName(s) : '';
+        renderSeriesList();
     }
 
     // A different table clears the metric chosen from the old one.
@@ -5629,6 +5800,7 @@
             kind: seriesKind(s),
             ...(s.multiply_by && s.multiply_by.metric ? { multiply_by: s.multiply_by } : {}),
             ...(s.within_below ? { within_below: true } : {}),
+            ...(s.no_chart_filters ? { no_chart_filters: true } : {}),
             ...(s.axis === 'secondary' ? { axis: 'secondary' } : {}),
             ...(hasSplit(s) ? { split_at: { source: s.split_at.source || 'snowflake', metric: s.split_at.metric,
                                             label: String(s.split_at.label || '').trim(),
@@ -5680,6 +5852,7 @@
             source: series[0].source,
             metric: series[0].metric,
             series,
+            chart_filters: chartFilters.filter(f => f.column),
             theme: document.getElementById('themeSelect').value || null,
             column_layout: columnLayoutValue(),
             column_gap: Math.min(90, Math.max(0, Math.round(Number(document.getElementById('columnGapInput').value) || 0))),
@@ -7739,7 +7912,7 @@
         return 'Cannot Be Subtracted';
     }
 
-    const DS_METRIC_KINDS = [['count', 'Count Rows'], ['average', 'Average Of A Column'], ['difference', 'Average Of A Difference']];
+    const DS_METRIC_KINDS = [['count', 'Count Rows'], ['average', 'Average Of This Column'], ['difference', 'Average Of A Difference']];
 
     function renderDsDifferences() {
         const options = (list, value, blank) => `<option value="">${escHtml(blank)}</option>`
@@ -7749,12 +7922,13 @@
         const all = dsState.columns.map(c => c.column);
         document.getElementById('dsDifferenceList').innerHTML = dsState.differences.map((d, i) => {
             const kinds = DS_METRIC_KINDS.map(([v, l]) => `<option value="${v}"${v === d.kind ? ' selected' : ''}>${escHtml(l)}</option>`).join('');
-            // Count: no column. Average: one number column. Difference: two dates or two numbers.
-            const columns = d.kind === 'count' ? ''
-                : d.kind === 'average' ? `<select title="Column" onchange="dsState.differences[${i}].column_a = this.value; renderDsDifferences()">${options(numbers, d.column_a, '(choose a column)')}</select>`
-                : `<select title="Column A" onchange="dsState.differences[${i}].column_a = this.value; renderDsDifferences()">${options(usable, d.column_a, '(choose a column)')}</select>
-                    <span>Minus</span>
-                    <select title="Column B" onchange="dsState.differences[${i}].column_b = this.value; renderDsDifferences()">${options(usable, d.column_b, '(choose a column)')}</select>`;
+            // Column first (blank means count rows), then what to do with it, then the name.
+            // Average: one number column. Difference: two dates or two numbers.
+            const firstColumn = `<select title="Column" onchange="onDsMetricColumn(${i}, this.value)">${options(d.kind === 'difference' ? usable : numbers, d.column_a, '(no column - count rows)')}</select>`;
+            const secondColumn = d.kind === 'difference'
+                ? `<span>Minus</span>
+                    <select title="Column B" onchange="dsState.differences[${i}].column_b = this.value; renderDsDifferences()">${options(usable, d.column_b, '(choose a column)')}</select>`
+                : '';
             const filters = (d.filters || []).map((f, j) => `
                 <div class="ds-diff-row ds-diff-filter">
                     <span>Only Where</span>
@@ -7768,11 +7942,12 @@
                 </div>`).join('');
             return `<div class="ds-diff">
                 <div class="ds-diff-row">
+                    ${firstColumn}
+                    <select title="What To Chart" onchange="onDsMetricKind(${i}, this.value)">${kinds}</select>
+                    ${secondColumn}
+                    <span>${escHtml(dsDifferenceKind(d))}</span>
                     <input type="text" maxlength="40" value="${escHtml(d.name || '')}" placeholder="Name, e.g. Z001 Deliveries"
                            oninput="dsState.differences[${i}].name = this.value">
-                    <select title="What To Chart" onchange="onDsMetricKind(${i}, this.value)">${kinds}</select>
-                    ${columns}
-                    <span>${escHtml(dsDifferenceKind(d))}</span>
                     <button type="button" class="btn btn-edit btn-sm" onclick="addDsDifferenceFilter(${i})"><i class="fas fa-plus"></i> Filter</button>
                     <button type="button" class="btn btn-edit btn-sm" title="Copy this metric, to change a filter value" onclick="duplicateDsDifference(${i})"><i class="fas fa-copy"></i></button>
                     <button type="button" class="btn btn-remove-chart" title="Remove metric" onclick="dsState.differences.splice(${i}, 1); renderDsDifferences()"><i class="fas fa-trash"></i></button>
@@ -7792,6 +7967,16 @@
         d.kind = kind;
         if (kind === 'count') d.column_a = '';
         if (kind !== 'difference') d.column_b = '';
+        if (kind === 'average' && !DS_NUMBER_TYPES.includes((dsState.columns.find(c => c.column === d.column_a) || {}).type)) d.column_a = '';
+        renderDsDifferences();
+    }
+
+    // Picking a column first: a blank means count rows, a column on a count becomes an average.
+    function onDsMetricColumn(i, column) {
+        const d = dsState.differences[i];
+        d.column_a = column;
+        if (!column && d.kind !== 'difference') d.kind = 'count';
+        else if (column && d.kind === 'count') d.kind = 'average';
         renderDsDifferences();
     }
 

@@ -52,13 +52,29 @@ function purchaseTotal(r) {
 const isSumField = f => f.type === 'money' || f.type === 'number';
 const yesNoOptions = v => ['', 'Yes', 'No'].map(o => `<option value="${o}"${o === v ? ' selected' : ''}>${o}</option>`).join('');
 
+/* Whether a custom field is for this supplier. No suppliers set means all of
+   them. Same as field_applies() in utils/cars_bought.py. */
+const sameName = (a, b) => String(a || '').trim().toLowerCase() === String(b || '').trim().toLowerCase();
+const fieldApplies = (f, supplier) => !(f.suppliers || []).length || f.suppliers.some(n => sameName(n, supplier));
+const batchFields = () => customFields.filter(f => fieldApplies(f, $('bSupplier').value));
+let batchFieldKeys = '';
+
 function renderHead() {
+    const fields = batchFields();
+    batchFieldKeys = fields.map(f => f.key).join();
     $('vehHead').innerHTML = '<tr><th></th><th>VRM</th><th>Mileage</th><th>Vehicle</th><th>CAP ID</th><th>VAT Status</th>' +
         MONEY_COLS.map(([, l, g]) => `<th class="text-end${g ? ' group-start' : ''}">${l}</th>`).join('') +
         '<th class="text-end group-start">Total Purchase</th>' +
         '<th class="text-end group-start">AT Valuation</th><th class="text-end">CAP Clean</th>' +
-        customFields.map((f, i) => `<th class="${i === 0 ? 'group-start' : ''}">${esc(f.label)}${f.required ? ' *' : ''}</th>`).join('') +
+        fields.map((f, i) => `<th class="${i === 0 ? 'group-start' : ''}">${esc(f.label)}${f.required ? ' *' : ''}</th>`).join('') +
         '<th></th></tr>';
+}
+
+/* The supplier changed: redrawn only if that changes which fields show. */
+function refreshBatchFields() {
+    if (!rows.length || batchFields().map(f => f.key).join() === batchFieldKeys) return;
+    renderHead();
+    renderRows();
 }
 
 function vehicleText(r) {
@@ -82,7 +98,7 @@ function renderRows() {
     $('vehBody').innerHTML = rows.map((r, i) => {
         const money = MONEY_COLS.map(([k, , g]) =>
             `<td class="${g ? 'group-start' : ''}"><input class="form-control num" data-i="${i}" data-k="${k}" value="${r[k] ?? ''}"></td>`).join('');
-        const custom = customFields.map((f, j) => {
+        const custom = batchFields().map((f, j) => {
             const v = (r.custom || {})[f.key] ?? '';
             const cls = f.type === 'text' ? 'txt' : 'num';
             const box = f.type === 'yesno' ? `<select class="form-select yesno" data-i="${i}" data-c="${esc(f.key)}">${yesNoOptions(v)}</select>`
@@ -117,7 +133,7 @@ function rowTotals() {
     t.atCount = rows.filter(r => num(r.at_retail_valuation)).length;
     t.cap = r2(rows.reduce((s, r) => s + (num(r.cap_clean) || 0), 0));
     t.capCount = rows.filter(r => num(r.cap_clean)).length;
-    customFields.filter(isSumField).forEach(f => {
+    batchFields().filter(isSumField).forEach(f => {
         t['c_' + f.key] = r2(rows.reduce((s, r) => s + (num((r.custom || {})[f.key]) || 0), 0));
     });
     return t;
@@ -128,7 +144,7 @@ function renderTotals() {
     $('vehFoot').innerHTML = `<tr><td colspan="6">Total (${rows.length})</td>` +
         MONEY_COLS.map(([k]) => `<td>${gbp(t[k])}</td>`).join('') +
         `<td>${gbp(t.total)}</td><td>${gbp(t.at)}</td><td>${gbp(t.cap)}</td>` +
-        customFields.map(f => `<td>${isSumField(f) ? gbp(t['c_' + f.key]) : ''}</td>`).join('') + '<td></td></tr>';
+        batchFields().map(f => `<td>${isSumField(f) ? gbp(t['c_' + f.key]) : ''}</td>`).join('') + '<td></td></tr>';
 
     // Rows against the invoice's printed totals.
     const checks = [['net', 'bNet', 'Net'], ['vat', 'bVat', 'VAT'], ['gross', 'bGross', 'Gross']].map(([p, id, label]) => {
@@ -152,7 +168,7 @@ function renderTotals() {
     ];
     if (t.atCount) stats.push(['AT Valuation Total', `${gbp(t.at)} (${t.atCount})`]);
     if (t.capCount) stats.push(['CAP Clean Total', `${gbp(t.cap)} (${t.capCount})`]);
-    customFields.filter(isSumField).forEach(f => stats.push([f.label + ' Total', gbp(t['c_' + f.key])]));
+    batchFields().filter(isSumField).forEach(f => stats.push([f.label + ' Total', gbp(t['c_' + f.key])]));
     const dup = rows.filter(r => r.already_bought).length;
     if (dup) stats.push(['Already Bought', dup]);
     $('summaryGrid').innerHTML = stats.map(([l, v]) => `<div class="stat"><div class="lbl">${esc(l)}</div><div class="val">${v}</div></div>`).join('');
@@ -180,6 +196,7 @@ function markMissingBatch() {
     $(id).addEventListener('input', markMissingBatch);
     $(id).addEventListener('change', markMissingBatch);
 });
+['input', 'change'].forEach(type => $('bSupplier').addEventListener(type, refreshBatchFields));
 const missingCell = value => (value || '').trim() ? `<td>${esc(value)}</td>` : '<td class="cb-missing">Missing</td>';
 
 /* Under the Supplier box: the text the supplier was matched from, or a way to add it. */
@@ -237,6 +254,7 @@ if (window.IS_ADMIN) {
                 Object.assign(batchInvoice, {supplier_text: text, supplier_matched: true});
                 $('bSupplier').value = supplier;
                 markMissingBatch();
+                refreshBatchFields();
                 renderSupplierMatch();
             }
             msg(`${esc(text)} now means ${esc(supplier)}. ${res.updated} pending invoice${res.updated === 1 ? '' : 's'} updated.`, 'success');
@@ -450,7 +468,7 @@ function renderInbox(files) {
         const ignore = f.status === 'pending' || f.status === 'failed'
             ? ` <button class="btn btn-sm btn-outline-secondary" data-ignore="${id}" data-name="${esc(f.filename)}">Ignore</button>` : '';
         const link = `<a href="${BASE}/cars-bought/inbox/${encodeURIComponent(f.file_id)}/view" target="_blank" rel="noopener" title="Open the file">${esc(f.filename)}</a>`;
-        return `<tr><td>${ukDate(f.found_at)}</td><td>${link}</td>${f.status === 'pending' ? missingCell(f.supplier_name) : `<td>${esc(f.supplier_name || '')}</td>`}<td>${esc(f.invoice_number || '')}</td>
+        return `<tr><td>${ukDate(f.found_at)}</td>${f.status === 'pending' ? missingCell(f.supplier_name) : `<td>${esc(f.supplier_name || '')}</td>`}<td>${link}</td><td>${esc(f.invoice_number || '')}</td>
             <td>${ukDate(f.invoice_date)}</td><td class="text-end">${f.vehicles ?? ''}</td>
             <td class="text-end">${f.invoice_gross == null ? '' : gbp(f.invoice_gross)}</td>
             <td style="white-space:normal;">${inboxStatus(f)}</td><td class="text-nowrap">${actions}${ignore}</td></tr>`;
@@ -772,6 +790,8 @@ function renderAllHead() {
 
 function allCell(r, c) {
     const f = customField(c);
+    // Not for this car's supplier: greyed out, showing anything saved before the field was limited.
+    if (f && !fieldApplies(f, r.supplier_name)) return `<td class="cb-not-used${isSumField(f) ? ' text-end' : ''}">${esc(allText(r, c))}</td>`;
     if (f) {
         const v = allValue(r, c) ?? '';
         const missing = f.required && v === '' ? 'cb-missing' : '';
@@ -897,8 +917,10 @@ function openBatch(id) {
             ['derivative', 'Derivative'], ['vat_status', 'VAT Status'], ['vehicle_net', 'Vehicle Net', 1], ['vehicle_vat', 'Vehicle VAT', 1],
             ['vehicle_gross', 'Vehicle Gross', 1], ['fees_net', 'Fees Net', 1], ['fees_vat', 'Fees VAT', 1], ['fees_gross', 'Fees Gross', 1],
             ['purchase_total', 'Total Purchase', 1]];
-        $('batchModalBody').innerHTML = `<table class="table table-sm veh-table"><thead><tr>${cols.map(c => `<th>${c[1]}</th>`).join('')}${customFields.map(f => `<th>${esc(f.label)}</th>`).join('')}</tr></thead><tbody>` +
-            v.map(r => `<tr>${cols.map(([k, , m]) => `<td class="${m ? 'text-end' : ''}">${m ? gbp(r[k]) : esc(r[k] ?? '')}</td>`).join('')}${customFields.map(f => `<td>${esc((r.custom || {})[f.key] ?? '')}</td>`).join('')}</tr>`).join('') +
+        // The supplier's fields, plus any other that already holds a value.
+        const fields = customFields.filter(f => fieldApplies(f, v.length ? v[0].supplier_name : '') || v.some(r => ((r.custom || {})[f.key] ?? '') !== ''));
+        $('batchModalBody').innerHTML = `<table class="table table-sm veh-table"><thead><tr>${cols.map(c => `<th>${c[1]}</th>`).join('')}${fields.map(f => `<th>${esc(f.label)}</th>`).join('')}</tr></thead><tbody>` +
+            v.map(r => `<tr>${cols.map(([k, , m]) => `<td class="${m ? 'text-end' : ''}">${m ? gbp(r[k]) : esc(r[k] ?? '')}</td>`).join('')}${fields.map(f => `<td>${esc((r.custom || {})[f.key] ?? '')}</td>`).join('')}</tr>`).join('') +
             '</tbody></table>';
         bootstrap.Modal.getOrCreateInstance($('batchModal')).show();
     });
@@ -919,6 +941,7 @@ function cfRow(f) {
         <td><input class="form-control form-control-sm cf-label" value="${esc(f.label || '')}"></td>
         <td><select class="form-select form-select-sm cf-type">${types.map(([v, l]) => `<option value="${v}"${f.type === v ? ' selected' : ''}>${l}</option>`).join('')}</select></td>
         <td class="text-center"><input type="checkbox" class="form-check-input cf-req"${f.required ? ' checked' : ''}></td>
+        <td><input class="form-control form-control-sm cf-suppliers" placeholder="All Suppliers" value="${esc((f.suppliers || []).join(', '))}"></td>
         <td><button class="btn btn-sm btn-outline-danger cf-del"><i class="fas fa-times"></i></button></td></tr>`;
 }
 
@@ -1025,6 +1048,7 @@ if (window.IS_ADMIN) {
         $('ownNamesInput').value = (buyerCfg.own_names || []).join(', ');
         $('gridColourInput').value = buyerCfg.grid_colour || '#d0d0d0';
         $('missingColourInput').value = buyerCfg.missing_colour || '#f8d7da';
+        $('notUsedColourInput').value = buyerCfg.not_used_colour || '#e9ecef';
         $('inboxEnabledInput').checked = !!buyerCfg.inbox_enabled;
         $('inboxFolderInput').value = buyerCfg.inbox_folder || '';
         $('inboxDoneInput').value = buyerCfg.inbox_done_folder || '';
@@ -1051,11 +1075,16 @@ if (window.IS_ADMIN) {
     $('srAddBtn').addEventListener('click', () => $('srBody').insertAdjacentHTML('beforeend', srRow({})));
     $('srBody').addEventListener('click', e => { const b = e.target.closest('.sr-del'); if (b) b.closest('tr').remove(); });
     $('settingsSaveBtn').addEventListener('click', () => {
+        const split = s => s.split(',').map(x => x.trim()).filter(Boolean);
         const fields = [...$('cfBody').querySelectorAll('tr')].map(tr => ({
             key: tr.dataset.key || null, label: tr.querySelector('.cf-label').value,
             type: tr.querySelector('.cf-type').value, required: tr.querySelector('.cf-req').checked,
+            suppliers: split(tr.querySelector('.cf-suppliers').value),
         }));
-        const split = s => s.split(',').map(x => x.trim()).filter(Boolean);
+        // A misspelled supplier would hide the field from the supplier it was meant for.
+        const known = [...suppliers.map(s => s.supplier_name), ...[...$('snBody').querySelectorAll('.sn-supplier')].map(el => el.value)];
+        const unknown = [...new Set(fields.flatMap(f => f.suppliers))].filter(n => !known.some(k => sameName(k, n)));
+        if (unknown.length && !confirm(`Custom Fields: not a known supplier: ${unknown.join(', ')}. Save anyway?`)) return;
         const column_names = {};
         $('colNamesBody').querySelectorAll('[data-colfield]').forEach(el => { column_names[el.dataset.colfield] = split(el.value); });
         const supplier_rules = [...$('srBody').querySelectorAll('tr')].map(tr => ({
@@ -1072,6 +1101,7 @@ if (window.IS_ADMIN) {
                                          table_rows: num($('tableRowsInput').value),
                                          grid_colour: $('gridColourInput').value,
                                          missing_colour: $('missingColourInput').value,
+                                         not_used_colour: $('notUsedColourInput').value,
                                          inbox_enabled: $('inboxEnabledInput').checked,
                                          inbox_folder: $('inboxFolderInput').value,
                                          inbox_done_folder: $('inboxDoneInput').value,
@@ -1092,6 +1122,7 @@ if (window.IS_ADMIN) {
             $('inboxFolderLink').style.display = res.inbox_enabled ? '' : 'none';
             document.documentElement.style.setProperty('--cb-grid', res.grid_colour);
             document.documentElement.style.setProperty('--cb-missing', res.missing_colour);
+            document.documentElement.style.setProperty('--cb-not-used', res.not_used_colour);
             markMissingBatch();
             allLimit = res.table_rows;
             renderAllHead();

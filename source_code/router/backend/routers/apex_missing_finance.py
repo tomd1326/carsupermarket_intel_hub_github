@@ -28,8 +28,14 @@ router = APIRouter()
 
 PAGE_KEY = 'apex_missing_finance'
 _AMF_TABLE = "PRODUCT_SALES_PERFORMANCE.MISSING_FINANCE_AMOUNTS"
-# Always fetched: the "Apex data as of" time and the search box read them.
-_AMF_FIXED_COLUMNS = ["UPDATED_AT", "VRM"]
+# Always fetched.
+_AMF_FIXED_COLUMNS = ["VRM"]
+# Shown as "last built": this table's last rebuild, in UK time. Its UPDATED_AT
+# cannot say this: a fixed order drops out of the report, so the newest row can
+# be days older than the data.
+_AMF_LAST_BUILT_SQL = ("SELECT CONVERT_TIMEZONE('Europe/London', LAST_ALTERED)::TIMESTAMP_NTZ "
+                       f"FROM {kpi._VEHICLE_DB}.INFORMATION_SCHEMA.TABLES "
+                       "WHERE TABLE_SCHEMA = 'PRODUCT_SALES_PERFORMANCE' AND TABLE_NAME = 'MISSING_FINANCE_AMOUNTS'")
 _AMF_MAX_RULES = 30
 _AMF_RULE_OPS = {"equals", "not_equals", "contains", "is_blank", "is_not_blank", "less_than", "greater_than"}
 _COLOUR = re.compile(r"^#[0-9a-fA-F]{6}$")
@@ -71,7 +77,7 @@ AMF_DEFAULT_HARD_FILTERS = [
 # own type for the column (a date such as 2026-01-01, or a number).
 _AMF_RANGE_OPS = {"less_than": "<", "greater_than": ">"}
 
-_amf_cache: dict ={"key": None, "columns": None, "rows": None, "cached_at": 0.0}
+_amf_cache: dict ={"key": None, "columns": None, "rows": None, "cached_at": 0.0, "last_built": None}
 _amf_cache_lock = threading.Lock()
 
 
@@ -246,7 +252,9 @@ def amf_data(request: Request, force: bool = False, user: str = Depends(require_
                 clauses, params = _hard_filter_sql(hard_filters)
                 where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
                 rows, _ = sf.execute(f"SELECT {', '.join(select)} FROM {kpi._VEHICLE_DB}.{_AMF_TABLE}{where}", params)
+                built, _ = sf.execute(_AMF_LAST_BUILT_SQL, [])
             cache = {"key": key, "columns": select, "cached_at": time.time(),
+                     "last_built": kpi._json_cell(built[0][0]) if built else None,
                      "rows": [[kpi._json_cell(v) for v in r] for r in rows]}
             with _amf_cache_lock:
                 _amf_cache.update(cache)
@@ -254,4 +262,5 @@ def amf_data(request: Request, force: bool = False, user: str = Depends(require_
         logger.error(f"Apex missing finance data failed: {e}")
         return {"status": "error", "message": str(e)}
     return {"status": "ok", "view": view, "filters": filters, "cell_rules": cell_rules, "columns": cache["columns"],
-            "rows": cache["rows"], "missing": missing, "cached_at": cache["cached_at"], "appearance": appearance}
+            "rows": cache["rows"], "missing": missing, "cached_at": cache["cached_at"], "last_built": cache["last_built"],
+            "appearance": appearance}

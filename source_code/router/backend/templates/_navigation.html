@@ -126,6 +126,7 @@
     <a href="{{ p.url }}" class="side-menu-item">{{ p.name }}</a>
     {% endfor %}
     <div class="side-menu-divider"></div>
+    <a href="{{ BASE_URL }}/whats-new" class="side-menu-item"><i class="fas fa-bullhorn me-2" aria-hidden="true"></i>What's New</a>
     <a href="{{ BASE_URL }}/my-account" class="side-menu-item"><i class="fas fa-user me-2" aria-hidden="true"></i>My Account</a>
     {% if user_is_admin(user_name) %}
     <a href="{{ BASE_URL }}/logs" class="side-menu-item"><i class="fas fa-list me-2" aria-hidden="true"></i>Logs</a>

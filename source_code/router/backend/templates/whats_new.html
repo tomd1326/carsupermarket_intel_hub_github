@@ -1,0 +1,85 @@
+{% from '_navigation.html' import page_header with context %}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>What's New</title>
+    <link rel="icon" type="image/png" href="{{ BASE_URL }}/static/icon.png">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css" rel="stylesheet">
+    <link href="{{ static_url('css/theme.css') }}" rel="stylesheet">
+    <style>
+        @font-face { font-family: 'DM Sans'; src: url('{{ BASE_URL }}/static/fonts/DMSans-Regular.ttf');  font-weight: 400; }
+        @font-face { font-family: 'DM Sans'; src: url('{{ BASE_URL }}/static/fonts/DMSans-Medium.ttf');   font-weight: 500; }
+        @font-face { font-family: 'DM Sans'; src: url('{{ BASE_URL }}/static/fonts/DMSans-SemiBold.ttf'); font-weight: 600; }
+        @font-face { font-family: 'DM Sans'; src: url('{{ BASE_URL }}/static/fonts/DMSans-Bold.ttf');     font-weight: 700; }
+        body { font-family: 'DM Sans', system-ui, sans-serif; }
+        .whats-new { max-width: 900px; margin: 24px auto 48px auto; padding: 0 16px; }
+        .dev-entry { scroll-margin-top: 16px; }
+        .dev-title { font-size: 1.25rem; font-weight: 600; color: var(--c-text-heading); margin: 0; }
+        .dev-text { white-space: pre-line; }
+        .dev-section { margin-top: 12px; }
+        .dev-section > summary { cursor: pointer; font-weight: 600; }
+        .dev-faq { margin-top: 10px; }
+        .dev-faq-q { font-weight: 600; }
+    </style>
+</head>
+<body>
+    {{ page_header("What's New", user) }}
+    <div class="whats-new">
+        {% if error %}
+        <div class="alert alert-danger py-2">Could not load What's New: {{ error }}</div>
+        {% elif not developments %}
+        <p class="text-muted">Nothing here yet.</p>
+        {% endif %}
+        {% for dev in developments %}
+        <div class="card mb-3 dev-entry" id="dev-{{ dev.id }}">
+            <div class="card-body">
+                <div class="d-flex align-items-center gap-2 flex-wrap mb-1">
+                    <span class="badge bg-secondary">{{ dev.dev_type }}</span>
+                    {% if dev.released_label %}<span class="text-muted small">{{ dev.released_label }}</span>{% endif %}
+                </div>
+                <h2 class="dev-title">{{ dev.title }}</h2>
+                {% if dev.summary %}<div class="dev-text mt-2">{{ dev.summary }}</div>{% endif %}
+                {% if dev.replaces %}<div class="mt-2"><strong>{{ template.replaces_label }}:</strong> {{ dev.replaces }}</div>{% endif %}
+                {% if dev.details %}<div class="dev-text mt-2">{{ dev.details }}</div>{% endif %}
+                {% if dev.page_url %}
+                <div class="mt-3">
+                    {% if dev.can_open %}
+                    <a class="btn btn-sm btn-primary" href="{{ dev.page_url }}">{{ template.page_button_label.replace('{page}', dev.page_name) }}</a>
+                    {% else %}
+                    <span class="text-muted small">{{ template.no_access_text }}</span>
+                    {% endif %}
+                </div>
+                {% endif %}
+                {% if dev.guide %}
+                <details class="dev-section">
+                    <summary>User Guide</summary>
+                    <div class="dev-text mt-2">{{ dev.guide }}</div>
+                </details>
+                {% endif %}
+                {% if dev.faqs %}
+                <details class="dev-section">
+                    <summary>FAQs</summary>
+                    {% for faq in dev.faqs %}
+                    <div class="dev-faq">
+                        <div class="dev-faq-q">{{ faq.question }}</div>
+                        <div class="dev-text">{{ faq.answer }}</div>
+                    </div>
+                    {% endfor %}
+                </details>
+                {% endif %}
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+    <script>
+        // A link from an email lands on one entry: open its guide and FAQs.
+        (function () {
+            const entry = location.hash && document.getElementById(location.hash.slice(1));
+            if (entry) entry.querySelectorAll('details').forEach(d => { d.open = true; });
+        })();
+    </script>
+</body>
+</html>

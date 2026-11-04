@@ -25,6 +25,7 @@ snowflake-connector-python = ">=3.17"
 tzdata = ">=2024.1"
 playwright = "^1.44.0"
 pypdf = "^5.1.0"
+olefile = "^0.47"
 
 [tool.poetry.group.dev.dependencies]
 uvicorn = "^0.15.0"

@@ -60,6 +60,8 @@ _GRID_COLOUR_KEY = 'cars_bought_grid_colour'
 DEFAULT_GRID_COLOUR = '#d0d0d0'
 _MISSING_COLOUR_KEY = 'cars_bought_missing_colour'
 DEFAULT_MISSING_COLOUR = '#f8d7da'
+_NOT_USED_COLOUR_KEY = 'cars_bought_not_used_colour'
+DEFAULT_NOT_USED_COLOUR = '#e9ecef'
 # Oldest Supplier Stock Evaluator data (hours) used to fill in a car.
 _EVALUATOR_HOURS_KEY = 'cars_bought_evaluator_max_hours'
 # '0' = Look Up CAP & AT always calls live, ignoring figures already stored.
@@ -116,6 +118,10 @@ def _missing_colour(conn) -> str:
     return _clean_colour(_read_setting(conn, _MISSING_COLOUR_KEY), DEFAULT_MISSING_COLOUR)
 
 
+def _not_used_colour(conn) -> str:
+    return _clean_colour(_read_setting(conn, _NOT_USED_COLOUR_KEY), DEFAULT_NOT_USED_COLOUR)
+
+
 def _person_name(people: dict, username: str) -> str:
     d = people.get(username) or {}
     return f"{d.get('first_name') or ''} {d.get('last_name') or ''}".strip() or username
@@ -137,11 +143,12 @@ def cars_bought_page(request: Request, user: str = Depends(require_page(_PAGE)))
         inbox_cfg = _inbox_settings(conn)
         grid_colour = _grid_colour(conn)
         missing_colour = _missing_colour(conn)
+        not_used_colour = _not_used_colour(conn)
     return templates.TemplateResponse("cars_bought.html", {"request": request, "user": user, "BASE_URL": BASE_URL,
                                                            "is_admin": is_admin(user), "inbox_enabled": inbox_cfg["inbox_enabled"],
                                                            "inbox_folder": inbox_cfg["inbox_folder"],
                                                            "inbox_folder_url": inbox_cfg["inbox_folder_url"], "grid_colour": grid_colour,
-                                                           "missing_colour": missing_colour})
+                                                           "missing_colour": missing_colour, "not_used_colour": not_used_colour})
 
 
 @router.get("/cars-bought/config")
@@ -156,6 +163,7 @@ def cars_bought_config(user: str = Depends(require_page_api(_PAGE))):
         inbox_cfg = _inbox_settings(conn)
         grid_colour = _grid_colour(conn)
         missing_colour = _missing_colour(conn)
+        not_used_colour = _not_used_colour(conn)
         own_names = _own_names(conn)
         table = _table_settings(conn, fields)
     # Not caught: an empty list here would be saved back as empty by Settings.
@@ -170,7 +178,7 @@ def cars_bought_config(user: str = Depends(require_page_api(_PAGE))):
             "column_names": names, "column_labels": cb.COLUMN_FIELD_LABELS, "fee_words": fee_words,
             "supplier_names": supplier_names, "fee_vat_rate": fee_vat_rate, "supplier_rules": supplier_rules, "own_names": own_names,
             "evaluator_max_hours": hours, "lookup_reuse": lookup_reuse, "grid_colour": grid_colour,
-            "missing_colour": missing_colour, **inbox_cfg}
+            "missing_colour": missing_colour, "not_used_colour": not_used_colour, **inbox_cfg}
 
 
 def _inbox_settings(conn) -> dict:
@@ -294,6 +302,7 @@ def cars_bought_save_config(payload: dict, user: str = Depends(require_page_api(
     since = str(payload.get("inbox_since") or "").strip()[:10]
     grid_colour = _clean_colour(payload.get("grid_colour"), DEFAULT_GRID_COLOUR)
     missing_colour = _clean_colour(payload.get("missing_colour"), DEFAULT_MISSING_COLOUR)
+    not_used_colour = _clean_colour(payload.get("not_used_colour"), DEFAULT_NOT_USED_COLOUR)
     rows_at_once = cb.to_int(payload.get("table_rows"))
     if rows_at_once is None or not 50 <= rows_at_once <= 5000:
         return {"status": "error", "message": "Rows Shown At Once must be between 50 and 5000"}
@@ -313,7 +322,8 @@ def cars_bought_save_config(payload: dict, user: str = Depends(require_page_api(
                                      _COLUMN_NAMES_KEY: json.dumps(names), _FEE_WORDS_KEY: json.dumps(words),
                                      _FEE_VAT_RATE_KEY: rate,
                                      _SUPPLIER_RULES_KEY: json.dumps(supplier_rules), _GRID_COLOUR_KEY: grid_colour,
-                                     _MISSING_COLOUR_KEY: missing_colour, _OWN_NAMES_KEY: json.dumps(own_names),
+                                     _MISSING_COLOUR_KEY: missing_colour, _NOT_USED_COLOUR_KEY: not_used_colour,
+                                     _OWN_NAMES_KEY: json.dumps(own_names),
                                      _EVALUATOR_HOURS_KEY: hours, _LOOKUP_REUSE_KEY: '1' if lookup_reuse else '0',
                                      _INBOX_ENABLED_KEY: '1' if payload.get("inbox_enabled") else '0',
                                      _INBOX_FOLDER_KEY: folder, _INBOX_DONE_FOLDER_KEY: done_folder,
@@ -326,7 +336,7 @@ def cars_bought_save_config(payload: dict, user: str = Depends(require_page_api(
             "column_names": names, "column_labels": cb.COLUMN_FIELD_LABELS, "fee_words": words,
             "supplier_names": supplier_names, "fee_vat_rate": rate, "supplier_rules": supplier_rules,
             "evaluator_max_hours": hours, "lookup_reuse": lookup_reuse, "grid_colour": grid_colour,
-            "missing_colour": missing_colour, **inbox_cfg}
+            "missing_colour": missing_colour, "not_used_colour": not_used_colour, **inbox_cfg}
 
 
 @router.post("/cars-bought/supplier-names")
@@ -714,10 +724,12 @@ def _saved_copy(s3_key) -> bytes | None:
 
 
 def _show_file(filename: str, data: bytes) -> Response:
-    """A file for the browser to open in its own tab where it can (PDF, photo)."""
+    """A file for the browser to open in its own tab where it can (PDF, photo).
+    A saved email is downloaded instead, so nothing in it can run on this site."""
     media_type = mimetypes.guess_type(filename or "")[0] or "application/octet-stream"
+    how = "attachment" if cb.file_kind_or_none(filename) in ("html", "email") else "inline"
     return Response(content=data, media_type=media_type,
-                    headers={"Content-Disposition": f"inline; filename*=UTF-8''{quote(filename or 'invoice')}"})
+                    headers={"Content-Disposition": f"{how}; filename*=UTF-8''{quote(filename or 'invoice')}"})
 
 
 @router.get("/cars-bought/inbox/{file_id}/view")
@@ -854,6 +866,11 @@ def cars_bought_submit(request: Request, payload: dict, user: str = Depends(requ
     with get_database_connection() as conn:
         fields = _custom_fields(conn)
     for f in fields:
+        # Not for this supplier: not asked for, and nothing typed before the supplier was changed is kept.
+        if not cb.field_applies(f, supplier):
+            for v in vehicles:
+                (v.get("custom") or {}).pop(f["key"], None)
+            continue
         if f.get("required"):
             blank = [v["vrm"] for v in vehicles if (v.get("custom") or {}).get(f["key"]) in (None, "")]
             if blank:

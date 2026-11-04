@@ -99,7 +99,8 @@ def _clean(line: str) -> str:
 _NOTHING = re.compile(r"Nothing to do|does not match any enabled nodes")
 _DONE = re.compile(r"Done\. PASS=(\d+).*?ERROR=(\d+).*?TOTAL=(\d+)")
 _ERROR = re.compile(r"(Compilation|Database|Runtime|Parsing|Dependency) Error|Error in model|"
-                    r"invalid identifier|does not exist or not authorized|^\s*ERROR\b|\bERROR creating")
+                    r"invalid identifier|does not exist or not authorized|^\s*ERROR\b|\bERROR creating|"
+                    r"\b\d{6} \(\w{5}\):|SQL compilation error|Insufficient privileges")
 
 
 def _admin(user: str):

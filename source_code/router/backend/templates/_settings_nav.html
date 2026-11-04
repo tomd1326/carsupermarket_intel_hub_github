@@ -28,6 +28,7 @@
     {% set groups = [
         ('Users', [
             ('users', 'User Accounts', BASE_URL ~ '/settings/users'),
+            ('page_access', 'Page Access', BASE_URL ~ '/settings/users/page-access'),
             ('user_activity', 'User Activity', BASE_URL ~ '/settings/user-activity'),
         ]),
     ] %}
@@ -47,5 +48,9 @@
     <a href="{{ BASE_URL }}/settings/page-names"
        class="btn {% if active_section == 'page_names' %}btn-dark{% else %}btn-outline-secondary{% endif %}">
         Page Names
+    </a>
+    <a href="{{ BASE_URL }}/settings/developments"
+       class="btn {% if active_section == 'developments' %}btn-dark{% else %}btn-outline-secondary{% endif %}">
+        Developments
     </a>
 </div>
