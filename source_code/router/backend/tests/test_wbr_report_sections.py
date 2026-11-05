@@ -316,6 +316,7 @@ def test_the_same_kpi_chart_can_be_in_two_sections():
     {"overview": "x"},
     {"overview": ["x"]},
     {"overview": [{"id": "r1", "ref": "cmv", "period": "y"}]},
+    {"overview": [{"id": "r1", "ref": "cmv", "period": "d"}]},
     {"overview": [{"id": "", "ref": "cmv", "period": "m"}]},
     {"overview": [{"id": "r1", "ref": "cmv", "period": "m"}, {"id": "r2", "ref": "cmv", "period": "m"}]},
     {"overview": [{"id": "r1", "ref": "cmv", "period": "m"}], "pnl": [{"id": "r1", "ref": "other", "period": "m"}]},

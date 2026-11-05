@@ -9,7 +9,8 @@ as dotted lines on the KPI charts.
 A comment belongs to a chart, not to one placing of it: target is
 'chart:<KPI row id>|<m|w|d>', so the same chart on the grid and on any slide
 shows the same threads. A chart taken off the review keeps its comments; they
-show again if it is put back.
+show again if it is put back. A Report table's comments have target
+'table:<table id>'.
 
 Who may do what (checked here, not only in the page):
   - anyone who can open the review may comment and reply;
@@ -47,7 +48,8 @@ PAGE = 'weekly_business_review'
 VEHICLE_PAGES = ('trade_report', 'orders_deliveries', 'stock_list')
 VEHICLE_TARGET_RE = re.compile(r"^vehicle:([A-Za-z0-9_\-]{1,40})$")
 BODY_MAX = 2000
-_TARGET_RE = re.compile(r"^chart:([A-Za-z0-9_\-]{1,40})\|([mwd])$")
+_TARGET_RE = re.compile(r"^(?:chart:[A-Za-z0-9_\-]{1,40}\|[mwd]|table:[A-Za-z0-9_\-]{1,40})$")
+_REVIEW_PREFIXES = ('chart:', 'table:')
 # @username, where a username may itself be an email address.
 _MENTION_RE = re.compile(r"@([A-Za-z0-9._\-]+(?:@[A-Za-z0-9.\-]+)?)")
 
@@ -186,7 +188,7 @@ def _add_alerts(cur, people, kind: str, comment_id: int, root_id: int, from_user
 
 
 def _insert_comment(cur, user: str, payload: dict, body: str, mentioned: list, check_target, link_for=None,
-                    prefix: str = 'chart:') -> int:
+                    prefix=_REVIEW_PREFIXES) -> int:
     """Adds a comment or a reply and its alerts; returns the new id. A reply
     takes its thread's target; a new thread's target goes through check_target.
     Only threads whose target starts with `prefix` can be replied to."""
@@ -257,7 +259,8 @@ def comments_list(request: Request, user: str = Depends(require_page_api(PAGE)))
                 cur.execute(
                     """SELECT id, target, parent_id, author, body, mentions, assigned_to,
                               resolved_at, resolved_by, created_at, edited_at
-                       FROM wbr_comments WHERE deleted_at IS NULL AND target LIKE 'chart:%' ORDER BY created_at""")
+                       FROM wbr_comments WHERE deleted_at IS NULL AND (target LIKE 'chart:%' OR target LIKE 'table:%')
+                       ORDER BY created_at""")
                 comments = [_row(r) for r in cur.fetchall()]
     except Exception as e:
         logger.error(f"Weekly Business Review comments load failed: {e}")
@@ -296,7 +299,7 @@ _ANY_COMMENT_PAGE = require_page_api(PAGE, *VEHICLE_PAGES)
 def _check_open_to(user: str, target: str) -> None:
     """The user can open the comment's page, and review comments are switched on."""
     _check_access(user, target)
-    if target.startswith('chart:'):
+    if target.startswith(_REVIEW_PREFIXES):
         _check_comments_on()
 
 

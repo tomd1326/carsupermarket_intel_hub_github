@@ -5,43 +5,57 @@ the live Sheet "UK - Weekly Business Review v6". Every cell was checked by scrip
 `1- EBIT landing`, `3&5`, `4 - Inventories EoP`, `6- Marketing Dynamism`, `GPU MS by Channel`,
 `Charts Finance`, `Charts GPU-M`, `Charts GPU-S`, `Ctrl - breakdown GPU MS` and `graphWeek-setup`.
 
-**Changed after this comparison, also 2026-11-05 (Tom's decisions), and not compared again:**
+**Tom's decisions of 2026-11-05, included in this comparison.** It was run again with them the same day,
+using the Sheet values read earlier that day, so the only changes are from the report's side:
 
 - **GPU-M, GPU-MS and GPU-MSB are Snowflake's `gpu_m`, `gpu_ms` and `gpu_msb`.** The £495 recon cost for a car
   with none or under £100 was a guess and is gone. GPU-S is `gpu_s`, within £1 of the old sum on all 20,469
-  cars delivered since 2025-12. The Sheet's GPU-M figures will now differ by the amounts below.
+  cars delivered since 2025-12. Section 1 shows what this changed against the Sheet.
 - **Apex holds a car's costs as one number**, so the recon and other split still comes from AutoView. A new
   breakdown row, `Apex Vs AutoView Difference`, holds what they do not account for: -£8 to +£20 per car a
   month from 2025-12, on 8% to 23% of cars. 2025-11 is -£472, on 97%, as AutoView recon barely exists then,
   so AutoView Costs Start now defaults to 2025-12.
 - **One cause of that difference:** 465 AutoView records sit on two or more Apex stock ids (944 of 20,466
   rows delivered since 2025-12), so their AutoView costs are on every one of those rows.
-- **The Report's charts are now KPI charts**, chosen per section on the page, so the chart rows in section 2
-  and the N-1 rows below no longer apply.
+- **The Report's charts are now KPI charts**, chosen per section on the page, so charts are no longer in this
+  comparison: 1,549 cells, against 1,993 when they were.
 
 For this comparison only, `Buy back` sales were put back into `C2B2C - Other`, as the Sheet's rows
 still have them there (see section 2).
 
 ## 1. Result
 
-**1,383 of 1,993 cells match within the Sheet's rounding (69%). A further 325 are recent rows with a
-median gap of 0.9%.**
+**1,030 of 1,549 cells match within the Sheet's rounding (66.5%). A further 260 are recent rows with a
+median gap of 1.2%. No cell is blank.**
 
 | What | Cells | Share | Median gap |
 |---|---:|---:|---:|
-| Match | 1,383 | 69.4% | |
-| Recent rows changed since the Sheet's refresh (section 3) | 325 | 16.3% | 0.9% |
-| Current month, only one day old (section 3) | 68 | 3.4% | 4.8% |
-| The Sheet's YTD columns are broken (section 4) | 61 | 3.1% | 28.7% |
-| Accounts moved since the Sheet copied them (section 3) | 45 | 2.3% | 2.4% |
-| Vehicles Ordered GPU-M, not explained (section 5) | 39 | 2.0% | 4.3% |
-| Older frozen rows, restated costs (section 3) | 36 | 1.8% | 0.3% |
-| Blank in the report on purpose (section 2) | 27 | 1.4% | |
-| Top 10 "before" column starts later (section 2) | 9 | 0.5% | 10.1% |
+| Match | 1,030 | 66.5% | |
+| Recent rows changed since the Sheet's refresh (section 3) | 260 | 16.8% | 1.2% |
+| Current month, only one day old (section 3) | 68 | 4.4% | 5.1% |
+| The Sheet's YTD columns are broken (section 4) | 61 | 3.9% | 28.7% |
+| Accounts moved since the Sheet copied them (section 3) | 45 | 2.9% | 2.4% |
+| Vehicles Ordered GPU-M, not explained (section 5) | 40 | 2.6% | 7.2% |
+| Older frozen rows, restated costs (section 3) | 36 | 2.3% | 0.4% |
+| Top 10 "before" column starts later (section 2) | 9 | 0.6% | 13.1% |
+
+**What the new GPU-M changed.** Of the 1,485 different cells compared in both runs, 979 matched before and
+966 match now: 18 stopped matching and 5 started. The Sheet still uses the old way, so these rows show the gap:
+
+| Period | GPU-M Sheet | GPU-M now | GPU-M before | GPU-MSB Sheet | GPU-MSB now |
+|---|---:|---:|---:|---:|---:|
+| 2026-08 | 699 | 734 | 700 | 1,470 | 1,505 |
+| 2026-09 | 705 | 719 | 702 | 1,439 | 1,453 |
+| 2026-10 | 739 | 739 | 731 | 1,513 | 1,491 |
+| 2026-11 | 810 | 798 | 794 | 1,416 | 1,395 |
+| W40 | 752 | 765 | 749 | 1,457 | 1,463 |
+| W41 | 755 | 750 | 747 | 1,522 | 1,496 |
+| W42 | 799 | 803 | 790 | 1,563 | 1,541 |
+| W43 | 692 | 696 | 693 | 1,499 | 1,484 |
+| W44 | 698 | 695 | 685 | 1,476 | 1,453 |
 
 **Match in full:** stock B2C, sleeping stock, rotation refurb, recon, the five enquiry rows and their
-trend arrows, purchased and advertised GPU-M, the GAP/RTI, SMART Plus and Service/MOT penetration
-rates, take rate, % for sale, purchases chart, B2B2C aging.
+trend arrows, advertised GPU-M.
 
 **Budget:** all 924 figures from 2025-10 onwards match the Sheet's Budget tab. Earlier months were
 never imported and are not used.
@@ -52,11 +66,11 @@ never imported and are not used.
 
 | Item | Report | Sheet | Why |
 |---|---|---|---|
-| GPU-M | AutoView recon and other costs plus standard lines, as the Power Query | Same | Not Snowflake's `gpu_m`, which uses Apex costs and adds `write_down`. Decide which should be the one figure later |
-| N-1 using AutoView costs, before 2025-11 | Blank | Filled from frozen rows | `SALES_AUTOVIEW` has almost no rows before then. Never the 495 default |
+| GPU-M | Snowflake's `gpu_m`, the same figure as the KPI charts | AutoView recon and other costs plus standard lines, in the Power Query | Tom's decision. One central figure, and the £495 guess is gone |
+| N-1 using AutoView costs, before 2025-12 | Blank | Filled from frozen rows | `SALES_AUTOVIEW` has almost no recon cost before then. AutoView Costs Start setting |
 | Recon N-1 before the file starts | Blank | 0, or a part month (2025-10: 290) | The file starts 2025-10-13 |
 | Inventories and days of inventories N-1 | Blank | Empty, 0 or `#N/A` | The Sheet's formula points at a row that does not exist |
-| Top 10 "before" column | From 2025-11 | All frozen rows | Earlier months would use the default recon cost |
+| Top 10 "before" column | From 2025-12 | All frozen rows | Follows AutoView Costs Start |
 | Deliveries after the review Sunday | Not counted | Counted if the Sheet is refreshed later | Nov 1: 24 against 26 |
 | Purchases chart | `sales_channel = 'B2C'` | Fixed since item 5 of the plan was written | |
 | `Buy back` channel | Own row | Inside `C2B2C - Other` (sales), left out of totals (purchases) | Uncommitted change in `suppliers__c.sql`, already in PROD. Sheet's purchases total W41 470, chart 480: the 10 is Buy Back |
@@ -77,8 +91,9 @@ never imported and are not used.
 **The Sheet's rows are frozen when pasted. Snowflake keeps changing.**
 
 - **Older months, confirmed.** The April and May GPU-M gap is one line: late costs. Finance's table now
-  says -166.48 and -167.66; the Sheet's rows hold -207 and -212. GPU-M Apr 854 against 817, May 935
-  against 896. June's gap is AutoView recon cost: -560 against -541.
+  says -166.48 and -167.66; the Sheet's rows hold -207 and -212. With the new GPU-M, Apr is 881 against
+  817 and May 949 against 896; late costs explain about 40 of each. June's gap was AutoView recon cost:
+  -560 against -541.
 - **October standards, confirmed for late costs.** The Sheet's Oct late cost (-223) is September's
   figure, so it was copied before October's was published (the model carries the last month forward).
   Snowflake now has -218.
@@ -113,11 +128,11 @@ and the inventories budget 2,440, against 2,434 in the Sheet.
 
 ## 5. Not explained
 
-**Vehicles Ordered GPU-M (39 cells, in "More" on `volume_trends`).** Sep is close (739 against 742), but
-weeks are not: W41 810 against 753. Leaving out cancelled orders does not fix it (796). The Sheet's title
-says it excludes cancelled; its monthly formula does not. Cancelled orders have no costs yet, so their
-figures keep moving, and the Sheet's are frozen. This is likely but not confirmed. It feeds the three
-GPU-M waterfall charts only.
+**Vehicles Ordered GPU-M (40 cells, none matching, in "More" on `volume_trends`).** The figures here were
+looked at before the new GPU-M: Sep was close (739 against 742), but weeks were not: W41 810 against 753.
+Leaving out cancelled orders did not fix it (796). The Sheet's title says it excludes cancelled; its monthly
+formula does not. Cancelled orders have no costs yet, so their figures keep moving, and the Sheet's are
+frozen. This is likely but not confirmed. The three GPU-M waterfall charts it fed have been removed.
 
 ## 6. Not checked
 
@@ -127,5 +142,6 @@ GPU-M waterfall charts only.
 - The cars bought, recon and net order rows of `average_volumes`: the Sheet's `6- Marketing Dynamism`
   only holds the enquiry rows. Recon and net orders are checked on `3&5`; cars bought is not checked.
 - `Charts GPU-M` weeks at supplier level beyond a sample, which depend on the costs in section 3.
-- `graphMTD-setup` monthly charts after GPU-MS: the Sheet's values were not compared.
+- `graphMTD-setup` and `graphWeek-setup`: charts are KPI charts now, so these are no longer compared. Six of
+  the KPI charts' figures were checked against Snowflake directly for October, not against the Sheet.
 - The sensitivity table and the rotation charts.

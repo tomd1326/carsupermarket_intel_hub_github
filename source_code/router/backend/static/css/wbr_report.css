@@ -35,7 +35,8 @@
 .wbr-trend-up { border-bottom: 8px solid #15803d; }
 .wbr-trend-down { border-top: 8px solid #b91c1c; }
 
-.wbr-report-charts { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 12px 16px; }
+.wbr-report-charts { display: flex; flex-direction: column; gap: 12px; }
+.wbr-report-chart-line { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 12px 16px; }
 .wbr-report-chart { box-sizing: border-box; width: var(--wbr-report-chart-width, 420px); max-width: 100%; }
 .wbr-report-charts .chart-card { box-sizing: border-box; width: 100%; }
 .modal-box.busy { opacity: 0.6; pointer-events: none; }
