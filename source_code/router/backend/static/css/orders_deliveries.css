@@ -57,11 +57,11 @@
            inactive, same idea as the filter pills on buying requirements. */
         .lens-toggle { display: inline-flex; background: var(--c-surface-sunken); border-radius: var(--radius-md); padding: 3px; }
         .lens-toggle button {
-            border: 1px solid var(--c-control-border); background: var(--c-surface); color: var(--c-text);
+            border: 1px solid var(--c-btn-border); background: var(--c-btn-bg); color: var(--c-btn-text);
             font-weight: 600; font-size: 1em; padding: 0.5em 1.2em; border-radius: var(--radius-sm); cursor: pointer;
         }
         .lens-toggle button + button { margin-left: 3px; }
-        .lens-toggle button:hover { border-color: var(--c-control-border-hover); background: var(--c-surface-alt); }
+        .lens-toggle button:hover { border-color: var(--c-btn-hover-bg); background: var(--c-btn-hover-bg); color: var(--c-btn-hover-text); }
         .lens-toggle button.active { background: var(--c-dark); color: var(--c-surface); border-color: var(--c-dark); }
         .lens-toggle button.active:hover { background: var(--c-dark); }
 
@@ -78,8 +78,8 @@
         }
         .btn-apply.loading:hover { background-color: var(--c-disabled-bg); border-color: var(--c-disabled-border); }
         .filter-input { border: 1px solid var(--c-disabled-border); border-radius: var(--radius-md); padding: 4px 8px; font-size: 0.75em; color: var(--c-text); width: 180px; }
-        .btn-refresh { background-color: var(--c-surface); border: 1px solid var(--c-control-border); color: var(--c-text); font-weight: 600; font-size: 0.9em; padding: 7px 15px; }
-        .btn-refresh:hover { background-color: var(--c-disabled-bg); color: var(--c-dark); }
+        .btn-refresh { background-color: var(--c-btn-bg); border: 1px solid var(--c-btn-border); color: var(--c-btn-text); font-weight: 600; font-size: 0.9em; padding: 7px 15px; }
+        .btn-refresh:hover { background-color: var(--c-btn-hover-bg); border-color: var(--c-btn-hover-bg); color: var(--c-btn-hover-text); }
         .btn-refresh:disabled { opacity: 0.6; cursor: default; }
         .cache-note { color: var(--c-text-muted); font-size: 1em; }
 

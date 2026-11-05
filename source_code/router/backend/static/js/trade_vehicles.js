@@ -229,9 +229,11 @@ window.TV = (function () {
     // Settings > Highlighting: the colour of the first rule on this column that
     // matches the value, or '' for none. Text tests ignore capitals.
     function highlightFor(value, column) {
-        if (blank(value)) return '';
         const hit = highlightRules.find(rule => {
             if (rule.column !== column) return false;
+            if (rule.op === 'is_blank') return blank(value);
+            if (rule.op === 'is_not_blank') return !blank(value);
+            if (blank(value)) return false;
             const text = String(value).toLowerCase(), want = rule.value.toLowerCase();
             if (rule.op === 'contains') return text.includes(want);
             if (['>', '<', '>=', '<='].includes(rule.op)) {
@@ -241,11 +243,9 @@ window.TV = (function () {
             const same = typeof value === 'number' ? value === Number(rule.value) : text === want;
             return rule.op === '=' ? same : !same;
         });
-        return hit ? hit.colour : '';
+        if (!hit) return '';
+        return `background:${hit.colour};${hit.text ? `color:${hit.text};` : ''}`;
     }
-
-    // Notes sits to the right of VRM, or first when VRM is not in the list.
-    const notesCell = r => `<td>${VehicleComments.button(r.stock_id, r.vrm)}</td>`;
 
     function renderTable() {
         const columns = view.columns;
@@ -253,18 +253,17 @@ window.TV = (function () {
         const head = columns.map(c => {
             const mark = state.sort && state.sort.column === c.column ? (state.sort.dir === 1 ? '&#9650;' : '&#9660;') : '';
             const th = `<th${NUMBER_FORMATS.includes(c.format) ? ' class="num"' : ''} onclick="TV.sort('${c.column}')" title="${escHtml(c.column)}">${escHtml(heading(c))}<span class="sort-mark">${mark}</span></th>`;
-            return c.column === 'vrm' ? th + '<th>Notes</th>' : th;
+            return th;
         }).join('');
-        const hasVrm = columns.some(c => c.column === 'vrm');
-        const body = rows.map(r => '<tr>' + (hasVrm ? '' : notesCell(r)) + columns.map(c => {
+        const body = rows.map(r => '<tr>' + columns.map(c => {
             const cell = cellFor(r[c.column], c);
             const colour = highlightFor(r[c.column], c.column);
             const changed = c.column === 'branch_name' && r.site_change;
-            const td = `<td${cell.num || changed ? ` class="${[cell.num ? 'num' : '', changed ? 'site-changed' : ''].join(' ').trim()}"` : ''}${colour ? ` style="background:${colour}"` : ''}>${cell.html}${changed ? VehicleComments.siteButton(r.stock_id, r.vrm, `Site Changed From ${r.site_change.old_site || 'Unknown'}`) : ''}</td>`;
-            return c.column === 'vrm' ? td + notesCell(r) : td;
+            const td = `<td${cell.num ? ' class="num"' : ''}${colour ? ` style="${colour}"` : ''}>${cell.html}${changed ? VehicleComments.siteButton(r.stock_id, r.vrm, `Site Changed From ${r.site_change.old_site || 'Unknown'}`) : ''}${c.column === 'vrm' ? VehicleComments.button(r.stock_id, r.vrm) : ''}</td>`;
+            return td;
         }).join('') + '</tr>').join('');
         document.getElementById('vehiclesTable').innerHTML =
-            `<thead><tr>${hasVrm ? '' : '<th>Notes</th>'}${head}</tr></thead><tbody>${body}</tbody>${summaryRow(columns, rows)}`;
+            `<thead><tr>${head}</tr></thead><tbody>${body}</tbody>${summaryRow(columns, rows)}`;
         const count = document.getElementById('vehQuickCount');
         if (count) count.textContent = `${rows.length.toLocaleString('en-GB')} of ${state.rows.length.toLocaleString('en-GB')} vehicles`;
     }
@@ -284,9 +283,6 @@ window.TV = (function () {
             return { ...cell, title: `${kind} of ${values.length.toLocaleString('en-GB')} vehicle${values.length === 1 ? '' : 's'}` };
         });
         if (!cells[0].html) cells[0] = { html: 'Total / Average' };
-        // A blank under the Notes column.
-        const vrmAt = columns.findIndex(c => c.column === 'vrm');
-        cells.splice(vrmAt + 1, 0, { html: '' });
         return '<tfoot><tr>' + cells.map(cell =>
             `<td${cell.num ? ' class="num"' : ''}${cell.title ? ` title="${escHtml(cell.title)}"` : ''}>${cell.html}</td>`
         ).join('') + '</tr></tfoot>';
@@ -327,8 +323,6 @@ window.TV = (function () {
         document.getElementById('vehColSearch').value = '';
         document.getElementById('filterColourInput').value =
             getComputedStyle(document.documentElement).getPropertyValue('--filter-on').trim();
-        document.getElementById('siteChangedColourInput').value =
-            getComputedStyle(document.documentElement).getPropertyValue('--site-changed').trim();
         const error = document.getElementById('settingsError');
         error.textContent = '';
         error.classList.remove('show');
@@ -442,29 +436,44 @@ window.TV = (function () {
 
     // Settings > Highlighting rows: a column, a test, a value and a colour.
     const RULE_OPS = [['=', 'Equals'], ['!=', 'Does Not Equal'], ['>', 'Greater Than'], ['<', 'Less Than'],
-                      ['>=', 'Greater Or Equal'], ['<=', 'Less Or Equal'], ['contains', 'Contains']];
+                      ['>=', 'Greater Or Equal'], ['<=', 'Less Or Equal'], ['contains', 'Contains'],
+                      ['is_blank', 'Is Blank'], ['is_not_blank', 'Is Not Blank']];
+    const BLANK_OPS = ['is_blank', 'is_not_blank'];
+
+    // Excel's own Good, Bad and Neutral cell styles. The server holds the same colours.
+    const RULE_STYLES = [['good', 'Good'], ['bad', 'Bad'], ['neutral', 'Neutral'], ['custom', 'Custom']];
+    const RULE_SAMPLES = {
+        good: 'background:#C6EFCE;color:#006100;',
+        bad: 'background:#FFC7CE;color:#9C0006;',
+        neutral: 'background:#FFEB9C;color:#9C5700;',
+    };
 
     function renderRuleDraft() {
         const list = api.draft.rules;
         document.getElementById('hlRuleList').innerHTML = list.map((r, i) => `
-                <div class="veh-quick-row">
+                <div class="hl-rule-row">
                     <select onchange="TV.draft.rules[${i}].column = this.value">
                         <option value="">(Choose A Column)</option>
                         ${COLUMNS.map(c => `<option value="${c.column}" ${c.column === r.column ? 'selected' : ''}>${escHtml(c.label)}</option>`).join('')}
                     </select>
-                    <select onchange="TV.draft.rules[${i}].op = this.value">
+                    <select onchange="TV.draft.rules[${i}].op = this.value; TV.renderRuleDraft()">
                         ${RULE_OPS.map(([op, name]) => `<option value="${op}" ${op === r.op ? 'selected' : ''}>${name}</option>`).join('')}
                     </select>
-                    <input type="text" maxlength="60" value="${escHtml(r.value || '')}" placeholder="Value"
+                    <input type="text" maxlength="60" value="${escHtml(BLANK_OPS.includes(r.op) ? '' : (r.value || ''))}" placeholder="${BLANK_OPS.includes(r.op) ? '(No Value Needed)' : 'Value'}" ${BLANK_OPS.includes(r.op) ? 'disabled' : ''}
                            title="Value to test" oninput="TV.draft.rules[${i}].value = this.value">
-                    <input type="color" value="${r.colour}" title="Highlight colour" onchange="TV.draft.rules[${i}].colour = this.value">
+                    <select title="Style, as in Excel" onchange="TV.draft.rules[${i}].style = this.value; TV.renderRuleDraft()">
+                        ${RULE_STYLES.map(([key, name]) => `<option value="${key}" ${key === r.style ? 'selected' : ''}>${name}</option>`).join('')}
+                    </select>
+                    ${r.style === 'custom'
+                        ? `<input type="color" class="hl-colour" value="${r.colour}" title="Highlight colour" onchange="TV.draft.rules[${i}].colour = this.value">`
+                        : `<span class="hl-sample" style="${RULE_SAMPLES[r.style]}">${RULE_STYLES.find(s => s[0] === r.style)[1]}</span>`}
                     <button type="button" class="btn btn-remove-chart" title="Remove rule"
                             onclick="TV.draft.rules.splice(${i}, 1); TV.renderRuleDraft()"><i class="fas fa-trash"></i></button>
                 </div>`).join('') || '<div class="point-status" style="padding:2px 0 6px;">No highlight rules.</div>';
     }
 
     function addRule() {
-        api.draft.rules.push({ column: '', op: '=', value: '', colour: '#ff0000' });
+        api.draft.rules.push({ column: '', op: '=', value: '', style: 'bad', colour: '#ff0000' });
         renderRuleDraft();
     }
 
@@ -492,21 +501,20 @@ window.TV = (function () {
                 summary: NUMBER_FORMATS.includes(c.format) ? c.summary : 'none',
             }));
             const payload = { columns, filters: api.draft.filters.map(f => ({ column: f.column, label: (f.label || '').trim() })) };
-            const rules = api.draft.rules.map(r => ({ column: r.column, op: r.op, value: (r.value || '').trim(), colour: r.colour }));
+            const rules = api.draft.rules.map(r => ({ column: r.column, op: r.op, value: BLANK_OPS.includes(r.op) ? '' : (r.value || '').trim(), style: r.style || 'custom', colour: r.colour }));
             const resp = await fetch(BASE_URL + '/reports/trade/vehicle-view', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
-                    view: payload, filter_colour: document.getElementById('filterColourInput').value,
-                    site_changed_colour: document.getElementById('siteChangedColourInput').value, highlight_rules: rules,
+                    view: payload, filter_colour: document.getElementById('filterColourInput').value, highlight_rules: rules,
                 }),
             }).then(r => r.json());
             if (resp.status !== 'ok') throw new Error(resp.message || 'Save failed');
             view = resp.view;
             highlightRules = resp.highlight_rules;
-            document.documentElement.style.setProperty('--filter-on', resp.filter_colour);
-            document.documentElement.style.setProperty('--site-changed', resp.site_changed_colour);
-            closeSettings();
+            // The main grid on the page uses the same rules (trade_report.js).
+            document.dispatchEvent(new CustomEvent('trade-settings-saved'));
+            document.documentElement.style.setProperty('--filter-on', resp.filter_colour);            closeSettings();
         } catch (err) {
             error.textContent = err.message;
             error.classList.add('show');
@@ -530,6 +538,7 @@ window.TV = (function () {
         renderColumnDraft, moveColumnTo, hideColumn, removeAllColumns, showColumn,
         renderFilterDraft, addFilter, moveFilter,
         renderRuleDraft, addRule,
+        highlightFor,
     };
     return api;
 })();

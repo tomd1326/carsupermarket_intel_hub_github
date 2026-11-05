@@ -533,7 +533,7 @@
         const head = GRID_COLUMNS.map(c => {
             const caret = gridSort.key === c.key ? `<span class="sort-caret">${gridSort.dir > 0 ? '&#9650;' : '&#9660;'}</span>` : '';
             const th = `<th class="${c.num ? 'num' : ''}" data-sort="${c.key}">${escHtml(c.label)}${caret}</th>`;
-            return c.key === 'vrm' ? `${th}<th>Notes</th>` : th;
+            return th;
         }).join('');
         // Notes sits to the right of VRM (vehicle_comments.js). A changed site is
         // coloured, with an i that opens the same history.
@@ -542,8 +542,10 @@
             const text = c.fmt ? c.fmt(v) : (v === null || v === undefined ? '' : String(v));
             const neg = c.num && num(v) !== null && num(v) < 0 ? ' neg' : '';
             const changed = c.key === 'branch_name' && r.site_change;
-            const td = `<td class="${c.num ? 'num' : ''}${c.cls ? ' ' + c.cls : ''}${neg}${changed ? ' site-changed' : ''}">${escHtml(text)}${changed ? VehicleComments.siteButton(r.stock_id, r.vrm, `Site Changed From ${r.site_change.old_site || 'Unknown'}`) : ''}</td>`;
-            return c.key === 'vrm' ? `${td}<td>${VehicleComments.button(r.stock_id, r.vrm)}</td>` : td;
+            // Settings > Highlighting rules, keyed by the same column names.
+            const rule = TV.highlightFor(v, c.key);
+            const td = `<td class="${c.num ? 'num' : ''}${c.cls ? ' ' + c.cls : ''}${neg}"${rule ? ` style="${rule}"` : ''}>${escHtml(text)}${changed ? VehicleComments.siteButton(r.stock_id, r.vrm, `Site Changed From ${r.site_change.old_site || 'Unknown'}`) : ''}${c.key === 'vrm' ? VehicleComments.button(r.stock_id, r.vrm) : ''}</td>`;
+            return td;
         }).join('') + '</tr>').join('');
         return `
         <div class="report-section">
@@ -877,6 +879,13 @@
         box.classList.toggle('show', !!message);
     }
 
+    // The green message after a site change is saved or removed.
+    function scSuccess(message) {
+        const box = document.getElementById('sc-success');
+        box.textContent = message || '';
+        box.classList.toggle('show', !!message);
+    }
+
     // Every sale with the typed VRM. A VRM with several stock ids must be picked from.
     function renderSiteMatches() {
         const typed = plate(document.getElementById('sc-vrm').value);
@@ -918,6 +927,7 @@
         if (!modal) return;
         document.getElementById('site-changes-btn').addEventListener('click', () => {
             scError('');
+            scSuccess('');
             renderSiteChanges();
             modal.classList.add('open');
         });
@@ -925,6 +935,7 @@
         document.getElementById('sc-vrm').addEventListener('input', renderSiteMatches);
         document.getElementById('sc-save').addEventListener('click', async () => {
             scError('');
+            scSuccess('');
             const picked = document.querySelector('input[name="sc-stock"]:checked');
             try {
                 if (!picked) throw new Error('Type a VRM and pick the vehicle');
@@ -938,18 +949,25 @@
                 document.getElementById('sc-reason').value = '';
                 await loadData(false);
                 VehicleComments.loadCounts();
+                scSuccess('Site change saved successfully');
             } catch (err) { scError(err.message); }
         });
         document.getElementById('sc-current').addEventListener('click', async e => {
             const id = e.target.dataset.remove;
             if (!id || !confirm('Remove this site change? The car goes back to its Autoview site.')) return;
             scError('');
+            scSuccess('');
             try {
                 await postSiteChange(`/${id}/remove`, {});
                 await loadData(false);
+                VehicleComments.loadCounts();
+                scSuccess('Site change removed successfully');
             } catch (err) { scError(err.message); }
         });
     }
+
+    // Saving Settings can change the highlight rules, which colour this grid too.
+    document.addEventListener('trade-settings-saved', () => { if (view === 'vehicles') renderReport(); });
 
     document.addEventListener('DOMContentLoaded', () => {
         bindControls();

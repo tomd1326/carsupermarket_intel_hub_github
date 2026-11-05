@@ -186,6 +186,8 @@ SETTINGS_DEFAULTS = {
     'cap_override_password':            '',
     # Live users circles beside the Home button (Settings > Live Users).
     'presence_enabled':                 1,
+    'presence_users_see_each_other':    0,
+    'presence_users_see_home_list':     0,
     'presence_interval_seconds':        20,
     'presence_drop_off_seconds':        150,
     'presence_circle_size':             26,

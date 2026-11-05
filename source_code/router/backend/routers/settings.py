@@ -343,16 +343,12 @@ def google_disconnect(request: Request, user: str = Depends(get_current_user)):
 def save_email(
     request: Request,
     email_sender: str = Form(default=""),
-    email_test_recipient: str = Form(default=""),
     user: str = Depends(get_current_user),
 ):
     if user != 'tdrayson':
         raise HTTPException(status_code=403, detail="Forbidden")
     with get_database_connection() as conn:
-        save_settings_partial(conn, {
-            'email_sender':         email_sender.strip(),
-            'email_test_recipient': email_test_recipient.strip(),
-        })
+        save_settings_partial(conn, {'email_sender': email_sender.strip()})
     logger.info("Settings [Email] updated by %s", user)
     return _section_redirect("email")
 
@@ -361,6 +357,8 @@ def save_email(
 def save_live_users(
     request: Request,
     presence_enabled: str = Form(default=""),
+    presence_users_see_each_other: str = Form(default=""),
+    presence_users_see_home_list: str = Form(default=""),
     presence_interval_seconds: int = Form(...),
     presence_drop_off_seconds: int = Form(...),
     presence_circle_size: int = Form(...),
@@ -390,6 +388,8 @@ def save_live_users(
     with get_database_connection() as conn:
         save_settings_partial(conn, {
             'presence_enabled':          '1' if presence_enabled == "on" else '0',
+            'presence_users_see_each_other': '1' if presence_users_see_each_other == "on" else '0',
+            'presence_users_see_home_list':  '1' if presence_users_see_home_list == "on" else '0',
             'presence_interval_seconds': interval,
             # Must outlast at least two missed heartbeats, or circles flicker.
             'presence_drop_off_seconds': max(interval * 2 + 5, presence_drop_off_seconds),
@@ -552,20 +552,18 @@ def test_microsoft_photo(email: str = Form(...), user: str = Depends(get_current
 
 @router.post("/settings/email/test")
 def send_test_email(request: Request, user: str = Depends(get_current_user)):
-    """Send a test email from the saved sender to the saved test address, to
-    confirm Graph mail sending works. Uses the SAVED values, not the boxes."""
+    """Send a test email from the saved sender to tom.drayson only, to confirm
+    Graph mail sending works. Uses the SAVED sender, not the box."""
     if user != 'tdrayson':
         raise HTTPException(status_code=403, detail="Forbidden")
     from utils.email_client import send_email, configured_sender
-    with get_database_connection() as conn:
-        settings = get_settings(conn, user=_SETTINGS_SCOPE)
     sender = configured_sender()
-    to = settings.get('email_test_recipient', '').strip() or sender
+    to = "tom.drayson@carsupermarket.com"
     sent_at = datetime.datetime.now(zoneinfo.ZoneInfo("Europe/London")).strftime('%Y-%m-%d %H:%M:%S')
     try:
         send_email(
             to=to,
-            subject=f"VLE test email - {sent_at}",
+            subject=f"Intelligence Hub test email - {sent_at}",
             body_html=(
                 "<p>Test email from Settings &gt; Email.</p>"
                 f"<p>Sent from {sender} at {sent_at} (UK).</p>"

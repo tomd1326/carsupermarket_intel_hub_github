@@ -74,6 +74,13 @@
                 <a href="{{ BASE_URL }}/my-account" class="account-menu-item">
                     <i class="fas fa-user me-2" aria-hidden="true"></i>My Account
                 </a>
+                {# Only for someone with at least one section they may read. #}
+                {% set guide = user_guide_menu(user_name) %}
+                {% if guide.show %}
+                <a href="{{ BASE_URL }}/user-guide" class="account-menu-item">
+                    <i class="fas fa-book me-2" aria-hidden="true"></i>{{ guide.title }}
+                </a>
+                {% endif %}
                 {% if user_is_admin(user_name) %}
                 <a href="{{ BASE_URL }}/logs" class="account-menu-item">
                     <i class="fas fa-list me-2" aria-hidden="true"></i>Logs
