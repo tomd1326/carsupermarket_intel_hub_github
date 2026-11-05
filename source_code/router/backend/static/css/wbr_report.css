@@ -4,7 +4,53 @@
 .wbr-view-switch .btn.active { background: #0d3d6e; border-color: #0d3d6e; color: #fff; }
 .wbr-report-empty { color: #64748b; padding: 24px 0; }
 .wbr-report-warning { color: #92400e; background: #fef3c7; border-radius: 6px; padding: 4px 8px; font-size: 0.82rem; }
-.wbr-report-section { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 3px 0; font-size: 0.85rem; }
-.wbr-report-section label { margin: 0; }
+.wbr-report-section { display: flex; align-items: center; gap: 8px; padding: 3px 0; font-size: 0.85rem; }
+.wbr-report-section-title { flex: 1; min-width: 0; }
 .wbr-report-settings-status { color: #64748b; font-size: 0.82rem; }
 .wbr-report-source-error { color: #b91c1c; }
+.wbr-report-settings-table { width: 100%; border-collapse: collapse; font-size: 0.82rem; }
+.wbr-report-settings-table th { text-align: left; color: #64748b; font-weight: 600; padding: 2px 4px; }
+.wbr-report-settings-table td { padding: 2px 4px; }
+.wbr-report-settings-table td:first-child { width: 55%; }
+.wbr-report-settings-table input { width: 100%; box-sizing: border-box; }
+#wbrReportChartSettings textarea { width: 100%; box-sizing: border-box; }
+
+/* A section can be longer than a 16:9 slide, so it grows with what it holds. */
+#wbrReportSlide { aspect-ratio: auto; min-height: 320px; gap: 12px; }
+.wbr-report-table-wrap { overflow-x: auto; }
+.wbr-report-table { border-collapse: collapse; width: 100%; font-size: var(--wbr-report-table-font, 12px); font-variant-numeric: tabular-nums; }
+.wbr-report-table th { background: #0d3d6e; color: #fff; font-weight: 600; padding: 4px 8px; text-align: right; white-space: nowrap; }
+.wbr-report-table td { border-bottom: 1px solid #e2e8f0; color: #0f172a; padding: 3px 8px; text-align: right; white-space: nowrap; }
+.wbr-report-table th.wbr-report-label, .wbr-report-table td.wbr-report-label { text-align: left; }
+.wbr-report-table th.wbr-report-gap, .wbr-report-table td.wbr-report-gap { background: #fff; border-bottom: none; padding: 0; width: 12px; }
+.wbr-report-bold td { font-weight: 700; }
+.wbr-report-indent .wbr-report-label { padding-left: 22px; color: #475569; }
+.wbr-report-blank td { border-bottom: none; height: 10px; padding: 0; }
+.wbr-report-trend { text-align: center !important; }
+/* The trend arrows, drawn with borders: icons are not used in the code. */
+.wbr-trend-up, .wbr-trend-down { display: inline-block; width: 0; height: 0; border-left: 5px solid transparent; border-right: 5px solid transparent; }
+.wbr-trend-up { border-bottom: 8px solid #15803d; }
+.wbr-trend-down { border-top: 8px solid #b91c1c; }
+
+.wbr-report-charts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px 16px; }
+.wbr-report-chart { min-width: 0; }
+.wbr-report-chart-title { font-size: 0.85rem; font-weight: 600; color: #0f172a; margin-bottom: 4px; }
+.wbr-report-plot { position: relative; height: var(--wbr-report-chart-height, 240px); }
+.wbr-report-more { display: flex; flex-direction: column; gap: 12px; }
+.wbr-report-more > summary { cursor: pointer; color: #0d3d6e; font-size: 0.85rem; font-weight: 600; margin-bottom: 8px; }
+.wbr-report-more > :not(summary) { margin-bottom: 12px; }
+.wbr-report-note { color: #64748b; font-size: 0.78rem; }
+
+/* Print / Save PDF: only the sections, one to a landscape page. */
+@media print {
+    @page { size: landscape; margin: 10mm; }
+    body * { visibility: hidden; }
+    #wbrReportSlide, #wbrReportSlide * { visibility: visible; }
+    #wbrReportSlide { position: absolute; left: 0; top: 0; width: 100%; border: none; padding: 0; }
+    .wbr-report-page { break-after: page; display: flex; flex-direction: column; gap: 10px; }
+    .wbr-report-page:last-child { break-after: auto; }
+    .wbr-report-chart, .wbr-report-table-wrap { break-inside: avoid; }
+    .wbr-report-table-wrap { overflow: visible; }
+    .wbr-report-plot canvas { max-width: 100% !important; }
+    .wbr-report-more > summary { display: none; }
+}
