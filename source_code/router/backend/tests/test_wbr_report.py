@@ -29,7 +29,7 @@ def numbers(**changes):
 
 def text(**changes):
     base = {"update_date": "", "last_closed_month": "2026-09", "autoview_start": "2025-11",
-            "sections": wr.clean_sections(None)}
+            "sections": wr.clean_sections(None), "chart_settings": wr.clean_chart_settings(None)}
     return {**base, **changes}
 
 
@@ -156,7 +156,7 @@ def test_build_report_warns_when_n1_is_too_old():
 def endpoint(monkeypatch, admin, on, update_date=""):
     monkeypatch.setattr(wr, "is_admin", lambda user: admin)
     monkeypatch.setattr(wr, "_read_settings", lambda: (numbers(wbr_report_on=on), text()))
-    monkeypatch.setattr(wr, "add_sources", lambda report, refresh=False: None)
+    monkeypatch.setattr(wr, "add_sources", lambda report, refresh=False: {})
     return wr.weekly_business_review_report(None, update_date, 0, "someone")
 
 
@@ -176,7 +176,7 @@ def test_only_admin_can_choose_the_date(monkeypatch):
 def test_only_admin_can_reload(monkeypatch):
     asked = []
     monkeypatch.setattr(wr, "_read_settings", lambda: (numbers(wbr_report_on=1), text()))
-    monkeypatch.setattr(wr, "add_sources", lambda report, refresh=False: asked.append(refresh))
+    monkeypatch.setattr(wr, "add_sources", lambda report, refresh=False: asked.append(refresh) or {})
     monkeypatch.setattr(wr, "is_admin", lambda user: False)
     wr.weekly_business_review_report(None, "", 1, "someone")
     monkeypatch.setattr(wr, "is_admin", lambda user: True)

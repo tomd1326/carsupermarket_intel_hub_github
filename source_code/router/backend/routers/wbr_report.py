@@ -2,12 +2,13 @@
 fed from Snowflake and SharePoint, shown next to the Grid and Slides views.
 
 This file holds the review's dates, its settings and the endpoint; wbr_report_data.py
-reads the data. The sections are empty until they are built.
+reads the data and wbr_report_sections.py builds the sections.
 
 The number settings (wbr_report_on and so on) are saved with the KPI settings in
 kpi.py. The rest are not numbers, so each has its own key in kpi_layout and is
 checked here. The Report view stays admin only until wbr_report_on is 1.
 """
+import copy
 import datetime
 import logging
 import re
@@ -16,6 +17,7 @@ from fastapi import APIRouter, Depends, Request
 
 from .core import _uk_now, is_admin, require_page_api
 from .wbr_report_data import add_months, add_sources, source_statuses
+from .wbr_report_sections import fill_sections
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -28,8 +30,10 @@ _UPDATE_DATE_KEY = "wbr_report_update_date"
 _LAST_CLOSED_KEY = "wbr_report_last_closed_month"
 _AUTOVIEW_START_KEY = "wbr_report_autoview_start"
 _SECTIONS_KEY = "wbr_report_sections"
+_CHART_SETTINGS_KEY = "wbr_report_chart_settings"
 
 _MONTH_RE = re.compile(r"^\d{4}-(0[1-9]|1[0-2])$")
+_COLOUR_RE = re.compile(r"^#[0-9a-fA-F]{6}$")
 
 # In slide order. Stored settings keep the order and on/off, never the titles.
 SECTIONS = (
@@ -47,6 +51,47 @@ SECTIONS = (
     ("glossary", "Glossary & Sources Of Data"),
 )
 _SECTION_TITLES = dict(SECTIONS)
+
+# Everything a section shows that is not data: all editable in Settings > Report.
+# A chart's axis is the spreadsheet's Floor and Sky. A percent chart's axis is a
+# fraction (0.8 = 80%).
+DEFAULT_CHART_SETTINGS = {
+    "charts": {
+        "net_deliveries": {"title": "Net Deliveries B2C (Avg/Week)", "min": 0, "max": 800},
+        "gpu_msb": {"title": "GPU-MSB (£/Unit)", "min": -4000, "max": 5000},
+        "inventories": {"title": "Inventories B2C", "min": 0, "max": 5000},
+        "days_inventories": {"title": "Days Of Inventories", "min": 20, "max": 150},
+        "sleeping": {"title": "Sleeping Stock B2C (Excl. Courtesy)", "min": 0, "max": 1000},
+        "for_sale_pct": {"title": "% Inventories For Sale", "min": 0, "max": 0.8},
+        "purchases": {"title": "Purchases (Avg/Week)", "min": 0, "max": 1000},
+        "total_recon": {"title": "Total Recon Volume (Avg/Week)", "min": 0, "max": 1000},
+        "net_orders": {"title": "Net Orders B2C (Avg/Week)", "min": 0, "max": 700},
+        "rotation_sutton": {"title": "Rotation Sutton Fields (Days)", "min": 0, "max": 20, "target": 4},
+        "rotation_goole": {"title": "Rotation Goole (Days)", "min": 0, "max": 20, "target": 4},
+        "rotation_sites": {"title": "Rotation Sites (Days)", "min": 0, "max": 20, "target": 6},
+        "mtd_deliveries": {"title": "Net Deliveries B2C Month To Date (New)"},
+        "coverage": {"title": "Stock Coverage B2C (Days)"},
+        "waterfall_b2b2c": {"title": "GPU-M Waterfall - B2B2C"},
+        "waterfall_px": {"title": "GPU-M Waterfall - PX"},
+        "waterfall_other": {"title": "GPU-M Waterfall - C2B Other"},
+    },
+    "coverage_targets": {"upstream": 5, "in_prep": 4, "for_sale": 20, "sold_not_delivered": 5, "total": 34},
+    "sleeping_targets": {"upstream": "<10 Days", "in_prep": "<10 Days", "on_sale": "<60 Days",
+                         "sold_not_delivered": "<10 Days", "trade_hold": "<10 Days"},
+    "constants": {"deliveries_days_per_month": 30},
+    "trend_basis": "last_week",
+    "appearance": {"actual": "#1f6fb2", "n1": "#64748b", "series_three": "#b45309", "budget_line": "#6b8fb5",
+                   "below_budget": "#dbe7f3", "above_budget": "#f6f8fb", "chart_height": 240, "table_font_px": 12},
+    "notes": {
+        "overview": "The margin calculated for the current month excludes the impact of write-downs and RFL/V5s (costs and revenues).",
+        "volumes": "Month figures are weekly averages.",
+        "inventories": "The date used for the end of the month is a proxy: the closest week ending on a Sunday.",
+    },
+    "titles": {},
+}
+_TREND_BASES = ("last_week", "months")
+_APPEARANCE_LIMITS = {"chart_height": (120, 600), "table_font_px": (9, 18)}
+_TEXT_MAX = {"title": 100, "note": 500, "target": 20}
 
 
 # ── Dates ────────────────────────────────────────────────────────────────────
@@ -139,6 +184,89 @@ def clean_sections(value) -> list:
     return out
 
 
+def _clean_number(value, default, label: str) -> float:
+    if value is None or value == "":
+        return default
+    if isinstance(value, bool):
+        raise ValueError(f"{label} must be a number")
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        raise ValueError(f"{label} must be a number")
+    if number != number or number in (float("inf"), float("-inf")):
+        raise ValueError(f"{label} must be a number")
+    return number
+
+
+def _clean_text(value, default: str, limit: int) -> str:
+    text = str(value if value is not None else default).strip()
+    return text[:limit]
+
+
+def _given(raw: dict, key: str) -> dict:
+    value = raw.get(key)
+    return value if isinstance(value, dict) else {}
+
+
+def clean_chart_settings(raw) -> dict:
+    """Targets, axis limits, constants, note texts and titles, over the defaults, so a
+    chart added later is not lost from an old saved list. Raises ValueError with a message."""
+    raw = raw if isinstance(raw, dict) else {}
+    out = copy.deepcopy(DEFAULT_CHART_SETTINGS)
+
+    given_charts = _given(raw, "charts")
+    for chart_id, chart in out["charts"].items():
+        given = given_charts.get(chart_id)
+        given = given if isinstance(given, dict) else {}
+        chart["title"] = _clean_text(given.get("title"), chart["title"], _TEXT_MAX["title"]) or chart["title"]
+        for key in ("min", "max", "target"):
+            if key in chart:
+                chart[key] = _clean_number(given.get(key), chart[key], f"{chart['title']} {key.title()}")
+        if "min" in chart and chart["min"] >= chart["max"]:
+            raise ValueError(f"{chart['title']}: Min must be below Max")
+
+    given_targets = _given(raw, "coverage_targets")
+    for key, default in out["coverage_targets"].items():
+        out["coverage_targets"][key] = _clean_number(given_targets.get(key), default, "Coverage Target")
+    given_sleeping = _given(raw, "sleeping_targets")
+    for key, default in out["sleeping_targets"].items():
+        out["sleeping_targets"][key] = _clean_text(given_sleeping.get(key), default, _TEXT_MAX["target"])
+
+    days = _clean_number(_given(raw, "constants").get("deliveries_days_per_month"),
+                         out["constants"]["deliveries_days_per_month"], "Days Per Month For Deliveries")
+    if not 28 <= days <= 31:
+        raise ValueError("Days Per Month For Deliveries must be from 28 to 31")
+    out["constants"]["deliveries_days_per_month"] = days
+
+    basis = raw.get("trend_basis", out["trend_basis"])
+    if basis not in _TREND_BASES:
+        raise ValueError("Trend must compare with the week before or the months shown")
+    out["trend_basis"] = basis
+
+    given_look = _given(raw, "appearance")
+    for key, default in out["appearance"].items():
+        if key in _APPEARANCE_LIMITS:
+            low, high = _APPEARANCE_LIMITS[key]
+            number = _clean_number(given_look.get(key), default, key.replace("_", " ").title())
+            if not low <= number <= high:
+                raise ValueError(f"{key.replace('_', ' ').title()} must be from {low} to {high}")
+            out["appearance"][key] = number
+        else:
+            colour = given_look.get(key) or default
+            if not isinstance(colour, str) or not _COLOUR_RE.fullmatch(colour):
+                raise ValueError("Colours must be like #1f6fb2")
+            out["appearance"][key] = colour
+
+    given_notes, given_titles = _given(raw, "notes"), _given(raw, "titles")
+    for section, _ in SECTIONS:
+        if section in given_notes:
+            out["notes"][section] = _clean_text(given_notes[section], "", _TEXT_MAX["note"])
+        title = _clean_text(given_titles.get(section), "", _TEXT_MAX["title"])
+        if title and title != _SECTION_TITLES[section]:
+            out["titles"][section] = title
+    return out
+
+
 def clean_report_settings(raw: dict) -> dict:
     """The text and list settings, checked. Raises ValueError with a message."""
     return {
@@ -146,7 +274,16 @@ def clean_report_settings(raw: dict) -> dict:
         _LAST_CLOSED_KEY: clean_month(raw.get("last_closed_month"), "Last Closed Month"),
         _AUTOVIEW_START_KEY: clean_month(raw.get("autoview_start"), "AutoView Costs Start") or DEFAULT_AUTOVIEW_START,
         _SECTIONS_KEY: clean_sections(raw.get("sections")),
+        _CHART_SETTINGS_KEY: clean_chart_settings(raw.get("chart_settings")),
     }
+
+
+def _stored_chart_settings(stored) -> dict:
+    """What is saved, or the defaults if it cannot be used."""
+    try:
+        return clean_chart_settings(stored)
+    except ValueError:
+        return clean_chart_settings(None)
 
 
 def _stored_sections(stored) -> list:
@@ -175,12 +312,13 @@ def _read_settings() -> tuple:
     """(number settings, text and list settings) from kpi_layout."""
     from .kpi import _kpi_settings, _read_kpi_layout_values
     stored = _read_kpi_layout_values(["settings", _UPDATE_DATE_KEY, _LAST_CLOSED_KEY,
-                                      _AUTOVIEW_START_KEY, _SECTIONS_KEY])
+                                      _AUTOVIEW_START_KEY, _SECTIONS_KEY, _CHART_SETTINGS_KEY])
     return _kpi_settings(stored.get("settings")), {
         "update_date": _stored_date(stored.get(_UPDATE_DATE_KEY)),
         "last_closed_month": _stored_month(stored.get(_LAST_CLOSED_KEY)),
         "autoview_start": _stored_month(stored.get(_AUTOVIEW_START_KEY), DEFAULT_AUTOVIEW_START),
         "sections": _stored_sections(stored.get(_SECTIONS_KEY)),
+        "chart_settings": _stored_chart_settings(stored.get(_CHART_SETTINGS_KEY)),
     }
 
 
@@ -204,6 +342,8 @@ def build_report(numbers: dict, text: dict, today: datetime.date, update_date: s
                         "months go back further than the data kept.")
 
     shown = periods["months"] + [periods["current_month"]]
+    titles = {**_SECTION_TITLES, **text.get("chart_settings", {}).get("titles", {})}
+    look = text.get("chart_settings", DEFAULT_CHART_SETTINGS)["appearance"]
     return {
         "status": "ok",
         "meta": {
@@ -216,9 +356,11 @@ def build_report(numbers: dict, text: dict, today: datetime.date, update_date: s
             "weeks_per_month": numbers["wbr_report_weeks_per_month"],
             "recon_default": numbers["wbr_report_recon_default"],
             "recon_floor": numbers["wbr_report_recon_floor"],
+            "appearance": look,
             "warnings": warnings,
         },
-        "sections": [{"id": s["id"], "title": _SECTION_TITLES[s["id"]], "tables": [], "charts": [], "notes": []}
+        "sections": [{"id": s["id"], "title": titles[s["id"]], "tables": [], "charts": [], "notes": [],
+                      "more": {"tables": [], "charts": []}}
                      for s in text["sections"] if s["on"]],
     }
 
@@ -241,7 +383,7 @@ def weekly_business_review_report(request: Request, update_date: str = "", refre
     except ValueError as e:
         return {"status": "error", "message": str(e)}
     report = build_report(numbers, text, _uk_now().date(), chosen)
-    add_sources(report, admin and refresh == 1)
+    fill_sections(report, add_sources(report, admin and refresh == 1), text["chart_settings"])
     return report
 
 

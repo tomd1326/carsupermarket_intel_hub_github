@@ -371,6 +371,13 @@ const BASE_URL = window.BASE_URL;
         // (slicers, summary, grid) starts from this set. The date window
         // itself is just the Period slicer's selection, applied later via
         // passesSlicers like any other slicer.
+        // Alphabetical, except the "Buy back" supplier category always goes last.
+        function buyBackLast(a, b) {
+            const ab = String(a) === 'Buy back', bb = String(b) === 'Buy back';
+            if (ab !== bb) return ab ? 1 : -1;
+            return String(a).localeCompare(String(b), 'en', { numeric: true });
+        }
+
         function baseRows(lensVal) {
             const cfg = LENS[lensVal];
             return allRows.filter(r => cfg.statuses.includes(r.deal_status) && !!r[cfg.dateKey]);
@@ -682,7 +689,7 @@ const BASE_URL = window.BASE_URL;
                     if (ia === -1) return 1; if (ib === -1) return -1;
                     return ia - ib;
                 })
-                : labels.sort((a, b) => String(a).localeCompare(String(b), 'en', { numeric: true }));
+                : labels.sort(buyBackLast);
 
             const total = rows.length;
             const dataRows = labels.map(label => ({ label, ...summariseGroup(groups.get(label), total) }));
@@ -697,9 +704,13 @@ const BASE_URL = window.BASE_URL;
         // shading.js so every page shades identically; these two wrap it for
         // this page's "build a shader per column key, emit an HTML attribute"
         // rendering style.
-        function columnShader(dataRows, key) {
-            if (dataRows.length < (shadeOpts.min_rows || 2)) return null;
-            return shadeScale(dataRows, r => r[key], {
+        // scaleRows (optional) are the rows the scale is measured from, when it
+        // should not be the rows being drawn (Highlighting > scale across the
+        // whole date range).
+        function columnShader(dataRows, key, scaleRows) {
+            const basis = scaleRows || dataRows;
+            if (basis.length < (shadeOpts.min_rows || 2)) return null;
+            return shadeScale(basis, r => r[key], {
                 inScale: SHADE_IN_SCALE[key], spreadSds: shadeOpts.strength, colour: shadeOpts.colourFns[key],
             });
         }
@@ -809,7 +820,7 @@ const BASE_URL = window.BASE_URL;
             // min->max shade over that few rows just marks "biggest of three",
             // not a meaningful spread, so it is left unshaded.
             if (table.dimKey !== '__sales_type_bucket' || shadeOpts.shade_sales_type) {
-                SHADE_COLS.forEach(k => { shaders[k] = columnShader(table.rows, k); });
+                SHADE_COLS.forEach(k => { shaders[k] = columnShader(table.rows, k, table.scaleRows); });
             }
 
             // Clicking the heading cell collapses the table to this one row.
@@ -948,9 +959,22 @@ const BASE_URL = window.BASE_URL;
             const filtered = base.filter(r => passesSlicers(r, slicerSel, lensApplied, granularityApplied)); // + all live slicers
             const filteredExceptSalesType = base.filter(r => passesSlicers(r, slicerSel, lensApplied, granularityApplied, 'sales_type'));
 
+            // Highlighting > "scale within the date range and channel": colours
+            // are measured from every vehicle in the selected period and
+            // supplier channel, ignoring the other slicers. Channel is kept
+            // because channels earn different margins, so a B2B2C row should be
+            // judged against B2B2C's own range, not against all channels.
+            let periodOnly = null;
+            if (shadeOpts.shade_scale_all) {
+                const periodSel = Object.fromEntries(SLICERS.map(s => [s.key, new Set()]));
+                periodSel.period = slicerSel.period;
+                periodSel.supplier_channel = slicerSel.supplier_channel;
+                periodOnly = base.filter(r => passesSlicers(r, periodSel, lensApplied, granularityApplied));
+            }
+
             // Pass 1: build every table's data (no HTML yet).
             const tables = SUMMARY_DIMENSIONS.map(dim => {
-                let rows, groupKey, heading, order;
+                let rows, groupKey, heading, order, scaleSrc = periodOnly;
                 if (dim.skipOwnFilter) {
                     // Groups straight off the column — no per-row object copy.
                     rows = filteredExceptSalesType;
@@ -962,10 +986,13 @@ const BASE_URL = window.BASE_URL;
                     // / "Order Month" / "Delivery Month" (same as the slicer).
                     heading = slicerHeadingApplied('period');
                     order = null; // yyyy-MM / yyyy-Www both sort chronologically as strings
+                    if (scaleSrc) scaleSrc = scaleSrc.map(r => ({ ...r, __period: periodOf(r, lensApplied, granularityApplied) || '(blank)' }));
                 } else {
                     rows = filtered; groupKey = dim.key; heading = dim.heading; order = dim.order;
                 }
-                return buildSummaryTable(rows, groupKey, heading, order, dim.key);
+                const table = buildSummaryTable(rows, groupKey, heading, order, dim.key);
+                if (scaleSrc) table.scaleRows = buildSummaryTable(scaleSrc, groupKey, heading, order, dim.key).rows;
+                return table;
             });
 
             // Measure the true longest label across every table's heading and
@@ -1284,7 +1311,7 @@ const BASE_URL = window.BASE_URL;
                     return ia - ib;
                 });
             }
-            return arr.sort((a, b) => String(a).localeCompare(String(b), 'en', { numeric: true }));
+            return arr.sort(buyBackLast);
         }
 
         // Slicer panels reflect APPLIED state — the whole bar (headings,

@@ -480,6 +480,40 @@ def month_end_proxy(weeks: list, month: str):
     return None
 
 
+def month_end_weeks(weeks: list, month: str) -> list:
+    """Every week ending within 4 days either side of a month's last day. A month can
+    have two; the spreadsheet's N-1 stock figures average them."""
+    year, number = int(month[:4]), int(month[5:7])
+    last = datetime.date(year, number, calendar.monthrange(year, number)[1])
+    return [week for week in weeks if abs((datetime.date.fromisoformat(week) - last).days) <= 4]
+
+
+# ── Budget ───────────────────────────────────────────────────────────────────
+
+def budget_lines(rows) -> dict:
+    """{(section, label): {month: value}} from (section, label, is_percent, month, value)
+    rows. Percent lines are stored as typed on the sheet (50.0), so they become 0.5 here."""
+    lines: dict = {}
+    for section, label, is_percent, month, value in rows:
+        line = lines.setdefault((section, label), {})
+        if month and value is not None:
+            line[month] = float(value) / 100 if is_percent else float(value)
+    return lines
+
+
+def load_budget() -> dict:
+    """Read from the PROD cluster, like the Budgets tab. Not kept in S3: an edit there
+    should show at once, and this read is quick."""
+    from utils.db_utils import get_prod_pricer_connection
+    with get_prod_pricer_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""SELECT l.section, l.label, l.is_percent, v.month, v.value
+                           FROM budget_lines l LEFT JOIN budget_values v ON v.line_id = l.id""")
+            rows = cur.fetchall()
+        conn.commit()
+    return budget_lines(rows)
+
+
 # ── What the report found ────────────────────────────────────────────────────
 
 _RECON_DATE_FIELDS = {"date", "year_month", "week_end"}
@@ -525,9 +559,9 @@ def snowflake_summary(meta: dict, margin: pd.DataFrame, purchases: pd.DataFrame,
     return out, warnings
 
 
-def add_sources(report: dict, refresh: bool = False) -> None:
-    """Read each source and add what was found to the report. A source that
-    cannot be read becomes a warning, so the others still show."""
+def add_sources(report: dict, refresh: bool = False) -> dict:
+    """Read each source, add what was found to the report and return the data for
+    the sections. A source that cannot be read becomes a warning, so the others still show."""
     meta = report["meta"]
     warnings = meta["warnings"]
     review = meta["update_date"]
@@ -542,7 +576,7 @@ def add_sources(report: dict, refresh: bool = False) -> None:
             return empty
 
     # At the same time: one after another, a first load gets close to the API Gateway limit.
-    with ThreadPoolExecutor(max_workers=6) as pool:
+    with ThreadPoolExecutor(max_workers=7) as pool:
         jobs = [
             pool.submit(read, "Accounts", lambda: load_accounts(refresh), {}),
             pool.submit(read, "Sales data",
@@ -551,9 +585,12 @@ def add_sources(report: dict, refresh: bool = False) -> None:
             pool.submit(read, "Daily summary", lambda: load_daily_summary(start, review, refresh), pd.DataFrame()),
             pool.submit(read, "Recon data", load_recon, ([], [])),
             pool.submit(read, "Volume data", load_volume, ({"weeks": [], "rows": {}}, [])),
+            pool.submit(read, "Budget", load_budget, {}),
         ]
-    accounts, margin, purchases, daily, (recon, recon_warnings), (volume, volume_warnings) = [j.result() for j in jobs]
+    accounts, margin, purchases, daily, (recon, recon_warnings), (volume, volume_warnings), budget = [j.result() for j in jobs]
     meta["sources"], found = source_summary(meta, accounts, recon, volume)
     tables, table_warnings = snowflake_summary(meta, margin, purchases, daily)
     meta["sources"].update(tables)
     warnings.extend(recon_warnings + volume_warnings + found + table_warnings)
+    return {"margin": margin, "purchases": purchases, "daily": daily, "recon": recon,
+            "volume": volume, "accounts": accounts, "budget": budget}

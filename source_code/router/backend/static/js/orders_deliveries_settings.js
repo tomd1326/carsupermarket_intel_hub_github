@@ -165,6 +165,7 @@
         $('od-shade-sales-type').checked = s.shade_sales_type;
         $('od-shade-sub-rows').checked = s.shade_sub_rows;
         $('od-shade-popup').checked = s.shade_popup;
+        $('od-shade-scale-all').checked = s.shade_scale_all;
         buildColumnRows(s.columns, s);
         updateSchemeView();
     }
@@ -195,6 +196,7 @@
             shade_sales_type: $('od-shade-sales-type').checked,
             shade_sub_rows: $('od-shade-sub-rows').checked,
             shade_popup: $('od-shade-popup').checked,
+            shade_scale_all: $('od-shade-scale-all').checked,
         };
     }
     // Shows only the colour boxes for the chosen scheme, and a strip of the

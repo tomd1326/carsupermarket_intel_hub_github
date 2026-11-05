@@ -39,6 +39,11 @@ DEFAULTS = {
     'shade_sales_type': False,
     'shade_sub_rows': True,
     'shade_popup': True,
+    # On: colours are scaled against every vehicle in the selected date range
+    # and supplier channel, ignoring the other filters, so a poor slice reads
+    # red rather than its best row reading green and each channel is judged
+    # against itself. Off: scaled against the rows on screen.
+    'shade_scale_all': False,
 }
 
 _HEX = re.compile(r'^#[0-9a-fA-F]{6}$')
@@ -76,7 +81,7 @@ def validate(s) -> str | None:
         v = s.get(k)
         if isinstance(v, bool) or not isinstance(v, int) or not lo <= v <= hi:
             return f"{name} must be a whole number from {lo} to {hi}"
-    for k in ('shade_sales_type', 'shade_sub_rows', 'shade_popup'):
+    for k in ('shade_sales_type', 'shade_sub_rows', 'shade_popup', 'shade_scale_all'):
         if not isinstance(s.get(k), bool):
             return "Tick boxes must be on or off"
     return None
