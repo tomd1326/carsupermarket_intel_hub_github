@@ -2,6 +2,8 @@
 
 from fastapi import APIRouter, Request, Depends, HTTPException
 from fastapi.responses import HTMLResponse
+import base64
+import binascii
 import calendar
 import hashlib
 import json
@@ -1534,6 +1536,9 @@ KPI_DEFAULT_SETTINGS = {
     "wbr_report_weeks_per_month": 4.2,  # divides a month's total into a weekly average
     "wbr_report_months": 3,             # complete months shown
     "wbr_report_weeks": 5,              # weeks shown
+    "wbr_report_slide_lines": 2,        # Export To Google Slides: lines of charts on a slide
+    "wbr_report_slide_table_rows": 19,  # Export To Google Slides: table rows on a slide, before the next
+    "wbr_report_export_more": 0,        # Export To Google Slides: 1 = also the tables under More
     "wbr_slides_on": 0,
     "wbr_grid_cols": 24,          # snap-to grid across a slide
     "wbr_grid_rows": 12,          # and down it (under the title)
@@ -1606,6 +1611,9 @@ KPI_SETTING_LIMITS = {
     "wbr_report_weeks_per_month": (1, 6),
     "wbr_report_months": (1, 6),
     "wbr_report_weeks": (1, 13),
+    "wbr_report_slide_lines": (1, 3),
+    "wbr_report_slide_table_rows": (8, 30),
+    "wbr_report_export_more": (0, 1),
     "wbr_slides_on": (0, 1),
     "wbr_grid_cols": (4, 48),
     "wbr_grid_rows": (4, 36),
@@ -4996,13 +5004,31 @@ def weekly_business_review_deck_save(request: Request, payload: dict, user: str 
     return {"status": "ok"}
 
 
+def wbr_slide_image_url(s3, stem: str, data, title: str) -> str:
+    """A chart's PNG (data URL or base64) saved to S3, as a link Google can read for
+    10 minutes: Slides only takes images by link. Raises ValueError with a message."""
+    data = str(data or "")
+    if data.startswith("data:"):
+        data = data.split(",", 1)[-1]
+    try:
+        png = base64.b64decode(data, validate=True)
+    except (binascii.Error, ValueError):
+        raise ValueError(f"{title}: the chart image could not be read")
+    if not png or len(png) > _WBR_SLIDE_IMAGE_MAX_BYTES:
+        raise ValueError(f"{title}: the chart image is empty, or larger than 5 MB")
+    key = f"applications/pricing/uk-vehicle-list-evaluator/{_S3_ENV}/weekly_business_review/{stem}.png"
+    try:
+        s3.put_object(Bucket=s3_bucketname, Key=key, Body=png, ContentType="image/png")
+        return s3.generate_presigned_url("get_object", Params={"Bucket": s3_bucketname, "Key": key}, ExpiresIn=600)
+    except Exception as e:
+        logger.error(f"Weekly Business Review slide image not saved to S3: {e}")
+        raise ValueError(f"Chart image not saved: {e}")
+
+
 @router.post("/weekly-business-review/export-slides")
 def weekly_business_review_export_slides(request: Request, payload: dict, user: str = Depends(require_page_api('weekly_business_review'))):
     """Create a Google Slides deck, one slide per chart, in the page's order:
-    {slides: [{title, subtitle, image (PNG data URL or base64)}]}. Each PNG goes
-    to S3 first because Slides only takes images by link."""
-    import base64
-    import binascii
+    {slides: [{title, subtitle, image (PNG data URL or base64)}]}."""
     import boto3
     from clients.google_slides_client import GoogleSlidesClient, GoogleSlidesError
 
@@ -5010,29 +5036,15 @@ def weekly_business_review_export_slides(request: Request, payload: dict, user: 
     if not isinstance(slides_in, list) or not slides_in or len(slides_in) > _WBR_ITEMS_MAX:
         return {"status": "error", "message": "No charts to export"}
     now = _uk_now()
-    prefix = f"applications/pricing/uk-vehicle-list-evaluator/{_S3_ENV}/weekly_business_review/{now:%Y%m%d_%H%M%S}"
     s3 = boto3.client("s3", region_name=s3_bucket_region)
     slides = []
     for i, s in enumerate(slides_in):
         s = s if isinstance(s, dict) else {}
         title = str(s.get("title") or "")[:200]
-        data = str(s.get("image") or "")
-        if data.startswith("data:"):
-            data = data.split(",", 1)[-1]
         try:
-            png = base64.b64decode(data, validate=True)
-        except (binascii.Error, ValueError):
-            return {"status": "error", "message": f"{title}: the chart image could not be read"}
-        if not png or len(png) > _WBR_SLIDE_IMAGE_MAX_BYTES:
-            return {"status": "error", "message": f"{title}: the chart image is empty, or larger than 5 MB"}
-        key = f"{prefix}_{i + 1:03d}.png"
-        try:
-            s3.put_object(Bucket=s3_bucketname, Key=key, Body=png, ContentType="image/png")
-            image_url = s3.generate_presigned_url(
-                "get_object", Params={"Bucket": s3_bucketname, "Key": key}, ExpiresIn=600)
-        except Exception as e:
-            logger.error(f"Weekly Business Review slide image not saved to S3: {e}")
-            return {"status": "error", "message": f"Chart image not saved: {e}"}
+            image_url = wbr_slide_image_url(s3, f"{now:%Y%m%d_%H%M%S}_{i + 1:03d}", s.get("image"), title)
+        except ValueError as e:
+            return {"status": "error", "message": str(e)}
         slides.append({"title": title, "subtitle": str(s.get("subtitle") or "")[:300], "image_url": image_url})
 
     try:

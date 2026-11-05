@@ -623,6 +623,9 @@
     // review loads wbr_months_scroll months back (sendMetricBatch), which is
     // as far as the scroller goes; when the window holds everything loaded,
     // there is no scroller.
+    // Room (px) left of a chart's right edge so the last point's label is not cut off.
+    // Fixed here, not a setting: it only has to be wide enough for a label such as £1,500.
+    const CHART_RIGHT_PADDING = 28;
     const wbrShift = { m: 0, w: 0 };   // points moved from the usual window (negative = earlier)
     const WBR_WINDOW_KEYS = { m: ['wbr_months_before', 'wbr_months_after'], w: ['wbr_weeks_before', 'wbr_weeks_after'] };
 
@@ -631,6 +634,20 @@
     function wbrWindow(k, starts, today) {
         if (!WBR || (k !== 'm' && k !== 'w') || !starts || !starts.length) return null;
         const n = starts.length;
+        // The Report shows the last Settings > Report months and weeks that are complete:
+        // never the month or week still going, and nothing after it.
+        if (typeof WbrReport !== 'undefined' && WbrReport.active()) {
+            const size = Math.max(1, Number(settings[k === 'm' ? 'wbr_report_months' : 'wbr_report_weeks']) || 1);
+            let cur = n - 1;
+            if (today) {
+                const found = starts.map(s => String(s).slice(0, 10)).filter(s => s <= today).length - 1;
+                if (found >= 0) cur = found;
+            }
+            const hi = cur - 1, lo = Math.min(size - 1, hi);
+            if (hi < 0) return null;
+            const end = Math.min(Math.max(hi + wbrShift[k], lo), hi);
+            return { start: Math.max(0, end - size + 1), end, lo, hi, home: hi, size, n };
+        }
         const [beforeKey, afterKey] = WBR_WINDOW_KEYS[k];
         const after = Math.max(0, Number(settings[afterKey]) || 0);
         const size = Math.max(0, Number(settings[beforeKey]) || 0) + after + 1;
@@ -790,6 +807,8 @@
         wbr_slide_title_px: 'setWbrSlideTitlePx', wbr_slide_subtitle_px: 'setWbrSlideSubtitlePx',
         wbr_report_on: 'setWbrReportOn', wbr_report_months: 'setWbrReportMonths',
         wbr_report_weeks: 'setWbrReportWeeks', wbr_report_weeks_per_month: 'setWbrReportWeeksPerMonth',
+        wbr_report_slide_lines: 'setWbrReportSlideLines', wbr_report_slide_table_rows: 'setWbrReportSlideTableRows',
+        wbr_report_export_more: 'setWbrReportExportMore',
     };
     // Changing these changes what is loaded, so the charts are fetched again.
     const WBR_LOAD_SETTINGS = ['wbr_months_after', 'wbr_months_scroll', 'wbr_weeks_after', 'wbr_weeks_scroll'];
@@ -943,7 +962,7 @@
         changeWbrItems(items, 'Move');
     }
 
-    // Add Chart From KPI: every KPI chart by section, each period on its own.
+    // Add Chart From KPI: every KPI chart by section, month and week each on its own.
     function openWbrPicker() {
         document.getElementById('wbrPickerSearch').value = '';
         renderWbrPicker();
@@ -963,22 +982,23 @@
         const inUse = report ? WbrReport.sectionItems() : deck ? [] : wbrItems;
         const have = new Set(inUse.map(i => i.ref + '|' + i.period));
         const html = SECTIONS.map(section => {
-            // Admins Only charts are not offered: release them on the KPI page first.
-            const rows = layout.rows.filter(r => r.section === section && !r.hidden && !r.admin_only
+            // Admins Only charts are offered for the Report only, which leaves them out
+            // for everyone else. Elsewhere, release them on the KPI page first.
+            const rows = layout.rows.filter(r => r.section === section && !r.hidden && (report || !r.admin_only)
                 && (!q || `${rowTitle(r)} ${r.subtitle || ''}`.toLowerCase().includes(q)));
             if (!rows.length) return '';
             return `<div class="wbr-picker-section">${escHtml(section)}</div>` + rows.map(r => {
-                const buttons = ['m', 'w', 'd'].map(k => {
+                const buttons = ['m', 'w'].map(k => {
                     const added = have.has(r.id + '|' + k);
                     return `<button type="button" class="chart-title-btn" ${added ? 'disabled' : ''}
                                     onclick="addWbrItem('${r.id}', '${k}', this)">
                                 <i class="fas ${added ? 'fa-check' : 'fa-plus'}"></i> ${PERIOD_NAMES[k]}
                             </button>`;
                 }).join('');
-                // The Report's usual row: the chart's month, week and day together.
-                const missing = ['m', 'w', 'd'].filter(k => !have.has(r.id + '|' + k));
+                // The Report's usual line: the chart's month and week together.
+                const missing = ['m', 'w'].filter(k => !have.has(r.id + '|' + k));
                 const all = report && missing.length ? `<button type="button" class="chart-title-btn"
-                    onclick="WbrReport.addCharts('${r.id}', ${JSON.stringify(missing).replace(/"/g, '&quot;')}, this)"><i class="fas fa-plus"></i> All Three</button>` : '';
+                    onclick="WbrReport.addCharts('${r.id}', ${JSON.stringify(missing).replace(/"/g, '&quot;')}, this)"><i class="fas fa-plus"></i> Month And Week</button>` : '';
                 const sub = r.subtitle ? ` <span class="text-muted">- ${escHtml(r.subtitle)}</span>` : '';
                 return `<div class="wbr-picker-row"><span class="wbr-picker-title">${escHtml(rowTitle(r))}${sub}</span>${buttons}${all}</div>`;
             }).join('');
@@ -991,6 +1011,7 @@
     // status line links to it: a link the user clicks is never blocked as a
     // popup, and they stay on this page to see what happened.
     function exportWbrSlides() {
+        if (typeof WbrReport !== 'undefined' && WbrReport.active()) { WbrReport.exportSlides(); return; }
         const status = document.getElementById('statusText');
         const slides = wbrItems.map(item => {
             const row = findRow(item.ref);
@@ -3658,7 +3679,8 @@
                         chart.canvas.style.cursor = opts.notes && elements.length && hasChartValue(chart, elements[0].index) ? 'pointer' : 'default';
                     },
                     // Tilted labels above the highest points need room at the top.
-                    layout: { padding: { top: !below && angle ? 22 : 4 } },
+                    // The right padding keeps the last point's label from being cut off.
+                    layout: { padding: { top: !below && angle ? 22 : 4, right: CHART_RIGHT_PADDING } },
                     plugins: {
                         legend: { display: false },
                         tooltip: {
@@ -4216,7 +4238,7 @@
                 // The room for the totals above the tallest column is added
                 // under the legend (legendGap), not above it, where the
                 // padding would only push the legend down.
-                layout: { padding: { top: 4 } },
+                layout: { padding: { top: 4, right: CHART_RIGHT_PADDING } },
                 plugins: {
                     legendGap: { gap: opts.pct || !opts.dataLabels ? 8 : 20 },
                     legend: {
@@ -4528,7 +4550,7 @@
         const row = rowId ? findRow(rowId) : null;
         if (rowId && !row) return;
         chartModalState = { rowId: row ? row.id : null };
-        document.getElementById('chartModalTitle').textContent = row ? 'Edit Chart' : 'Add Chart';
+        document.getElementById('chartModalTitle').textContent = row ? `Edit Chart - ${rowTitle(row)}` : 'Add Chart';
         document.getElementById('chartModalError').classList.remove('show');
         document.getElementById('removeChartBtn').style.display = row ? '' : 'none';
         // Cleared first so the last chart's weighting is not carried over.

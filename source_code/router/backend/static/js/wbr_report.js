@@ -14,7 +14,7 @@ const WbrReport = (() => {
     let reviewDate = '';      // admin: a date picked on the page, instead of the saved one
     let printing = false;     // every section is drawn, one to a page, while printing
 
-    // {section id: [{id, ref (KPI row id), period: 'm'|'w'|'d', title?, subtitle?}]}
+    // {section id: [{id, ref (KPI row id), period: 'm'|'w', title?, subtitle?}]}
     let kpiCharts = {};
     const drawn = {};         // item id -> Chart
     let saving = Promise.resolve();
@@ -121,8 +121,9 @@ const WbrReport = (() => {
         // A table of words (the glossary) has its first heading in label_heading.
         const heading = table.text ? `<div class="wbr-report-table-title">${escHtml(table.title)}</div>` : '';
         const corner = table.text ? (table.label_heading || '') : table.title;
+        const comments = !table.text && !printing && typeof WbrComments !== 'undefined' ? WbrComments.slotHtml(`table:${table.id}`) : '';
         return `${heading}<div class="wbr-report-table-wrap"><table class="wbr-report-table ${table.text ? 'wbr-report-table-text' : ''}">
-                    <thead><tr><th class="wbr-report-label">${escHtml(corner)}</th>${head}</tr></thead>
+                    <thead><tr><th class="wbr-report-label">${escHtml(corner)} ${comments}</th>${head}</tr></thead>
                     <tbody>${body}</tbody>
                 </table></div>`;
     }
@@ -151,31 +152,43 @@ const WbrReport = (() => {
         return printing ? report.sections.flatMap(s => kpiCharts[s.id] || []) : sectionItems();
     }
 
-    function chartActionsHtml(item, index, count) {
+    // One line per KPI chart: its month, then its week.
+    function chartLines(items) {
+        const lines = new Map();
+        items.forEach(item => {
+            if (!lines.has(item.ref)) lines.set(item.ref, []);
+            lines.get(item.ref).push(item);
+        });
+        lines.forEach(line => line.sort((a, b) => a.period.localeCompare(b.period)));
+        return [...lines.values()];
+    }
+
+    // Moving a chart moves its whole line.
+    function chartActionsHtml(item, line, lineCount) {
         return `<div class="wbr-item-actions">
-                    <button type="button" class="chart-title-btn" onclick="WbrReport.moveChart('${item.id}', -1)" ${index === 0 ? 'disabled' : ''}><i class="fas fa-arrow-left"></i> Move Left</button>
-                    <button type="button" class="chart-title-btn" onclick="WbrReport.moveChart('${item.id}', 1)" ${index === count - 1 ? 'disabled' : ''}><i class="fas fa-arrow-right"></i> Move Right</button>
+                    <button type="button" class="chart-title-btn" onclick="WbrReport.moveChart('${item.id}', -1)" ${line === 0 ? 'disabled' : ''}><i class="fas fa-arrow-up"></i> Move Up</button>
+                    <button type="button" class="chart-title-btn" onclick="WbrReport.moveChart('${item.id}', 1)" ${line === lineCount - 1 ? 'disabled' : ''}><i class="fas fa-arrow-down"></i> Move Down</button>
                     <button type="button" class="chart-title-btn" onclick="WbrReport.removeChart('${item.id}')"><i class="fas fa-times"></i> Remove</button>
                     ${wbrTitleBoxes(item, `WbrReport.setChartText('${item.id}', KEY, this.value)`)}
                 </div>`;
     }
 
-    function chartHtml(item, index, count) {
+    function chartHtml(item, line, lineCount) {
         const row = findRow(item.ref);
-        const scroller = item.period === 'd' ? '' : wbrScrollerHtml(item.period);
         const comments = typeof WbrComments !== 'undefined' ? WbrComments.slotHtml(`chart:${item.ref}|${item.period}`) : '';
         const card = row ? chartCardHtml({
             canvasId: 'wbrr-' + item.id, title: wbrItemTitle(item, row), subtitle: wbrItemSubtitle(item, row),
-            legend: false, dayScroller: item.period === 'd',
-            headExtra: `<span class="chart-period">${escHtml(PERIOD_NAMES[item.period])}</span>${scroller}${comments}`,
+            legend: false,
+            headExtra: `<span class="chart-period">${escHtml(PERIOD_NAMES[item.period])}</span>${wbrScrollerHtml(item.period)}${comments}`,
         }) : '<div class="wbr-item-missing">This chart has been removed from the KPI page.</div>';
-        const actions = isUserView() || printing ? '' : chartActionsHtml(item, index, count);
+        const actions = isUserView() || printing ? '' : chartActionsHtml(item, line, lineCount);
         return `<div class="wbr-report-chart">${actions}${card}</div>`;
     }
 
     function chartsHtml(items) {
-        if (!items.length) return '';
-        return `<div class="wbr-report-charts">${items.map((item, i) => chartHtml(item, i, items.length)).join('')}</div>`;
+        const lines = chartLines(items);
+        if (!lines.length) return '';
+        return `<div class="wbr-report-charts">${lines.map((line, i) => `<div class="wbr-report-chart-line">${line.map(item => chartHtml(item, i, lines.length)).join('')}</div>`).join('')}</div>`;
     }
 
     function drawChart(item) {
@@ -186,7 +199,7 @@ const WbrReport = (() => {
         if (drawn[item.id]) { drawn[item.id].destroy(); delete drawn[item.id]; }
         // The same window as every other review chart (Settings, wbrWindow).
         drawn[item.id] = buildRowCharts(row, wbrSliceData(row, full), [{ k: item.period, canvasId: canvas.id, existing: null,
-                                                                         first: item.period === 'd' ? 0 : wbrStart(row.id, item.period) }])[0];
+                                                                         first: wbrStart(row.id, item.period) }])[0];
     }
 
     // A KPI row's data has arrived or changed: redraw its charts on the page.
@@ -249,11 +262,11 @@ const WbrReport = (() => {
     }
 
     function moveChart(id, step) {
-        const items = [...sectionItems()];
-        const a = items.findIndex(item => item.id === id), b = a + step;
-        if (a < 0 || b < 0 || b >= items.length) return;
-        [items[a], items[b]] = [items[b], items[a]];
-        changeSection(items, 'Move');
+        const lines = chartLines(sectionItems());
+        const a = lines.findIndex(line => line.some(item => item.id === id)), b = a + step;
+        if (a < 0 || b < 0 || b >= lines.length) return;
+        [lines[a], lines[b]] = [lines[b], lines[a]];
+        changeSection(lines.flat(), 'Move');
     }
 
     // A chart's own title / subtitle in this section; blank = the KPI chart's.
@@ -294,7 +307,6 @@ const WbrReport = (() => {
         slide.innerHTML = html;
         shownItems().forEach(drawChart);
         updateWbrSliders();
-        DayWindow.updateScrollers();
         if (typeof WbrComments !== 'undefined') WbrComments.refreshButtons();
     }
 
@@ -356,6 +368,118 @@ const WbrReport = (() => {
         if (event.key === 'ArrowLeft' && current > 0) show(current - 1);
         else if (event.key === 'ArrowRight' && current < report.sections.length - 1) show(current + 1);
     });
+
+    // A Report table's name, for its comments.
+    function tableTitle(id) {
+        const tables = report ? report.sections.flatMap(s => s.tables.concat((s.more || { tables: [] }).tables)) : [];
+        const table = tables.find(t => t.id === id);
+        return table ? table.title : '';
+    }
+
+    // ── Export To Google Slides ──
+    // One slide per part of a table and per few lines of charts, section by section.
+    // Tables go as text, so they are real tables in the deck; charts as images.
+    function plainCell(row, column) {
+        if (column.key === 'trend') return row.trend === 'up' ? 'Up' : row.trend === 'down' ? 'Down' : '';
+        return formatValue(row.values[column.key], (row.formats && row.formats[column.key]) || row.format);
+    }
+
+    function tableParts(table) {
+        const columns = table.columns.filter(c => c.group !== 'spacer');
+        const rows = table.rows.filter(row => row.label).map(row => ({
+            cells: [(row.indent ? '   ' : '') + row.label, ...columns.map(c => plainCell(row, c))],
+            bold: !!row.bold,
+        }));
+        const head = [table.text ? (table.label_heading || '') : table.title, ...columns.map(c => c.label)];
+        // A row of words takes several lines on a slide.
+        const size = table.text ? 6 : Number(settings.wbr_report_slide_table_rows) || 19;
+        const parts = [];
+        for (let i = 0; i < rows.length; i += size) parts.push({ head, rows: rows.slice(i, i + size), text: !!table.text });
+        return parts;
+    }
+
+    function chartForSlide(item) {
+        const row = findRow(item.ref);
+        const chart = drawn[item.id];
+        if (!row || !chart) return null;
+        // No half-drawn frame of the chart's animation in the picture.
+        chart.update('none');
+        return { title: `${wbrItemTitle(item, row)} - ${PERIOD_NAMES[item.period]}`, subtitle: wbrItemSubtitle(item, row),
+                 image: chart.toBase64Image('image/png', 1) };
+    }
+
+    // Every slide, with the charts' pictures taken. The charts must all be on the page
+    // for that, so they are drawn as for printing, then put back as they were.
+    async function slidesForExport() {
+        const withMore = Number(settings.wbr_report_export_more) === 1;
+        const linesPerSlide = Number(settings.wbr_report_slide_lines) || 2;
+        printing = true;
+        render();
+        await new Promise(done => requestAnimationFrame(() => requestAnimationFrame(done)));
+        try {
+            const slides = [];
+            report.sections.forEach(section => {
+                const before = slides.length;
+                const add = slide => slides.push({ title: section.title + (slides.length > before ? ' (Continued)' : ''), note: '', ...slide });
+                section.tables.concat(withMore ? (section.more || { tables: [] }).tables : []).forEach(table => {
+                    tableParts(table).forEach(part => add({ subtitle: table.text ? table.title : '', table: part }));
+                });
+                const lines = chartLines(kpiCharts[section.id] || [])
+                    .map(line => line.map(chartForSlide).filter(Boolean))
+                    .filter(line => line.length);
+                for (let i = 0; i < lines.length; i += linesPerSlide) add({ lines: lines.slice(i, i + linesPerSlide) });
+                if (slides.length > before) slides[before].note = (section.notes || []).join(' ');
+            });
+            return slides;
+        } finally {
+            printing = false;
+            render();
+        }
+    }
+
+    async function postExport(path, body) {
+        const resp = await fetch(BASE_URL + '/weekly-business-review/report/export/' + path, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
+        }).then(r => r.json());
+        if (resp.status !== 'ok') throw new Error(resp.message || 'Export failed');
+        return resp;
+    }
+
+    // The status line links to the deck, as a link the user clicks is never blocked
+    // as a popup. If a slide fails, the deck so far is still linked.
+    async function exportSlides() {
+        const status = document.getElementById('statusText');
+        const btn = document.getElementById('slidesBtn');
+        const icon = document.getElementById('slidesIcon');
+        if (!report) { status.textContent = 'Load the Report before exporting.'; return; }
+        const waiting = report.sections.flatMap(s => kpiCharts[s.id] || []).some(item => findRow(item.ref) && !customRowData[item.ref]);
+        if (waiting) { status.textContent = 'Load the charts before exporting.'; return; }
+        btn.disabled = true;
+        icon.className = 'fas fa-spinner fa-spin';
+        status.textContent = 'Creating Google Slides...';
+        const link = (url, text) => `<a href="${escHtml(url)}" target="_blank" rel="noopener">${text}</a>`;
+        let url = '';
+        let index = 0;
+        try {
+            const slides = await slidesForExport();
+            if (!slides.length) throw new Error('Nothing to export');
+            const deck = await postExport('start', { update_date: report.meta.update_date });
+            url = deck.url;
+            for (index = 0; index < slides.length; index++) {
+                status.textContent = `Creating Google Slides (Slide ${index + 1} Of ${slides.length})...`;
+                await postExport('slide', { deck_id: deck.deck_id, index, slide: slides[index] });
+            }
+            status.innerHTML = `Google Slides created - ${link(url, 'Open Deck')}`;
+        } catch (err) {
+            status.textContent = `Google Slides stopped: ${err.message}`;
+            if (url) status.insertAdjacentHTML('beforeend', ` (at slide ${index + 1}) - ${link(url, 'Open Deck So Far')}`);
+        } finally {
+            btn.disabled = false;
+            icon.className = 'fas fa-file-powerpoint';
+        }
+    }
 
     // ── Settings > Report (admin) ──
     function sectionsHtml() {
@@ -502,6 +626,7 @@ const WbrReport = (() => {
 
     return { setVisible, show, reload: () => load(true), pickDate, print, active: () => visible,
              setCharts, refs, sectionItems, rowLoaded, addCharts, removeChart, moveChart, setChartText,
+             tableTitle, exportSlides,
              charts: () => Object.values(drawn),
              openSettings, saveSettings, setSectionOn, moveSection };
 })();

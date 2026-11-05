@@ -8,11 +8,11 @@
 // delete, replies inside the same card, @mentions in blue and "Assigned to".
 // Not the same as Notes (business changes drawn on the charts).
 //
-// Every chart on the grid and on the slides has a comment button (a
-// .wbr-comment-slot in its title line, filled here) with its open thread
-// count. It opens the side panel for that chart; the toolbar's Comments
-// button opens it for every chart. All shown only while Settings > Comments
-// is On.
+// Every chart on the grid, the slides and the Report, and every Report table, has
+// a comment button (a .wbr-comment-slot in its title line, filled here) with its
+// open thread count. It opens the side panel for that chart or table; the toolbar's
+// Comments button opens it for all of them. All shown only while Settings >
+// Comments is On.
 const WbrComments = (() => {
     let comments = [];          // every comment, threads and replies, oldest first
     let people = [];            // [{username, name, email}] who can be @mentioned
@@ -92,6 +92,8 @@ const WbrComments = (() => {
         }).replace(/\n/g, '<br>');
     }
     function targetTitle(target) {
+        const table = /^table:(.+)$/.exec(target || '');
+        if (table) return (typeof WbrReport !== 'undefined' && WbrReport.tableTitle(table[1])) || 'Report Table';
         const m = /^chart:(.+)\|([mwd])$/.exec(target || '');
         const row = m && findRow(m[1]);
         return row ? `${rowTitle(row)} - ${PERIOD_NAMES[m[2]]}` : 'Removed Chart';

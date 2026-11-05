@@ -353,6 +353,117 @@ def weekly_business_review_report(request: Request, update_date: str = "", refre
     return report
 
 
+# ── Export To Google Slides ──────────────────────────────────────────────────
+# The page sends one slide at a time, so the whole deck is not one request that
+# runs past the API Gateway time limit, and a slide's images are small enough to send.
+_DECK_ID_RE = re.compile(r"[A-Za-z0-9_\-]{10,100}")
+_SLIDE_TEXT_MAX = {"title": 200, "subtitle": 300, "note": 1000}
+_SLIDE_CELL_MAX = 1000
+_SLIDE_ROWS_MAX = 40
+_SLIDE_COLUMNS_MAX = 30
+_SLIDE_LINES_MAX = 3
+_SLIDE_LINE_CHARTS_MAX = 2
+
+
+def _slide_text(raw, key: str) -> str:
+    return str(raw.get(key) or "").strip()[:_SLIDE_TEXT_MAX[key]]
+
+
+def _clean_slide_table(raw) -> dict:
+    if not isinstance(raw, dict) or not isinstance(raw.get("head"), list) or not isinstance(raw.get("rows"), list):
+        raise ValueError("Bad table on the slide")
+    head = [str(c or "")[:_SLIDE_CELL_MAX] for c in raw["head"]]
+    if not 1 <= len(head) <= _SLIDE_COLUMNS_MAX or not 1 <= len(raw["rows"]) <= _SLIDE_ROWS_MAX:
+        raise ValueError("A table on the slide has too many rows or columns")
+    rows = []
+    for row in raw["rows"]:
+        cells = row.get("cells") if isinstance(row, dict) else None
+        if not isinstance(cells, list) or len(cells) != len(head):
+            raise ValueError("Bad table row on the slide")
+        rows.append({"cells": [str(c or "")[:_SLIDE_CELL_MAX] for c in cells], "bold": row.get("bold") is True})
+    return {"head": head, "rows": rows, "text": raw.get("text") is True}
+
+
+def clean_export_slide(raw) -> dict:
+    """One slide from the page: {title, subtitle, note, and a table {head, rows: [{cells,
+    bold}], text} or lines: [[{title, subtitle, image}]]}. Raises ValueError with a message."""
+    if not isinstance(raw, dict):
+        raise ValueError("Bad slide")
+    out = {key: _slide_text(raw, key) for key in _SLIDE_TEXT_MAX}
+    if raw.get("table") is not None:
+        out["table"] = _clean_slide_table(raw["table"])
+        return out
+    lines = raw.get("lines")
+    if not isinstance(lines, list) or not 1 <= len(lines) <= _SLIDE_LINES_MAX:
+        raise ValueError("A slide needs a table or charts")
+    out["lines"] = []
+    for line in lines:
+        if not isinstance(line, list) or not 1 <= len(line) <= _SLIDE_LINE_CHARTS_MAX or not all(isinstance(c, dict) for c in line):
+            raise ValueError("Bad line of charts on the slide")
+        out["lines"].append([{"title": _slide_text(c, "title"), "subtitle": _slide_text(c, "subtitle"), "image": c.get("image")}
+                             for c in line])
+    return out
+
+
+def _report_refused(user: str) -> str | None:
+    """Why this user may not use the Report, or None: admin only until wbr_report_on is 1."""
+    if is_admin(user):
+        return None
+    numbers, _ = _read_settings()
+    return None if int(numbers["wbr_report_on"]) == 1 else "The Report view is not available yet"
+
+
+@router.post("/weekly-business-review/report/export/start")
+def weekly_business_review_report_export_start(request: Request, payload: dict,
+                                               user: str = Depends(require_page_api("weekly_business_review"))):
+    """A new deck with its title slide, for the page to add the slides to. {update_date}."""
+    from clients.google_slides_client import GoogleSlidesClient, GoogleSlidesError
+    try:
+        refused = _report_refused(user)
+        if refused:
+            return {"status": "error", "message": refused}
+        review = datetime.date.fromisoformat(clean_update_date((payload or {}).get("update_date")) or last_sunday(_uk_now().date()).isoformat())
+        deck_id, url = GoogleSlidesClient().create_report_deck(f"Weekly Business Review {review:%d/%m/%Y}",
+                                                               f"Review Date {review:%d/%m/%Y}")
+    except (ValueError, GoogleSlidesError) as e:
+        return {"status": "error", "message": str(e)}
+    except Exception as e:
+        logger.error(f"Weekly Business Review report export failed to start: {e}")
+        return {"status": "error", "message": str(e)}
+    _track(request, 'wbr_report_export_slides', '/weekly-business-review')
+    return {"status": "ok", "deck_id": deck_id, "url": url}
+
+
+@router.post("/weekly-business-review/report/export/slide")
+def weekly_business_review_report_export_slide(request: Request, payload: dict,
+                                               user: str = Depends(require_page_api("weekly_business_review"))):
+    """Adds one slide to the end of a deck from export/start. {deck_id, index, slide}."""
+    import boto3
+    from clients.google_slides_client import GoogleSlidesClient, GoogleSlidesError
+    from .kpi import s3_bucket_region, wbr_slide_image_url
+    payload = payload or {}
+    deck_id, index = str(payload.get("deck_id") or ""), payload.get("index")
+    if not _DECK_ID_RE.fullmatch(deck_id) or isinstance(index, bool) or not isinstance(index, int) or not 0 <= index <= 9999:
+        return {"status": "error", "message": "Bad deck"}
+    try:
+        refused = _report_refused(user)
+        if refused:
+            return {"status": "error", "message": refused}
+        slide = clean_export_slide(payload.get("slide"))
+        if slide.get("lines"):
+            s3 = boto3.client("s3", region_name=s3_bucket_region)
+            for l, line in enumerate(slide["lines"]):
+                for c, chart in enumerate(line):
+                    chart["image_url"] = wbr_slide_image_url(s3, f"report_{deck_id}_{index:04d}_{l}_{c}", chart.pop("image"), chart["title"])
+        GoogleSlidesClient().add_report_slide(deck_id, slide)
+    except (ValueError, GoogleSlidesError) as e:
+        return {"status": "error", "message": str(e)}
+    except Exception as e:
+        logger.error(f"Weekly Business Review report slide failed: {e}")
+        return {"status": "error", "message": str(e)}
+    return {"status": "ok"}
+
+
 def clean_report_charts(raw) -> dict:
     """The KPI charts chosen for each section: {section id: [{id, ref, period, title?,
     subtitle?}]}. Raises ValueError with a message."""
@@ -370,7 +481,7 @@ def clean_report_charts(raw) -> dict:
             if not isinstance(item, dict):
                 raise ValueError("Bad report chart")
             item_id, ref, period = item.get("id"), item.get("ref"), item.get("period")
-            if not all(isinstance(v, str) and 0 < len(v) <= 40 for v in (item_id, ref)) or period not in ("m", "w", "d"):
+            if not all(isinstance(v, str) and 0 < len(v) <= 40 for v in (item_id, ref)) or period not in ("m", "w"):
                 raise ValueError("Bad report chart")
             if item_id in ids or (ref, period) in seen:
                 raise ValueError("That chart is already in this section")
