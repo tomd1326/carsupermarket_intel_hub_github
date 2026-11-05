@@ -33,6 +33,14 @@
     --c-table-header-text:    #1e3a5f;
     --c-table-total-bg:       #eff6ff;   /* totals / grand total rows */
 
+    /* ── Buttons (Refresh, Search, Settings, Font +/-, unselected toggles) ── */
+    /* Same blues as the table headings. */
+    --c-btn-bg:           var(--c-table-header-bg);
+    --c-btn-border:       #93b4e0;
+    --c-btn-text:         var(--c-table-header-text);
+    --c-btn-hover-bg:     var(--c-table-header-hover);
+    --c-btn-hover-text:   var(--c-table-header-text);
+
     /* ── Borders ──────────────────────────────────────────────────────── */
     /* --c-border is the standard visible border: card edges, table outlines,
        cell separators. --c-border-soft is only for separators INSIDE an
@@ -254,6 +262,14 @@ body { background-color: var(--c-page-bg); color: var(--c-text); }
     border: 1px solid var(--c-border);
     border-radius: var(--radius-lg);
     padding: 13px 18px;
+}
+
+/* Plain outline buttons (Font +/-, Reset) share the tinted blue button style. */
+.btn-outline-secondary {
+    background-color: var(--c-btn-bg); border-color: var(--c-btn-border); color: var(--c-btn-text);
+}
+.btn-outline-secondary:hover, .btn-outline-secondary:focus, .btn-outline-secondary:active {
+    background-color: var(--c-btn-hover-bg); border-color: var(--c-btn-hover-bg); color: var(--c-btn-hover-text);
 }
 
 /* Green CSV download button, the same on every page that exports a table. */

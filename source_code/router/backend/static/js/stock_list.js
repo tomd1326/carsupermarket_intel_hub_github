@@ -317,20 +317,12 @@ function updateSortIndicators() {
 }
 
 /* ── Header (built from the Settings columns) ────────────────────────────── */
-// The Settings columns plus Notes (vehicle_comments.js), to the right of VRM or
-// first when VRM is not shown. Notes is not a Settings column and not in the CSV.
-const NOTES_COLUMN = { column: '__NOTES', label: 'Notes', format: 'link', width: 58 };
-function shownColumns() {
-    const at = viewColumns.findIndex(c => c.column === 'VRM');
-    return [...viewColumns.slice(0, at + 1), NOTES_COLUMN, ...viewColumns.slice(at + 1)];
-}
-
 function buildHeader() {
     const colgroup = document.getElementById('stock-cols');
     const headRow  = document.getElementById('stock-head');
     colgroup.innerHTML = '';
     headRow.innerHTML  = '';
-    shownColumns().forEach(c => {
+    viewColumns.forEach(c => {
         const col = document.createElement('col');
         col.style.width = (c.width || DEFAULT_WIDTH) + 'px';
         colgroup.appendChild(col);
@@ -500,10 +492,10 @@ function renderTable(rows) {
         else if (status === 'Ordered')    tr.classList.add('vehicle-row-ordered');
         else if (val(r, 'PRICE_BAND') === 'interest_free') tr.classList.add('vehicle-row-if');
 
-        shownColumns().forEach(c => {
+        viewColumns.forEach(c => {
             const td = document.createElement('td');
-            if (c === NOTES_COLUMN) td.innerHTML = VehicleComments.button(val(r, 'AUTOVIEW_STOCK_ID'), val(r, 'VRM'));
-            else fillCell(td, c, val(r, c.column));
+            fillCell(td, c, val(r, c.column));
+            if (c.column === 'VRM') td.insertAdjacentHTML('beforeend', VehicleComments.button(val(r, 'AUTOVIEW_STOCK_ID'), val(r, 'VRM')));
             tr.appendChild(td);
         });
         tbody.appendChild(tr);

@@ -141,8 +141,11 @@ async def presence_heartbeat(request: Request):
     if not config['presence_enabled']:
         return {"users": [], "config": display}
 
-    only_user = None if is_admin(user) else ADMIN_USERNAME
-    all_pages = is_admin(user) and page == _HOME_PAGE
+    # Settings > Live Users decides what regular users see. Admin sees all.
+    see_each_other = bool(config['presence_users_see_each_other'])
+    only_user = None if is_admin(user) or see_each_other else ADMIN_USERNAME
+    all_pages = page == _HOME_PAGE and (
+        is_admin(user) or (see_each_other and bool(config['presence_users_see_home_list'])))
     with get_database_connection() as conn:
         rows = touch_page_presence(conn, tab_id, seq, request.session.get('session_id', ''), user, _ENV,
                                    page, config['presence_drop_off_seconds'], only_user, all_pages, detail,

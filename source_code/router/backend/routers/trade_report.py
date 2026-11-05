@@ -229,8 +229,16 @@ def _saved_view() -> dict | None:
 # Settings > Highlighting: a rule colours the cell of its column in the vehicle
 # list when the value matches, e.g. Mileage = 0 in red.
 _HIGHLIGHT_KEY = 'trade_highlight_rules'
-_HIGHLIGHT_OPS = {'=', '!=', '>', '<', '>=', '<=', 'contains'}
+_HIGHLIGHT_OPS = {'=', '!=', '>', '<', '>=', '<=', 'contains', 'is_blank', 'is_not_blank'}
 _HIGHLIGHT_NUMBER_OPS = {'>', '<', '>=', '<='}
+# Tests on whether the cell is empty (null): no value to give.
+_HIGHLIGHT_BLANK_OPS = {'is_blank', 'is_not_blank'}
+# Excel's Good, Bad and Neutral cell styles: (fill, text).
+_HIGHLIGHT_STYLES = {
+    'good': ('#C6EFCE', '#006100'),
+    'bad': ('#FFC7CE', '#9C0006'),
+    'neutral': ('#FFEB9C', '#9C5700'),
+}
 
 
 def _clean_highlight_rules(rules) -> list:
@@ -246,18 +254,27 @@ def _clean_highlight_rules(rules) -> list:
             raise ValueError("Choose a column for each highlight rule, or remove it")
         if r.get("op") not in _HIGHLIGHT_OPS:
             raise ValueError(f"Unknown test for {r['column']}")
-        value = str(r.get("value") if r.get("value") is not None else "").strip()
-        if not value or len(value) > 60:
+        value = "" if r["op"] in _HIGHLIGHT_BLANK_OPS else str(r.get("value") if r.get("value") is not None else "").strip()
+        if r["op"] not in _HIGHLIGHT_BLANK_OPS and (not value or len(value) > 60):
             raise ValueError(f"Give a value (at most 60 characters) for {r['column']}")
         if r["op"] in _HIGHLIGHT_NUMBER_OPS:
             try:
                 float(value)
             except ValueError:
                 raise ValueError(f"{r['column']} {r['op']} needs a number, not '{value}'")
-        colour = r.get("colour")
-        if not re.fullmatch(r"#[0-9a-fA-F]{6}", str(colour or "")):
-            raise ValueError(f"Pick a colour for the {r['column']} rule")
-        cleaned.append({"column": r["column"], "op": r["op"], "value": value, "colour": colour})
+        # Good, Bad and Neutral are Excel's own cell styles: the colours are fixed
+        # here, not taken from the page. Custom is a fill colour of the user's own.
+        style = r.get("style") or "custom"
+        if style in _HIGHLIGHT_STYLES:
+            fill, text = _HIGHLIGHT_STYLES[style]
+        elif style == "custom":
+            fill, text = r.get("colour"), ""
+            if not re.fullmatch(r"#[0-9a-fA-F]{6}", str(fill or "")):
+                raise ValueError(f"Pick a colour for the {r['column']} rule")
+        else:
+            raise ValueError(f"Unknown style for {r['column']}")
+        cleaned.append({"column": r["column"], "op": r["op"], "value": value, "style": style,
+                        "colour": fill, "text": text})
     return cleaned
 
 
@@ -273,8 +290,6 @@ def _saved_highlight_rules() -> list:
 # that has been changed.
 _FILTER_COLOUR_KEY = 'trade_filter_colour'
 _FILTER_COLOUR_DEFAULT = '#fff3b0'
-_SITE_CHANGED_COLOUR_KEY = 'trade_site_changed_colour'
-_SITE_CHANGED_COLOUR_DEFAULT = '#dbeafe'
 
 
 def _clean_colour(colour, default: str) -> str:
@@ -368,7 +383,6 @@ def trade_report_page(request: Request, user: str = Depends(require_page(PAGE_KE
         "font_size": font_size, "font_pref": _FONT_PREF,
         "is_admin": is_admin(user), "vehicle_view": _saved_view(), "filter_colour": _saved_filter_colour(),
         "highlight_rules": _saved_highlight_rules(),
-        "site_changed_colour": _saved_colour(_SITE_CHANGED_COLOUR_KEY, _SITE_CHANGED_COLOUR_DEFAULT),
         "can_change_sites": user_has_permission(user, _SITE_PERMISSION),
     })
 
@@ -456,7 +470,6 @@ def trade_report_vehicle_view_save(request: Request, payload: dict,
     except ValueError as e:
         return {"status": "error", "message": str(e)}
     colour = _clean_filter_colour((payload or {}).get("filter_colour"))
-    site_colour = _clean_colour((payload or {}).get("site_changed_colour"), _SITE_CHANGED_COLOUR_DEFAULT)
     try:
         rules = _clean_highlight_rules((payload or {}).get("highlight_rules"))
     except ValueError as e:
@@ -464,10 +477,8 @@ def trade_report_vehicle_view_save(request: Request, payload: dict,
     try:
         kpi._write_kpi_layout_value(_VIEW_KEY, view)
         kpi._write_kpi_layout_value(_FILTER_COLOUR_KEY, colour)
-        kpi._write_kpi_layout_value(_SITE_CHANGED_COLOUR_KEY, site_colour)
         kpi._write_kpi_layout_value(_HIGHLIGHT_KEY, rules)
     except Exception as e:
         logger.error("Trade Report View Vehicles save failed: %s", e)
         return {"status": "error", "message": str(e)}
-    return {"status": "ok", "view": view, "filter_colour": colour, "site_changed_colour": site_colour,
-            "highlight_rules": rules}
+    return {"status": "ok", "view": view, "filter_colour": colour, "highlight_rules": rules}

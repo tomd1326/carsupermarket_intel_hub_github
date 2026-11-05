@@ -21,7 +21,7 @@ SECRET_NAME = "prod/carsupermarket/sharepoint/credentials"
 # than an anonymous relay, so this address must exist in the tenant and the app
 # must be allowed to send as it. Set in Settings > Email; this is only the
 # fallback when that box is blank.
-DEFAULT_SENDER = "Intel-hub@carsupermarket.com"
+DEFAULT_SENDER = "intel-hub@carsupermarket.com"
 
 
 def configured_sender() -> str:

@@ -118,6 +118,14 @@
              loading-spinner width (full, matching the control bar above) —
              renderSummary() removes is-loading once real tables are in, which
              lets the fit-content rule below take over and hug the content. -->
+        <div class="summary-tools mb-2" id="summary-tools">
+            <button type="button" class="btn btn-refresh" onclick="setAllSummaryTablesCollapsed(false)" title="Show every summary table">
+                <i class="fas fa-angles-down"></i> Expand All
+            </button>
+            <button type="button" class="btn btn-refresh" onclick="setAllSummaryTablesCollapsed(true)" title="Hide every summary table except its heading row">
+                <i class="fas fa-angles-up"></i> Collapse All
+            </button>
+        </div>
         <div class="panel shadow-sm is-loading" id="summary-area" style="max-width: 100%;">
             <div class="spinner-wrap"><div class="css-spinner"></div><div style="margin-top:12px;font-size:0.9rem;">Loading vehicles...</div></div>
         </div>

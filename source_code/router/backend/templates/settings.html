@@ -476,24 +476,17 @@
                 <div class="card-header fw-semibold">Email</div>
                 <div class="card-body">
                     <p class="form-text mt-0">
-                        Mail is sent through Microsoft Graph using the SharePoint app registration.
-                        The sender must be a real mailbox in the tenant, and the app needs the
-                        Mail.Send application permission with admin consent.
+                        Mail is sent through Microsoft Graph using the Website Mailer app registration.
+                        It can only send from the Intel-hub shared mailbox. Send Test Email sends a test
+                        message to tom.drayson@carsupermarket.com only.
                     </p>
                     <div class="d-flex gap-3 flex-wrap">
                         <div>
                             <label for="email_sender" class="form-label mb-1">Send From</label>
                             <input class="form-control" type="email" id="email_sender" name="email_sender"
-                                   value="{{ settings.email_sender }}" placeholder="tom.drayson@carsupermarket.com"
+                                   value="{{ settings.email_sender }}" placeholder="intel-hub@carsupermarket.com"
                                    style="width: 320px;" autocomplete="off">
-                            <div class="form-text">Blank = tom.drayson@carsupermarket.com</div>
-                        </div>
-                        <div>
-                            <label for="email_test_recipient" class="form-label mb-1">Send Test Email To</label>
-                            <input class="form-control" type="email" id="email_test_recipient" name="email_test_recipient"
-                                   value="{{ settings.email_test_recipient }}" placeholder="Same as Send From"
-                                   style="width: 320px;" autocomplete="off">
-                            <div class="form-text">Blank = the Send From address</div>
+                            <div class="form-text">Blank = intel-hub@carsupermarket.com</div>
                         </div>
                     </div>
                 </div>
@@ -2119,6 +2112,16 @@
                         <input class="form-check-input" type="checkbox" id="presence_enabled" name="presence_enabled"
                                {% if settings.presence_enabled %}checked{% endif %}>
                         <label class="form-check-label" for="presence_enabled">Show Live Users <span class="text-muted">(everyone)</span></label>
+                    </div>
+                    <div class="form-check mb-2">
+                        <input class="form-check-input" type="checkbox" id="presence_users_see_each_other" name="presence_users_see_each_other"
+                               {% if settings.presence_users_see_each_other %}checked{% endif %}>
+                        <label class="form-check-label" for="presence_users_see_each_other">Users Can See Each Other <span class="text-muted">(off: users only see you)</span></label>
+                    </div>
+                    <div class="form-check mb-3">
+                        <input class="form-check-input" type="checkbox" id="presence_users_see_home_list" name="presence_users_see_home_list"
+                               {% if settings.presence_users_see_home_list %}checked{% endif %}>
+                        <label class="form-check-label" for="presence_users_see_home_list">Users See Everyone On Home <span class="text-muted">(off: only people on the same page; needs the setting above)</span></label>
                     </div>
                     <div class="d-flex gap-4 flex-wrap">
                         <div>

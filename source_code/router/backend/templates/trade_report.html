@@ -15,7 +15,7 @@
     <!-- The saved font size is rendered here so the page paints at the right
          size straight away instead of being resized by JS after load. -->
     <style>
-        :root { --page-font: {{ font_size }}px; --filter-on: {{ filter_colour }}; --site-changed: {{ site_changed_colour }}; }
+        :root { --page-font: {{ font_size }}px; --filter-on: {{ filter_colour }}; }
     </style>
     <link href="{{ static_url('css/vehicle_comments.css') }}" rel="stylesheet">
     <link href="{{ static_url('css/trade_report.css') }}" rel="stylesheet">
@@ -144,6 +144,7 @@
             </div>
             <p class="modal-sub">Moves a car to another site on this report, for good. Applies straight away, for everyone. Figures on other reports keep the Autoview site.</p>
             <div class="modal-error" id="sc-error"></div>
+            <div class="vc-success" id="sc-success"></div>
             <div class="sc-field">
                 <label for="sc-vrm">VRM</label>
                 <input type="text" class="form-control form-control-sm" id="sc-vrm" maxlength="12" autocomplete="off" spellcheck="false" style="width:140px;">
@@ -220,13 +221,7 @@
                             <label for="filterColourInput">Filter On Colour</label>
                             <input type="color" id="filterColourInput">
                             <div class="modal-hint">The colour of a control with a filter on, and of the line listing the filters.</div>
-                        </div>
-                        <div class="modal-field">
-                            <label for="siteChangedColourInput">Changed Site Colour</label>
-                            <input type="color" id="siteChangedColourInput">
-                            <div class="modal-hint">The colour of the Site cell on a car whose site has been changed.</div>
-                        </div>
-                    </div>
+                        </div>                    </div>
                 </div>
             </div>
             <div class="modal-actions">

@@ -34,10 +34,25 @@
 .vc-composer .vc-actions { justify-content: space-between; }
 .vc-assign { font-size: 0.9em; color: var(--c-text-muted); display: flex; align-items: center; gap: 6px; }
 .vc-empty { color: var(--c-text-muted); padding: 12px 4px; }
+/* Comment bubble in the VRM cell: faint on hover of the row when there are no notes. */
+.vc-btn.vc-bubble { border: 0; background: none; padding: 0 0 0 6px; color: #1a73e8; font-size: 0.9em; white-space: nowrap; vertical-align: middle; }
+.vc-btn.vc-bubble:hover { color: #0b57d0; }
+.vc-bubble-empty { opacity: 0; }
+tr:hover .vc-bubble-empty { opacity: 0.7; }
+/* A VRM cell with notes or a site change is Excel's Neutral style. !important
+   so it also shows on rows the page colours itself (e.g. Stock List sold rows). */
+td:has(> .vc-bubble:not(.vc-bubble-empty)) { background: #FFEB9C !important; color: #9C5700 !important; }
+/* Excel's Good style, for "saved" messages in the popups. */
+.vc-success { display: none; background: #C6EFCE; color: #006100; border: 1px solid #006100; border-radius: 6px; padding: 6px 10px; margin-bottom: 10px; font-size: 0.85rem; font-weight: 600; }
+.vc-success.show { display: block; }
+/* The @ names that pop up under a note box while typing. */
+.vc-suggest { display: flex; flex-direction: column; border: 1px solid var(--c-border); border-radius: 6px; background: #fff; margin: 2px 0 6px; max-height: 180px; overflow-y: auto; }
+.vc-suggest-item { border: 0; background: none; text-align: left; padding: 5px 8px; font-size: 0.85em; cursor: pointer; }
+.vc-suggest-item:hover { background: #eef4ff; }
+.vc-suggest-user { color: var(--c-text-muted); font-size: 0.85em; margin-left: 6px; }
 .vc-btn.vc-site { border: 0; background: none; padding: 0 0 0 4px; color: #1a73e8; }
 .vc-site-change { border-left: 4px solid #1a73e8; }
 .vc-site-line { font-weight: 600; margin-top: 4px; }
-.site-changed { background: var(--site-changed, #dbeafe); }
 .sc-box { width: 680px; max-width: 94vw; max-height: 90vh; overflow-y: auto; }
 .sc-field { margin-bottom: 10px; }
 .sc-field label { display: block; font-weight: 600; margin-bottom: 3px; }

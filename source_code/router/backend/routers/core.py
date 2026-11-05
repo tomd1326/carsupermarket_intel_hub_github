@@ -281,7 +281,8 @@ templates.env.globals['user_menu'] = user_menu
 # as page names. Every page reads them to draw the circles, so they must not
 # cost a database read per page. The page header's and menus' sizes ride
 # along, as every page draws them too.
-PRESENCE_SETTING_KEYS = ('presence_enabled', 'presence_interval_seconds', 'presence_drop_off_seconds',
+PRESENCE_SETTING_KEYS = ('presence_enabled', 'presence_users_see_each_other',
+                         'presence_users_see_home_list', 'presence_interval_seconds', 'presence_drop_off_seconds',
                          'presence_circle_size', 'presence_max_circles', 'presence_border_width',
                          'presence_gap', 'presence_border_colour', 'presence_text_colour',
                          'presence_more_colour', 'presence_ring_width', 'presence_ring_gap',

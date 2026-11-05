@@ -5,8 +5,8 @@
 //
 // To use it on a page: load vehicle_comments.css and this file, set
 // window.VEHICLE_COMMENTS_PAGE to the page key (it must be in VEHICLE_PAGES in
-// routers/wbr_comments.py), and put VehicleComments.button(stockId, vrm) in a
-// Notes column to the right of VRM. Clicking it opens the popup, the counts fill
+// routers/wbr_comments.py), and put VehicleComments.button(stockId, vrm) inside
+// the VRM cell, as a comment bubble. Clicking it opens the popup, the counts fill
 // in by themselves, and ?vehicle=<id>&vrm=<vrm> (an alert's link) opens that car.
 const VehicleComments = (function () {
     'use strict';
@@ -14,6 +14,7 @@ const VehicleComments = (function () {
     let counts = {};
     let ctx = null;               // { stockId, vrm, data, replyTo, editing }
     let modal = null;
+    let activeBox = null;         // the note box last typed in, for @ names
 
     const esc = s => String(s ?? '').replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
     const when = iso => iso ? new Date(iso).toLocaleString('en-GB', {
@@ -34,13 +35,14 @@ const VehicleComments = (function () {
 
     function buttonInner(stockId) {
         const n = count(stockId);
-        return `<i class="fas fa-info-circle"></i>${n ? ` ${n}` : ''}`;
+        // A bubble with the count when there are notes; a + (on hover only) when there are none.
+        return n ? `<i class="fas fa-comment"></i> ${n}` : '<i class="fas fa-plus"></i>';
     }
 
     function showCounts() {
-        document.querySelectorAll('.vc-btn[data-stock]:not(.vc-site)').forEach(b => {
+        document.querySelectorAll('.vc-bubble[data-stock]').forEach(b => {
             b.innerHTML = buttonInner(b.dataset.stock);
-            b.classList.toggle('has', count(b.dataset.stock) > 0);
+            b.classList.toggle('vc-bubble-empty', count(b.dataset.stock) === 0);
         });
     }
 
@@ -49,15 +51,17 @@ const VehicleComments = (function () {
         showCounts();
     }
 
-    // The Notes button for a row. A car with no Autoview id has none.
+    // The comment bubble for a VRM cell. With no notes it only shows on hover of
+    // the row. A car with no Autoview id has none.
     function button(stockId, vrm) {
         if (stockId === null || stockId === undefined || stockId === '') return '';
-        return `<button type="button" class="vc-btn${count(stockId) ? ' has' : ''}" data-stock="${esc(stockId)}" data-vrm="${esc(vrm)}" title="Notes On ${esc(vrm || 'This Vehicle')}">${buttonInner(stockId)}</button>`;
+        return `<button type="button" class="vc-btn vc-bubble${count(stockId) ? '' : ' vc-bubble-empty'}" data-stock="${esc(stockId)}" data-vrm="${esc(vrm)}" title="Notes On ${esc(vrm || 'This Vehicle')}">${buttonInner(stockId)}</button>`;
     }
 
-    // The i beside a changed site. Opens the same history.
+    // The same bubble beside a changed site (and the same Neutral colour on the
+    // cell). Opens the same history.
     function siteButton(stockId, vrm, title) {
-        return `<button type="button" class="vc-btn vc-site" data-stock="${esc(stockId)}" data-vrm="${esc(vrm)}" title="${esc(title)}"><i class="fas fa-info-circle"></i></button>`;
+        return `<button type="button" class="vc-btn vc-bubble vc-site" data-stock="${esc(stockId)}" data-vrm="${esc(vrm)}" title="${esc(title)}">${buttonInner(stockId)}</button>`;
     }
 
     function ensureModal() {
@@ -72,17 +76,30 @@ const VehicleComments = (function () {
                     <button type="button" class="modal-close-x" data-vc="close" aria-label="Close">&times;</button>
                 </div>
                 <div class="modal-error" id="vcError"></div>
+                <div class="vc-success" id="vcSuccess"></div>
                 <div class="vc-history" id="vcHistory"></div>
                 <div class="vc-composer" id="vcComposer"></div>
             </div>`;
         document.body.appendChild(modal);
         modal.addEventListener('click', onClick);
-        // Chips keep the cursor in the box they insert into.
-        modal.addEventListener('mousedown', e => { if (e.target.closest('.vc-chip')) e.preventDefault(); });
+        // A name picked from the @ list keeps the cursor in the box it goes into.
+        modal.addEventListener('mousedown', e => { if (e.target.closest('.vc-suggest-item')) e.preventDefault(); });
+        modal.addEventListener('input', e => {
+            if (!e.target.classList.contains('vc-text')) return;
+            activeBox = e.target;
+            showSuggest(e.target);
+        });
     }
 
     function showError(message) {
         const box = document.getElementById('vcError');
+        box.textContent = message || '';
+        box.classList.toggle('show', !!message);
+    }
+
+    // The green message after something is saved. '' hides it.
+    function showSuccess(message) {
+        const box = document.getElementById('vcSuccess');
         box.textContent = message || '';
         box.classList.toggle('show', !!message);
     }
@@ -102,6 +119,7 @@ const VehicleComments = (function () {
         document.getElementById('vcHistory').innerHTML = '<div class="vc-empty">Loading...</div>';
         document.getElementById('vcComposer').innerHTML = '';
         showError('');
+        showSuccess('');
         modal.classList.add('open');
         try { await reload(); } catch (e) { showError(e.message); }
     }
@@ -114,11 +132,6 @@ const VehicleComments = (function () {
     // @name in a note, picked out.
     const bodyHtml = text => esc(text).replace(/(^|\s)(@[A-Za-z0-9._\-]+(?:@[A-Za-z0-9.\-]+)?)/g, '$1<span class="vc-mention">$2</span>');
 
-    function chips(people) {
-        return `<div class="vc-chips">${people.map(p =>
-            `<button type="button" class="vc-chip" data-vc="mention" data-user="${esc(p.username)}" title="${esc(p.username)}">@${esc(p.name)}</button>`).join('')}</div>`;
-    }
-
     function head(c) {
         return `<div class="vc-head"><span class="vc-author">${esc(c.author_name)}</span>
             <span class="vc-when">${esc(when(c.created_at))}${c.edited_at ? ' (Edited)' : ''}</span></div>`;
@@ -130,8 +143,7 @@ const VehicleComments = (function () {
         if (ctx.editing === c.id) {
             return `<div class="vc-comment${isReply ? ' reply' : ''}">${head(c)}
                 <textarea class="vc-text" id="vcEdit" maxlength="2000">${esc(c.body)}</textarea>
-                ${chips(ctx.data.people)}
-                <div class="vc-actions">
+                                <div class="vc-actions">
                     <button type="button" class="btn btn-sm btn-primary" data-vc="save-edit" data-id="${c.id}">Save</button>
                     <button type="button" class="btn btn-sm btn-outline-secondary" data-vc="cancel">Cancel</button>
                 </div></div>`;
@@ -157,9 +169,8 @@ const VehicleComments = (function () {
                 ${t.resolved_at ? `<div class="vc-resolved">Resolved By ${esc(t.resolved_by_name || t.resolved_by)} On ${esc(when(t.resolved_at))}</div>` : ''}
                 ${ctx.replyTo === t.id ? `<div class="vc-comment reply">
                     <textarea class="vc-text" id="vcReply" maxlength="2000" placeholder="Reply"></textarea>
-                    ${chips(ctx.data.people)}
                     <div class="vc-actions">
-                        <button type="button" class="btn btn-sm btn-primary" data-vc="send-reply" data-id="${t.id}">Reply</button>
+                        <button type="button" class="btn btn-sm btn-primary" data-vc="send-reply" data-id="${t.id}">Save Reply</button>
                         <button type="button" class="btn btn-sm btn-outline-secondary" data-vc="cancel">Cancel</button>
                     </div></div>` : ''}
             </div>`;
@@ -175,6 +186,7 @@ const VehicleComments = (function () {
     }
 
     function render() {
+        clearSuggest();
         const items = [
             ...ctx.data.comments.filter(c => c.parent_id === null).map(t => ({ at: t.created_at, html: threadHtml(t) })),
             ...ctx.data.site_changes.map(s => ({ at: s.changed_at, html: siteChangeHtml(s) })),
@@ -184,23 +196,52 @@ const VehicleComments = (function () {
         // What is being typed stays through a redraw.
         const draft = (document.getElementById('vcNew') || {}).value || '';
         document.getElementById('vcComposer').innerHTML = `
-            <textarea class="vc-text" id="vcNew" maxlength="2000" placeholder="Add A Note. Click A Name To Mention Someone"></textarea>
-            ${chips(ctx.data.people)}
-            <div class="vc-actions">
+            <textarea class="vc-text" id="vcNew" maxlength="2000" placeholder="Add A Note. Type @ And A Name To Mention Someone"></textarea>
+                        <div class="vc-actions">
                 <label class="vc-assign"><input type="checkbox" id="vcAssign"> Assign To The First Person Mentioned</label>
-                <button type="button" class="btn btn-sm btn-primary" data-vc="add">Add Note</button>
+                <button type="button" class="btn btn-sm btn-primary" data-vc="add">Save Note</button>
             </div>`;
         document.getElementById('vcNew').value = draft;
     }
 
-    function insertMention(username) {
-        const box = document.activeElement && document.activeElement.classList.contains('vc-text')
-            ? document.activeElement : document.getElementById('vcNew');
-        const at = box.selectionStart ?? box.value.length;
+    // @ names: once a name starts after an @, the people it matches pop up under
+    // that box. Picking one puts the full @name in. Nothing shows otherwise.
+    function mentionQuery(box) {
+        const before = box.value.slice(0, box.selectionStart ?? box.value.length);
+        const m = before.match(/(^|\s)@([A-Za-z0-9._\-]*)$/);
+        return m ? { at: before.length - m[2].length - 1, text: m[2].toLowerCase() } : null;
+    }
+
+    function clearSuggest() {
+        document.querySelectorAll('.vc-suggest').forEach(s => s.remove());
+    }
+
+    function showSuggest(box) {
+        clearSuggest();
+        const q = mentionQuery(box);
+        if (!q || !ctx || !ctx.data) return;
+        const people = ctx.data.people
+            .filter(p => p.username.toLowerCase().startsWith(q.text) || p.name.toLowerCase().includes(q.text))
+            .slice(0, 6);
+        if (!people.length) return;
+        const list = document.createElement('div');
+        list.className = 'vc-suggest';
+        list.innerHTML = people.map(p =>
+            `<button type="button" class="vc-suggest-item" data-vc="pick" data-user="${esc(p.username)}">${esc(p.name)} <span class="vc-suggest-user">${esc(p.username)}</span></button>`).join('');
+        box.insertAdjacentElement('afterend', list);
+    }
+
+    function pickMention(username) {
+        const box = activeBox;
+        if (!box) return;
+        const q = mentionQuery(box);
+        const end = box.selectionStart ?? box.value.length;
+        const at = q ? q.at : end;
         const text = `@${username} `;
-        box.value = box.value.slice(0, at) + text + box.value.slice(box.selectionEnd ?? at);
+        box.value = box.value.slice(0, at) + text + box.value.slice(end);
         box.focus();
         box.setSelectionRange(at + text.length, at + text.length);
+        clearSuggest();
     }
 
     async function onClick(e) {
@@ -210,9 +251,10 @@ const VehicleComments = (function () {
         const id = Number(el.dataset.id);
         const action = el.dataset.vc;
         showError('');
+        showSuccess('');
         try {
             if (action === 'close') return close();
-            if (action === 'mention') return insertMention(el.dataset.user);
+            if (action === 'pick') return pickMention(el.dataset.user);
             if (action === 'reply') { ctx.replyTo = id; ctx.editing = null; return render(); }
             if (action === 'edit') { ctx.editing = id; ctx.replyTo = null; return render(); }
             if (action === 'cancel') { ctx.replyTo = null; ctx.editing = null; return render(); }
@@ -237,6 +279,13 @@ const VehicleComments = (function () {
                 await call(`/api/comments/${id}/delete`, {});
             } else return;
             await reload();
+            showSuccess({
+                'add': 'Note saved successfully',
+                'send-reply': 'Reply saved successfully',
+                'save-edit': 'Note updated successfully',
+                'resolve': el.dataset.resolved === '1' ? 'Thread marked as resolved' : 'Thread reopened',
+                'delete': 'Note deleted',
+            }[action]);
         } catch (err) {
             showError(err.message);
         }

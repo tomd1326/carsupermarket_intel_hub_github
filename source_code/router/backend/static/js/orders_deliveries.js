@@ -13,8 +13,6 @@ const BASE_URL = window.BASE_URL;
         // type: 'text' | 'num' | 'money' | 'pct' | 'date' | 'link' (link uses linkKey)
         const COLS = [
             { key: 'vrm', label: 'VRM' },
-            // The vehicle's notes (vehicle_comments.js). Left out of the CSV.
-            { key: 'notes', label: 'Notes', type: 'notes', derived: () => '' },
             { key: 'order_date', label: 'Order Date', type: 'date' },
             { key: 'delivered', label: 'Delivered', type: 'date' },
             // Make, model and derivative in one column — built by vehicleDesc()
@@ -934,6 +932,16 @@ const BASE_URL = window.BASE_URL;
             });
         }
 
+        // Expand All / Collapse All above the summary tables: shows or hides
+        // every table at once (the same state as each table's own +/- button).
+        function setAllSummaryTablesCollapsed(collapse) {
+            collapsedTables.clear();
+            if (collapse) SUMMARY_DIMENSIONS.forEach(d => collapsedTables.add(d.key));
+            saveCollapsedTables();
+            renderSummary();
+        }
+        window.setAllSummaryTablesCollapsed = setAllSummaryTablesCollapsed;
+
         function renderSummary() {
             const area = document.getElementById('summary-area');
             const base = baseRows(lensApplied);                                                            // lens only, no slicers
@@ -1122,8 +1130,7 @@ const BASE_URL = window.BASE_URL;
             const body = rows.length
                 ? rows.map(r => '<tr>' + MODAL_COLS.map(c => {
                     const v = cellValue(c, r);
-                    if (c.type === 'notes') return `<td>${VehicleComments.button(r.autoview_stock_id, r.vrm)}</td>`;
-                    // Link columns (Apex Vehicle/Order/Invoice) render as an icon, same as
+                                        // Link columns (Apex Vehicle/Order/Invoice) render as an icon, same as
                     // the vehicle grid — otherwise the raw URL prints as text.
                     if (c.type === 'link') {
                         return v ? `<td><a href="${escapeHtml(v)}" target="_blank" rel="noopener"><i class="fas fa-external-link-alt"></i></a></td>` : '<td></td>';
@@ -1133,7 +1140,7 @@ const BASE_URL = window.BASE_URL;
                     // title so a value trimmed by the fixed column width is
                     // still readable on hover.
                     const text = escapeHtml(fmtCell(c, v));
-                    return `<td class="${(numCls + negCls).trim()}" title="${text}"${shadeAttr(shaders[c.key], v, SHADE_DIRECTION[c.key])}>${text}</td>`;
+                    return `<td class="${(numCls + negCls).trim()}" title="${text}"${shadeAttr(shaders[c.key], v, SHADE_DIRECTION[c.key])}>${text}${c.key === 'vrm' ? VehicleComments.button(r.autoview_stock_id, r.vrm) : ''}</td>`;
                 }).join('') + '</tr>').join('')
                 : `<tr><td colspan="${MODAL_COLS.length}" style="text-align:center;color:var(--c-text-muted);padding:20px 0;">${
                     modalVrmQuery ? `No VRM matching &ldquo;${escapeHtml(modalVrmQuery)}&rdquo;` : 'No vehicles'
@@ -1430,6 +1437,7 @@ const BASE_URL = window.BASE_URL;
         function rerender() {
             renderSlicers();
             document.getElementById('summary-area').style.display = viewApplied === 'summary' ? '' : 'none';
+            document.getElementById('summary-tools').style.display = viewApplied === 'summary' ? '' : 'none';
             document.getElementById('vehicle-area').style.display = viewApplied === 'vehicle' ? '' : 'none';
             if (viewApplied === 'vehicle') renderGrid(); else renderSummary();
         }
@@ -1545,14 +1553,13 @@ const BASE_URL = window.BASE_URL;
 
             const body = rows.map(r => '<tr>' + COLS.map(c => {
                 const v = cellValue(c, r);
-                if (c.type === 'notes') return `<td>${VehicleComments.button(r.autoview_stock_id, r.vrm)}</td>`;
-                if (c.type === 'link') {
+                                if (c.type === 'link') {
                     return v ? `<td><a href="${escapeHtml(v)}" target="_blank" rel="noopener"><i class="fas fa-external-link-alt"></i></a></td>` : '<td></td>';
                 }
                 const numCls = (c.type === 'num' || c.type === 'money' || c.type === 'pct') ? ' num' : '';
                 const negCls = isNeg(c, v) ? ' neg' : '';
                 const text = escapeHtml(fmtCell(c, v));
-                return `<td class="${(numCls + negCls).trim()}" title="${text}">${text}</td>`;
+                return `<td class="${(numCls + negCls).trim()}" title="${text}">${text}${c.key === 'vrm' ? VehicleComments.button(r.autoview_stock_id, r.vrm) : ''}</td>`;
             }).join('') + '</tr>').join('');
 
             // Explicit width = the colgroup's own total, overriding the CSS
@@ -1608,9 +1615,8 @@ const BASE_URL = window.BASE_URL;
         // columns (COLS === MODAL_COLS), same row/column shape, just a
         // different row source and filename suffix.
         function downloadCsvRows(rows, filenameSuffix) {
-            const csvCols = COLS.filter(c => c.type !== 'notes');
-            const header = csvCols.map(c => csvEscape(c.label)).join(',');
-            const lines = rows.map(r => csvCols.map(c => {
+            const header = COLS.map(c => csvEscape(c.label)).join(',');
+            const lines = rows.map(r => COLS.map(c => {
                 // Raw values in the CSV (not the formatted display) so numbers stay numeric
                 return csvEscape(cellValue(c, r));
             }).join(','));

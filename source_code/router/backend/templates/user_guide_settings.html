@@ -1,0 +1,129 @@
+{% from '_navigation.html' import page_header with context %}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Settings — User Guide</title>
+    <link rel="icon" type="image/png" href="{{ BASE_URL }}/static/icon.png">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css" rel="stylesheet">
+    <link href="{{ static_url('css/theme.css') }}" rel="stylesheet">
+    <link href="{{ static_url('css/user_guide.css') }}" rel="stylesheet">
+    {% include '_settings_head.html' %}
+    <style>
+        #guide-table th { font-weight: 600; white-space: nowrap; padding: .5rem .6rem; }
+        #guide-table td { padding: .4rem .6rem; vertical-align: middle; }
+        #guide-people { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 4px 12px; max-height: 220px; overflow-y: auto; border: 1px solid var(--c-border-soft); border-radius: 4px; padding: 8px 10px; }
+        #guide-body { font-family: Consolas, monospace; font-size: 0.9rem; }
+        #guide-preview { border: 1px solid var(--c-border-soft); border-radius: 4px; padding: 12px 14px; background: #fff; height: 100%; min-height: 320px; max-height: 560px; overflow-y: auto; }
+    </style>
+</head>
+<body>
+    {{ page_header('Settings', user) }}
+    <div class="settings-card settings-card-wide">
+        <div class="settings-layout">
+        {% include '_settings_nav.html' %}
+
+        <div class="settings-content" id="guide-settings-page" data-base="{{ BASE_URL }}">
+            <div class="alert alert-danger py-2" id="guide-load-error" style="display:none"></div>
+
+            <div class="card mb-4">
+                <div class="card-header fw-semibold d-flex align-items-center justify-content-between">
+                    <span>Sections</span>
+                    <span class="d-flex align-items-center gap-2">
+                        <a class="btn btn-sm btn-outline-secondary" href="{{ BASE_URL }}/user-guide" target="_blank">Open User Guide</a>
+                        <select class="form-select form-select-sm w-auto" id="guide-generate-page" aria-label="Page to generate a section for" title="Pages with no section yet"></select>
+                        <button type="button" class="btn btn-sm btn-outline-secondary" id="guide-generate-page-btn" title="Add a starter section for the chosen page and open it" disabled>Generate Section</button>
+                        <button type="button" class="btn btn-sm btn-outline-secondary" id="guide-generate-btn" title="Add a starter section for every page that has none">Generate For All Pages</button>
+                        <button type="button" class="btn btn-sm btn-primary" id="guide-add-btn"><i class="fas fa-plus me-1"></i>Add Section</button>
+                    </span>
+                </div>
+                <div class="card-body">
+                    <p class="form-text mt-0">The order here is the order down the left of the guide. A new section is seen only by you until you change Who Can See. You always see every section.</p>
+                    <div class="table-responsive">
+                        <table class="table table-sm mb-0" id="guide-table">
+                            <thead><tr><th></th><th>Title</th><th>Page</th><th>Who Can See</th><th>People</th><th></th></tr></thead>
+                            <tbody></tbody>
+                        </table>
+                    </div>
+                    <div class="text-muted small mt-2" id="guide-empty" style="display:none">No sections yet.</div>
+                    <div class="small mt-2" id="guide-list-note"></div>
+                </div>
+            </div>
+
+            <div class="card mb-4" id="guide-editor" style="display:none">
+                <div class="card-header fw-semibold" id="guide-editor-title">Add Section</div>
+                <div class="card-body">
+                    <div class="row g-3">
+                        <div class="col-md-5">
+                            <label class="form-label mb-1" for="guide-title">Title</label>
+                            <input class="form-control" id="guide-title" maxlength="200" autocomplete="off">
+                        </div>
+                        <div class="col-md-3">
+                            <label class="form-label mb-1" for="guide-page">Page</label>
+                            <select class="form-select" id="guide-page"></select>
+                            <div class="form-text">Adds a button to open the page, for people with access.</div>
+                        </div>
+                        <div class="col-md-4">
+                            <label class="form-label mb-1" for="guide-visibility">Who Can See</label>
+                            <select class="form-select" id="guide-visibility"></select>
+                            <div class="form-text">Page access follows the Page Access ticks, so it stays up to date. Any other choice overrides it.</div>
+                        </div>
+                        <div class="col-12" id="guide-people-wrap" style="display:none">
+                            <label class="form-label mb-1">Chosen People</label>
+                            <div id="guide-people"></div>
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label mb-1" for="guide-body">Text</label>
+                            <textarea class="form-control" id="guide-body" rows="20"></textarea>
+                            <div class="form-text">Start a line with ## for a heading, ### for a smaller heading, - for a bullet, 1. for a numbered step or &gt; for a note. Use **bold** and [link text](https://address). A blank line starts a new paragraph.</div>
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label mb-1">Preview</label>
+                            <div id="guide-preview" class="guide-text" style="--guide-font-size: 14px"></div>
+                        </div>
+                    </div>
+                    <div class="d-flex align-items-center gap-2 mt-3">
+                        <button type="button" class="btn btn-primary" id="guide-save-btn">Save Section</button>
+                        <button type="button" class="btn btn-outline-secondary" id="guide-cancel-btn">Cancel</button>
+                        <span class="small" id="guide-save-note"></span>
+                    </div>
+                </div>
+            </div>
+
+            <div class="card mb-4">
+                <div class="card-header fw-semibold">Guide Settings</div>
+                <div class="card-body">
+                    <div class="row g-3">
+                        <div class="col-md-4">
+                            <label class="form-label mb-1" for="set-title">Guide Name</label>
+                            <input class="form-control" id="set-title" maxlength="60" autocomplete="off">
+                            <div class="form-text">Shown in the account menu and at the top of the guide.</div>
+                        </div>
+                        <div class="col-md-2">
+                            <label class="form-label mb-1" for="set-font-size">Text Size (px)</label>
+                            <input class="form-control" type="number" id="set-font-size" min="11" max="22">
+                        </div>
+                        <div class="col-md-2">
+                            <label class="form-label mb-1" for="set-nav-width">Left Menu Width (px)</label>
+                            <input class="form-control" type="number" id="set-nav-width" min="180" max="420">
+                        </div>
+                        <div class="col-12">
+                            <label class="form-label mb-1" for="set-starter">Starter Text For A New Section</label>
+                            <textarea class="form-control" id="set-starter" rows="8"></textarea>
+                            <div class="form-text">Used when a page is chosen for an empty section, and by Generate Section and Generate For All Pages. {page} becomes the page's name.</div>
+                        </div>
+                    </div>
+                    <div class="d-flex align-items-center gap-2 mt-3">
+                        <button type="button" class="btn btn-primary" id="set-save-btn">Save Guide Settings</button>
+                        <span class="small" id="set-save-note"></span>
+                    </div>
+                </div>
+            </div>
+        </div>
+        </div>
+    </div>
+    <script src="{{ static_url('js/user_guide_settings.js') }}"></script>
+</body>
+</html>
