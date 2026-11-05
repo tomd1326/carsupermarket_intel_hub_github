@@ -42,7 +42,9 @@ body { background-color: var(--c-page-bg); font-size: var(--page-font); }
 .lens-toggle button.active { background: var(--c-dark); color: var(--c-surface); border-color: var(--c-dark); }
 .lens-toggle button.active:hover { background: var(--c-dark); }
 
-.btn-refresh { background-color: var(--c-btn-bg); border: 1px solid var(--c-btn-border); color: var(--c-btn-text); font-weight: 600; font-size: 0.9em; padding: 7px 15px; }
+.btn-refresh { background-color: var(--c-btn-bg); border: 1px solid var(--c-btn-border); color: var(--c-btn-text); font-weight: 600; font-size: 1em; padding: 0.5em 1.2em; }
+/* Every button on the page uses the page font size. */
+.btn-csv { font-size: 1em; padding: 0.5em 1.2em; }
 .btn-refresh:hover { background-color: var(--c-btn-hover-bg); border-color: var(--c-btn-hover-bg); color: var(--c-btn-hover-text); }
 /* Site Changes and Settings in the page header match Refresh Data. */
 .page-head .btn-edit { background: var(--c-btn-bg); border: 1px solid var(--c-btn-border); color: var(--c-btn-text); }
@@ -108,7 +110,19 @@ table.summary tbody tr:last-child td:last-child { border-bottom-right-radius: va
 
 /* ── Vehicles grid ───────────────────────────────────────────────────────── */
 .grid-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 8px; }
-.grid-search { border: 1px solid var(--c-disabled-border); border-radius: var(--radius-md); padding: 4px 8px; font-size: 0.9em; color: var(--c-text); width: 220px; }
+.grid-search { border: 1px solid var(--c-disabled-border); border-radius: var(--radius-md); padding: 4px 8px; font-size: 0.9em; color: var(--c-text); width: 380px; }
+.chart-card { border-color: var(--chart-border, #94a3b8); }
+/* A popup that is saving is greyed out and cannot be clicked. */
+.modal-box.busy { opacity: 0.55; pointer-events: none; cursor: wait; }
+/* Site views: charts to the right of their table, wrapping underneath if there is no room. */
+.table-with-charts { display: flex; flex-wrap: wrap; gap: 16px; align-items: flex-start; }
+.table-with-charts .tables-block { flex: 0 1 auto; min-width: 0; max-width: 100%; }
+.beside-charts { flex: 1 1 460px; min-width: 0; }
+.beside-charts .charts-row.even { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.chart-group-title { font-size: 1em; font-weight: 700; margin: 14px 0 0; color: var(--c-text); }
+.grid-search-label { font-weight: 600; margin: 0 -4px 0 0; }
+/* The search box follows its label; the CSV button takes the free space. */
+.grid-toolbar .btn-csv { margin-left: auto; }
 .grid-wrap { max-height: 74vh; overflow: auto; border: 1px solid var(--c-border); border-radius: var(--radius-md); }
 table.grid { border-collapse: collapse; font-size: 0.95em; width: max-content; min-width: 100%; }
 table.grid thead th {
@@ -132,7 +146,7 @@ table.grid td.vrm { text-transform: uppercase; }
 
 /* ── View buttons (bottom row of each metric table) ──────────────────────── */
 table.summary tr.view-row td { border-top: 1px solid var(--c-border-strong); padding-top: 0.45em; padding-bottom: 0.45em; }
-.btn-view { padding: 1px 10px; font-size: 0.85em; }
+.btn-view { padding: 1px 10px; font-size: 1em; }
 
 /* ── View Vehicles popup and Settings, copied from kpi.css so this page reads
    the same. charts.css already holds .modal-overlay, .modal-box and .modal-field;

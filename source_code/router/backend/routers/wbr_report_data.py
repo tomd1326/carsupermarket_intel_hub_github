@@ -199,9 +199,10 @@ def _cached(name: str, build, refresh: bool = False, to_body=None, from_body=Non
 
 
 # ── Margin (replaces the Sheet's data_margin tab) ────────────────────────────
-# The same steps as the Power Query that filled that tab. Its GPU-M uses AutoView
-# recon and other costs, so it is not WEEKLY_BUSINESS_REVIEW.gpu_m, which is kept
-# alongside so the difference can be measured.
+# GPU-M, GPU-S, GPU-MS and GPU-MSB are the columns in WEEKLY_BUSINESS_REVIEW, the same
+# figures as the KPI charts. Apex holds a car's costs as one number, so the split into
+# recon and other comes from AutoView. Where the two do not match, costs_unmatched
+# holds the difference, so the breakdown still adds up to GPU-M.
 
 _MARGIN_TEXT = ["invoice_status", "order_acknowledged_month", "order_acknowledged_date",
                 "invoice_posted_month", "invoice_posted_date", "supplier_name", "supplier_channel",
@@ -219,7 +220,7 @@ _MARGIN_NUMBERS = ["dis", "delivery_volume", "rate_volume", "sale_price_ex_vat",
                    "product_margin_service_mot_plan", "product_margin_services_mots_carried_over",
                    "product_margin_ceramic_vehicle_protection", "product_margin_anti_bacterial_protection",
                    "product_margin_ev_charger", "product_margin_mats", "total_product_margin",
-                   *_STD_GPU_M, *_STD_GPU_S, "gpu_m", "gpu_s", "gpu_b"]
+                   *_STD_GPU_M, *_STD_GPU_S, "gpu_m", "gpu_s", "gpu_ms", "gpu_b", "gpu_msb"]
 _MARGIN_SQL = f"""
     SELECT {', '.join(_MARGIN_TEXT + _MARGIN_NUMBERS)}
     FROM PROD_CARSUPERMARKET_DB.PRODUCT_SALES_PERFORMANCE.WEEKLY_BUSINESS_REVIEW
@@ -237,13 +238,12 @@ def _week_end(dates: pd.Series) -> pd.Series:
 
 
 def _total(frame: pd.DataFrame, columns: list) -> pd.Series:
-    """Add columns across, ignoring blanks, as the Power Query's List.Sum does:
-    a blank chassis margin still leaves the costs as the car's GPU-M."""
+    """Add columns across, ignoring blanks."""
     return frame[columns].sum(axis=1, min_count=1)
 
 
-def margin_frame(frame: pd.DataFrame, cutoff: str, recon_default: float, recon_floor: float) -> pd.DataFrame:
-    """The Power Query's steps. cutoff is the review's Sunday. An order placed by
+def margin_frame(frame: pd.DataFrame, cutoff: str) -> pd.DataFrame:
+    """The sales rows the review uses. cutoff is the review's Sunday. An order placed by
     then but delivered after it is kept, as not yet delivered, so a run on
     Wednesday does not add Monday's and Tuesday's deliveries to the month."""
     df = frame.copy()
@@ -256,18 +256,14 @@ def margin_frame(frame: pd.DataFrame, cutoff: str, recon_default: float, recon_f
     df.loc[late, _INVOICE_DATES] = None
     df["deliveries"] = df["delivery_volume"].where(~late, 0).fillna(0).astype(int)
 
-    low = df["recon_cost"].isna() | (df["recon_cost"] < recon_floor)
-    df["recon_cost"] = -df["recon_cost"].where(~low, recon_default)
+    df["recon_cost"] = -df["recon_cost"].fillna(0)
     df["other_costs"] = -df["other_costs"].fillna(0)
     for column in ("purchase_price_ex_vat", "discount_ex_vat", "margin_vat_cost", "finance_subsidy"):
         df[column] = -df[column]
 
-    df["total_cos"] = _total(df, ["recon_cost", "other_costs", *_STD_GPU_M]).round(2)
+    df["total_cos"] = (df["gpu_m"] - df["chassis_margin_after_subsidy"]).round(2)
+    df["costs_unmatched"] = (df["total_cos"] - _total(df, ["recon_cost", "other_costs", *_STD_GPU_M])).round(2)
     df["gpu_s_cost"] = _total(df, _STD_GPU_S).round(2)
-    df["gpu_m_pq"] = _total(df, ["chassis_margin_after_subsidy", "total_cos"]).round(2)
-    df["gpu_s_pq"] = _total(df, ["total_product_margin", "finance_commission", "gpu_s_cost"]).round(2)
-    df["gpu_ms_pq"] = _total(df, ["gpu_m_pq", "gpu_s_pq"]).round(2)
-    df["gpu_msb_pq"] = _total(df, ["gpu_ms_pq", "gpu_b"]).round(2)
     df["volume_warranty"] = (df["product_margin_warranty"] > 0).astype(int)
 
     df["order_week_end"] = _week_end(df["order_acknowledged_date"])
@@ -279,16 +275,15 @@ def _with_lower_columns(rows, columns) -> pd.DataFrame:
     return pd.DataFrame([list(r) for r in rows], columns=[c.lower() for c in columns])
 
 
-def load_margin(cutoff: str, recon_default: float, recon_floor: float, refresh: bool = False) -> pd.DataFrame:
+def load_margin(cutoff: str, refresh: bool = False) -> pd.DataFrame:
     def build():
         rows, columns = _query(_MARGIN_SQL, [cutoff])
-        return margin_frame(_with_lower_columns(rows, columns), cutoff, recon_default, recon_floor)
-    return _cached(f"margin_{cutoff}_{recon_default}_{recon_floor}", build, refresh, _frame_to_body, _frame_from_body)
+        return margin_frame(_with_lower_columns(rows, columns), cutoff)
+    return _cached(f"margin_{cutoff}", build, refresh, _frame_to_body, _frame_from_body)
 
 
 def autoview_costs_usable(month: str, autoview_start: str) -> bool:
-    """False for a month before AutoView data starts. An N-1 figure using recon_cost
-    or other_costs is then blank, not worked out from the default recon cost."""
+    """False for a month before AutoView data starts: its recon and other costs are blank."""
     return month >= autoview_start
 
 
@@ -580,7 +575,7 @@ def add_sources(report: dict, refresh: bool = False) -> dict:
         jobs = [
             pool.submit(read, "Accounts", lambda: load_accounts(refresh), {}),
             pool.submit(read, "Sales data",
-                        lambda: load_margin(review, meta["recon_default"], meta["recon_floor"], refresh), pd.DataFrame()),
+                        lambda: load_margin(review, refresh), pd.DataFrame()),
             pool.submit(read, "Purchases data", lambda: load_purchases(start, review, refresh), pd.DataFrame()),
             pool.submit(read, "Daily summary", lambda: load_daily_summary(start, review, refresh), pd.DataFrame()),
             pool.submit(read, "Recon data", load_recon, ([], [])),

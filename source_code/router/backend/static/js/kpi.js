@@ -229,6 +229,7 @@
             if (layoutResp.status !== 'ok') throw new Error(layoutResp.message || 'no layout returned');
             if (layoutResp.sections) SECTIONS = layoutResp.sections;
             hiddenSections = new Set(layoutResp.hidden_sections || []);
+            vehItemNames = layoutResp.vehicle_item_names || {};
             sectionSources = layoutResp.section_sources || {};
             sectionCompanies = layoutResp.section_companies || {};
             loadCollapsedRows(layoutResp.collapsed_rows || []);
@@ -236,6 +237,7 @@
             myCharts = layoutResp.my_charts || [];
             wbrItems = layoutResp.wbr_items || [];
             if (WBR && typeof WbrDeck !== 'undefined') WbrDeck.setSaved(layoutResp.wbr_deck || null);
+            if (WBR && typeof WbrReport !== 'undefined') WbrReport.setCharts(layoutResp.wbr_report_charts);
             layout = layoutResp.layout || { rows: [] };
             if (layoutResp.settings) settings = layoutResp.settings;
             applyAppearance();
@@ -788,7 +790,6 @@
         wbr_slide_title_px: 'setWbrSlideTitlePx', wbr_slide_subtitle_px: 'setWbrSlideSubtitlePx',
         wbr_report_on: 'setWbrReportOn', wbr_report_months: 'setWbrReportMonths',
         wbr_report_weeks: 'setWbrReportWeeks', wbr_report_weeks_per_month: 'setWbrReportWeeksPerMonth',
-        wbr_report_recon_default: 'setWbrReportReconDefault', wbr_report_recon_floor: 'setWbrReportReconFloor',
     };
     // Changing these changes what is loaded, so the charts are fetched again.
     const WBR_LOAD_SETTINGS = ['wbr_months_after', 'wbr_months_scroll', 'wbr_weeks_after', 'wbr_weeks_scroll'];
@@ -877,9 +878,15 @@
         }
     }
 
-    // Every chart on the review: the grid's and the slides' own copies.
+    // The slides' and the Report's own copies of KPI charts.
+    function wbrOwnCharts() {
+        return (typeof WbrDeck !== 'undefined' ? WbrDeck.charts() : [])
+            .concat(typeof WbrReport !== 'undefined' ? WbrReport.charts() : []);
+    }
+
+    // Every chart on the review: the grid's, the slides' and the Report's.
     function wbrAllCharts() {
-        return Object.values(rowCharts).flat().concat(typeof WbrDeck !== 'undefined' ? WbrDeck.charts() : []);
+        return Object.values(rowCharts).flat().concat(wbrOwnCharts());
     }
 
     async function saveWbrItems() {
@@ -908,7 +915,9 @@
         return true;
     }
 
-    async function addWbrItem(ref, period) {
+    async function addWbrItem(ref, period, button) {
+        // Report view: into the section showing; a chart may be in any number of sections.
+        if (typeof WbrReport !== 'undefined' && WbrReport.active()) { WbrReport.addCharts(ref, [period], button); return; }
         // Slides view: onto the slide showing; a chart may be on any number of slides.
         if (typeof WbrDeck !== 'undefined' && WbrDeck.active()) { WbrDeck.addChart(ref, period); return; }
         const row = findRow(ref);
@@ -950,7 +959,9 @@
         if (!list) return;
         const q = document.getElementById('wbrPickerSearch').value.trim().toLowerCase();
         const deck = typeof WbrDeck !== 'undefined' && WbrDeck.active();
-        const have = new Set(deck ? [] : wbrItems.map(i => i.ref + '|' + i.period));
+        const report = typeof WbrReport !== 'undefined' && WbrReport.active();
+        const inUse = report ? WbrReport.sectionItems() : deck ? [] : wbrItems;
+        const have = new Set(inUse.map(i => i.ref + '|' + i.period));
         const html = SECTIONS.map(section => {
             // Admins Only charts are not offered: release them on the KPI page first.
             const rows = layout.rows.filter(r => r.section === section && !r.hidden && !r.admin_only
@@ -960,12 +971,16 @@
                 const buttons = ['m', 'w', 'd'].map(k => {
                     const added = have.has(r.id + '|' + k);
                     return `<button type="button" class="chart-title-btn" ${added ? 'disabled' : ''}
-                                    onclick="addWbrItem('${r.id}', '${k}')">
+                                    onclick="addWbrItem('${r.id}', '${k}', this)">
                                 <i class="fas ${added ? 'fa-check' : 'fa-plus'}"></i> ${PERIOD_NAMES[k]}
                             </button>`;
                 }).join('');
+                // The Report's usual row: the chart's month, week and day together.
+                const missing = ['m', 'w', 'd'].filter(k => !have.has(r.id + '|' + k));
+                const all = report && missing.length ? `<button type="button" class="chart-title-btn"
+                    onclick="WbrReport.addCharts('${r.id}', ${JSON.stringify(missing).replace(/"/g, '&quot;')}, this)"><i class="fas fa-plus"></i> All Three</button>` : '';
                 const sub = r.subtitle ? ` <span class="text-muted">- ${escHtml(r.subtitle)}</span>` : '';
-                return `<div class="wbr-picker-row"><span class="wbr-picker-title">${escHtml(rowTitle(r))}${sub}</span>${buttons}</div>`;
+                return `<div class="wbr-picker-row"><span class="wbr-picker-title">${escHtml(rowTitle(r))}${sub}</span>${buttons}${all}</div>`;
             }).join('');
         }).join('');
         list.innerHTML = html || '<div class="text-muted">No charts found.</div>';
@@ -1417,8 +1432,7 @@
     // chart is open in it, so the page's charts do not move with it.
     function dayWindowCharts() {
         if (zoomOnDaily()) return [zoomChart()];
-        const slides = WBR && typeof WbrDeck !== 'undefined' ? WbrDeck.charts() : [];
-        return Object.values(rowCharts).map(charts => charts[2]).concat(slides);
+        return Object.values(rowCharts).map(charts => charts[2]).concat(WBR ? wbrOwnCharts() : []);
     }
 
     function redrawDayWindow() {
@@ -1549,9 +1563,10 @@
     function shownRows() {
         // The review loads only the KPI charts it uses, hidden ones included.
         if (WBR) {
-            // The grid's charts and every slide's.
+            // The grid's charts, every slide's and every Report section's.
             const refs = new Set(wbrItems.map(i => i.ref)
-                .concat(typeof WbrDeck !== 'undefined' ? WbrDeck.refs() : []));
+                .concat(typeof WbrDeck !== 'undefined' ? WbrDeck.refs() : [])
+                .concat(typeof WbrReport !== 'undefined' ? WbrReport.refs() : []));
             return layout.rows.filter(r => refs.has(r.id));
         }
         return layout.rows.filter(rowShownOnPage);
@@ -2230,6 +2245,32 @@
         };
     }
 
+    function wbrMonthFields() {
+        const weeks = document.getElementById('wbrWeeksInMonthInput').value;
+        return { wbr_month_weekly: document.getElementById('wbrMonthWeeklySelect').value === '1',
+                 wbr_weeks_in_month: weeks === '' ? null : Number(weeks) };
+    }
+
+    // Edit Chart > Months On The Review: a month's total as a weekly average, on the
+    // review only. N-1 divides by the weeks in a month and a target by its days x 7.
+    // The current month is part done, so it divides by the weeks so far: today's
+    // figures are not in until tomorrow, so those are the days up to yesterday.
+    function wbrWeeklyMonths(row, d) {
+        if (!WBR || !row.wbr_month_weekly || row.agg !== 'sum' || row.pct || row.divide_by) return d;
+        const perMonth = Number(row.wbr_weeks_in_month) || Number(settings.wbr_report_weeks_per_month) || 4.2;
+        const starts = d.monthly_starts || [];
+        const today = String(d.today || '');
+        const soFar = Math.max(1, Number(today.slice(8, 10)) - 1) / 7;
+        const divide = (values, by) => (values ? values.map((v, i) => (v === null || v === undefined ? v : v / by(i))) : values);
+        const actualWeeks = i => (String(starts[i]).slice(0, 7) === today.slice(0, 7) ? soFar : perMonth);
+        const n1Weeks = () => perMonth;
+        const targetWeeks = i => Number(lastDayOfMonthIso(String(starts[i]).slice(0, 10)).slice(8, 10)) / 7;
+        const out = { ...d, monthly_values: divide(d.monthly_values, actualWeeks), monthly_values_n1: divide(d.monthly_values_n1, n1Weeks),
+                      monthly_values_target: divide(d.monthly_values_target, targetWeeks) };
+        if (d.stacked) out.stacked = d.stacked.map(s => ({ ...s, m: divide(s.m, actualWeeks), mn1: divide(s.mn1, n1Weeks) }));
+        return out;
+    }
+
     // A divided chart shown as a Percentage (x 100) is already a %, so the
     // "from a decimal" Label Format would times it by 100 a second time
     // (0.5 showing as 5,000%). Read it as "already a %" instead.
@@ -2490,6 +2531,8 @@
         DayWindow.updateScrollers();
         // Slides draw their own copies of the row's charts (wbr_deck.js).
         if (WBR && typeof WbrDeck !== 'undefined') WbrDeck.rowLoaded(row, loaded);
+        // So does the Report (wbr_report.js).
+        if (WBR && typeof WbrReport !== 'undefined') WbrReport.rowLoaded(row);
     }
 
     // A difference's day chart scales to the days on screen, and again as the
@@ -2517,8 +2560,8 @@
     // The ranges always come from all three periods, so a chart drawn on its
     // own is scaled as it is on the KPI page.
     function buildRowCharts(row, d, targets) {
-        if (isStacked(row)) return buildStackedCharts(row, d, targets);
-        d = wbrBudgetData(row, d);
+        if (isStacked(row)) return buildStackedCharts(row, wbrWeeklyMonths(row, d), targets);
+        d = wbrWeeklyMonths(row, wbrBudgetData(row, d));
         // 7-day average on the daily chart only; the cached data is kept as
         // loaded so switching back needs no reload.
         if (rollingOn(row.id)) {
@@ -2964,6 +3007,11 @@
     // vehicles are only fetched when the button is pressed: one query for that
     // day, week or month, using the chart's saved date column and filters.
     let pointState = null;   // { row, start, end, data, sort: { index, dir } }
+    let vehItemNames = {};   // table -> what its list is called (Settings > View Vehicles)
+
+    function vehItemName(row) {
+        return vehItemNames[(row && row.vehicles && row.vehicles.table) || ''] || 'Vehicles';
+    }
 
     function lastDayOfMonthIso(firstIso) {
         const [y, m] = firstIso.split('-').map(Number);
@@ -3027,7 +3075,7 @@
         }
         document.getElementById('pointFigures').innerHTML = figures
             .map(f => `<span>${escHtml(f.label)}: <b>${f.v === null || f.v === undefined || isNaN(f.v) ? '-' : escHtml(fmt(f.v))}</b></span>`)
-            .join('') + (row.vehicles ? '<span>Vehicles: <b id="pointVehCount">...</b></span>' : '');
+            .join('') + (row.vehicles ? `<span>${escHtml(vehItemName(row))}: <b id="pointVehCount">...</b></span>` : '');
         if (row.vehicles) loadPointVehicleCount(pointState);
 
         // A review chart or slide may draw a window of the loaded points.
@@ -3036,6 +3084,8 @@
         const button = document.getElementById('viewVehiclesBtn');
         button.style.display = row.vehicles ? '' : 'none';
         button.disabled = false;
+        document.getElementById('viewVehiclesLabel').textContent = 'View ' + vehItemName(row);
+        document.getElementById('viewVehiclesIcon').className = vehItemName(row) === 'Vehicles' ? 'fas fa-car' : 'fas fa-list';
         document.getElementById('pointStatus').textContent = row.vehicles ? ''
             : 'View Vehicles is not set up for this chart.' + (isUserView() ? '' : ' Choose its date column in Edit Chart.');
         document.getElementById('vehiclesWrap').classList.remove('show');
@@ -3201,7 +3251,7 @@
         } catch (err) {
             if (pointState === state) {
                 cell.textContent = '-';
-                cell.title = 'Could not count the vehicles: ' + err.message;
+                cell.title = `Could not count the ${vehItemName(state.row).toLowerCase()}: ` + err.message;
             }
         }
     }
@@ -3212,14 +3262,15 @@
         const button = document.getElementById('viewVehiclesBtn');
         const status = document.getElementById('pointStatus');
         button.disabled = true;
-        status.innerHTML = '<i class="fas fa-sync-alt spin"></i> Loading vehicles...';
+        const itemName = vehItemName(state.row);
+        status.innerHTML = `<i class="fas fa-sync-alt spin"></i> Loading ${escHtml(itemName.toLowerCase())}...`;
         try {
             const params = new URLSearchParams({ row_id: state.row.id, start: state.start, end: state.end });
             const resp = await fetch(`${BASE_URL}/kpi/vehicles?${params}`).then(r => r.json());
             if (pointState !== state) return;   // popup closed or moved on meanwhile
             if (resp.status !== 'ok') throw new Error(resp.message || 'load failed');
             state.data = resp;
-            const notes = [`${resp.rows.length.toLocaleString('en-GB')} vehicle${resp.rows.length === 1 ? '' : 's'}`];
+            const notes = [`${itemName}: ${resp.rows.length.toLocaleString('en-GB')}`];
             if (resp.truncated) notes.push(`only the first ${resp.row_limit.toLocaleString('en-GB')} shown`);
             if (resp.missing_columns.length) notes.push(`not in the table any more: ${resp.missing_columns.join(', ')}`);
             // When the chart figure is an average, a ratio or a %, or the list is
@@ -3241,7 +3292,7 @@
             document.getElementById('vehiclesCsvBtn').style.display = resp.rows.length ? '' : 'none';
             document.getElementById('vehiclesColumnsBtn').style.display = IS_ADMIN && !isUserView() ? '' : 'none';
         } catch (err) {
-            if (pointState === state) status.textContent = 'Could not load the vehicles: ' + err.message;
+            if (pointState === state) status.textContent = `Could not load the ${itemName.toLowerCase()}: ` + err.message;
         } finally {
             if (pointState === state) button.disabled = false;
         }
@@ -3497,7 +3548,7 @@
         document.getElementById('vehiclesTable').innerHTML =
             `<thead><tr>${head}</tr></thead><tbody>${body}</tbody>${vehiclesSummaryRow(data.columns, rows, isGrey)}`;
         const count = document.getElementById('vehQuickCount');
-        if (count) count.textContent = `${rows.length.toLocaleString('en-GB')} of ${data.rows.length.toLocaleString('en-GB')} vehicles`;
+        if (count) count.textContent = `${rows.length.toLocaleString('en-GB')} of ${data.rows.length.toLocaleString('en-GB')} ${vehItemName(pointState && pointState.row).toLowerCase()}`;
     }
 
     // Row under the list with each column's Total or Average (set per column in
@@ -4559,6 +4610,8 @@
             setRadio('aggRadio', row.agg);
             setCurrentInputs(rowCurrent(row));
             document.getElementById('invertSelect').value = row.invert ? '1' : '0';
+            document.getElementById('wbrMonthWeeklySelect').value = row.wbr_month_weekly ? '1' : '0';
+            document.getElementById('wbrWeeksInMonthInput').value = row.wbr_weeks_in_month ?? '';
             document.getElementById('fmtSelect').value = row.fmt || 'num';
             document.getElementById('decimalsSelect').value = String(row.decimals || 0);
             document.getElementById('hoverFmtSelect').value = row.hover_fmt || '';
@@ -4571,6 +4624,8 @@
             updateWeightUi(row.weight_by || '');
         } else {
             document.getElementById('subtitleInput').value = '';
+            document.getElementById('wbrMonthWeeklySelect').value = '0';
+            document.getElementById('wbrWeeksInMonthInput').value = '';
             fillAxisInputs(Y_MIN_INPUTS, 'yMinAll', null);
             fillAxisInputs(Y_MAX_INPUTS, 'yMaxAll', null);
             // A new chart goes into the section tab it was added from.
@@ -5868,6 +5923,7 @@
             decimals: parseInt(document.getElementById('decimalsSelect').value, 10),
             ...hoverFields(),
             invert: document.getElementById('invertSelect').value === '1',
+            ...wbrMonthFields(),
             target_mode: mode,
             stack_target: target,
             y_min: yMin,
@@ -5962,6 +6018,7 @@
             decimals: parseInt(document.getElementById('decimalsSelect').value, 10),
             ...hoverFields(),
             invert: document.getElementById('invertSelect').value === '1',
+            ...wbrMonthFields(),
             target_mode: mode,
             y_min: yMin,
             y_max: yMax,
@@ -8170,7 +8227,7 @@
     let vehViewDraft = null;
 
     function vehViewPayload(draft) {
-        return { table: draft.table, columns: draft.shown.map(c => ({
+        return { table: draft.table, item_name: (draft.item_name || '').trim(), columns: draft.shown.map(c => ({
             column: c.column, label: c.label.trim(), format: c.format, decimals: c.decimals,
             // A column switched away from number or % drops its total.
             summary: VEH_NUMBER_FORMATS.includes(c.format) ? (c.summary || 'none') : 'none',
@@ -8214,6 +8271,9 @@
         const loadId = ++vehColumnDraftLoadId;
         vehViewDraft = null;
         document.getElementById('vehColSearch').value = '';
+        const itemNameBox = document.getElementById('vehItemName');
+        itemNameBox.value = '';
+        itemNameBox.disabled = true;
         // Every list that depends on the table says so while it loads, and the
         // table dropdown is greyed until the new columns have arrived.
         const message = table ? '<i class="fas fa-sync-alt spin"></i> Loading columns...' : 'Choose a table above.';
@@ -8239,16 +8299,20 @@
             const shownBefore = resp.view.columns;
             vehViewDraft = {
                 table: resp.table,
+                item_name: resp.view.item_name || '',
                 shown: shownBefore.map(c => vehColumnSetting(c, types[c.column])),
                 live: resp.columns,
                 grey_rules: JSON.parse(JSON.stringify(resp.view.grey_rules || [])),
                 filters: JSON.parse(JSON.stringify(resp.view.filters || [])),
                 saved: JSON.stringify(vehViewPayload({ table: resp.view.table,
+                    item_name: resp.view.item_name || '',
                     filters: resp.view.filters || [],
                     shown: resp.view.columns.map(c => ({ column: c.column, label: c.label || '',
                         format: c.format, decimals: c.decimals, summary: c.summary, blank_grey: c.blank_grey })),
                     grey_rules: resp.view.grey_rules || [] })),
             };
+            itemNameBox.value = vehViewDraft.item_name;
+            itemNameBox.disabled = false;
             renderGreyRules();
             renderVehQuickFilters();
             fillVehTableSelect(resp, resp.table);
@@ -8504,6 +8568,7 @@
         }).then(r => r.json());
         if (resp.status !== 'ok') throw new Error(resp.message || 'View Vehicles columns save failed');
         vehViewDraft.saved = JSON.stringify(payload);
+        vehItemNames = resp.item_names || vehItemNames;
     }
 
     // ── Sections (edited in the Settings popup) ──────────────────────────────

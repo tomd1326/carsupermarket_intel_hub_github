@@ -2,8 +2,9 @@
 // only; everything it calls from kpi.js (escHtml, BASE_URL ...) is only used once
 // the page has loaded. wbr_deck.js decides which view shows and calls setVisible.
 //
-// The server builds every section (routers/wbr_report_sections.py) and sends raw
-// numbers; this formats and draws them. A section not built yet says so.
+// The server builds each section's tables (routers/wbr_report_sections.py) and sends
+// raw numbers; this formats them. The charts are the KPI page's own: each section
+// lists the KPI charts chosen for it, drawn with buildRowCharts as the slides do.
 const WbrReport = (() => {
     let visible = false;
     let report = null;        // the last response from the server
@@ -12,14 +13,18 @@ const WbrReport = (() => {
     let current = 0;          // index of the section showing
     let reviewDate = '';      // admin: a date picked on the page, instead of the saved one
     let printing = false;     // every section is drawn, one to a page, while printing
-    const drawn = [];         // the Charts showing, destroyed before each draw
-    const waiting = new Map();   // canvas id -> chart spec not drawn yet (a closed More stays waiting)
+
+    // {section id: [{id, ref (KPI row id), period: 'm'|'w'|'d', title?, subtitle?}]}
+    let kpiCharts = {};
+    const drawn = {};         // item id -> Chart
+    let saving = Promise.resolve();
 
     // Settings > Report (admin). Nothing is saved until the settings have loaded,
     // so a failed load cannot overwrite them with blanks.
     let sections = null;
     let titles = {};
     let chartSettings = null;
+    let glossaryDefault = '';
 
     function setVisible(on) {
         visible = on;
@@ -100,7 +105,8 @@ const WbrReport = (() => {
             const label = row.trend === 'up' ? 'Up' : 'Down';
             return `<td class="wbr-report-trend">${row.trend ? `<span class="wbr-trend-${row.trend}" role="img" aria-label="${label}" title="${label}"></span>` : ''}</td>`;
         }
-        return `<td>${escHtml(formatValue(row.values[column.key], row.format))}</td>`;
+        const format = (row.formats && row.formats[column.key]) || row.format;
+        return `<td>${escHtml(formatValue(row.values[column.key], format))}</td>`;
     }
 
     function tableHtml(table) {
@@ -109,130 +115,187 @@ const WbrReport = (() => {
         const body = table.rows.map(row => {
             if (!row.label) return `<tr class="wbr-report-blank"><td colspan="${table.columns.length + 1}"></td></tr>`;
             const classes = [row.bold ? 'wbr-report-bold' : '', row.indent ? 'wbr-report-indent' : ''].join(' ');
-            return `<tr class="${classes}"><td class="wbr-report-label">${escHtml(row.label)}</td>${table.columns.map(c => cellHtml(row, c)).join('')}</tr>`;
+            const hint = row.hint ? ` title="${escHtml(row.hint)}"` : '';
+            return `<tr class="${classes}"><td class="wbr-report-label"${hint}>${escHtml(row.label)}</td>${table.columns.map(c => cellHtml(row, c)).join('')}</tr>`;
         }).join('');
-        return `<div class="wbr-report-table-wrap"><table class="wbr-report-table">
-                    <thead><tr><th class="wbr-report-label">${escHtml(table.title)}</th>${head}</tr></thead>
+        // A table of words (the glossary) has its first heading in label_heading.
+        const heading = table.text ? `<div class="wbr-report-table-title">${escHtml(table.title)}</div>` : '';
+        const corner = table.text ? (table.label_heading || '') : table.title;
+        return `${heading}<div class="wbr-report-table-wrap"><table class="wbr-report-table ${table.text ? 'wbr-report-table-text' : ''}">
+                    <thead><tr><th class="wbr-report-label">${escHtml(corner)}</th>${head}</tr></thead>
                     <tbody>${body}</tbody>
                 </table></div>`;
     }
 
-    // ── Charts ──
-    function chartsHtml(list) {
-        if (!list.length) return '';
-        return `<div class="wbr-report-charts">${list.map(spec => {
-            const id = 'wbrReportChart' + waiting.size;
-            waiting.set(id, spec);
-            return `<div class="wbr-report-chart">
-                        <div class="wbr-report-chart-title">${escHtml(spec.title)}</div>
-                        <div class="wbr-report-plot"><canvas id="${id}" role="img" aria-label="${escHtml(spec.title)}"></canvas></div>
-                    </div>`;
-        }).join('')}</div>`;
+    // ── KPI charts ──
+    function setCharts(value) {
+        kpiCharts = value && typeof value === 'object' ? value : {};
     }
 
-    function chartOptions(spec, extra) {
-        const label = value => formatValue(value, spec.unit);
-        return {
-            responsive: true, maintainAspectRatio: false, animation: false,
-            interaction: { mode: 'index', intersect: false },
-            plugins: {
-                legend: { position: 'bottom', labels: { boxWidth: 12, font: { size: 11 }, filter: item => item.text !== '' } },
-                tooltip: {
-                    filter: item => item.dataset.label !== '' && item.raw !== null,
-                    callbacks: { label: item => `${item.dataset.label}: ${label(item.raw)}` },
-                },
-            },
-            scales: {
-                x: { grid: { display: false }, ticks: { font: { size: 11 } } },
-                y: { grid: { color: '#e2e8f0' }, ticks: { font: { size: 11 }, callback: label }, ...extra },
-            },
-        };
+    function refs() {
+        return Object.values(kpiCharts).flat().map(item => item.ref);
     }
 
-    function hasData(values) {
-        return values.some(v => v !== null && v !== undefined);
+    function sectionId() {
+        const section = report && report.sections[current];
+        return section ? section.id : null;
     }
 
-    function lineDataset(label, data, colour, dashed) {
-        return { label, data, borderColor: colour, backgroundColor: colour, borderWidth: 2, tension: 0,
-                 borderDash: dashed ? [5, 4] : [], pointRadius: 3, pointHoverRadius: 5,
-                 pointBorderColor: '#fff', pointBorderWidth: 1, spanGaps: false, fill: false };
+    function sectionItems() {
+        return kpiCharts[sectionId()] || [];
     }
 
-    // The actual line against a budget band: one colour below the budget, another above.
-    function drawBandChart(canvas, spec, look) {
-        const { actual, n1, budget } = spec.series;
-        const datasets = [
-            { label: spec.budget_label, data: budget, borderColor: look.budget_line, backgroundColor: look.below_budget,
-              borderWidth: 1, pointRadius: 0, stepped: 'middle', fill: 'start', spanGaps: true, order: 3 },
-            { label: '', data: budget.map(() => spec.axis.max), borderWidth: 0, pointRadius: 0, pointHoverRadius: 0,
-              backgroundColor: look.above_budget, fill: { target: 0 }, order: 4 },
-            { ...lineDataset('Actual', actual, look.actual), order: 1 },
-        ];
-        if (hasData(n1)) datasets.push({ ...lineDataset('N-1', n1, look.n1, true), order: 2 });
-        return new Chart(canvas, { type: 'line', data: { labels: spec.labels, datasets },
-                                   options: chartOptions(spec, { min: spec.axis.min, max: spec.axis.max }) });
+    // The items on the page: the section showing, or every section while printing.
+    function shownItems() {
+        if (!report) return [];
+        return printing ? report.sections.flatMap(s => kpiCharts[s.id] || []) : sectionItems();
     }
 
-    function drawLinesChart(canvas, spec, look) {
-        const datasets = spec.series.filter(s => hasData(s.data))
-            .map(s => lineDataset(s.name, s.data, look[s.kind], s.dashed));
-        return new Chart(canvas, { type: 'line', data: { labels: spec.labels, datasets }, options: chartOptions(spec) });
+    function chartActionsHtml(item, index, count) {
+        return `<div class="wbr-item-actions">
+                    <button type="button" class="chart-title-btn" onclick="WbrReport.moveChart('${item.id}', -1)" ${index === 0 ? 'disabled' : ''}><i class="fas fa-arrow-left"></i> Move Left</button>
+                    <button type="button" class="chart-title-btn" onclick="WbrReport.moveChart('${item.id}', 1)" ${index === count - 1 ? 'disabled' : ''}><i class="fas fa-arrow-right"></i> Move Right</button>
+                    <button type="button" class="chart-title-btn" onclick="WbrReport.removeChart('${item.id}')"><i class="fas fa-times"></i> Remove</button>
+                    ${wbrTitleBoxes(item, `WbrReport.setChartText('${item.id}', KEY, this.value)`)}
+                </div>`;
     }
 
-    // One hue, light to dark: oldest period lightest. The target is a marker on each stage.
-    function drawBarsChart(canvas, spec, look) {
-        const count = spec.series.length;
-        const datasets = spec.series.map((s, i) => ({
-            label: s.name, data: s.data, backgroundColor: look.actual + Math.round((0.35 + 0.65 * (i + 1) / count) * 255).toString(16).padStart(2, '0'),
-            borderRadius: { topLeft: 4, topRight: 4 }, borderSkipped: 'bottom', categoryPercentage: 0.8, barPercentage: 0.85, order: 2,
-        }));
-        datasets.push({ type: 'line', label: 'Target', data: spec.target, showLine: false, pointStyle: 'line',
-                        pointRadius: 16, pointHoverRadius: 16, pointBorderWidth: 3, borderColor: look.series_three,
-                        backgroundColor: look.series_three, order: 1 });
-        return new Chart(canvas, { type: 'bar', data: { labels: spec.labels, datasets }, options: chartOptions(spec, { beginAtZero: true }) });
+    function chartHtml(item, index, count) {
+        const row = findRow(item.ref);
+        const scroller = item.period === 'd' ? '' : wbrScrollerHtml(item.period);
+        const comments = typeof WbrComments !== 'undefined' ? WbrComments.slotHtml(`chart:${item.ref}|${item.period}`) : '';
+        const card = row ? chartCardHtml({
+            canvasId: 'wbrr-' + item.id, title: wbrItemTitle(item, row), subtitle: wbrItemSubtitle(item, row),
+            legend: false, dayScroller: item.period === 'd',
+            headExtra: `<span class="chart-period">${escHtml(PERIOD_NAMES[item.period])}</span>${scroller}${comments}`,
+        }) : '<div class="wbr-item-missing">This chart has been removed from the KPI page.</div>';
+        const actions = isUserView() || printing ? '' : chartActionsHtml(item, index, count);
+        return `<div class="wbr-report-chart">${actions}${card}</div>`;
     }
 
-    function drawWaiting(root) {
-        if (typeof Chart === 'undefined') return;
-        const look = report.meta.appearance;
-        root.querySelectorAll('canvas').forEach(canvas => {
-            const spec = waiting.get(canvas.id);
-            if (!spec || canvas.closest('details:not([open])')) return;
-            waiting.delete(canvas.id);
-            const draw = { band: drawBandChart, lines: drawLinesChart, bars: drawBarsChart }[spec.type];
-            drawn.push(draw(canvas, spec, look));
-        });
+    function chartsHtml(items) {
+        if (!items.length) return '';
+        return `<div class="wbr-report-charts">${items.map((item, i) => chartHtml(item, i, items.length)).join('')}</div>`;
+    }
+
+    function drawChart(item) {
+        const canvas = document.getElementById('wbrr-' + item.id);
+        const row = findRow(item.ref);
+        const full = row && customRowData[row.id];
+        if (!canvas || !full) return;   // drawn when its data arrives (rowLoaded)
+        if (drawn[item.id]) { drawn[item.id].destroy(); delete drawn[item.id]; }
+        // The same window as every other review chart (Settings, wbrWindow).
+        drawn[item.id] = buildRowCharts(row, wbrSliceData(row, full), [{ k: item.period, canvasId: canvas.id, existing: null,
+                                                                         first: item.period === 'd' ? 0 : wbrStart(row.id, item.period) }])[0];
+    }
+
+    // A KPI row's data has arrived or changed: redraw its charts on the page.
+    function rowLoaded(row) {
+        if (!visible) return;
+        shownItems().filter(item => item.ref === row.id).forEach(drawChart);
+        updateWbrSliders();
+    }
+
+    function clearCharts() {
+        Object.keys(drawn).forEach(id => { drawn[id].destroy(); delete drawn[id]; });
+    }
+
+    async function saveCharts(charts) {
+        blockSaveIfLoadFailed();
+        const resp = await fetch(BASE_URL + '/weekly-business-review/report/charts', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ charts }),
+        }).then(r => r.json());
+        if (resp.status !== 'ok') throw new Error(resp.message || 'Save failed');
+    }
+
+    // The page changes straight away and is put back if the save fails.
+    async function changeSection(items, what) {
+        const before = kpiCharts;
+        const mine = { ...kpiCharts, [sectionId()]: items };
+        kpiCharts = mine;
+        renderLayout();
+        const done = saving.then(() => saveCharts(mine));
+        saving = done.catch(() => {});
+        try {
+            await done;
+            return true;
+        } catch (err) {
+            if (kpiCharts === mine) { kpiCharts = before; renderLayout(); }
+            document.getElementById('statusText').textContent = `${what} failed: ${err.message}`;
+            return false;
+        }
+    }
+
+    // From the picker: into the section showing. The popup is locked while it saves.
+    async function addCharts(ref, periods, button) {
+        const row = findRow(ref);
+        if (!row || !sectionId()) return;
+        const newId = () => 'r' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+        const added = periods.map(period => ({ id: newId(), ref, period }));
+        const box = button.closest('.modal-box');
+        box.classList.add('busy');
+        button.disabled = true;
+        button.textContent = 'Saving...';
+        const ok = await changeSection([...sectionItems(), ...added], 'Add');
+        box.classList.remove('busy');
+        renderWbrPicker();
+        if (ok && !customRowData[ref]) loadCustomRow(row);
+    }
+
+    function removeChart(id) {
+        changeSection(sectionItems().filter(item => item.id !== id), 'Remove');
+    }
+
+    function moveChart(id, step) {
+        const items = [...sectionItems()];
+        const a = items.findIndex(item => item.id === id), b = a + step;
+        if (a < 0 || b < 0 || b >= items.length) return;
+        [items[a], items[b]] = [items[b], items[a]];
+        changeSection(items, 'Move');
+    }
+
+    // A chart's own title / subtitle in this section; blank = the KPI chart's.
+    function setChartText(id, key, value) {
+        const text = String(value || '').trim().slice(0, key === 'title' ? 200 : 300);
+        changeSection(sectionItems().map(item => {
+            if (item.id !== id) return item;
+            const next = { ...item };
+            if (text) next[key] = text;
+            else delete next[key];
+            return next;
+        }), 'Change');
     }
 
     // ── A section ──
     function sectionHtml(section) {
-        const more = section.more || { tables: [], charts: [] };
-        const hasMore = more.tables.length || more.charts.length;
-        const empty = !section.tables.length && !section.charts.length;
-        return `<div class="wbr-slide-head"><div class="wbr-slide-title">${escHtml(section.title)}</div></div>
+        const more = section.more || { tables: [] };
+        const items = kpiCharts[section.id] || [];
+        const empty = !section.tables.length && !items.length;
+        const linked = section.link ? report.sections.findIndex(s => s.id === section.link.section) : -1;
+        return `<div class="wbr-slide-head"><div class="wbr-slide-title">${escHtml(section.title)}</div>
+                    ${linked >= 0 && !printing ? `<button type="button" class="wbr-report-link" onclick="WbrReport.show(${linked})">${escHtml(section.link.label)}</button>` : ''}</div>
                 ${empty ? '<div class="wbr-report-empty">This section has no data yet.</div>' : ''}
                 ${section.tables.map(tableHtml).join('')}
-                ${chartsHtml(section.charts)}
-                ${hasMore ? `<details class="wbr-report-more" ${printing ? 'open' : ''} ontoggle="WbrReport.drawMore(this)">
+                ${chartsHtml(items)}
+                ${more.tables.length ? `<details class="wbr-report-more" ${printing ? 'open' : ''}>
                                 <summary>More</summary>
                                 ${more.tables.map(tableHtml).join('')}
-                                ${chartsHtml(more.charts)}
                              </details>` : ''}
                 ${(section.notes || []).map(n => `<div class="wbr-report-note">${escHtml(n)}</div>`).join('')}`;
     }
 
-    function clearCharts() {
-        drawn.splice(0).forEach(chart => chart.destroy());
-        waiting.clear();
-    }
-
     function drawSlide(slide, html) {
         const look = report.meta.appearance;
+        slide.style.setProperty('--wbr-report-chart-width', look.chart_width + 'px');
         slide.style.setProperty('--wbr-report-chart-height', look.chart_height + 'px');
         slide.style.setProperty('--wbr-report-table-font', look.table_font_px + 'px');
         slide.innerHTML = html;
-        drawWaiting(slide);
+        shownItems().forEach(drawChart);
+        updateWbrSliders();
+        DayWindow.updateScrollers();
+        if (typeof WbrComments !== 'undefined') WbrComments.refreshButtons();
     }
 
     function render() {
@@ -240,7 +303,6 @@ const WbrReport = (() => {
         const strip = document.getElementById('wbrReportStrip');
         const meta = document.getElementById('wbrReportMeta');
         const slide = document.getElementById('wbrReportSlide');
-        // Before any section's HTML is built, as building it lists the charts to draw.
         clearCharts();
         if (!report) {
             strip.innerHTML = '';
@@ -314,7 +376,7 @@ const WbrReport = (() => {
     }
 
     function numberInput(path, value, step) {
-        return `<input type="number" step="${step || 'any'}" data-cs="${path}" value="${value === undefined ? '' : escHtml(String(value))}">`;
+        return `<input type="number" step="${step || 'any'}" data-cs="${path}" value="${value === undefined || value === null ? '' : escHtml(String(value))}">`;
     }
 
     function textInput(path, value) {
@@ -323,22 +385,14 @@ const WbrReport = (() => {
 
     // Everything a section shows that is not data. Saved as one, with the rest of the tab.
     function chartSettingsHtml(cs) {
-        const chartRows = Object.entries(cs.charts).map(([id, c]) => `<tr>
-            <td>${textInput(`charts.${id}.title`, c.title)}</td>
-            <td>${'min' in c ? numberInput(`charts.${id}.min`, c.min) : ''}</td>
-            <td>${'max' in c ? numberInput(`charts.${id}.max`, c.max) : ''}</td>
-            <td>${'target' in c ? numberInput(`charts.${id}.target`, c.target) : ''}</td></tr>`).join('');
         const stages = { upstream: 'Upstream Stock', in_prep: 'In Prep', for_sale: 'For Sale', sold_not_delivered: 'Sold Not Delivered', total: 'Total' };
         const sleeping = { upstream: 'Upstream Stock', in_prep: 'In Prep', on_sale: 'On Sale Stock', sold_not_delivered: 'Sold Not Delivered', trade_hold: 'Trade Hold' };
         const field = (label, input) => `<div class="modal-field"><label>${label}${input}</label></div>`;
-        const colours = { actual: 'Actual Line', n1: 'N-1 Line', series_three: 'Third Line', budget_line: 'Budget Line',
-                          below_budget: 'Below Budget', above_budget: 'Above Budget' };
+        const constants = { deliveries_days_per_month: 'Days Per Month For Deliveries', fiscal_year_start_month: 'Financial Year Starts In Month (1 To 12)',
+                            top_suppliers: 'Top Suppliers Shown', sites_shown: 'Sites Shown', finance_companies_shown: 'Finance Companies Shown',
+                            sensitivity_gpu_step: 'Sensitivity GPU-MSB Step (£)', sensitivity_deliveries_step: 'Sensitivity Deliveries Step' };
         return `
-            <p class="modal-sub">Axis limits for a percent chart are fractions: 0.8 Is 80%.</p>
-            <table class="wbr-report-settings-table">
-                <thead><tr><th>Chart Title</th><th>Axis Min</th><th>Axis Max</th><th>Target</th></tr></thead>
-                <tbody>${chartRows}</tbody>
-            </table>
+            <p class="modal-sub">Charts Are KPI Charts: Add Them With Add Chart From KPI, While The Section Is Showing, And Edit Them On The KPI Page.</p>
             <div class="wbr-settings-title">Targets</div>
             <div class="wbr-settings-grid">
                 ${Object.entries(stages).map(([k, name]) => field(`Coverage: ${name} (Days)`, numberInput(`coverage_targets.${k}`, cs.coverage_targets[k]))).join('')}
@@ -346,7 +400,7 @@ const WbrReport = (() => {
             </div>
             <div class="wbr-settings-title">Calculation</div>
             <div class="wbr-settings-grid">
-                ${field('Days Per Month For Deliveries', numberInput('constants.deliveries_days_per_month', cs.constants.deliveries_days_per_month))}
+                ${Object.entries(constants).map(([k, name]) => field(name, numberInput(`constants.${k}`, cs.constants[k]))).join('')}
                 <div class="modal-field"><label>Trend Compares Last Week With
                     <select data-cs="trend_basis">
                         <option value="last_week" ${cs.trend_basis === 'last_week' ? 'selected' : ''}>The Week Before</option>
@@ -355,13 +409,16 @@ const WbrReport = (() => {
             </div>
             <div class="wbr-settings-title">Appearance</div>
             <div class="wbr-settings-grid">
-                ${Object.entries(colours).map(([k, name]) => field(name, `<input type="color" class="setting-colour" data-cs="appearance.${k}" value="${escHtml(cs.appearance[k])}">`)).join('')}
+                ${field('Chart Width (px)', numberInput('appearance.chart_width', cs.appearance.chart_width, 1))}
                 ${field('Chart Height (px)', numberInput('appearance.chart_height', cs.appearance.chart_height, 1))}
                 ${field('Table Text Size (px)', numberInput('appearance.table_font_px', cs.appearance.table_font_px, 1))}
             </div>
             <div class="wbr-settings-title">Notes Under Each Section</div>
             ${Object.keys(titles).map(id => field(escHtml(titles[id]),
-                `<textarea rows="2" data-cs="notes.${id}">${escHtml((cs.notes || {})[id] || '')}</textarea>`)).join('')}`;
+                `<textarea rows="2" data-cs="notes.${id}">${escHtml((cs.notes || {})[id] || '')}</textarea>`)).join('')}
+            <div class="wbr-settings-title">Glossary</div>
+            <p class="modal-sub"># Starts A Table, The Next Line Is Its Headings, And | Splits The Cells. Clear It To Go Back To The Standard Text.</p>
+            <textarea rows="12" data-cs="glossary" aria-label="Glossary">${escHtml(cs.glossary || glossaryDefault)}</textarea>`;
     }
 
     // What the tab's inputs hold, over what was loaded. A blank number uses the default.
@@ -372,7 +429,8 @@ const WbrReport = (() => {
             const last = path.pop();
             let holder = out;
             path.forEach(key => { holder = holder[key] = holder[key] || {}; });
-            if (input.type === 'number') holder[last] = input.value === '' ? null : Number(input.value);
+            if (input.type === 'checkbox') holder[last] = input.checked;
+            else if (input.type === 'number') holder[last] = input.value === '' ? null : Number(input.value);
             else holder[last] = input.value;
         });
         return out;
@@ -402,6 +460,7 @@ const WbrReport = (() => {
             titles = resp.titles;
             sections = resp.settings.sections;
             chartSettings = resp.settings.chart_settings;
+            glossaryDefault = resp.glossary_default || '';
             status.textContent = '';
             drawSections();
             document.getElementById('wbrReportChartSettings').innerHTML = chartSettingsHtml(chartSettings);
@@ -441,6 +500,8 @@ const WbrReport = (() => {
         report = null;
     }
 
-    return { setVisible, show, reload: () => load(true), pickDate, print, drawMore: drawWaiting,
+    return { setVisible, show, reload: () => load(true), pickDate, print, active: () => visible,
+             setCharts, refs, sectionItems, rowLoaded, addCharts, removeChart, moveChart, setChartText,
+             charts: () => Object.values(drawn),
              openSettings, saveSettings, setSectionOn, moveSection };
 })();

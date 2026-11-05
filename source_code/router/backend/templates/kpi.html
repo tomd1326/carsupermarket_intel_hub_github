@@ -225,8 +225,6 @@
                 <div class="modal-field"><label for="setWbrReportMonths">Complete Months Shown</label><input type="number" id="setWbrReportMonths" step="1"></div>
                 <div class="modal-field"><label for="setWbrReportWeeks">Weeks Shown</label><input type="number" id="setWbrReportWeeks" step="1"></div>
                 <div class="modal-field"><label for="setWbrReportWeeksPerMonth">Weeks Per Month</label><input type="number" id="setWbrReportWeeksPerMonth" step="0.1"></div>
-                <div class="modal-field"><label for="setWbrReportReconDefault">Recon Cost When Missing (£)</label><input type="number" id="setWbrReportReconDefault" step="1"></div>
-                <div class="modal-field"><label for="setWbrReportReconFloor">Treat Recon Cost Below This As Missing (£)</label><input type="number" id="setWbrReportReconFloor" step="1"></div>
                 <div class="modal-field"><label for="setWbrReportUpdateDate">Review Date (A Sunday, Blank = Last Sunday)</label><input type="date" id="setWbrReportUpdateDate"></div>
                 <div class="modal-field"><label for="setWbrReportLastClosed">Last Closed Month (Blank = Month Before Review)</label><input type="month" id="setWbrReportLastClosed"></div>
                 <div class="modal-field"><label for="setWbrReportAutoviewStart">AutoView Costs Start</label><input type="month" id="setWbrReportAutoviewStart"></div>
@@ -303,7 +301,7 @@
             <div class="point-calc" id="pointCalc"></div>
             <div class="point-actions">
                 <button type="button" class="btn btn-apply" id="viewVehiclesBtn" onclick="loadPointVehicles()">
-                    <i class="fas fa-car"></i> View Vehicles
+                    <i class="fas fa-car" id="viewVehiclesIcon"></i> <span id="viewVehiclesLabel">View Vehicles</span>
                 </button>
                 <span class="point-status" id="pointStatus"></span>
                 <div class="spacer" style="flex:1;"></div>
@@ -639,6 +637,20 @@
                         <option value="0">Above Target</option>
                         <option value="1">Below Target</option>
                     </select>
+                </div>
+            </div>
+            <div class="modal-section-title">Weekly Business Review</div>
+            <div class="modal-grid">
+                <div class="modal-field">
+                    <label for="wbrMonthWeeklySelect">Months On The Review (Sum Charts Only)</label>
+                    <select id="wbrMonthWeeklySelect">
+                        <option value="0">Month Total</option>
+                        <option value="1">Weekly Average</option>
+                    </select>
+                </div>
+                <div class="modal-field">
+                    <label for="wbrWeeksInMonthInput">Weeks In A Month</label>
+                    <input type="number" id="wbrWeeksInMonthInput" step="any" min="1" max="6" placeholder="From Settings > Report">
                 </div>
             </div>
             <div class="modal-section-title">Vertical Axis</div>
@@ -1369,6 +1381,12 @@
                     </button>
                 </div>
                 <div class="modal-hint">Each chart picks its own table in Edit Chart. Set up one table's columns here, Save, then switch to the next - each table is saved separately.</div>
+            </div>
+            <div class="modal-field">
+                <label for="vehItemName">List Name</label>
+                <input type="text" id="vehItemName" maxlength="30" placeholder="Vehicles" disabled
+                       oninput="if (vehViewDraft) vehViewDraft.item_name = this.value">
+                <div class="modal-hint">What this table's rows are called on the chart popup, e.g. Enquiries gives a View Enquiries button.</div>
             </div>
             <div class="modal-field">
                 <label>Grey Out Rows Where Any Of These Match</label>

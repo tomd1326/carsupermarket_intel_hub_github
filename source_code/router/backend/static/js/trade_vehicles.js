@@ -319,10 +319,14 @@ window.TV = (function () {
             shown: view.columns.map(columnSetting),
             filters: (view.filters || []).map(f => ({ ...f })),
             rules: highlightRules.map(r => ({ ...r })),
+            auctions: (window.TRADE_AUCTIONS || []).slice(),
         };
+        renderAuctionDraft();
         document.getElementById('vehColSearch').value = '';
         document.getElementById('filterColourInput').value =
             getComputedStyle(document.documentElement).getPropertyValue('--filter-on').trim();
+        document.getElementById('chartBorderInput').value =
+            getComputedStyle(document.documentElement).getPropertyValue('--chart-border').trim();
         const error = document.getElementById('settingsError');
         error.textContent = '';
         error.classList.remove('show');
@@ -472,6 +476,26 @@ window.TV = (function () {
                 </div>`).join('') || '<div class="point-status" style="padding:2px 0 6px;">No highlight rules.</div>';
     }
 
+    // Settings > Auctions: a tick box per customer. A saved auction with no
+    // sales in the data still shows, so it can be unticked.
+    function renderAuctionDraft() {
+        const chosen = api.draft.auctions;
+        const names = (window.TRADE_CUSTOMERS || []).slice();
+        chosen.forEach(n => { if (!names.includes(n)) names.push(n); });
+        document.getElementById('auctionList').innerHTML = names.map(n => `
+                <label class="auction-row" style="display:block;padding:2px 0;">
+                    <input type="checkbox" ${chosen.includes(n) ? 'checked' : ''} data-name="${escHtml(n)}"
+                           onchange="TV.toggleAuction(this.dataset.name, this.checked)"> ${escHtml(n.trim())}
+                </label>`).join('') || '<div class="point-status">No customers loaded.</div>';
+    }
+
+    function toggleAuction(name, on) {
+        const list = api.draft.auctions;
+        const i = list.indexOf(name);
+        if (on && i < 0) list.push(name);
+        if (!on && i >= 0) list.splice(i, 1);
+    }
+
     function addRule() {
         api.draft.rules.push({ column: '', op: '=', value: '', style: 'bad', colour: '#ff0000' });
         renderRuleDraft();
@@ -494,6 +518,10 @@ window.TV = (function () {
         const button = document.getElementById('settingsSaveBtn');
         error.classList.remove('show');
         button.disabled = true;
+        const box = button.closest('.modal-box');
+        const buttonText = button.textContent;
+        box.classList.add('busy');
+        button.textContent = 'Saving...';
         try {
             // A column switched away from number, £ or % drops its total.
             const columns = api.draft.shown.map(c => ({
@@ -507,11 +535,14 @@ window.TV = (function () {
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                     view: payload, filter_colour: document.getElementById('filterColourInput').value, highlight_rules: rules,
+                    auctions: api.draft.auctions, chart_border: document.getElementById('chartBorderInput').value,
                 }),
             }).then(r => r.json());
             if (resp.status !== 'ok') throw new Error(resp.message || 'Save failed');
             view = resp.view;
             highlightRules = resp.highlight_rules;
+            window.TRADE_AUCTIONS = resp.auctions;
+            document.documentElement.style.setProperty('--chart-border', resp.chart_border);
             // The main grid on the page uses the same rules (trade_report.js).
             document.dispatchEvent(new CustomEvent('trade-settings-saved'));
             document.documentElement.style.setProperty('--filter-on', resp.filter_colour);            closeSettings();
@@ -519,6 +550,8 @@ window.TV = (function () {
             error.textContent = err.message;
             error.classList.add('show');
         } finally {
+            box.classList.remove('busy');
+            button.textContent = buttonText;
             button.disabled = false;
         }
     }
@@ -537,7 +570,7 @@ window.TV = (function () {
         openSettings, closeSettings, saveSettings,
         renderColumnDraft, moveColumnTo, hideColumn, removeAllColumns, showColumn,
         renderFilterDraft, addFilter, moveFilter,
-        renderRuleDraft, addRule,
+        renderRuleDraft, addRule, renderAuctionDraft, toggleAuction,
         highlightFor,
     };
     return api;

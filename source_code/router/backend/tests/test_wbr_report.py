@@ -81,13 +81,6 @@ def test_month_kinds_use_the_last_closed_month():
     assert wr.month_kinds(["2026-12", "2027-01"], "2026-12") == {"2026-12": "actual", "2027-01": "fcst"}
 
 
-def test_n1_window():
-    today = D(2026, 11, 2)
-    assert wr.n1_in_dbt_window(D(2026, 11, 1), 6, today)
-    assert wr.n1_in_dbt_window(D(2026, 10, 25), 6, today)
-    assert not wr.n1_in_dbt_window(D(2026, 8, 30), 6, today)
-
-
 @pytest.mark.parametrize("bad", ["2026-13", "2026-9", "Oct-26", "2026-10-01"])
 def test_bad_months_are_rejected(bad):
     with pytest.raises(ValueError):
@@ -120,7 +113,7 @@ def test_bad_sections_are_rejected(bad):
 
 
 def test_autoview_start_defaults():
-    assert wr.clean_report_settings({})["wbr_report_autoview_start"] == "2025-11"
+    assert wr.clean_report_settings({})["wbr_report_autoview_start"] == "2025-12"
 
 
 def test_report_is_off_by_default_and_settings_are_in_range():
@@ -145,12 +138,6 @@ def test_build_report_leaves_out_switched_off_sections():
     out = wr.build_report(numbers(), text(sections=sections), D(2026, 11, 2))
     assert "pnl" not in [s["id"] for s in out["sections"]]
     assert len(out["sections"]) == len(wr.SECTIONS) - 1
-
-
-def test_build_report_warns_when_n1_is_too_old():
-    out = wr.build_report(numbers(wbr_report_months=6), text(update_date="2026-08-30"), D(2026, 11, 2))
-    assert out["meta"]["n1_available"] is False
-    assert any("N-1" in w for w in out["meta"]["warnings"])
 
 
 def endpoint(monkeypatch, admin, on, update_date=""):

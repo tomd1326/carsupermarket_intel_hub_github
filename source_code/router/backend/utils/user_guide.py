@@ -48,7 +48,7 @@ _SEEDS = [{
 
 Everything at the top of the page changes the report straight away.
 
-- **View** picks the layout: the list of vehicles, or the figures by month or year, split by site or auction.
+- **View** picks the layout: Vehicles (the list of vehicles), Month To Date or Year To Date. Month To Date splits by site or auction; Year To Date splits by site, auction or month.
 - **Period** picks the month or financial year. Financial years run from October to September.
 - **Invoice Date** shows sales invoiced between two dates. While either date is set it replaces the Period on every view. Press Clear to go back to the Period.
 - **Site**, **Customer** and **Supplier Category** narrow the sales further. Any filter that is on is listed under the top bar, and Clear All Filters removes them all.
@@ -56,13 +56,13 @@ Everything at the top of the page changes the report straight away.
 ## What The Figures Mean
 
 - **Units**: the number of vehicles sold.
-- **Purchase Price** and **Sale Price**: averages excluding VAT, for vehicles with a CAP value.
-- **CAP Clean**: the average live CAP clean value.
+- **Avg Purchase Price** and **Avg Sale Price**: averages excluding VAT, for vehicles with a CAP value.
+- **Avg CAP Clean**: the average live CAP clean value.
 - **Purchase % CAP Clean** and **Sell % CAP Clean**: the purchase and sale price as a percentage of CAP Clean.
-- **Gross Margin**: the average gross margin.
-- **Total Costs**: the average total costs.
-- **Net Margin**: the average of gross margin less total costs.
-- **Total Margin**: all the net margins added together.
+- **Avg Gross Margin**: the average gross margin.
+- **Avg Total Costs**: the average total costs.
+- **Avg Net Margin**: the average of gross margin less total costs.
+- **Total Net Margin**: all the net margins added together.
 
 ## Seeing The Vehicles Behind A Figure
 

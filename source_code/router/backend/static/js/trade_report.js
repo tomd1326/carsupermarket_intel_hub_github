@@ -44,6 +44,14 @@
     let charts = [];               // live Chart instances; destroyed on re-render
     let gridSort = { key: 'invoice_date', dir: -1 };
     let gridSearch = '';
+    let marginChart = 'total';     // 'total' or 'net' (average): which margin the charts show
+
+    // The sub views of each main view, and the one each last showed.
+    const VIEW_GROUPS = [
+        { key: 'month', subs: [{ view: 'month_site', label: 'By Site' }, { view: 'month_auction', label: 'By Auction' }] },
+        { key: 'year', subs: [{ view: 'year_site', label: 'By Site' }, { view: 'year_auction', label: 'By Auction' }, { view: 'year_month', label: 'By Month' }] },
+    ];
+    const lastSub = { month: 'month_site', year: 'year_site' };
 
     const SITE = 'Site';
     const CATEGORIES = ['PX/Buy In', 'Buy Back', 'B2B Purchase'];
@@ -92,15 +100,15 @@
     // ── Metrics ──────────────────────────────────────────────────────────────
     const METRICS = [
         { key: 'units',    label: 'Units',                fmt: fmtNum },
-        { key: 'purchase', label: 'Purchase Price',       fmt: fmtMoney },
-        { key: 'sale',     label: 'Sale Price',           fmt: fmtMoney },
-        { key: 'gross',    label: 'Gross Margin',         fmt: fmtMoney },
-        { key: 'cap',      label: 'CAP Clean',            fmt: fmtMoney },
+        { key: 'purchase', label: 'Avg Purchase Price',   fmt: fmtMoney },
+        { key: 'sale',     label: 'Avg Sale Price',       fmt: fmtMoney },
+        { key: 'gross',    label: 'Avg Gross Margin',     fmt: fmtMoney },
+        { key: 'cap',      label: 'Avg CAP Clean',        fmt: fmtMoney },
         { key: 'purchPct', label: 'Purchase % CAP Clean', fmt: fmtPct },
         { key: 'sellPct',  label: 'Sell % CAP Clean',     fmt: fmtPct },
-        { key: 'costs',    label: 'Total Costs',          fmt: fmtMoney },
-        { key: 'net',      label: 'Net Margin',           fmt: fmtMoney },
-        { key: 'total',    label: 'Total Margin',         fmt: fmtMoney, emphasis: true },
+        { key: 'costs',    label: 'Avg Total Costs',      fmt: fmtMoney },
+        { key: 'net',      label: 'Avg Net Margin',       fmt: fmtMoney },
+        { key: 'total',    label: 'Total Net Margin',     fmt: fmtMoney, emphasis: true },
     ];
     const METRIC_BY_KEY = Object.fromEntries(METRICS.map(m => [m.key, m]));
     // The workbook's six charts under each site table, in its order.
@@ -160,6 +168,11 @@
         list.forEach(r => { const a = r.auction || 'Unknown'; counts[a] = (counts[a] || 0) + 1; });
         return Object.keys(counts).sort((a, b) => counts[b] - counts[a] || a.localeCompare(b));
     }
+    // Only the customers ticked in Settings > Auctions count as auctions.
+    function onlyAuctions(list) {
+        const chosen = new Set(window.TRADE_AUCTIONS || []);
+        return list.filter(r => chosen.has(r.auction));
+    }
     function monthsAvailable() {
         return distinct(rows, r => r.month).sort();
     }
@@ -185,8 +198,12 @@
         return kind === 'M' ? rows.filter(r => r.month === value) : rows.filter(r => String(r.financial_year) === value);
     }
 
+    const searchOverrides = () => view === 'vehicles' && !!gridSearch.trim();
+
     // Those rows, narrowed by supplier category, site and customer.
     function scopeRows() {
+        // A search on the Vehicles view looks through every sale, ignoring all filters.
+        if (searchOverrides()) return rows;
         return periodRows().filter(r => (!category || r.supplier_category === category) && siteTicked(r)
             && (!ticked.customer.size || ticked.customer.has(customerOf(r))));
     }
@@ -267,7 +284,10 @@
     // One chart card per metric, bars = the columns given.
     function chartsHtml(columns, metricKeys, titlePrefix = '', perRow = 3) {
         const colMetrics = columns.map(c => calcMetrics(c.rows));
-        const cards = metricKeys.map(key => {
+        // The margin chart shows the total or the average, as chosen above the
+        // page; the two never both show.
+        const shown = [...new Set(metricKeys.map(k => (k === 'total' || k === 'net') ? marginChart : k))];
+        const cards = shown.map(key => {
             const metric = METRIC_BY_KEY[key];
             const canvasId = `trade-chart-${++chartSeq}`;
             pendingCharts.push({
@@ -353,12 +373,19 @@
     }
 
     // ── Sections ─────────────────────────────────────────────────────────────
-    function sectionHtml(title, note, tableHtml, chartsBlock = '') {
+    // Charts are collected here and shown together under the tables (renderReport).
+    let chartBlocks = [];
+
+    // Charts go under all the tables, except where a section asks for its
+    // charts beside its table (each site's year on Year By Site).
+    function sectionHtml(title, note, tableHtml, chartsBlock = '', chartsBeside = false) {
+        const beside = chartsBeside && chartsBlock && tableHtml;
+        if (chartsBlock && !beside) chartBlocks.push({ title, html: chartsBlock });
+        const table = tableHtml ? `<div class="tables-block"><div class="panel shadow-sm">${tableHtml}</div></div>` : '';
         return `
         <div class="report-section">
             <h3 class="section-title">${escHtml(title)}${note ? `<span class="section-note">${escHtml(note)}</span>` : ''}</h3>
-            ${tableHtml ? `<div class="tables-block"><div class="panel shadow-sm">${tableHtml}</div></div>` : ''}
-            ${chartsBlock ? `<div class="charts-block mt-2">${chartsBlock}</div>` : ''}
+            ${beside ? `<div class="table-with-charts">${table}<div class="beside-charts">${chartsBlock}</div></div>` : table}
         </div>`;
     }
 
@@ -409,6 +436,7 @@
 
     // Month By Auction: the "MTD by auction" sheet, every branch together.
     function renderMonthAuction(scope) {
+        scope = onlyAuctions(scope);
         const cols = auctionNames(scope).map(a => ({ label: a, rows: scope.filter(r => (r.auction || 'Unknown') === a) }));
         if (!cols.length) return emptyHtml();
         const label = periodText();
@@ -455,7 +483,7 @@
             const cols = monthColumns(list, fy);
             html += sectionHtml(`${name} - ${periodText()}`, note,
                 metricTableHtml({ columns: cols, totalRows: list, totalLabel: periodTotalLabel(), cornerLabel: name }),
-                chartsHtml(cols, YEAR_CHARTS, name, 2));
+                chartsHtml(cols, YEAR_CHARTS, name, 2), true);
         });
         return html;
     }
@@ -463,6 +491,7 @@
     // Year By Auction: the "YTD by auction" asked for in the workbook's
     // comments - every auction's year across the top, then a block each.
     function renderYearAuction(scope) {
+        scope = onlyAuctions(scope);
         const fy = periodValue();
         const names = auctionNames(scope);
         if (!names.length) return emptyHtml();
@@ -549,10 +578,11 @@
         }).join('') + '</tr>').join('');
         return `
         <div class="report-section">
-            <h3 class="section-title">Vehicles - ${escHtml(periodText())}<span class="section-note">${escHtml(category || 'All supplier categories')} - ${list.length.toLocaleString('en-GB')} vehicles</span></h3>
+            <h3 class="section-title">Vehicles - ${escHtml(searchOverrides() ? 'All Sales' : periodText())}<span class="section-note">${escHtml(searchOverrides() ? 'Search ignores the filters' : (category || 'All supplier categories'))} -${list.length.toLocaleString('en-GB')} vehicles</span></h3>
             <div class="panel shadow-sm" style="width: 100%;">
                 <div class="grid-toolbar">
-                    <input type="search" class="grid-search${gridSearch.trim() ? ' filter-on' : ''}" id="grid-search" placeholder="Search VRM, stock ID, supplier, site, customer, make or model" value="${escHtml(gridSearch)}" autocomplete="off" spellcheck="false">
+                    <label for="grid-search" class="grid-search-label">Search Vehicles</label>
+                    <input type="search" class="grid-search${gridSearch.trim() ? ' filter-on' : ''}" id="grid-search" placeholder="VRM, Stock ID, Supplier, Site, Customer, Make Or Model" value="${escHtml(gridSearch)}" autocomplete="off" spellcheck="false">
                     <button class="btn btn-csv${activeFilters().length ? ' filter-on' : ''}" id="csv-btn"><i class="fas fa-download"></i> ${activeFilters().length ? 'CSV (Filtered)' : 'CSV'}</button>
                 </div>
                 <div class="grid-wrap"><table class="grid"><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table></div>
@@ -584,6 +614,7 @@
         charts.forEach(c => c.destroy());
         charts = [];
         pendingCharts = [];
+        chartBlocks = [];
         viewGroups = [];
         const area = document.getElementById('report-area');
         const scope = scopeRows();
@@ -595,6 +626,12 @@
         else if (view === 'year_month') html = renderYearMonth(scope);
         else if (view === 'year_site') html = renderYearSite(scope);
         else if (view === 'year_auction') html = renderYearAuction(scope);
+        // Every table first, then all the charts under one heading.
+        if (chartBlocks.length) {
+            html += `<div class="report-section"><h3 class="section-title">Charts - ${escHtml(periodText())}</h3>`
+                + chartBlocks.map(b => `<h4 class="chart-group-title">${escHtml(b.title)}</h4><div class="charts-block mt-2">${b.html}</div>`).join('')
+                + '</div>';
+        }
         area.innerHTML = html;
         pendingCharts.forEach(buildBarChart);
         pendingCharts = [];
@@ -622,13 +659,7 @@
         mark('date-from', !!dateFrom);
         mark('date-to', !!dateTo);
         document.querySelector('#category-filter summary').classList.toggle('filter-on', !!category);
-        const filters = activeFilters();
-        document.getElementById('filter-banner').style.display = filters.length ? '' : 'none';
-        if (!filters.length) return;
-        const shown = view === 'vehicles' ? gridRows(scope).length : scope.length;
-        const base = rangeOn() ? rows.length : periodRows().length;
-        document.getElementById('filter-banner-text').textContent =
-            `Filtered, Showing ${shown.toLocaleString('en-GB')} Of ${base.toLocaleString('en-GB')} Sales. ${filters.join(' | ')}`;
+        document.getElementById('filter-banner').style.display = 'none';
     }
 
     // The tick-lists offer only the sites and customers left in the data by the
@@ -705,8 +736,10 @@
             label.textContent = 'Month';
             options = months.slice().reverse().map(m => `<option value="M:${m}">${escHtml(monthLabel(m))}</option>`);
         }
+        // While a date range is on, the period shows blank; picking one clears the range.
+        if (rangeOn()) options.unshift('<option value="">(Date Range)</option>');
         sel.innerHTML = options.join('');
-        sel.disabled = !options.length || rangeOn();
+        sel.disabled = !options.length;
         // Keep the current choice where the new list still offers it,
         // otherwise the latest period of the right kind.
         const values = Array.from(sel.options).map(o => o.value);
@@ -714,7 +747,7 @@
             if (view !== 'vehicles' && viewIsYear(view)) period = years.length ? `Y:${years[years.length - 1]}` : null;
             else period = months.length ? `M:${months[months.length - 1]}` : null;
         }
-        if (period) sel.value = period;
+        sel.value = rangeOn() ? '' : (period || '');
     }
 
     // ── Controls ─────────────────────────────────────────────────────────────
@@ -778,13 +811,33 @@
             const group = viewGroups[Number(btn.dataset.viewGroup)];
             if (group) TV.open(group.title, group.rows);
         });
-        document.getElementById('view-toggle').addEventListener('click', e => {
-            const btn = e.target.closest('button[data-view]');
-            if (!btn || btn.dataset.view === view) return;
-            view = btn.dataset.view;
-            setActive('view-toggle', 'view', view);
+        document.getElementById('margin-toggle').addEventListener('click', e => {
+            const btn = e.target.closest('button[data-margin]');
+            if (!btn || btn.dataset.margin === marginChart) return;
+            marginChart = btn.dataset.margin;
+            setActive('margin-toggle', 'margin', marginChart);
+            renderReport();
+        });
+        const chooseView = next => {
+            view = next;
+            const group = VIEW_GROUPS.find(g => g.subs.some(s => s.view === next));
+            if (group) lastSub[group.key] = next;
+            const subs = group ? group.subs : [];
+            document.getElementById('subview-group').style.display = subs.length ? '' : 'none';
+            document.getElementById('subview-toggle').innerHTML = subs.map(s =>
+                `<button data-view="${s.view}" class="${s.view === next ? 'active' : ''}">${s.label}</button>`).join('');
             fillPeriodSelect();
             renderReport();
+        };
+        document.getElementById('view-toggle').addEventListener('click', e => {
+            const btn = e.target.closest('button[data-group]');
+            if (!btn || btn.classList.contains('active')) return;
+            setActive('view-toggle', 'group', btn.dataset.group);
+            chooseView(btn.dataset.group === 'vehicles' ? 'vehicles' : lastSub[btn.dataset.group]);
+        });
+        document.getElementById('subview-toggle').addEventListener('click', e => {
+            const btn = e.target.closest('button[data-view]');
+            if (btn && btn.dataset.view !== view) chooseView(btn.dataset.view);
         });
         document.getElementById('category-filter').addEventListener('change', e => {
             if (e.target.type !== 'radio') return;
@@ -793,8 +846,12 @@
             renderReport();
         });
         document.getElementById('period-select').addEventListener('change', e => {
+            if (!e.target.value) return;
             period = e.target.value;
-            renderReport();
+            // A period replaces any date range.
+            document.getElementById('date-from').value = '';
+            document.getElementById('date-to').value = '';
+            applyDateRange();
         });
     }
 
@@ -852,6 +909,8 @@
                 o.site_change = changes[String(o.stock_id)] || null;
                 return o;
             });
+            // The Settings > Auctions list offers every customer, busiest first.
+            window.TRADE_CUSTOMERS = auctionNames(rows);
             const warning = document.getElementById('site-changes-warning');
             warning.textContent = data.site_changes_error || '';
             warning.style.display = data.site_changes_error ? '' : 'none';
@@ -922,9 +981,44 @@
         if (resp.status !== 'ok') throw new Error(resp.message || 'Save failed');
     }
 
+    // While a save runs the popup is greyed out and locked and the button says
+    // what is happening, so it is clear something is going on.
+    async function whileSaving(button, busyText, work) {
+        const box = button.closest('.modal-box');
+        const text = button.textContent;
+        box.classList.add('busy');
+        button.disabled = true;
+        button.textContent = busyText;
+        try { await work(); } finally {
+            box.classList.remove('busy');
+            button.disabled = false;
+            button.textContent = text;
+        }
+    }
+
+    // The site changes now in force, one line each.
+    function downloadSiteChangesCsv() {
+        const esc = s => { s = String(s ?? ''); return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
+        const lines = [['VRM', 'Stock ID', 'Old Site', 'New Site', 'Reason', 'Changed By', 'Changed At'].join(',')];
+        rows.filter(r => r.site_change).forEach(r => {
+            const s = r.site_change;
+            lines.push([r.vrm, r.stock_id, s.old_site, s.new_site, s.reason, s.changed_by_name, String(s.changed_at || '').slice(0, 16).replace('T', ' ')].map(esc).join(','));
+        });
+        // Byte order mark first so Excel reads the file as UTF-8.
+        const blob = new Blob(['﻿' + lines.join('\r\n')], { type: 'text/csv;charset=utf-8;' });
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = 'trade_site_changes.csv';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(a.href);
+    }
+
     function bindSiteChanges() {
         const modal = document.getElementById('siteChangesModal');
         if (!modal) return;
+        document.getElementById('sc-csv').addEventListener('click', downloadSiteChangesCsv);
         document.getElementById('site-changes-btn').addEventListener('click', () => {
             scError('');
             scSuccess('');
@@ -939,16 +1033,18 @@
             const picked = document.querySelector('input[name="sc-stock"]:checked');
             try {
                 if (!picked) throw new Error('Type a VRM and pick the vehicle');
-                await postSiteChange('', {
-                    stock_id: picked.value,
-                    new_site: document.getElementById('sc-site').value,
-                    reason: document.getElementById('sc-reason').value,
+                await whileSaving(document.getElementById('sc-save'), 'Saving...', async () => {
+                    await postSiteChange('', {
+                        stock_id: picked.value,
+                        new_site: document.getElementById('sc-site').value,
+                        reason: document.getElementById('sc-reason').value,
+                    });
+                    document.getElementById('sc-vrm').value = '';
+                    document.getElementById('sc-site').value = '';
+                    document.getElementById('sc-reason').value = '';
+                    await loadData(false);
+                    VehicleComments.loadCounts();
                 });
-                document.getElementById('sc-vrm').value = '';
-                document.getElementById('sc-site').value = '';
-                document.getElementById('sc-reason').value = '';
-                await loadData(false);
-                VehicleComments.loadCounts();
                 scSuccess('Site change saved successfully');
             } catch (err) { scError(err.message); }
         });
@@ -958,16 +1054,18 @@
             scError('');
             scSuccess('');
             try {
-                await postSiteChange(`/${id}/remove`, {});
-                await loadData(false);
-                VehicleComments.loadCounts();
+                await whileSaving(e.target, 'Removing...', async () => {
+                    await postSiteChange(`/${id}/remove`, {});
+                    await loadData(false);
+                    VehicleComments.loadCounts();
+                });
                 scSuccess('Site change removed successfully');
             } catch (err) { scError(err.message); }
         });
     }
 
     // Saving Settings can change the highlight rules, which colour this grid too.
-    document.addEventListener('trade-settings-saved', () => { if (view === 'vehicles') renderReport(); });
+    document.addEventListener('trade-settings-saved', () => { renderReport(); });
 
     document.addEventListener('DOMContentLoaded', () => {
         bindControls();
