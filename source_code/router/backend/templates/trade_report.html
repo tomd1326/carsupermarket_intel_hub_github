@@ -15,7 +15,7 @@
     <!-- The saved font size is rendered here so the page paints at the right
          size straight away instead of being resized by JS after load. -->
     <style>
-        :root { --page-font: {{ font_size }}px; --filter-on: {{ filter_colour }}; }
+        :root { --page-font: {{ font_size }}px; --filter-on: {{ filter_colour }}; --chart-border: {{ chart_border }}; }
     </style>
     <link href="{{ static_url('css/vehicle_comments.css') }}" rel="stylesheet">
     <link href="{{ static_url('css/trade_report.css') }}" rel="stylesheet">
@@ -53,12 +53,20 @@
                 <div class="control-group">
                     <span class="control-label">View</span>
                     <div class="lens-toggle" id="view-toggle">
-                        <button data-view="vehicles" class="active">Vehicles</button>
-                        <button data-view="month_site">Month By Site</button>
-                        <button data-view="month_auction">Month By Auction</button>
-                        <button data-view="year_month">Year By Month</button>
-                        <button data-view="year_site">Year By Site</button>
-                        <button data-view="year_auction">Year By Auction</button>
+                        <button data-group="vehicles" class="active">Vehicles</button>
+                        <button data-group="month">Month To Date</button>
+                        <button data-group="year">Year To Date</button>
+                    </div>
+                </div>
+                <!-- Filled by trade_report.js; hidden on Vehicles, which has no sub views. -->
+                <div class="control-group" id="subview-group" style="display:none;">
+                    <div class="lens-toggle" id="subview-toggle"></div>
+                </div>
+                <div class="control-group">
+                    <span class="control-label" title="Whether the margin charts show the total or the average per vehicle">Margin Charts</span>
+                    <div class="lens-toggle" id="margin-toggle">
+                        <button data-margin="total" class="active">Total</button>
+                        <button data-margin="net">Average</button>
                     </div>
                 </div>
                 <div class="control-group">
@@ -159,7 +167,9 @@
                 <textarea class="form-control form-control-sm" id="sc-reason" rows="2" maxlength="2000"></textarea>
             </div>
             <button type="button" class="btn btn-apply" id="sc-save">Save Site Change</button>
-            <h3 class="section-title mt-3">Current Site Changes</h3>
+            <h3 class="section-title mt-3">Current Site Changes
+                <button type="button" class="btn btn-csv ms-2" id="sc-csv"><i class="fas fa-download"></i> CSV</button>
+            </h3>
             <div id="sc-current"></div>
         </div>
     </div>
@@ -216,12 +226,25 @@
                             <div class="modal-hint">Each rule colours the cell in the vehicle list when its test is true, e.g. Mileage = 0 in red. Text tests ignore capitals. The rules apply to the vehicle list only.</div>
                         </div>
                     </div>
+                    <div class="settings-pane" data-title="Auctions">
+                        <div class="modal-field">
+                            <label>Customers That Are Auctions</label>
+                            <div id="auctionList"></div>
+                            <div class="modal-hint">Tick the customers counted as auctions. Only these show in Month By Auction and Year By Auction.</div>
+                        </div>
+                    </div>
                     <div class="settings-pane" data-title="Appearance">
                         <div class="modal-field">
                             <label for="filterColourInput">Filter On Colour</label>
                             <input type="color" id="filterColourInput">
                             <div class="modal-hint">The colour of a control with a filter on, and of the line listing the filters.</div>
-                        </div>                    </div>
+                        </div>
+                        <div class="modal-field">
+                            <label for="chartBorderInput">Chart Border Colour</label>
+                            <input type="color" id="chartBorderInput">
+                            <div class="modal-hint">The border round each chart on the Trade Report.</div>
+                        </div>
+                    </div>
                 </div>
             </div>
             <div class="modal-actions">
@@ -239,9 +262,11 @@
         window.TRADE_IS_ADMIN = {{ 'true' if is_admin else 'false' }};
         window.TRADE_VEHICLE_VIEW = {{ vehicle_view | tojson }};
         window.TRADE_HIGHLIGHT_RULES = {{ highlight_rules | tojson }};
+        window.TRADE_AUCTIONS = {{ auctions | tojson }};
     </script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
     <script src="{{ static_url('js/settings_tabs.js') }}"></script>
+    <script src="{{ static_url('js/date_range_jump.js') }}"></script>
     <script src="{{ static_url('js/charts.js') }}"></script>
     <script src="{{ static_url('js/vehicle_comments.js') }}"></script>
     <script src="{{ static_url('js/trade_vehicles.js') }}"></script>

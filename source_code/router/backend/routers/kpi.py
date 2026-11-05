@@ -1534,8 +1534,6 @@ KPI_DEFAULT_SETTINGS = {
     "wbr_report_weeks_per_month": 4.2,  # divides a month's total into a weekly average
     "wbr_report_months": 3,             # complete months shown
     "wbr_report_weeks": 5,              # weeks shown
-    "wbr_report_recon_default": 495,    # recon cost used when a car has none, or less than the floor
-    "wbr_report_recon_floor": 100,
     "wbr_slides_on": 0,
     "wbr_grid_cols": 24,          # snap-to grid across a slide
     "wbr_grid_rows": 12,          # and down it (under the title)
@@ -1608,8 +1606,6 @@ KPI_SETTING_LIMITS = {
     "wbr_report_weeks_per_month": (1, 6),
     "wbr_report_months": (1, 6),
     "wbr_report_weeks": (1, 13),
-    "wbr_report_recon_default": (0, 5000),
-    "wbr_report_recon_floor": (0, 5000),
     "wbr_slides_on": (0, 1),
     "wbr_grid_cols": (4, 48),
     "wbr_grid_rows": (4, 36),
@@ -2868,6 +2864,14 @@ def _validate_layout(layout: dict, sections: list, locks: dict | None = None) ->
             return "bad subtitle"
         if not isinstance(row.get("invert", False), bool):
             return "bad invert"
+        # On the review only, a month's total shown as a weekly average. Blank
+        # weeks in a month uses Settings wbr_report_weeks_per_month.
+        if not isinstance(row.get("wbr_month_weekly", False), bool):
+            return "bad wbr_month_weekly"
+        weeks_in_month = row.get("wbr_weeks_in_month")
+        if weeks_in_month is not None and (isinstance(weeks_in_month, bool) or not isinstance(weeks_in_month, (int, float))
+                                           or not 1 <= weeks_in_month <= 6):
+            return "Weeks In A Month must be from 1 to 6"
         # Hidden in Settings > Charts: kept, but not shown or loaded.
         if not isinstance(row.get("hidden", False), bool):
             return "bad hidden"
@@ -3255,8 +3259,8 @@ def kpi_layout_get(request: Request, user: str = Depends(require_page_api(*_KPI_
         stored = _read_kpi_layout_values([
             'layout', 'settings', 'notes', 'themes', 'metric_names', 'metric_formats',
             'derived_names', 'hidden_sections', _AT_PERIODS_KEY, _AT_PPC_KEY,
-            _COLLAPSED_KEY, _ROLLING_KEY, _MY_CHARTS_KEY, _WBR_ITEMS_KEY, _WBR_DECK_KEY,
-            _SECTION_SOURCES_KEY, _SECTION_COMPANIES_KEY,
+            _COLLAPSED_KEY, _ROLLING_KEY, _MY_CHARTS_KEY, _WBR_ITEMS_KEY, _WBR_DECK_KEY, _WBR_REPORT_CHARTS_KEY,
+            _SECTION_SOURCES_KEY, _SECTION_COMPANIES_KEY, 'vehicle_view',
         ])
         layout = stored.get('layout') or KPI_DEFAULT_LAYOUT
         settings = _kpi_settings(stored.get('settings'))
@@ -3280,10 +3284,15 @@ def kpi_layout_get(request: Request, user: str = Depends(require_page_api(*_KPI_
     layout = {**layout, "rows": [r for r in layout.get("rows", []) if r.get("type") == "custom"]}
     wbr_items = stored.get(_WBR_ITEMS_KEY) or []
     wbr_deck = stored.get(_WBR_DECK_KEY)
+    wbr_report_charts = stored.get(_WBR_REPORT_CHARTS_KEY) or {}
     # Admins Only charts are never sent to anyone else, so they cannot be
     # seen in the page, the review or the browser's network tab.
     if not is_admin(user):
+        drafts = _admin_only_ids(layout)
         layout, notes, wbr_items, wbr_deck = _drop_admin_only(layout, notes, wbr_items, wbr_deck)
+        # While the Report is off no one else sees it, so its charts are not loaded for them.
+        wbr_report_charts = {} if settings["wbr_report_on"] != 1 else {
+            section: [i for i in items if i.get("ref") not in drafts] for section, items in wbr_report_charts.items()}
     try:
         raw = stored.get(_AT_PERIODS_KEY) or []
         at_periods = _at_allowance_periods(raw)
@@ -3302,13 +3311,15 @@ def kpi_layout_get(request: Request, user: str = Depends(require_page_api(*_KPI_
             "at_periods": at_periods, "at_ppc_periods": at_ppc_periods,
             "hidden_sections": [s for s in (stored.get('hidden_sections') or []) if s in sections],
             "section_sources": section_sources,
+            "vehicle_item_names": _vehicle_item_names(_vehicle_views(stored.get('vehicle_view'))),
             "section_companies": {s: c for s, c in (stored.get(_SECTION_COMPANIES_KEY) or {}).items()
                                   if s in sections and c in _COMPANIES},
             "collapsed_rows": (stored.get(_COLLAPSED_KEY) or {}).get(user, []),
             "rolling_rows": (stored.get(_ROLLING_KEY) or {}).get(user, []),
             "my_charts": (stored.get(_MY_CHARTS_KEY) or {}).get(user, []),
             "wbr_items": wbr_items,
-            "wbr_deck": wbr_deck}
+            "wbr_deck": wbr_deck,
+            "wbr_report_charts": wbr_report_charts}
 
 
 # ── Per-user chart row lists ─────────────────────────────────────────────────
@@ -4074,6 +4085,8 @@ _VEHICLE_DB = "PROD_CARSUPERMARKET_DB"
 _VEHICLE_TABLE_DEFAULT = "PRODUCT_SALES_PERFORMANCE.SALES_PERFORMANCE"
 _VEHICLE_ROW_LIMIT = 5000
 _VEHICLE_FILTERS_MAX = 20
+_VEHICLE_ITEM_NAME_DEFAULT = "Vehicles"
+_VEHICLE_ITEM_NAME_MAX = 30
 _IDENTIFIER = r"[A-Z][A-Z0-9_$]*"
 _VEHICLE_DATE_TYPES = {"DATE", "TIMESTAMP_NTZ", "TIMESTAMP_LTZ", "TIMESTAMP_TZ", "TIMESTAMP"}
 # Operators a chart filter can use: those taking no value, and those taking one.
@@ -4097,6 +4110,7 @@ def _vehicle_view_config(stored) -> dict:
         grey_rules = [{"column": column, "op": "=", "value": stored.get("grey_value", "STATUS_CANCELLED")}] if column else []
     return {"table": stored.get("table") or _VEHICLE_TABLE_DEFAULT,
             "columns": stored.get("columns") or [],
+            "item_name": stored.get("item_name") or _VEHICLE_ITEM_NAME_DEFAULT,
             "grey_rules": grey_rules,
             "filters": stored.get("filters") or []}
 
@@ -4125,7 +4139,15 @@ def _vehicle_view_for_table(stored, table: str) -> dict:
     for view in _vehicle_views(stored):
         if view["table"] == table:
             return view
-    return {"table": table, "columns": [], "grey_rules": [], "filters": []}
+    return {"table": table, "columns": [], "item_name": _VEHICLE_ITEM_NAME_DEFAULT, "grey_rules": [], "filters": []}
+
+
+def _vehicle_item_names(views: list) -> dict:
+    """What each table's list is called (the "Enquiries" of "View Enquiries"),
+    by table. "" is the name for a chart that has not picked a table."""
+    names = {v["table"]: v["item_name"] for v in views}
+    names[""] = names.get(_VEHICLE_TABLE_DEFAULT, _VEHICLE_ITEM_NAME_DEFAULT)
+    return names
 
 
 def _vehicle_tables() -> list:
@@ -4254,8 +4276,11 @@ def _vehicle_table_columns(table: str) -> list:
 
 
 def _validate_vehicle_view(view) -> str | None:
-    if not isinstance(view, dict) or set(view) - {"table", "columns", "grey_rules", "filters"}:
+    if not isinstance(view, dict) or set(view) - {"table", "columns", "item_name", "grey_rules", "filters"}:
         return "bad vehicle view"
+    item_name = view.get("item_name", "")
+    if not isinstance(item_name, str) or len(item_name) > _VEHICLE_ITEM_NAME_MAX:
+        return f"The list name must be {_VEHICLE_ITEM_NAME_MAX} characters or fewer"
     error = _validate_filter_list(view.get("grey_rules", []), "grey-out rule")
     if error:
         return error
@@ -4454,7 +4479,7 @@ def kpi_vehicle_view_save(request: Request, payload: dict, user: str = Depends(r
     except Exception as e:
         logger.error(f"KPI vehicle view save failed: {e}")
         return {"status": "error", "message": str(e)}
-    return {"status": "ok", "view": view, "views": views}
+    return {"status": "ok", "view": view, "views": views, "item_names": _vehicle_item_names(views)}
 
 
 @router.get("/kpi/vehicles")
@@ -4717,6 +4742,15 @@ def _parse_kpi_copy(src: dict, values: list) -> dict:
     return {"columns": [m for _, m in number_columns], "by_date": by_date}
 
 
+def _kpi_sharepoint_sources() -> list:
+    """Every file whose columns are KPI metrics. The review's recon file is also a date
+    column plus numbers. Its column_names are not renames: they are the headers
+    wbr_report_data looks for, so its date column comes from those and nothing is renamed."""
+    recon = [{**src, "date_header": sharepoint_sources.header_names(src["source_key"])["Date"][0], "column_names": {}}
+             for src in sharepoint_sources.sources_of_type("wbr_recon")]
+    return sharepoint_sources.sources_of_type(sharepoint_sources.KPI_FILE_TYPE) + recon
+
+
 def _uk_text(ts) -> str:
     import zoneinfo
     return ts.astimezone(zoneinfo.ZoneInfo("Europe/London")).strftime("%d %b %H:%M") if ts else "unknown"
@@ -4738,7 +4772,7 @@ def _get_sharepoint_data(sp_refresh: str = "") -> dict:
                 _sp_refresh_token = sp_refresh
                 check = "now"
     try:
-        sources = sharepoint_sources.sources_of_type(sharepoint_sources.KPI_FILE_TYPE)
+        sources = _kpi_sharepoint_sources()
     except Exception as e:
         logger.error("KPI SharePoint: file list unavailable: %s", e)
         return {"status": "error", "message": f"SharePoint file list unavailable: {e}"}
@@ -4828,6 +4862,9 @@ _WBR_POINTS_MAX = 120
 _WBR_DECK_KEY = 'wbr_deck'
 _WBR_SLIDES_MAX = 60
 _WBR_SLIDE_ITEMS_MAX = 40
+# The Report view's charts (wbr_report.js): {section id: [{id, ref, period, title?,
+# subtitle?}]}, checked by wbr_report.clean_report_charts.
+_WBR_REPORT_CHARTS_KEY = 'wbr_report_charts'
 
 
 def _wbr_titles(item: dict) -> dict:

@@ -307,7 +307,7 @@ def test_add_sources_turns_a_failed_read_into_a_warning(monkeypatch):
     monkeypatch.setattr(d, "load_daily_summary", lambda *a: pd.DataFrame())
     monkeypatch.setattr(d, "load_recon", lambda: ([], ["Recon is still downloading. Reload shortly."]))
     monkeypatch.setattr(d, "load_volume", lambda: ({"weeks": [], "rows": {}}, []))
-    report = {"meta": {**META, "recon_default": 495, "recon_floor": 100, "warnings": []}}
+    report = {"meta": {**META, "warnings": []}}
     d.add_sources(report)
     assert any("Accounts could not be read: no access" in w for w in report["meta"]["warnings"])
     assert any("Sales data could not be read" in w for w in report["meta"]["warnings"])
@@ -327,42 +327,55 @@ def margin_row(**changes):
         "finance_subsidy": 200, "chassis_margin_after_subsidy": 1500, "recon_cost": 600, "other_costs": 40,
         "total_product_margin": 300, "finance_commission": 500, "std_late_costs": -10, "std_write_downs": -5,
         "std_finance_debit_backs": -20, "gpu_b": 70, "product_margin_warranty": 90,
+        "gpu_m": 845, "gpu_s": 780, "gpu_ms": 1625, "gpu_msb": 1695,
     })
     return {**base, **changes}
 
 
 def margin(*rows, cutoff="2026-10-25"):
-    return d.margin_frame(pd.DataFrame(rows), cutoff, 495, 100)
+    return d.margin_frame(pd.DataFrame(rows), cutoff)
 
 
-def test_margin_follows_the_power_query():
+def test_margin_splits_the_snowflake_gpu_m_into_its_costs():
     row = margin(margin_row()).iloc[0]
     assert row["recon_cost"] == -600
     assert row["other_costs"] == -40
     assert row["purchase_price_ex_vat"] == -12000
     assert row["finance_subsidy"] == -200
-    assert row["total_cos"] == -655          # -600 - 40 - 10 - 5
-    assert row["gpu_m_pq"] == 845            # 1500 - 655
+    assert row["total_cos"] == -655          # 845 - 1500
+    assert row["costs_unmatched"] == 0       # -655 against -600 - 40 - 10 - 5
+    assert row["gpu_m"] == 845
     assert row["gpu_s_cost"] == -20
-    assert row["gpu_s_pq"] == 780            # 300 + 500 - 20
-    assert row["gpu_ms_pq"] == 1625
-    assert row["gpu_msb_pq"] == 1695
+    assert row["gpu_s"] == 780
+    assert row["gpu_ms"] == 1625
+    assert row["gpu_msb"] == 1695
     assert row["volume_warranty"] == 1
 
 
-@pytest.mark.parametrize("recon", [None, 0, 99])
-def test_missing_or_tiny_recon_uses_the_default(recon):
-    assert margin(margin_row(recon_cost=recon)).iloc[0]["recon_cost"] == -495
+@pytest.mark.parametrize("recon, shown, unmatched", [(None, 0, -600), (0, 0, -600), (99, -99, -501)])
+def test_no_guess_is_made_for_a_missing_or_small_recon_cost(recon, shown, unmatched):
+    row = margin(margin_row(recon_cost=recon)).iloc[0]
+    assert row["recon_cost"] == shown
+    assert row["costs_unmatched"] == unmatched
+    assert row["gpu_m"] == 845
 
 
 def test_blank_costs_are_treated_as_zero():
     row = margin(margin_row(other_costs=None, std_late_costs=None)).iloc[0]
     assert row["other_costs"] == 0
-    assert row["total_cos"] == -605
+    assert row["total_cos"] == -655
+    assert row["costs_unmatched"] == -50
 
 
-def test_blank_chassis_still_leaves_the_costs_as_gpu_m():
-    assert margin(margin_row(chassis_margin_after_subsidy=None)).iloc[0]["gpu_m_pq"] == -655
+def test_apex_costs_not_in_autoview_show_as_the_difference():
+    row = margin(margin_row(gpu_m=800)).iloc[0]
+    assert row["total_cos"] == -700
+    assert row["costs_unmatched"] == -45
+
+
+def test_a_blank_chassis_margin_leaves_gpu_m_and_total_costs_blank():
+    row = margin(margin_row(chassis_margin_after_subsidy=None, gpu_m=None)).iloc[0]
+    assert pd.isna(row["gpu_m"]) and pd.isna(row["total_cos"])
 
 
 @pytest.mark.parametrize("price", [None, 0])
@@ -408,7 +421,7 @@ def test_gpu_s_lines_add_up():
                 "product_margin_ev_charger": 25, "product_margin_mats": 15}
     row = margin(margin_row(**products, total_product_margin=sum(products.values()), product_margin_admin_fee=99)).iloc[0]
     assert sum(row[c] for c in products) == row["total_product_margin"]
-    assert row["total_product_margin"] + row["finance_commission"] + row["gpu_s_cost"] == row["gpu_s_pq"]
+    assert row["total_product_margin"] + row["finance_commission"] + row["gpu_s_cost"] == row["gpu_s"]
 
 
 def test_autoview_costs_usable():
@@ -531,7 +544,7 @@ def test_a_frame_survives_the_cache(s3, monkeypatch):
     monkeypatch.setattr(d, "_memory", {})
     back = d._cached("m", build, False, d._frame_to_body, d._frame_from_body)
     assert list(back.columns) == list(frame.columns)
-    assert back["gpu_m_pq"].tolist() == frame["gpu_m_pq"].tolist()
+    assert back["gpu_m"].tolist() == frame["gpu_m"].tolist()
     assert back["deliveries"].sum() == 1
     assert back.loc[1, "invoice_posted_date"] is None
 

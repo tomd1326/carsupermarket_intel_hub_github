@@ -286,6 +286,34 @@ def _saved_highlight_rules() -> list:
         return []
 
 
+# Settings > Auctions: the customers counted as auctions in the Month By Auction
+# and Year By Auction views. Nothing saved yet = G3 and Newark.
+_AUCTION_KEY = 'trade_auction_customers'
+_AUCTION_DEFAULT = ['G3', 'Newark']
+
+
+def _clean_auctions(names) -> list:
+    if not isinstance(names, list):
+        raise ValueError("Auctions must be a list of customers")
+    out = []
+    for n in names:
+        n = str(n or "").strip()
+        if len(n) > 200:
+            raise ValueError("A customer name is too long")
+        if n and n not in out:
+            out.append(n)
+    return out
+
+
+def _saved_auctions() -> list:
+    try:
+        stored = kpi._read_kpi_layout_value(_AUCTION_KEY)
+        return _clean_auctions(stored) if stored is not None else list(_AUCTION_DEFAULT)
+    except Exception as e:
+        logger.warning("Trade Report: could not load the auction customers: %s", e)
+        return list(_AUCTION_DEFAULT)
+
+
 # Settings > Appearance: the colour of a control with a filter on, and of a site
 # that has been changed.
 _FILTER_COLOUR_KEY = 'trade_filter_colour'
@@ -310,6 +338,15 @@ def _saved_colour(key: str, default: str) -> str:
 
 def _saved_filter_colour() -> str:
     return _saved_colour(_FILTER_COLOUR_KEY, _FILTER_COLOUR_DEFAULT)
+
+
+# Settings > Appearance: the border round each chart (KPI keeps the lighter shared one).
+_CHART_BORDER_KEY = 'trade_chart_border_colour'
+_CHART_BORDER_DEFAULT = '#94a3b8'
+
+
+def _saved_chart_border() -> str:
+    return _saved_colour(_CHART_BORDER_KEY, _CHART_BORDER_DEFAULT)
 
 
 # Site changes: a car on the wrong site in Autoview that cannot be put right
@@ -381,8 +418,8 @@ def trade_report_page(request: Request, user: str = Depends(require_page(PAGE_KE
     return templates.TemplateResponse("trade_report.html", {
         "request": request, "user": user, "BASE_URL": BASE_URL,
         "font_size": font_size, "font_pref": _FONT_PREF,
-        "is_admin": is_admin(user), "vehicle_view": _saved_view(), "filter_colour": _saved_filter_colour(),
-        "highlight_rules": _saved_highlight_rules(),
+        "is_admin": is_admin(user), "vehicle_view": _saved_view(), "filter_colour": _saved_filter_colour(), "chart_border": _saved_chart_border(),
+        "highlight_rules": _saved_highlight_rules(), "auctions": _saved_auctions(),
         "can_change_sites": user_has_permission(user, _SITE_PERMISSION),
     })
 
@@ -470,15 +507,22 @@ def trade_report_vehicle_view_save(request: Request, payload: dict,
     except ValueError as e:
         return {"status": "error", "message": str(e)}
     colour = _clean_filter_colour((payload or {}).get("filter_colour"))
+    chart_border = _clean_colour((payload or {}).get("chart_border"), _CHART_BORDER_DEFAULT)
     try:
         rules = _clean_highlight_rules((payload or {}).get("highlight_rules"))
     except ValueError as e:
         return {"status": "error", "message": str(e)}
     try:
+        auctions = _clean_auctions((payload or {}).get("auctions"))
+    except ValueError as e:
+        return {"status": "error", "message": str(e)}
+    try:
+        kpi._write_kpi_layout_value(_AUCTION_KEY, auctions)
         kpi._write_kpi_layout_value(_VIEW_KEY, view)
         kpi._write_kpi_layout_value(_FILTER_COLOUR_KEY, colour)
+        kpi._write_kpi_layout_value(_CHART_BORDER_KEY, chart_border)
         kpi._write_kpi_layout_value(_HIGHLIGHT_KEY, rules)
     except Exception as e:
         logger.error("Trade Report View Vehicles save failed: %s", e)
         return {"status": "error", "message": str(e)}
-    return {"status": "ok", "view": view, "filter_colour": colour, "highlight_rules": rules}
+    return {"status": "ok", "view": view, "filter_colour": colour, "chart_border": chart_border, "highlight_rules": rules, "auctions": auctions}

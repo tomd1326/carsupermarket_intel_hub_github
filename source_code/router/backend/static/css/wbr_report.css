@@ -26,16 +26,20 @@
 .wbr-report-bold td { font-weight: 700; }
 .wbr-report-indent .wbr-report-label { padding-left: 22px; color: #475569; }
 .wbr-report-blank td { border-bottom: none; height: 10px; padding: 0; }
+.wbr-report-table-title { font-size: 0.9rem; font-weight: 600; color: #0f172a; margin-bottom: 4px; }
+.wbr-report-table-text td, .wbr-report-table-text th { text-align: left; white-space: normal; vertical-align: top; }
+.wbr-report-link { background: none; border: none; padding: 0; color: #0d3d6e; cursor: pointer; font-size: 0.82rem; text-decoration: underline; }
 .wbr-report-trend { text-align: center !important; }
 /* The trend arrows, drawn with borders: icons are not used in the code. */
 .wbr-trend-up, .wbr-trend-down { display: inline-block; width: 0; height: 0; border-left: 5px solid transparent; border-right: 5px solid transparent; }
 .wbr-trend-up { border-bottom: 8px solid #15803d; }
 .wbr-trend-down { border-top: 8px solid #b91c1c; }
 
-.wbr-report-charts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px 16px; }
-.wbr-report-chart { min-width: 0; }
-.wbr-report-chart-title { font-size: 0.85rem; font-weight: 600; color: #0f172a; margin-bottom: 4px; }
-.wbr-report-plot { position: relative; height: var(--wbr-report-chart-height, 240px); }
+.wbr-report-charts { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 12px 16px; }
+.wbr-report-chart { box-sizing: border-box; width: var(--wbr-report-chart-width, 420px); max-width: 100%; }
+.wbr-report-charts .chart-card { box-sizing: border-box; width: 100%; }
+.modal-box.busy { opacity: 0.6; pointer-events: none; }
+.wbr-report-charts .chart-wrap { height: var(--wbr-report-chart-height, 335px); }
 .wbr-report-more { display: flex; flex-direction: column; gap: 12px; }
 .wbr-report-more > summary { cursor: pointer; color: #0d3d6e; font-size: 0.85rem; font-weight: 600; margin-bottom: 8px; }
 .wbr-report-more > :not(summary) { margin-bottom: 12px; }
@@ -49,8 +53,8 @@
     #wbrReportSlide { position: absolute; left: 0; top: 0; width: 100%; border: none; padding: 0; }
     .wbr-report-page { break-after: page; display: flex; flex-direction: column; gap: 10px; }
     .wbr-report-page:last-child { break-after: auto; }
-    .wbr-report-chart, .wbr-report-table-wrap { break-inside: avoid; }
+    .wbr-report-charts .chart-card, .wbr-report-table-wrap { break-inside: avoid; }
     .wbr-report-table-wrap { overflow: visible; }
-    .wbr-report-plot canvas { max-width: 100% !important; }
+    .wbr-report-charts canvas { max-width: 100% !important; }
     .wbr-report-more > summary { display: none; }
 }
