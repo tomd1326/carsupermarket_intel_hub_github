@@ -1,7 +1,9 @@
-"""Settings > AI: the knowledge entries every Ask AI reads, and each page's
-Ask AI settings (instructions, answer length, temperature, history, knowledge
-size). Everything here is edited on the website; the values in this file are
-only the defaults a page starts with and goes back to on Reset To Default.
+"""The Semantic & Context Layer entries (metrics, dimensions, tables, glossary
+terms, business rules...) that people read on /semantic-layer and every Ask AI
+reads, and each page's Ask AI settings in Settings > AI (instructions, answer
+length, temperature, history, knowledge size). Everything here is edited on the
+website; the values in this file are only the defaults a page starts with and
+goes back to on Reset To Default.
 
 Both tables live in the prod pricer DB (get_prod_pricer_connection), like
 kpi_layout, so local edits and prod use the same entries. See
@@ -25,16 +27,31 @@ SCOPES = ["all"] + PAGE_KEYS
 
 # Kinds of entry, in the order they are sent to the model: rules and
 # instructions first, so they survive when the size limit cuts entries off.
+# Labels and which ones show on the Semantic & Context Layer page are set on
+# that page; the keys here are stored on each row, so never rename one.
 KINDS = [
-    ("instruction", "Instruction"),
+    ("instruction", "AI Instruction"),
+    ("rule", "Business Rule"),
+    ("metric", "Metric"),
+    ("dimension", "Dimension"),
+    ("term", "Glossary Term"),
     ("learned", "Learned Fact"),
-    ("table", "Table Description"),
-    ("column", "Column Note"),
+    ("table", "Table"),
+    ("column", "Column"),
     ("yaml", "YAML"),
     ("document", "Document"),
 ]
 KIND_KEYS = [key for key, _ in KINDS]
 STATUSES = ["active", "proposed"]
+
+# Alex's two layers. Semantic: what can be measured and sliced, and where it
+# lives in Snowflake. Context: what the numbers mean in the business and the
+# rules for using them.
+LAYERS = [("semantic", "Semantic Layer"), ("context", "Context Layer")]
+DEFAULT_KIND_LAYERS = {
+    "metric": "semantic", "dimension": "semantic", "table": "semantic", "column": "semantic", "yaml": "semantic",
+    "term": "context", "rule": "context", "instruction": "context", "learned": "context", "document": "context",
+}
 
 TITLE_MAX = 200
 CONTENT_MAX = 100_000
@@ -48,6 +65,65 @@ SEEDS = [
     ("seed_sales_performance", "PRODUCT_SALES_PERFORMANCE.SALES_PERFORMANCE", "table", "all", "sales_performance.md"),
     ("seed_daily_summary", "PRODUCT_SLT_KPIS.DAILY_SUMMARY", "table", "kpi", "daily_summary.md"),
 ]
+# Starting entries for the Semantic & Context Layer page: one metric, term or
+# rule each, with category, tags and fields. Loaded the same way, as proposed.
+REFERENCE_SEED_FILE = "semantic_context_entries.json"
+
+CATEGORY_MAX = 100
+TAGS_MAX = 500
+FIELD_VALUE_MAX = 20_000
+
+
+# ── Semantic & Context Layer page settings ───────────────────────────────────
+# Everything about the page is set on the page itself (Settings popup): title,
+# intro, categories, kind labels and layers, which kinds show, the extra fields
+# each kind has, and text sizes. Stored as one JSON value in ai_page_settings
+# under REFERENCE_KEY, next to the Ask AI page settings.
+
+REFERENCE_KEY = "semantic_layer_page"
+FIELD_TYPES = ["text", "textarea", "code"]
+GROUP_BY = ["category", "kind", "none"]
+
+# The page's name is set in Settings > Page Names like every other page.
+REFERENCE_DEFAULTS = {
+    "intro": ("The semantic layer says what can be measured and how: each metric's calculation, the "
+              "dimensions it can be split by, and the tables and columns it comes from. The context "
+              "layer says what it means in the business: glossary terms and the rules for using the "
+              "numbers. Ask AI reads these entries, and Download YAML gives the same entries to other "
+              "analytics tools."),
+    "content_label": "Detail",
+    "group_by": "category",
+    "export_name": "carsupermarket_uk",
+    "title_font_px": 17,
+    "text_font_px": 14,
+    "badge_font_px": 11,
+    "categories": ["Sales", "Pricing", "Margin & Costs", "Stock", "Marketing & Enquiries", "Data Tables"],
+    "kinds_shown": ["metric", "dimension", "table", "column", "term", "rule", "document"],
+    "kind_labels": {},
+    "kind_layers": dict(DEFAULT_KIND_LAYERS),
+    "layer_labels": {},
+    # key never changes once made, so values stay attached when a label is renamed.
+    # kinds: which kinds show the field ([] = every kind). send_to_ai: added to
+    # the text Ask AI reads.
+    "fields": [
+        {"key": "definition", "label": "Definition", "type": "textarea", "kinds": [], "send_to_ai": True},
+        {"key": "calculation", "label": "Calculation", "type": "code", "kinds": ["metric"], "send_to_ai": True},
+        {"key": "source_table", "label": "Source Table", "type": "text",
+         "kinds": ["metric", "dimension", "term", "rule", "table"], "send_to_ai": True},
+        {"key": "source_columns", "label": "Source Columns", "type": "text",
+         "kinds": ["metric", "dimension", "term", "rule"], "send_to_ai": True},
+        {"key": "grain", "label": "Grain (One Row Is)", "type": "text", "kinds": ["metric", "table"], "send_to_ai": True},
+        {"key": "dimensions", "label": "Can Be Split By", "type": "text", "kinds": ["metric"], "send_to_ai": True},
+        {"key": "values", "label": "Allowed Values", "type": "textarea", "kinds": ["dimension"], "send_to_ai": True},
+        {"key": "exclusions", "label": "Included And Left Out", "type": "textarea",
+         "kinds": ["metric", "rule"], "send_to_ai": True},
+        {"key": "synonyms", "label": "Also Called", "type": "text",
+         "kinds": ["metric", "dimension", "term"], "send_to_ai": True},
+        {"key": "owner", "label": "Owner", "type": "text", "kinds": [], "send_to_ai": False},
+    ],
+}
+
+REFERENCE_LIMITS = {"title_font_px": (10, 40), "text_font_px": (10, 30), "badge_font_px": (8, 24)}
 
 
 # ── Page settings ────────────────────────────────────────────────────────────
@@ -191,6 +267,102 @@ def clean_page_settings(page: str, stored) -> dict:
     return result
 
 
+def _clean_text(value, default: str, max_len: int) -> str:
+    return value.strip()[:max_len] if isinstance(value, str) and value.strip() else default
+
+
+def _field_key(label: str, taken: set) -> str:
+    base = "".join(c if c.isalnum() else "_" for c in label.lower()).strip("_")[:40] or "field"
+    key, n = base, 2
+    while key in taken:
+        key, n = f"{base}_{n}", n + 1
+    return key
+
+
+def clean_reference_settings(stored) -> dict:
+    """The Knowledge page settings with defaults filled in and every value
+    checked, so a bad save can never break the page."""
+    d = REFERENCE_DEFAULTS
+    stored = stored if isinstance(stored, dict) else {}
+    result = {
+        "intro": stored["intro"][:5000] if isinstance(stored.get("intro"), str) else d["intro"],
+        "content_label": _clean_text(stored.get("content_label"), d["content_label"], 60),
+        "group_by": stored.get("group_by") if stored.get("group_by") in GROUP_BY else d["group_by"],
+        "export_name": "".join(c for c in _clean_text(stored.get("export_name"), d["export_name"], 60)
+                               if c.isalnum() or c in "_-") or d["export_name"],
+    }
+    for key, (low, high) in REFERENCE_LIMITS.items():
+        try:
+            result[key] = min(max(int(stored[key]), low), high)
+        except (KeyError, TypeError, ValueError):
+            result[key] = d[key]
+
+    categories = stored.get("categories")
+    if isinstance(categories, list):
+        seen, clean = set(), []
+        for c in categories:
+            c = c.strip()[:CATEGORY_MAX] if isinstance(c, str) else ""
+            if c and c.lower() not in seen:
+                seen.add(c.lower())
+                clean.append(c)
+        result["categories"] = clean
+    else:
+        result["categories"] = list(d["categories"])
+
+    shown = stored.get("kinds_shown")
+    result["kinds_shown"] = [k for k in KIND_KEYS if k in shown] if isinstance(shown, list) else list(d["kinds_shown"])
+    labels = stored.get("kind_labels") if isinstance(stored.get("kind_labels"), dict) else {}
+    result["kind_labels"] = {k: v.strip()[:60] for k, v in labels.items()
+                             if k in KIND_KEYS and isinstance(v, str) and v.strip()}
+    layers = stored.get("kind_layers") if isinstance(stored.get("kind_layers"), dict) else {}
+    layer_keys = [key for key, _ in LAYERS]
+    result["kind_layers"] = {k: layers.get(k) if layers.get(k) in layer_keys else DEFAULT_KIND_LAYERS[k]
+                             for k in KIND_KEYS}
+    layer_labels = stored.get("layer_labels") if isinstance(stored.get("layer_labels"), dict) else {}
+    result["layer_labels"] = {k: v.strip()[:60] for k, v in layer_labels.items()
+                              if k in layer_keys and isinstance(v, str) and v.strip()}
+
+    fields = stored.get("fields")
+    if not isinstance(fields, list):
+        result["fields"] = [dict(f) for f in d["fields"]]
+    else:
+        clean, taken = [], set()
+        for f in fields:
+            if not isinstance(f, dict):
+                continue
+            label = _clean_text(f.get("label"), "", 80)
+            if not label:
+                continue
+            key = f.get("key") if isinstance(f.get("key"), str) and f["key"] and f["key"] not in taken else None
+            key = key or _field_key(label, taken)
+            taken.add(key)
+            clean.append({
+                "key": key, "label": label,
+                "type": f.get("type") if f.get("type") in FIELD_TYPES else "text",
+                "kinds": [k for k in KIND_KEYS if k in (f.get("kinds") or [])],
+                "send_to_ai": bool(f.get("send_to_ai")),
+            })
+        result["fields"] = clean
+    return result
+
+
+def kind_label(settings: dict, kind: str) -> str:
+    return settings["kind_labels"].get(kind) or dict(KINDS).get(kind, kind)
+
+
+def layer_label(settings: dict, layer: str) -> str:
+    return settings["layer_labels"].get(layer) or dict(LAYERS).get(layer, layer)
+
+
+def field_applies(field: dict, kind: str) -> bool:
+    return not field["kinds"] or kind in field["kinds"]
+
+
+def _entry_fields(entry: dict) -> dict:
+    fields = entry.get("fields")
+    return fields if isinstance(fields, dict) else {}
+
+
 def validate_entry(entry: dict) -> str | None:
     """Why an entry cannot be saved, or None."""
     if not isinstance(entry, dict):
@@ -205,25 +377,51 @@ def validate_entry(entry: dict) -> str | None:
     if entry.get("status", "active") not in STATUSES:
         return "Unknown status"
     content = entry.get("content") or ""
-    if not isinstance(content, str) or not content.strip():
+    if not isinstance(content, str):
         return "Text is needed"
     if len(content) > CONTENT_MAX:
         return f"Text must be under {CONTENT_MAX:,} characters"
+    if "fields" in entry and not isinstance(entry["fields"], dict):
+        return "Bad fields"
+    fields = _entry_fields(entry)
+    for value in fields.values():
+        if not isinstance(value, str) or len(value) > FIELD_VALUE_MAX:
+            return f"Each field must be text under {FIELD_VALUE_MAX:,} characters"
+    if not content.strip() and not any(v.strip() for v in fields.values()):
+        return "Text is needed"
+    if len(str(entry.get("category") or "")) > CATEGORY_MAX:
+        return f"Category must be under {CATEGORY_MAX} characters"
+    if len(str(entry.get("tags") or "")) > TAGS_MAX:
+        return f"Tags must be under {TAGS_MAX} characters"
     if entry["kind"] == "column" and title.count(".") != 2:
         return "A column note's title must be SCHEMA.TABLE.COLUMN"
     return None
 
 
-def _entry_text(entry: dict) -> str:
-    return f"### {entry['title']}\n{entry['content'].strip()}\n"
+def _entry_text(entry: dict, ai_fields: list | None = None) -> str:
+    """One entry as Ask AI reads it: title, then the fields marked Ask AI that
+    apply to its kind and have a value, then its main text."""
+    lines = [f"### {entry['title']}"]
+    values = _entry_fields(entry)
+    for f in ai_fields or []:
+        value = (values.get(f["key"]) or "").strip()
+        if value and field_applies(f, entry["kind"]):
+            lines.append(f"{f['label']}: {value}")
+    if (entry.get("content") or "").strip():
+        lines.append(entry["content"].strip())
+    return "\n".join(lines) + "\n"
 
 
-def assemble_knowledge(entries: list, page: str, max_chars: int) -> dict:
+def ai_fields(settings: dict) -> list:
+    return [f for f in settings["fields"] if f["send_to_ai"]]
+
+
+def assemble_knowledge(entries: list, page: str, max_chars: int, fields: list | None = None) -> dict:
     """The knowledge text sent to a page's Ask AI, built from active, enabled
     entries for every page or for this one. Entries go in kind order, then
     title; any that would take the text over max_chars are left out and listed
     in 'skipped' so Settings can show them. Column notes are grouped under
-    their table in one section."""
+    their table in one section. fields: the Knowledge page fields marked Ask AI."""
     usable = [e for e in entries
               if e.get("enabled") and e.get("status") == "active" and e.get("scope") in ("all", page)]
     usable.sort(key=lambda e: e["title"].lower())
@@ -232,7 +430,8 @@ def assemble_knowledge(entries: list, page: str, max_chars: int) -> dict:
     def add(text: str, members: list) -> None:
         nonlocal total
         if total + len(text) > max_chars:
-            skipped.extend({"id": e["id"], "title": e["title"], "chars": len(_entry_text(e))} for e in members)
+            skipped.extend({"id": e["id"], "title": e["title"], "chars": len(_entry_text(e, fields))}
+                           for e in members)
             return
         parts.append(text)
         used.extend(e["id"] for e in members)
@@ -244,7 +443,7 @@ def assemble_knowledge(entries: list, page: str, max_chars: int) -> dict:
             _add_columns(of_kind, add)
         else:
             for entry in of_kind:
-                add(_entry_text(entry), [entry])
+                add(_entry_text(entry, fields), [entry])
 
     text = "\n".join(parts)
     return {"text": text, "chars": len(text), "max_chars": max_chars,
@@ -259,8 +458,100 @@ def _add_columns(columns: list, add) -> None:
         by_table.setdefault(table, []).append((column, entry))
     for table, items in by_table.items():
         lines = [f"### Column Notes: {table}"]
-        lines += [f"- {column}: {entry['content'].strip()}" for column, entry in items]
+        lines += [f"- {column}: {_column_text(entry)}" for column, entry in items]
         add("\n".join(lines) + "\n", [entry for _, entry in items])
+
+
+def _column_text(entry: dict) -> str:
+    """A column note's text, or its field values when it has no main text."""
+    content = (entry.get("content") or "").strip()
+    return content or "; ".join(v.strip() for v in _entry_fields(entry).values() if v.strip())
+
+
+# ── Export (YAML / JSON) ─────────────────────────────────────────────────────
+# For analytics tools and an MCP server to read the same definitions people
+# read on the page. Only active entries; split into the two layers, then one
+# list per kind.
+
+def build_export(entries: list, settings: dict, generated_at: str, title: str = "") -> dict:
+    out = {"name": settings["export_name"], "title": title, "generated_at": generated_at}
+    for layer, _ in LAYERS:
+        out[f"{layer}_layer"] = {
+            "label": layer_label(settings, layer),
+            "kinds": _export_kinds([e for e in entries if settings["kind_layers"].get(e["kind"]) == layer],
+                                   settings),
+        }
+    return out
+
+
+def _export_kinds(entries: list, settings: dict) -> dict:
+    groups = {}
+    for kind in KIND_KEYS:
+        rows = sorted((e for e in entries if e["kind"] == kind and e.get("status") == "active"),
+                      key=lambda e: e["title"].lower())
+        if not rows:
+            continue
+        items = []
+        for e in rows:
+            item = {"name": e["title"]}
+            if e.get("category"):
+                item["category"] = e["category"]
+            tags = [t.strip() for t in (e.get("tags") or "").split(",") if t.strip()]
+            if tags:
+                item["tags"] = tags
+            values = _entry_fields(e)
+            for f in settings["fields"]:
+                value = (values.get(f["key"]) or "").strip()
+                if value and field_applies(f, kind):
+                    item[f["key"]] = value
+            if (e.get("content") or "").strip():
+                item["detail"] = e["content"].strip()
+            item["used_by_ask_ai"] = bool(e.get("enabled"))
+            item["updated_at"] = e.get("updated_at")
+            item["updated_by"] = e.get("updated_by")
+            items.append(item)
+        groups[kind] = {"label": kind_label(settings, kind), "entries": items}
+    return groups
+
+
+def _yaml_scalar(value, indent: str) -> str:
+    if value is None:
+        return "null"
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, (int, float)):
+        return str(value)
+    text = str(value).replace("\r\n", "\n")
+    if "\n" in text:
+        # A literal block keeps line breaks exactly as typed.
+        body = "\n".join((indent + "  " + line) if line else "" for line in text.split("\n"))
+        return "|-\n" + body
+    # A JSON string is a valid YAML double-quoted string, so nothing typed can
+    # break the file.
+    return json.dumps(text, ensure_ascii=False)
+
+
+def to_yaml(value, indent: str = "") -> str:
+    """Plain YAML for dicts, lists and scalars (PyYAML is not installed)."""
+    lines = []
+    if isinstance(value, dict):
+        for key, item in value.items():
+            if isinstance(item, (dict, list)) and item:
+                lines.append(f"{indent}{key}:")
+                lines.append(to_yaml(item, indent + "  "))
+            elif isinstance(item, (dict, list)):
+                lines.append(f"{indent}{key}: {'{}' if isinstance(item, dict) else '[]'}")
+            else:
+                lines.append(f"{indent}{key}: {_yaml_scalar(item, indent)}")
+    elif isinstance(value, list):
+        for item in value:
+            if isinstance(item, dict) and item:
+                inner = to_yaml(item, indent + "  ").split("\n")
+                lines.append(f"{indent}- {inner[0].lstrip()}")
+                lines.extend(inner[1:])
+            else:
+                lines.append(f"{indent}- {_yaml_scalar(item, indent + '  ')}")
+    return "\n".join(lines)
 
 
 def system_prompt(settings: dict, knowledge: dict) -> str:
@@ -303,15 +594,38 @@ def _ensure_tables(conn) -> None:
                 updated_by VARCHAR(100),
                 updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
             )""")
+        # Added for the Semantic & Context Layer page. fields is a JSON object
+        # of field key -> text (the fields themselves are set on the page).
+        cur.execute("ALTER TABLE ai_knowledge ADD COLUMN IF NOT EXISTS category VARCHAR(100) NOT NULL DEFAULT ''")
+        cur.execute("ALTER TABLE ai_knowledge ADD COLUMN IF NOT EXISTS tags VARCHAR(500) NOT NULL DEFAULT ''")
+        cur.execute("ALTER TABLE ai_knowledge ADD COLUMN IF NOT EXISTS fields TEXT NOT NULL DEFAULT '{}'")
+        cur.execute("ALTER TABLE ai_knowledge ADD COLUMN IF NOT EXISTS show_on_page BOOLEAN NOT NULL DEFAULT TRUE")
     conn.commit()
     if is_new:
         _insert_seeds(conn, "setup")
     _tables_ready = True
 
 
+def _reference_seeds() -> list:
+    try:
+        with open(os.path.join(_SEED_DIR, REFERENCE_SEED_FILE), encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, ValueError) as e:
+        logger.warning("AI knowledge: %s not loaded: %s", REFERENCE_SEED_FILE, e)
+        return []
+
+
 def _insert_seeds(conn, user: str) -> int:
     added = 0
     with conn.cursor() as cur:
+        for s in _reference_seeds():
+            cur.execute(
+                "INSERT INTO ai_knowledge (id, title, kind, scope, content, enabled, status, updated_by, "
+                "category, tags, fields) VALUES (%s, %s, %s, %s, %s, TRUE, 'proposed', %s, %s, %s, %s) "
+                "ON CONFLICT (id) DO NOTHING",
+                (s["id"], s["title"], s["kind"], s.get("scope", "all"), s.get("content", ""), user,
+                 s.get("category", ""), s.get("tags", ""), json.dumps(s.get("fields") or {})))
+            added += cur.rowcount
         for entry_id, title, kind, scope, filename in SEEDS:
             try:
                 with open(os.path.join(_SEED_DIR, filename), encoding="utf-8") as f:
@@ -335,7 +649,8 @@ def add_starting_entries(user: str) -> int:
         return _insert_seeds(conn, user)
 
 
-_COLUMNS = "id, title, kind, scope, content, enabled, status, updated_by, updated_at"
+_COLUMNS = ("id, title, kind, scope, content, enabled, status, updated_by, updated_at, "
+            "category, tags, fields, show_on_page")
 
 
 def _row_to_entry(row) -> dict:
@@ -343,6 +658,11 @@ def _row_to_entry(row) -> dict:
     entry = dict(zip(keys, row))
     if isinstance(entry["updated_at"], datetime.datetime):
         entry["updated_at"] = entry["updated_at"].isoformat()
+    try:
+        fields = json.loads(entry["fields"] or "{}")
+    except ValueError:
+        fields = {}
+    entry["fields"] = fields if isinstance(fields, dict) else {}
     return entry
 
 
@@ -362,21 +682,33 @@ def save_entry(entry: dict, user: str) -> dict:
     error = validate_entry(entry)
     if error:
         raise ValueError(error)
-    values = (entry["title"].strip(), entry["kind"], entry["scope"], entry["content"],
-              bool(entry.get("enabled", True)), entry.get("status", "active"), user)
+    cols = {
+        "title": entry["title"].strip(), "kind": entry["kind"], "scope": entry["scope"],
+        "content": entry.get("content") or "", "enabled": bool(entry.get("enabled", True)),
+        "status": entry.get("status", "active"), "updated_by": user,
+    }
+    # The page's own columns are only written when sent, so an Ask AI proposal
+    # or an older caller never blanks them.
+    if "category" in entry:
+        cols["category"] = str(entry.get("category") or "").strip()
+    if "tags" in entry:
+        cols["tags"] = ", ".join(t.strip() for t in str(entry.get("tags") or "").split(",") if t.strip())
+    if "fields" in entry:
+        cols["fields"] = json.dumps({k: v for k, v in _entry_fields(entry).items() if v.strip()})
+    if "show_on_page" in entry:
+        cols["show_on_page"] = bool(entry["show_on_page"])
+    names = list(cols)
     with get_prod_pricer_connection() as conn:
         _ensure_tables(conn)
         with conn.cursor() as cur:
             if entry.get("id"):
-                cur.execute(
-                    "UPDATE ai_knowledge SET title = %s, kind = %s, scope = %s, content = %s, "
-                    "enabled = %s, status = %s, updated_by = %s, updated_at = NOW() "
-                    f"WHERE id = %s RETURNING {_COLUMNS}", values + (entry["id"],))
+                sets = ", ".join(f"{n} = %s" for n in names)
+                cur.execute(f"UPDATE ai_knowledge SET {sets}, updated_at = NOW() WHERE id = %s RETURNING {_COLUMNS}",
+                            [cols[n] for n in names] + [entry["id"]])
             else:
                 cur.execute(
-                    "INSERT INTO ai_knowledge (id, title, kind, scope, content, enabled, status, updated_by) "
-                    f"VALUES (%s, %s, %s, %s, %s, %s, %s, %s) RETURNING {_COLUMNS}",
-                    ("k_" + uuid.uuid4().hex[:16],) + values)
+                    f"INSERT INTO ai_knowledge (id, {', '.join(names)}) VALUES (%s{', %s' * len(names)}) "
+                    f"RETURNING {_COLUMNS}", ["k_" + uuid.uuid4().hex[:16]] + [cols[n] for n in names])
             row = cur.fetchone()
         conn.commit()
     if row is None:
@@ -386,7 +718,7 @@ def save_entry(entry: dict, user: str) -> dict:
 
 def propose_entry(title: str, content: str, kind: str, scope: str, user: str) -> dict:
     """Save an entry suggested by Ask AI or drafted by Cortex. It waits as
-    proposed until Tom approves it in Settings > AI."""
+    proposed until Tom approves it on the Semantic & Context Layer page."""
     return save_entry({"title": title, "content": content, "kind": kind, "scope": scope,
                        "enabled": True, "status": "proposed"}, user)
 
@@ -400,6 +732,70 @@ def set_status(entry_id: str, status: str, user: str) -> None:
             cur.execute("UPDATE ai_knowledge SET status = %s, updated_by = %s, updated_at = NOW() WHERE id = %s",
                         (status, user, entry_id))
         conn.commit()
+
+
+def approve_all(user: str) -> int:
+    with get_prod_pricer_connection() as conn:
+        _ensure_tables(conn)
+        with conn.cursor() as cur:
+            cur.execute("UPDATE ai_knowledge SET status = 'active', updated_by = %s, updated_at = NOW() "
+                        "WHERE status = 'proposed'", (user,))
+            count = cur.rowcount
+        conn.commit()
+    return count
+
+
+def rename_category(old: str, new: str, user: str) -> None:
+    with get_prod_pricer_connection() as conn:
+        _ensure_tables(conn)
+        with conn.cursor() as cur:
+            cur.execute("UPDATE ai_knowledge SET category = %s, updated_by = %s, updated_at = NOW() "
+                        "WHERE category = %s", (new, user, old))
+        conn.commit()
+
+
+def get_reference_settings() -> dict:
+    with get_prod_pricer_connection() as conn:
+        _ensure_tables(conn)
+        with conn.cursor() as cur:
+            cur.execute("SELECT value FROM ai_page_settings WHERE page_key = %s", (REFERENCE_KEY,))
+            row = cur.fetchone()
+        conn.commit()
+    try:
+        stored = json.loads(row[0]) if row else None
+    except ValueError:
+        stored = None
+    return clean_reference_settings(stored)
+
+
+def save_reference_settings(values: dict, user: str) -> dict:
+    """Save the page settings. values['renames'] ({old: new}) renames a
+    category on every entry that has it."""
+    cleaned = clean_reference_settings(values)
+    renames = values.get("renames") if isinstance(values.get("renames"), dict) else {}
+    for old, new in renames.items():
+        new = new.strip()[:CATEGORY_MAX] if isinstance(new, str) else ""
+        if isinstance(old, str) and old and new and old != new:
+            rename_category(old, new, user)
+    with get_prod_pricer_connection() as conn:
+        _ensure_tables(conn)
+        with conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO ai_page_settings (page_key, value, updated_by) VALUES (%s, %s, %s) "
+                "ON CONFLICT (page_key) DO UPDATE SET value = EXCLUDED.value, "
+                "updated_by = EXCLUDED.updated_by, updated_at = NOW()",
+                (REFERENCE_KEY, json.dumps(cleaned), user))
+        conn.commit()
+    return cleaned
+
+
+def reset_reference_settings() -> dict:
+    with get_prod_pricer_connection() as conn:
+        _ensure_tables(conn)
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM ai_page_settings WHERE page_key = %s", (REFERENCE_KEY,))
+        conn.commit()
+    return clean_reference_settings(None)
 
 
 def delete_entry(entry_id: str) -> None:
@@ -466,7 +862,12 @@ def page_prompt(page: str) -> tuple[dict, dict, str]:
         logger.warning("AI settings for %s not read, using defaults: %s", page, e)
         settings = clean_page_settings(page, None)
     try:
-        knowledge = assemble_knowledge(list_entries(), page, settings["knowledge_max_chars"])
+        fields = ai_fields(get_reference_settings())
+    except Exception as e:
+        logger.warning("Semantic & Context Layer settings not read, using defaults: %s", e)
+        fields = ai_fields(clean_reference_settings(None))
+    try:
+        knowledge = assemble_knowledge(list_entries(), page, settings["knowledge_max_chars"], fields)
     except Exception as e:
         logger.warning("AI knowledge for %s not read: %s", page, e)
         knowledge = assemble_knowledge([], page, 0)

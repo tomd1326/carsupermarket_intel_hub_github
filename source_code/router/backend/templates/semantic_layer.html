@@ -1,0 +1,280 @@
+{% from '_navigation.html' import page_header with context %}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ page_name('semantic_layer') }}</title>
+    <link rel="icon" type="image/png" href="{{ BASE_URL }}/static/icon.png">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css" rel="stylesheet">
+    <link href="{{ static_url('css/theme.css') }}" rel="stylesheet">
+    <link href="{{ static_url('css/charts.css') }}" rel="stylesheet">
+    <style>
+        @font-face { font-family: 'DM Sans'; src: url('{{ BASE_URL }}/static/fonts/DMSans-Regular.ttf');  font-weight: 400; }
+        @font-face { font-family: 'DM Sans'; src: url('{{ BASE_URL }}/static/fonts/DMSans-Medium.ttf');   font-weight: 500; }
+        @font-face { font-family: 'DM Sans'; src: url('{{ BASE_URL }}/static/fonts/DMSans-SemiBold.ttf'); font-weight: 600; }
+        @font-face { font-family: 'DM Sans'; src: url('{{ BASE_URL }}/static/fonts/DMSans-Bold.ttf');     font-weight: 700; }
+        body { font-family: 'DM Sans', system-ui, sans-serif; }
+        /* Sizes come from the page settings (semantic_layer.js sets these). */
+        #semantic-layer { --sl-title-size: 17px; --sl-text-size: 14px; --sl-badge-size: 11px; }
+        .sl-wrap { max-width: 1400px; margin: 20px auto 48px auto; padding: 0 16px; }
+        .sl-intro { white-space: pre-line; color: var(--c-text-muted, #475569); font-size: var(--sl-text-size); max-width: 1000px; }
+        .sl-admin-bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 8px; }
+        .sl-usage { font-size: 0.8rem; color: #64748b; margin-bottom: 10px; }
+        .sl-usage .over { color: #b91c1c; font-weight: 600; }
+        .sl-tabs { display: flex; gap: 6px; flex-wrap: wrap; margin: 14px 0 10px; }
+        .sl-tabs button { border: 1px solid #cbd5e1; background: #fff; border-radius: 999px; padding: 4px 14px; font-weight: 600; color: #334155; }
+        .sl-tabs button.active { background: #1e3a8a; border-color: #1e3a8a; color: #fff; }
+        .sl-toolbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 14px; }
+        .sl-toolbar .form-control, .sl-toolbar .form-select { width: auto; min-width: 170px; }
+        .sl-body { display: grid; grid-template-columns: 260px minmax(0, 1fr); gap: 20px; align-items: start; }
+        .sl-nav { position: sticky; top: 12px; max-height: calc(100vh - 24px); overflow-y: auto; font-size: 0.85rem; }
+        .sl-nav-group { font-weight: 700; color: #0f172a; margin: 10px 0 4px; }
+        .sl-nav a { display: block; color: #334155; text-decoration: none; padding: 1px 0 1px 8px; border-left: 2px solid transparent; }
+        .sl-nav a:hover { border-left-color: #1e3a8a; color: #1e3a8a; }
+        .sl-group-title { font-size: calc(var(--sl-title-size) + 3px); font-weight: 700; color: var(--c-text-heading, #0f172a); margin: 18px 0 10px; }
+        .sl-card { background: #fff; border: 1px solid #e2e8f0; border-radius: 10px; padding: 14px 18px; margin-bottom: 12px; scroll-margin-top: 16px; }
+        .sl-card.flash { box-shadow: 0 0 0 3px #93c5fd; }
+        .sl-card.proposed { border-left: 4px solid #f59e0b; }
+        .sl-card.hidden-entry { opacity: 0.6; }
+        .sl-card-head { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+        .sl-card-title { font-size: var(--sl-title-size); font-weight: 700; margin: 0 6px 0 0; color: #0f172a; overflow-wrap: anywhere; }
+        .sl-badge { font-size: var(--sl-badge-size); font-weight: 600; padding: 2px 8px; border-radius: 999px; background: #f1f5f9; color: #334155; }
+        .sl-badge.layer-semantic { background: #dbeafe; color: #1e40af; }
+        .sl-badge.layer-context { background: #dcfce7; color: #166534; }
+        .sl-badge.warn { background: #fef3c7; color: #92400e; }
+        .sl-badge.muted { background: #f1f5f9; color: #64748b; }
+        .sl-tag { font-size: var(--sl-badge-size); color: #475569; border: 1px solid #cbd5e1; border-radius: 4px; padding: 0 6px; }
+        .sl-fields { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 4px 16px; margin-top: 10px; font-size: var(--sl-text-size); }
+        .sl-field-label { font-weight: 600; color: #475569; }
+        .sl-field-value { white-space: pre-line; overflow-wrap: anywhere; color: #0f172a; }
+        .sl-field-value.code { font-family: ui-monospace, Consolas, monospace; white-space: pre-wrap; background: #f8fafc; border-radius: 4px; padding: 2px 6px; }
+        .sl-content-label { font-weight: 600; color: #475569; margin-top: 10px; font-size: var(--sl-text-size); }
+        .sl-content { white-space: pre-line; overflow-wrap: anywhere; font-size: var(--sl-text-size); }
+        .sl-card-foot { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 10px; font-size: 0.78rem; color: #64748b; }
+        .sl-card-foot .spacer { flex: 1; }
+        .sl-empty { color: #64748b; padding: 20px 0; }
+        /* Popups. While saving, the popup is greyed out and locked. */
+        .modal-box.busy { opacity: 0.55; pointer-events: none; cursor: wait; }
+        .modal-box.sl-editor { width: 900px; max-width: 96vw; max-height: 90vh; overflow-y: auto; }
+        .modal-box.sl-settings { width: 1100px; max-width: 96vw; max-height: 90vh; overflow-y: auto; }
+        .modal-field textarea { width: 100%; padding: 6px 10px; border: 1px solid #cbd5e1; border-radius: 6px; }
+        .modal-field textarea.code { font-family: ui-monospace, Consolas, monospace; }
+        .sl-row { display: grid; gap: 12px; }
+        .sl-row.two { grid-template-columns: 1fr 1fr; }
+        .sl-row.three { grid-template-columns: 1fr 1fr 1fr; }
+        .sl-checks { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 0.85rem; }
+        .sl-checks label { display: inline-flex; gap: 5px; align-items: center; font-weight: 400; }
+        .sl-set-section { border-top: 1px solid #e2e8f0; padding-top: 12px; margin-top: 12px; }
+        .sl-set-section h3 { font-size: 0.95rem; font-weight: 700; margin-bottom: 4px; }
+        .sl-set-help { font-size: 0.78rem; color: #64748b; margin-bottom: 8px; }
+        .sl-set-table { width: 100%; font-size: 0.85rem; border-collapse: collapse; }
+        .sl-set-table th { text-align: left; font-weight: 600; color: #475569; padding: 4px 6px; border-bottom: 1px solid #e2e8f0; }
+        .sl-set-table td { padding: 4px 6px; vertical-align: top; border-bottom: 1px solid #f1f5f9; }
+        .sl-set-table input[type="text"], .sl-set-table select { width: 100%; padding: 3px 8px; border: 1px solid #cbd5e1; border-radius: 5px; }
+        .sl-set-table .sl-checks { font-size: 0.78rem; }
+        .sl-note { font-size: 0.8rem; color: #b91c1c; }
+        @media (max-width: 900px) { .sl-body { grid-template-columns: 1fr; } .sl-nav { position: static; max-height: none; } }
+    </style>
+</head>
+<body>
+    {{ page_header(page_name('semantic_layer'), user) }}
+    <div class="sl-wrap" id="semantic-layer" data-base="{{ BASE_URL }}">
+        <p class="sl-intro" id="sl-intro"></p>
+
+        {% if show_admin %}
+        <div class="sl-admin-bar">
+            <button type="button" class="btn btn-sm btn-primary" id="sl-add">Add Entry</button>
+            <button type="button" class="btn btn-sm btn-success" id="sl-approve-all" style="display:none;"></button>
+            <button type="button" class="btn btn-sm btn-outline-secondary" id="sl-seed">Add Starting Entries</button>
+            <button type="button" class="btn btn-sm btn-outline-secondary" id="sl-settings-btn">Page Settings</button>
+        </div>
+        <div class="sl-usage" id="sl-usage"></div>
+        {% endif %}
+
+        <div class="sl-tabs" id="sl-tabs"></div>
+        <div class="sl-toolbar">
+            <input type="search" class="form-control form-control-sm" id="sl-search" placeholder="Search">
+            <select class="form-select form-select-sm" id="sl-kind"></select>
+            <select class="form-select form-select-sm" id="sl-category"></select>
+            {% if show_admin %}
+            <select class="form-select form-select-sm" id="sl-status">
+                <option value="">All Statuses</option>
+                <option value="active">Approved</option>
+                <option value="proposed">Proposed</option>
+                <option value="hidden">Hidden From Page</option>
+            </select>
+            {% endif %}
+            <span class="text-muted small" id="sl-count"></span>
+            <span class="flex-grow-1"></span>
+            <a class="btn btn-sm btn-outline-primary" href="{{ BASE_URL }}/semantic-layer/export.yaml">Download YAML</a>
+            <a class="btn btn-sm btn-outline-primary" href="{{ BASE_URL }}/semantic-layer/export.json">Download JSON</a>
+        </div>
+
+        <div class="sl-body">
+            <nav class="sl-nav" id="sl-nav"></nav>
+            <main id="sl-list"><div class="sl-empty">Loading...</div></main>
+        </div>
+    </div>
+
+    {% if show_admin %}
+    <!-- Add / edit an entry. Filled by semantic_layer.js. -->
+    <div class="modal-overlay" id="sl-editor-modal">
+        <div class="modal-box sl-editor">
+            <h2 id="sl-e-heading">Add Entry</h2>
+            <div class="sl-row two">
+                <div class="modal-field">
+                    <label for="sl-e-kind">Kind</label>
+                    <select id="sl-e-kind"></select>
+                </div>
+                <div class="modal-field">
+                    <label for="sl-e-category">Category</label>
+                    <input type="text" id="sl-e-category" list="sl-e-category-list" maxlength="100">
+                    <datalist id="sl-e-category-list"></datalist>
+                </div>
+            </div>
+            <div class="sl-row two" id="sl-e-pick" style="display:none;">
+                <div class="modal-field">
+                    <label for="sl-e-table">Snowflake Table</label>
+                    <select id="sl-e-table"></select>
+                </div>
+                <div class="modal-field" id="sl-e-column-wrap">
+                    <label for="sl-e-column">Column</label>
+                    <select id="sl-e-column"></select>
+                </div>
+            </div>
+            <div class="modal-field">
+                <label for="sl-e-title">Title</label>
+                <input type="text" id="sl-e-title" maxlength="200">
+                <div class="form-text" id="sl-e-title-help"></div>
+            </div>
+            <div class="modal-field">
+                <label for="sl-e-tags">Tags (Comma Separated)</label>
+                <input type="text" id="sl-e-tags" maxlength="500">
+            </div>
+            <div id="sl-e-fields"></div>
+            <div class="modal-field">
+                <label for="sl-e-content" id="sl-e-content-label">Detail</label>
+                <textarea id="sl-e-content" rows="6"></textarea>
+            </div>
+            <div class="sl-row three">
+                <div class="modal-field">
+                    <label for="sl-e-status">Status</label>
+                    <select id="sl-e-status">
+                        <option value="active">Approved</option>
+                        <option value="proposed">Proposed</option>
+                    </select>
+                </div>
+                <div class="modal-field">
+                    <label for="sl-e-scope">Ask AI Pages</label>
+                    <select id="sl-e-scope"></select>
+                </div>
+                <div class="modal-field">
+                    <label>Used By</label>
+                    <div class="sl-checks">
+                        <label><input type="checkbox" id="sl-e-enabled"> Ask AI</label>
+                        <label><input type="checkbox" id="sl-e-show"> This Page</label>
+                    </div>
+                </div>
+            </div>
+            <div class="form-text">Proposed entries are seen only by you and are not read by Ask AI until approved.</div>
+            <div class="modal-actions">
+                <span class="sl-note" id="sl-e-note"></span>
+                <span class="spacer"></span>
+                <button type="button" class="btn btn-outline-danger" id="sl-e-delete">Delete</button>
+                <button type="button" class="btn btn-outline-secondary" id="sl-e-cancel">Cancel</button>
+                <button type="button" class="btn btn-primary" id="sl-e-save">Save</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Page settings. Filled by semantic_layer.js. -->
+    <div class="modal-overlay" id="sl-settings-modal">
+        <div class="modal-box sl-settings">
+            <h2>Page Settings</h2>
+            <div class="modal-field">
+                <label for="sl-s-intro">Intro Text</label>
+                <textarea id="sl-s-intro" rows="3"></textarea>
+            </div>
+            <div class="sl-row three">
+                <div class="modal-field">
+                    <label for="sl-s-content-label">Main Text Label</label>
+                    <input type="text" id="sl-s-content-label" maxlength="60">
+                </div>
+                <div class="modal-field">
+                    <label for="sl-s-group-by">Group Entries By</label>
+                    <select id="sl-s-group-by">
+                        <option value="category">Category</option>
+                        <option value="kind">Kind</option>
+                        <option value="none">No Grouping</option>
+                    </select>
+                </div>
+                <div class="modal-field">
+                    <label for="sl-s-export-name">Download File Name</label>
+                    <input type="text" id="sl-s-export-name" maxlength="60">
+                </div>
+            </div>
+            <div class="sl-row three">
+                <div class="modal-field">
+                    <label for="sl-s-title-size">Entry Title Size (px)</label>
+                    <input type="number" id="sl-s-title-size">
+                </div>
+                <div class="modal-field">
+                    <label for="sl-s-text-size">Text Size (px)</label>
+                    <input type="number" id="sl-s-text-size">
+                </div>
+                <div class="modal-field">
+                    <label for="sl-s-badge-size">Badge Size (px)</label>
+                    <input type="number" id="sl-s-badge-size">
+                </div>
+            </div>
+
+            <div class="sl-set-section">
+                <h3>Layers</h3>
+                <div class="sl-set-help">The two tabs entries are split into.</div>
+                <div class="sl-row two" id="sl-s-layers"></div>
+            </div>
+
+            <div class="sl-set-section">
+                <h3>Kinds</h3>
+                <div class="sl-set-help">Rename a kind, move it to the other layer, or hide it from everyone but you. Hidden kinds are still read by Ask AI.</div>
+                <table class="sl-set-table" id="sl-s-kinds">
+                    <thead><tr><th>Kind</th><th>Label</th><th>Layer</th><th>Shown To Everyone</th></tr></thead>
+                    <tbody></tbody>
+                </table>
+            </div>
+
+            <div class="sl-set-section">
+                <h3>Categories</h3>
+                <div class="sl-set-help">Renaming a category renames it on every entry. Removing one leaves entries that have it unchanged until they are edited.</div>
+                <table class="sl-set-table" id="sl-s-categories">
+                    <tbody></tbody>
+                </table>
+                <button type="button" class="btn btn-sm btn-outline-primary mt-2" id="sl-s-add-category">Add Category</button>
+            </div>
+
+            <div class="sl-set-section">
+                <h3>Fields</h3>
+                <div class="sl-set-help">The boxes an entry has, besides its title and main text. Tick no kinds for a field every kind has. Ask AI: the field is included in what Ask AI reads. Removing a field hides it; what was typed in it is kept.</div>
+                <table class="sl-set-table" id="sl-s-fields">
+                    <thead><tr><th style="width: 20%;">Label</th><th style="width: 11%;">Box</th><th>Kinds</th><th style="width: 6%;">Ask AI</th><th style="width: 12%;"></th></tr></thead>
+                    <tbody></tbody>
+                </table>
+                <button type="button" class="btn btn-sm btn-outline-primary mt-2" id="sl-s-add-field">Add Field</button>
+            </div>
+
+            <div class="modal-actions">
+                <span class="sl-note" id="sl-s-note"></span>
+                <span class="spacer"></span>
+                <button type="button" class="btn btn-outline-secondary" id="sl-s-reset">Reset To Default</button>
+                <button type="button" class="btn btn-outline-secondary" id="sl-s-cancel">Cancel</button>
+                <button type="button" class="btn btn-primary" id="sl-s-save">Save</button>
+            </div>
+        </div>
+    </div>
+    {% endif %}
+
+    <script src="{{ static_url('js/semantic_layer.js') }}"></script>
+</body>
+</html>

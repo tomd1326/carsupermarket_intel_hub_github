@@ -1,0 +1,263 @@
+[
+  {
+    "id": "seed_term_ordered",
+    "title": "Ordered",
+    "kind": "term",
+    "category": "Sales",
+    "tags": "sales, status",
+    "fields": {
+      "definition": "The customer has paid a deposit and is waiting to collect the car.",
+      "source_columns": "invoice_status = 'STATUS_ACKNOWLEDGED' (deal_status 'Acknowledged')",
+      "synonyms": "Order, deposit taken"
+    },
+    "content": "Count orders by order_acknowledged_date. Ordered and sold both count as a sale unless the question says otherwise."
+  },
+  {
+    "id": "seed_term_sold",
+    "title": "Sold / Delivered",
+    "kind": "term",
+    "category": "Sales",
+    "tags": "sales, status",
+    "fields": {
+      "definition": "The car has been collected or delivered and the full balance paid.",
+      "source_columns": "invoice_status = 'STATUS_PAID' (deal_status 'Delivered')",
+      "synonyms": "Delivery, invoiced"
+    },
+    "content": "Count deliveries and invoices by invoice_posted_date."
+  },
+  {
+    "id": "seed_rule_what_counts_as_a_sale",
+    "title": "What Counts As A Sale",
+    "kind": "rule",
+    "category": "Sales",
+    "tags": "sales, status",
+    "fields": {
+      "definition": "Both Ordered and Sold count as a sale throughout the site.",
+      "source_columns": "vehicle_status IN ('SOLD', 'ORDERED'); SALES_90_DAYS = 1 in buying_requirements__p",
+      "exclusions": "Ask which is meant when it matters, e.g. 'sold this month' by order acknowledged date or by invoice posted date."
+    }
+  },
+  {
+    "id": "seed_term_cancelled_order",
+    "title": "Cancelled Order",
+    "kind": "term",
+    "category": "Sales",
+    "tags": "sales, status",
+    "fields": {
+      "definition": "An order the customer did not go through with.",
+      "source_columns": "invoice_status = 'STATUS_CANCELLED' (deal_status 'Cancelled')"
+    },
+    "content": "Ask whether to include cancelled orders when it is not clear."
+  },
+  {
+    "id": "seed_term_credited_invoice",
+    "title": "Credited Invoice",
+    "kind": "term",
+    "category": "Sales",
+    "tags": "sales, status",
+    "fields": {
+      "definition": "An invoice that has been credited back after it was raised.",
+      "source_columns": "invoice_credited = TRUE (deal_status 'Invoice Credited')"
+    },
+    "content": "Ask whether to include credited invoices when it is not clear."
+  },
+  {
+    "id": "seed_metric_advertised_price",
+    "title": "Advertised Price",
+    "kind": "metric",
+    "category": "Pricing",
+    "tags": "price",
+    "fields": {
+      "definition": "The price before discount plus the standard admin fee, which every platform must include.",
+      "calculation": "advertised_price_inc_vat_inc_admin_fee",
+      "source_table": "PRODUCT_SALES_PERFORMANCE.SALES_PERFORMANCE",
+      "source_columns": "advertised_price_inc_vat_inc_admin_fee",
+      "exclusions": "Called advertised, not sale, because where the admin fee was waived it is not the price the car sold for. Use it for 'cars under 15k' style questions unless told otherwise.",
+      "grain": "One row per vehicle sale"
+    }
+  },
+  {
+    "id": "seed_metric_price_paid",
+    "title": "Price Paid",
+    "kind": "metric",
+    "category": "Pricing",
+    "tags": "price",
+    "fields": {
+      "definition": "The price the customer actually paid, after discount and including the admin fee charged.",
+      "calculation": "sale_price_after_discount_inc_admin_fee",
+      "source_table": "PRODUCT_SALES_PERFORMANCE.SALES_PERFORMANCE",
+      "source_columns": "sale_price_after_discount_inc_admin_fee",
+      "grain": "One row per vehicle sale"
+    }
+  },
+  {
+    "id": "seed_rule_cancelled_prices",
+    "title": "Cancelled Orders In Price Averages",
+    "kind": "rule",
+    "category": "Pricing",
+    "tags": "price, cancelled",
+    "fields": {
+      "definition": "Leave cancelled orders out of every price-based average.",
+      "source_table": "PRODUCT_SALES_PERFORMANCE.SALES_PERFORMANCE",
+      "source_columns": "cancelled_selling_price",
+      "exclusions": "Their Autotrader valuation and retail rating are correct and are kept."
+    },
+    "content": "An invoice holds no selling price of its own: it is read from the vehicle record, which keeps changing after the order. For cancelled orders the price is rebuilt as at order_acknowledged_at from vehicles_record_history__c. Even then it can be a stand-in typed on the deal (e.g. a -9998 discount on a car not yet priced)."
+  },
+  {
+    "id": "seed_rule_interest_free",
+    "title": "Interest-Free (0%) Cars",
+    "kind": "rule",
+    "category": "Pricing",
+    "tags": "price, finance, 0%",
+    "fields": {
+      "definition": "Interest-free cars sell at about 125% of the Autotrader valuation, because the price absorbs a ~14% subsidy charge from the finance company.",
+      "source_columns": "interest_free = TRUE, sales_type '0%', sales_type_bucket '0%', price_band '0%'",
+      "exclusions": "Leave them out of any price-related average (selling price, Autotrader valuation, price position). Keep them in counts and non-price metrics (GPU, days in stock, ratings)."
+    }
+  },
+  {
+    "id": "seed_term_cap_clean",
+    "title": "CAP Clean",
+    "kind": "term",
+    "category": "Pricing",
+    "tags": "benchmark, buying",
+    "fields": {
+      "definition": "The trade benchmark used for purchase prices (what we pay for stock).",
+      "synonyms": "CAP trade value"
+    },
+    "content": "CAP Retail also exists but is not commonly used."
+  },
+  {
+    "id": "seed_term_autotrader_valuation",
+    "title": "Autotrader Valuation",
+    "kind": "term",
+    "category": "Pricing",
+    "tags": "benchmark, autotrader",
+    "fields": {
+      "definition": "The retail benchmark used for selling prices (what we expect to sell for). Normal stock sells at about 98% of it.",
+      "synonyms": "AT valuation, AT val"
+    }
+  },
+  {
+    "id": "seed_metric_gpu_m",
+    "title": "GPU M",
+    "kind": "metric",
+    "category": "Margin & Costs",
+    "tags": "margin, gpu",
+    "fields": {
+      "definition": "Metal gross profit per unit: the vehicle margin after GPU M standard costs.",
+      "source_table": "PRODUCT_SALES_PERFORMANCE.SALES_PERFORMANCE",
+      "source_columns": "gpu_m",
+      "synonyms": "GPU-M, metal margin",
+      "dimensions": "Supplier channel, supplier, sales type, price band",
+      "grain": "One row per vehicle sale"
+    },
+    "content": "Moves with chassis margin after subsidy, vehicle costs and write-downs."
+  },
+  {
+    "id": "seed_metric_gpu_s",
+    "title": "GPU S",
+    "kind": "metric",
+    "category": "Margin & Costs",
+    "tags": "margin, gpu, finance",
+    "fields": {
+      "definition": "Service and product gross profit per unit: product and finance margin after GPU S standard costs.",
+      "source_columns": "gpu_s",
+      "synonyms": "GPU-S",
+      "grain": "One row per vehicle sale"
+    },
+    "content": "Moves with finance penetration, finance commission per financed deal and total product margin. Penetration and commission rate are different problems, so say which one moved."
+  },
+  {
+    "id": "seed_metric_gpu_ms",
+    "title": "GPU MS",
+    "kind": "metric",
+    "category": "Margin & Costs",
+    "tags": "margin, gpu",
+    "fields": {
+      "definition": "GPU M and GPU S combined.",
+      "calculation": "gpu_m + gpu_s",
+      "synonyms": "GPU-MS, total GPU",
+      "grain": "One row per vehicle sale"
+    }
+  },
+  {
+    "id": "seed_term_chassis_margin",
+    "title": "Chassis Margin After Subsidy",
+    "kind": "term",
+    "category": "Margin & Costs",
+    "tags": "margin",
+    "fields": {
+      "definition": "The vehicle's own margin before costs."
+    }
+  },
+  {
+    "id": "seed_rule_cost_signs",
+    "title": "Cost Signs",
+    "kind": "rule",
+    "category": "Margin & Costs",
+    "tags": "costs, data",
+    "fields": {
+      "definition": "Standard costs are stored negative, late costs positive.",
+      "source_table": "SOURCE_FINANCE.MANAGEMENT_ACCOUNTS, late_costs__s, COMPUTE_VEHICLES.VEHICLES_STOCK_EVOLUTION",
+      "source_columns": "cost_amount (already negative), cost (positive), gpu_m_costs (sum of all cost columns, negative)"
+    },
+    "content": "Add gpu_m_costs into margin to reduce it. Subtracting a negative would add to margin instead. Costs and write-downs come from AutoView through the compute layer, never rebuilt from accounting transaction splits."
+  },
+  {
+    "id": "seed_metric_at_portal_conversion",
+    "title": "Autotrader Portal Enquiry To Order Conversion",
+    "kind": "metric",
+    "category": "Marketing & Enquiries",
+    "tags": "enquiries, conversion, autotrader",
+    "fields": {
+      "definition": "The share of Autotrader Portal enquiries that turn into an order.",
+      "calculation": "at_portal_orders_from_enquiries / at_portal_enquiries (worked out in Power BI)",
+      "source_table": "PRODUCT_SLT_KPIS.DAILY_SUMMARY",
+      "source_columns": "at_portal_enquiries, at_portal_orders_from_enquiries",
+      "exclusions": "Deliberately uneven: the bottom number counts deduped enquiries only; the top number counts all orders by enquiry_created_at date, including orders on a duplicate enquiry. Do not add a dedup filter to the order side.",
+      "grain": "One row per day"
+    },
+    "content": "Dedup keeps a customer's FIRST enquiry per email, VRM and 4-hour window, but the LATEST enquiry is the one that converts and it is the one marked duplicate. So each converting customer counts once on each side, which is the fair count."
+  },
+  {
+    "id": "seed_rule_autotrader_advert_status",
+    "title": "Autotrader Advert Status",
+    "kind": "rule",
+    "category": "Stock",
+    "tags": "autotrader, adverts",
+    "fields": {
+      "definition": "Use adverts_retail_autotrader_advert_status for whether a car is advertised on Autotrader.",
+      "source_table": "COMPUTE_VEHICLES.VEHICLES_STOCK_EVOLUTION",
+      "source_columns": "autotrader_advert_status (PUBLISHED, CAPPED, NOT_PUBLISHED)",
+      "exclusions": "Never use adverts_retail_profile_advert_status: it still says PUBLISHED for cars capped by the contract advert limit."
+    }
+  },
+  {
+    "id": "seed_dimension_autotrader_advert_status",
+    "title": "Autotrader Advert Status",
+    "kind": "dimension",
+    "category": "Stock",
+    "tags": "autotrader, adverts",
+    "fields": {
+      "definition": "Whether a car is live on Autotrader on a given day.",
+      "source_table": "COMPUTE_VEHICLES.VEHICLES_STOCK_EVOLUTION",
+      "source_columns": "autotrader_advert_status",
+      "values": "PUBLISHED - live on Autotrader\nCAPPED - held back by the contract advert limit\nNOT_PUBLISHED - not advertised"
+    }
+  },
+  {
+    "id": "seed_table_vehicles_stock_evolution",
+    "title": "COMPUTE_VEHICLES.VEHICLES_STOCK_EVOLUTION",
+    "kind": "table",
+    "category": "Data Tables",
+    "tags": "stock, vehicles",
+    "fields": {
+      "definition": "The main per-vehicle, per-day table. Check what it already works out before reaching for raw tables.",
+      "grain": "One row per vehicle per day",
+      "source_table": "COMPUTE_VEHICLES.VEHICLES_STOCK_EVOLUTION"
+    },
+    "content": "Already holds last_price_change_date, price_change_count, date_first_advertised and autotrader_advert_status. Autotrader data joins to vehicles on metadata_external_stock_id = stock_id."
+  }
+]

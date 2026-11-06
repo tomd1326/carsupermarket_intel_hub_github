@@ -318,87 +318,9 @@
             <div class="card mb-4">
                 <div class="card-header fw-semibold">Knowledge</div>
                 <div class="card-body">
-                    <div class="form-text mb-2">What every Ask AI reads before answering: table descriptions, notes on what columns mean, business rules and instructions. Proposed entries (starting entries, AI drafts, things Ask AI suggests remembering) are not sent until you approve them.</div>
+                    <div class="form-text mb-2">What every Ask AI reads before answering (metrics, dimensions, tables, glossary terms, business rules and instructions) is kept on the Semantic &amp; Context Layer page, where people can read it too.</div>
                     <div id="ai-usage" class="mb-2"></div>
-                    <div class="d-flex flex-wrap gap-2 mb-3">
-                        <input type="search" class="form-control" id="ai-search" placeholder="Search" style="max-width: 240px;">
-                        <select class="form-select" id="ai-filter-page" style="max-width: 200px;"></select>
-                        <select class="form-select" id="ai-filter-status" style="max-width: 170px;">
-                            <option value="">All Statuses</option>
-                            <option value="active">Active</option>
-                            <option value="proposed">Proposed</option>
-                        </select>
-                        <button type="button" class="btn btn-primary" id="ai-add">Add Entry</button>
-                        <button type="button" class="btn btn-outline-primary" id="ai-add-column">Add Column Note</button>
-                        <button type="button" class="btn btn-outline-primary" id="ai-draft">Draft With AI</button>
-                        <button type="button" class="btn btn-outline-secondary" id="ai-seed">Add Starting Entries</button>
-                    </div>
-
-                    <div id="ai-editor" class="border rounded p-3 mb-3" style="display:none;">
-                        <div class="row g-2">
-                            <div class="col-md-5">
-                                <label class="form-label" for="ai-e-title">Title</label>
-                                <input type="text" class="form-control" id="ai-e-title" maxlength="200">
-                            </div>
-                            <div class="col-md-2">
-                                <label class="form-label" for="ai-e-kind">Kind</label>
-                                <select class="form-select" id="ai-e-kind"></select>
-                            </div>
-                            <div class="col-md-2">
-                                <label class="form-label" for="ai-e-scope">Page</label>
-                                <select class="form-select" id="ai-e-scope"></select>
-                            </div>
-                            <div class="col-md-2">
-                                <label class="form-label" for="ai-e-status">Status</label>
-                                <select class="form-select" id="ai-e-status">
-                                    <option value="active">Active</option>
-                                    <option value="proposed">Proposed</option>
-                                </select>
-                            </div>
-                            <div class="col-md-1 d-flex align-items-end">
-                                <div class="form-check mb-2">
-                                    <input class="form-check-input" type="checkbox" id="ai-e-enabled">
-                                    <label class="form-check-label" for="ai-e-enabled">On</label>
-                                </div>
-                            </div>
-                        </div>
-                        <div class="row g-2 mt-1" id="ai-e-column-pick" style="display:none;">
-                            <div class="col-md-6">
-                                <label class="form-label" for="ai-e-table">Table</label>
-                                <select class="form-select" id="ai-e-table"></select>
-                            </div>
-                            <div class="col-md-6">
-                                <label class="form-label" for="ai-e-column">Column</label>
-                                <select class="form-select" id="ai-e-column"></select>
-                            </div>
-                        </div>
-                        <label class="form-label mt-2" for="ai-e-content">Text</label>
-                        <textarea class="form-control font-monospace" id="ai-e-content" rows="12"></textarea>
-                        <div class="d-flex gap-2 mt-2">
-                            <button type="button" class="btn btn-primary" id="ai-e-save">Save Entry</button>
-                            <button type="button" class="btn btn-outline-secondary" id="ai-e-cancel">Cancel</button>
-                            <span class="align-self-center text-muted" id="ai-e-note"></span>
-                        </div>
-                    </div>
-
-                    <div id="ai-draft-box" class="border rounded p-3 mb-3" style="display:none;">
-                        <label class="form-label" for="ai-draft-table">Table To Describe</label>
-                        <div class="d-flex gap-2">
-                            <select class="form-select" id="ai-draft-table" style="max-width: 480px;"></select>
-                            <button type="button" class="btn btn-primary" id="ai-draft-go">Draft</button>
-                            <button type="button" class="btn btn-outline-secondary" id="ai-draft-cancel">Cancel</button>
-                        </div>
-                        <div class="form-text" id="ai-draft-note">The AI writes a description from the table's columns and any Column Notes already written for it. It is saved as Proposed for you to check. Switched off until the Claude API is set up.</div>
-                    </div>
-
-                    <div class="table-responsive">
-                        <table class="table table-sm align-middle" id="ai-table">
-                            <thead>
-                                <tr><th>Title</th><th>Kind</th><th>Page</th><th>Status</th><th>On</th><th class="text-end">Size</th><th>Updated</th><th></th></tr>
-                            </thead>
-                            <tbody></tbody>
-                        </table>
-                    </div>
+                    <a class="btn btn-primary" href="{{ BASE_URL }}/semantic-layer">Open Semantic &amp; Context Layer</a>
                 </div>
             </div>
         </div>
