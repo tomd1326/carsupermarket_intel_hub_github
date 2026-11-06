@@ -792,3 +792,30 @@ body.wbr-mode #sectionTabs, body.wbr-mode #sectionsContainer { display: none; }
 .wbr-picker-row { display: flex; align-items: center; gap: 8px; padding: 5px 0; border-bottom: 1px solid #f1f5f9; font-size: 0.86rem; }
 .wbr-picker-row .wbr-picker-title { flex: 1; min-width: 0; }
 .wbr-picker-row button[disabled] { opacity: 0.45; cursor: default; }
+
+/* Phones, KPI page only (not the Weekly Business Review, which also loads this
+   file): one chart per row, with no admin controls. The 768px stays fixed: a media
+   query cannot read a setting without JS building the rule. dayLabelsFit() in
+   kpi.js uses the same cutoff. */
+@media screen and (max-width: 768px) {
+    body:not(.wbr-mode) .page-content { padding: 10px; }
+    /* Wrapped buttons would cover too much of the screen if the header stayed pinned. */
+    body:not(.wbr-mode) .kpi-top-bar { position: relative; }
+    body:not(.wbr-mode) .page-head { flex-wrap: wrap; gap: 8px 10px; }
+    body:not(.wbr-mode) .page-head-left { display: contents; }
+    body:not(.wbr-mode) .page-head-title { flex: 1 1 0; min-width: 0; }
+    body:not(.wbr-mode) .page-head-actions { order: 1; flex: 0 0 100%; margin-left: 0; }
+    body:not(.wbr-mode) .side-menu-panel { max-width: 90vw; }
+    body:not(.wbr-mode) .account-user, body:not(.wbr-mode) .admin-only,
+    body:not(.wbr-mode) .view-toggle, body:not(.wbr-mode) .chart-row-admin { display: none !important; }
+
+    /* The header no longer pins, so the tabs pin to the top of the window, on one sideways row. */
+    body:not(.wbr-mode) .kpi-tabs { top: 0; flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; }
+    body:not(.wbr-mode) .kpi-tab { flex: none; }
+
+    body:not(.wbr-mode) .charts-row { grid-template-columns: minmax(0, 1fr); }
+    body:not(.wbr-mode) .chart-row-actions { flex-wrap: wrap; }
+    body:not(.wbr-mode) .chart-wrap { height: 260px; }
+    body:not(.wbr-mode) .modal-box.point-modal { min-width: 0; }
+    body:not(.wbr-mode) .chart-zoom-box { min-width: 0; resize: none; }
+}

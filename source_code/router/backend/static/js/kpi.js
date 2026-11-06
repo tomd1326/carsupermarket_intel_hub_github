@@ -2614,7 +2614,7 @@
                 existing, { ...opts, n1Labels: d.weekly_n1_labels, range: ranges[1], notes: notes(d.weekly_starts || []) });
             return buildMetricChart(canvasId, dailyLabels, valuesPast,
                 d.values_n1, d.values_target || nulls(d.dates),
-                existing, { ...opts, range: ranges[2], day: true, notes: notes(d.dates) });
+                existing, { ...opts, dataLabels: opts.dataLabels && dayLabelsFit(), range: ranges[2], day: true, notes: notes(d.dates) });
         });
     }
 
@@ -4005,7 +4005,8 @@
                        segLabels: !!row.seg_labels || !!row.pct, segPos: row.seg_label_pos || 'center', dataLabels: dataLabelsOn(row) };
         const at = { m: 0, w: 1, d: 2 };
         return targets.map(({ k, canvasId, existing, first }) => buildStackedChart(canvasId, periods[k], targets_[k], existing,
-            { ...opts, range: ranges[at[k]], rightRange: rightRanges && rightRanges[at[k]], onRight, day: k === 'd',
+            { ...opts, ...(k === 'd' && !dayLabelsFit() ? { dataLabels: false, segLabels: false } : {}),
+              range: ranges[at[k]], rightRange: rightRanges && rightRanges[at[k]], onRight, day: k === 'd',
               n1Labels: k === 'w' ? d.weekly_n1_labels : null,
               notes: { rowId: row.id, kind: k, starts: periods[k].starts, first: first || 0 } }));
     }
@@ -6132,6 +6133,12 @@
     function dataLabelsOn(row) {
         const own = IS_ADMIN ? undefined : ownDataLabels()[row.id];
         return typeof own === 'boolean' ? own : row.data_labels !== false;
+    }
+    // On a phone a daily chart has too many points for every label to fit;
+    // tapping a point still shows its value. Same cutoff as the @media block in
+    // kpi.css, and likewise KPI page only.
+    function dayLabelsFit() {
+        return WBR || !window.matchMedia('(max-width: 768px)').matches;
     }
 
     async function setDataLabels(rowId, on) {

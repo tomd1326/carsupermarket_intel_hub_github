@@ -561,7 +561,7 @@
             .page-head-actions > * { margin-left: 0 !important; }
             .side-menu-panel { max-width: 90vw; }
 
-            .page-head-actions > .d-flex, #vehicle-area > .d-flex > .d-flex,
+            .account-user, .page-head-actions > .d-flex, #vehicle-area > .d-flex > .d-flex,
             button[onclick="openOdSettings()"] { display: none !important; }
 
             /* !important because the template sets this padding inline. */
