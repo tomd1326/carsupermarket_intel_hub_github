@@ -66,7 +66,7 @@
                         <tr class="pa-row" data-pages="{{ access.get(u, [])|sort|join(',') }}">
                             <td><input class="form-check-input pa-tick" type="checkbox" value="{{ u }}" aria-label="Give {{ u }} this page"></td>
                             <td class="text-nowrap">{{ ((d.first_name or '') ~ ' ' ~ (d.last_name or ''))|trim }}
-                                {% if u in inactive %}<span class="badge bg-warning text-dark ms-1">Not Activated</span>{% endif %}
+                                
                             </td>
                             <td>{% if d.email %}{{ d.email }}{% else %}<span class="text-muted">{{ u }}</span>{% endif %}</td>
                             <td class="text-nowrap">{{ d.company_name or '' }}</td>

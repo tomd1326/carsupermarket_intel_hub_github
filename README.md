@@ -22,6 +22,17 @@ python3 -m pip install virtualenv \
 
 ## Local development
 
+Sign-in is Keycloak SSO; see `docs/keycloak_sso.md`. To work locally without Keycloak (VPN and
+AWS SSO login needed, the app reads users from the dev database), from the repo root:
+
+```bash
+cd source_code/router
+LOCAL_ENV=1 LOCAL_LOGIN_AS=<existing username> poetry run uvicorn main:app --app-dir backend --reload --port 8080
+```
+
+Then open <http://127.0.0.1:8080/>. `/login` signs you in as that user. It does not work in Docker
+(docker-compose sets `AWS_LAMBDA_FUNCTION_NAME`, which switches the bypass off).
+
 ### Using FastAPI directly (not the way that reproduces the production environment)
 
 ```bash

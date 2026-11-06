@@ -370,10 +370,8 @@ s3_bucketname = 'aa-raw-sources-uk'
 s3_bucket_region = 'eu-west-1'  # bucket is always in eu-west-1 regardless of Lambda region
 
 
-_ADMIN_FALLBACK = {
-    'tdrayson': 'e026581a53dc97e3381566ad0f74e99ae65e0297f9eb41bb76596627885bf8a0',
-}
-VALID_USERS: dict = {}
+_ADMIN_FALLBACK = {'tdrayson'}
+VALID_USERS: set = set()
 
 
 ADMIN_USERNAME = 'tdrayson'
@@ -674,14 +672,14 @@ def get_current_user(request: Request):
     user = request.session.get('user')
     if not user:
         return None
-    # Other containers change passwords and delete users: re-read on the same
-    # TTL as page access, so this check is never more than a minute behind.
+    # Other containers delete users: re-read on the same TTL as page access,
+    # so this check is never more than a minute behind.
     if not _permissions_are_fresh():
         _reload_users_from_aurora()
-    # Password changed or account deleted since login. The save already ended
-    # the user's sessions; this ends this one in case it was missed.
-    if request.session.get('pwd_hash') != VALID_USERS.get(user):
-        _end_this_session(request, 'password_changed')
+    # Account deleted since login. The delete already ended the user's
+    # sessions; this ends this one in case it was missed.
+    if user not in VALID_USERS:
+        _end_this_session(request, 'user_deleted')
         request.session.clear()
         return None
     config = session_config()
