@@ -21,6 +21,7 @@
         if (m.label) return m.label;
         if (m.agg === 'count' && !m.column) return 'Rows';
         let text = `${AGG_LABELS[m.agg] || m.agg} ${columnLabel(m.column)}`;
+        if (m.denominator) text += ` / Total ${columnLabel(m.denominator)} (%)`;
         if (m.minus) text += ` Minus ${columnLabel(m.minus)}`;
         if (m.minus && m.as_pct) text += ' (%)';
         return text;
@@ -52,8 +53,8 @@
     }
 
     // ── Filters and calculations ────────────────────────────────────────────
-    const num = v => (v === null || v === undefined || v === '' || typeof v === 'boolean') ? null
-        : (typeof v === 'number' ? v : (isNaN(Number(v)) ? null : Number(v)));
+    const num = v => (v === null || v === undefined || (typeof v === 'string' && !v.trim()) || typeof v === 'boolean') ? null
+        : (Number.isFinite(Number(v)) ? Number(v) : null);
 
     function passes(row, filters, idx) {
         return filters.every(f => {
@@ -90,8 +91,8 @@
         if (!nums.length) return null;
         if (agg === 'sum') return nums.reduce((a, b) => a + b, 0);
         if (agg === 'avg') return nums.reduce((a, b) => a + b, 0) / nums.length;
-        if (agg === 'min') return Math.min(...nums);
-        if (agg === 'max') return Math.max(...nums);
+        if (agg === 'min') return nums.reduce((a, b) => Math.min(a, b));
+        if (agg === 'max') return nums.reduce((a, b) => Math.max(a, b));
         if (agg === 'median') {
             const s = nums.slice().sort((a, b) => a - b), m = Math.floor(s.length / 2);
             return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
@@ -103,6 +104,10 @@
         const values = col => { const i = idx(col); return i < 0 ? [] : rows.map(r => r[i]); };
         if (m.agg === 'count' && !m.column) return rows.length;
         const a = aggregate(values(m.column), m.agg);
+        if (m.denominator) {
+            const b = aggregate(values(m.denominator), 'sum');
+            return a === null || b === null || b === 0 ? null : a / b * 100;
+        }
         if (!m.minus) return a;
         const b = aggregate(values(m.minus), m.agg);
         if (a === null || b === null) return null;
@@ -113,13 +118,34 @@
     // ── One chart's data ────────────────────────────────────────────────────
     const MAX_SERIES = 25;
 
+    function cohortRows(chart, columns, rows) {
+        const idx = name => columns.findIndex(c => c.name.toLowerCase() === String(name).toLowerCase());
+        const needed = [chart.x, chart.split].concat(chart.measures.flatMap(m => [m.column, m.minus, m.denominator]),
+            (chart.filters || []).map(f => f.column)).filter(Boolean);
+        if (needed.some(c => idx(c) < 0)) return [];
+        const complete = chart.measures.flatMap(m => [m.column, m.minus, m.denominator].filter(Boolean)
+            .map(column => ({column, numeric: !['count', 'count_distinct'].includes(m.agg)})));
+        return rows.filter(r => passes(r, chart.filters || [], idx) && (chart.cohort !== 'complete' ||
+            complete.every(c => c.numeric ? num(r[idx(c.column)]) !== null :
+                r[idx(c.column)] !== null && r[idx(c.column)] !== undefined && r[idx(c.column)] !== '')));
+    }
+
+    function drillRows(chart, columns, rows, key, splitValue) {
+        const idx = name => columns.findIndex(c => c.name.toLowerCase() === String(name).toLowerCase());
+        const xi = idx(chart.x), si = idx(chart.split);
+        return cohortRows(chart, columns, rows).filter(r =>
+            (xi < 0 || bucket(r[xi], chart.grain)[0] === key) &&
+            (si < 0 || (r[si] == null ? '(Blank)' : String(r[si])) === splitValue));
+    }
+
     function buildSeries(chart, columns, rows) {
         const names = columns.map(c => c.name.toLowerCase());
         const idx = name => name ? names.indexOf(String(name).toLowerCase()) : -1;
-        const missing = [chart.x, chart.split].concat(chart.measures.flatMap(m => [m.column, m.minus]))
+        const missing = [chart.x, chart.split].concat(chart.measures.flatMap(m => [m.column, m.minus, m.denominator]))
             .concat(chart.filters.map(f => f.column)).filter(c => c && idx(c) < 0);
         const notes = missing.length ? [`Not in the query's columns: ${[...new Set(missing)].join(', ')}`] : [];
-        const kept = rows.filter(r => passes(r, chart.filters, idx));
+        const kept = cohortRows(chart, columns, rows);
+        if (chart.cohort === 'complete') notes.push(`${kept.length.toLocaleString()} Matched Rows; Missing Measures Excluded.`);
         const measures = chart.measures.length ? chart.measures : [{column: null, agg: 'count'}];
 
         if (chart.type === 'scatter') {
@@ -154,13 +180,17 @@
         }
         const series = [];
         measures.forEach(m => splitValues.forEach(sv => {
+            const counts = [];
             const data = keys.map(k => {
                 let groupRows = groups.get(k).rows;
                 if (sv !== null) groupRows = groupRows.filter(r => (r[si] === null || r[si] === undefined ? '(Blank)' : String(r[si])) === sv);
+                counts.push(!m.column ? groupRows.length : groupRows.filter(r => ['count', 'count_distinct'].includes(m.agg) ?
+                    r[idx(m.column)] !== null && r[idx(m.column)] !== undefined && r[idx(m.column)] !== '' :
+                    num(r[idx(m.column)]) !== null).length);
                 return groupRows.length ? measureValue(groupRows, m, idx) : null;
             });
             const label = sv === null ? measureLabel(m) : (measures.length > 1 ? `${measureLabel(m)} - ${sv}` : sv);
-            series.push({label, data, measure: m});
+            series.push({label, data, measure: m, splitValue: sv, counts});
         }));
 
         // Order and top N, by the first series.
@@ -175,8 +205,8 @@
         else if (chart.sort === 'value_asc') order.sort((a, b) => firstValue(a) - firstValue(b));
         else order.sort(byX);
         const pos = order.map(k => keys.indexOf(k));
-        series.forEach(s => { s.data = pos.map(p => s.data[p]); });
-        return {labels: order.map(k => groups.get(k).label), series, notes, rows: kept.length};
+        series.forEach(s => { s.data = pos.map(p => s.data[p]); s.counts = pos.map(p => s.counts[p]); });
+        return {labels: order.map(k => groups.get(k).label), keys: order, series, notes, rows: kept.length};
     }
 
     // ── Describe A Chart ────────────────────────────────────────────────────
@@ -396,7 +426,7 @@
         return lines;
     }
 
-    const api = {columnLabel, measureLabel, bucket, passes, aggregate, buildSeries, describe, titleFor};
+    const api = {columnLabel, measureLabel, bucket, passes, aggregate, buildSeries, describe, titleFor, cohortRows, drillRows};
     if (typeof module !== 'undefined' && module.exports) module.exports = api;
     else root.SACore = api;
 })(this);

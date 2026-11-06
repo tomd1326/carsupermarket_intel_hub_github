@@ -58,7 +58,7 @@ def semantic_layer_data(request: Request, user: str = Depends(require_page_api(P
         "is_admin": is_admin(user),
     }
     if is_admin(user):
-        data["pages"] = [["all", "All Pages"]] + [list(p) for p in ak.AI_PAGES]
+        data["pages"] = [["all", "All Pages"]] + [list(p) for p in ak.AI_PAGES] + [["self_analytics", "Self-Analytics"]]
         data["field_types"] = ak.FIELD_TYPES
         data["usage"] = usage(entries)
     return data

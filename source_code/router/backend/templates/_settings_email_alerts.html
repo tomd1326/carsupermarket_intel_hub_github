@@ -2,7 +2,26 @@
 <style>
     .ea-users { display: flex; flex-wrap: wrap; gap: 4px 18px; font-size: 0.82rem; }
     .ea-desc { font-size: 0.8rem; color: var(--c-text-muted); }
+    .pa-style-row { display: flex; align-items: center; gap: 10px; padding: 2px 0; font-size: 0.8rem; }
+    .pa-style-name { width: 270px; flex: none; }
+    .pa-colour { width: 44px; height: 26px; padding: 1px; }
 </style>
+<div class="card mb-4" id="as-card">
+    <div class="card-header fw-semibold">Alert Email Style</div>
+    <div class="card-body">
+        <p class="form-text mt-0">
+            The look of the alert emails sent from a page's Send Alert button. Each page's Settings &gt; Alerts follows this
+            unless it sets a field for itself. Email programs cannot load web fonts, so DM Sans only shows where it is
+            installed on the reader's computer; everyone else sees Arial.
+        </p>
+        <div id="as-error" class="alert alert-danger d-none py-1 small"></div>
+        <div id="as-style" class="text-muted small">Loading...</div>
+        <div class="d-flex align-items-center gap-2 mt-3">
+            <button type="button" class="btn btn-primary" id="as-save-btn" onclick="asSave()">Save Style</button>
+            <span class="small text-muted" id="as-note"></span>
+        </div>
+    </div>
+</div>
 <div class="card mb-4" id="ea-card">
     <div class="card-header fw-semibold">Email Alerts</div>
     <div class="card-body">
@@ -18,6 +37,7 @@
         </div>
     </div>
 </div>
+<script src="{{ static_url('js/page_alerts.js') }}"></script>
 <script>
     const EA_API = "{{ BASE_URL }}/api/email-alerts";
     let eaData = null;
@@ -111,4 +131,34 @@
     }
 
     eaLoad();
+
+    let asEditor = null;
+
+    async function asLoad() {
+        const err = document.getElementById('as-error');
+        try {
+            const d = await PageAlerts.getJson(EA_API + '/style');
+            asEditor = new PageAlerts.StyleEditor(document.getElementById('as-style'), d.meta, d.style, null);
+            err.classList.add('d-none');
+        } catch (e) {
+            err.textContent = 'Could not load the style: ' + e.message;
+            err.classList.remove('d-none');
+        }
+    }
+
+    async function asSave() {
+        if (!asEditor) return;
+        const err = document.getElementById('as-error');
+        err.classList.add('d-none');
+        try {
+            await PageAlerts.whileBusy(document.getElementById('as-save-btn'), 'Saving...',
+                () => PageAlerts.postJson(EA_API + '/style', { style: asEditor.values() }));
+            document.getElementById('as-note').textContent = 'Saved.';
+        } catch (e) {
+            err.textContent = 'Not saved: ' + e.message;
+            err.classList.remove('d-none');
+        }
+    }
+
+    asLoad();
 </script>

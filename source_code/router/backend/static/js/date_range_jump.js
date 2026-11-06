@@ -8,6 +8,7 @@
     'use strict';
 
     const PAIRS = {
+        'sa-b-from': 'sa-b-to',      // Guided Self-Analytics
         'date-from': 'date-to',      // Trade Report, Reports
         'expFrom': 'expTo',          // Cars Bought export
         'mDateFrom': 'mDateTo',      // Cars Bought

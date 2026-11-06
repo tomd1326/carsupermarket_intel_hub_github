@@ -36,6 +36,7 @@ SORTS = ["x", "value_desc", "value_asc"]
 # ── Page settings ────────────────────────────────────────────────────────────
 
 SETTINGS_DEFAULTS = {
+    "builder_enabled": False,
     "row_limit": 20000,
     "max_response_mb": 5,
     "charts_per_row": 2,
@@ -82,6 +83,7 @@ def clean_settings(stored) -> dict:
     d = SETTINGS_DEFAULTS
     stored = stored if isinstance(stored, dict) else {}
     result = {}
+    result["builder_enabled"] = stored.get("builder_enabled") is True
     for key, (low, high) in SETTINGS_LIMITS.items():
         try:
             result[key] = min(max(int(stored[key]), low), high)
@@ -247,6 +249,7 @@ def _clean_chart(c: dict, index: int) -> dict:
             "column": col(m.get("column")),
             "agg": m.get("agg") if m.get("agg") in AGGS else "sum",
             "minus": col(m.get("minus")),
+            "denominator": col(m.get("denominator")),
             "as_pct": bool(m.get("as_pct")),
             "label": (m.get("label") or "")[:120] if isinstance(m.get("label"), str) else "",
             "color": m.get("color") if isinstance(m.get("color"), str) and _HEX.match(m["color"]) else "",
@@ -286,6 +289,9 @@ def _clean_chart(c: dict, index: int) -> dict:
         "legend": c.get("legend", True) is not False,
         "width": width,
         "description": (c.get("description") or "")[:500] if isinstance(c.get("description"), str) else "",
+        "cohort": c.get("cohort") if c.get("cohort") in ("complete", "available") else "available",
+        "x_title": str(c.get("x_title") or "")[:200],
+        "y_title": str(c.get("y_title") or "")[:200],
     }
 
 
@@ -295,7 +301,13 @@ def clean_report(report: dict) -> dict:
     name = (report.get("name") or "").strip() if isinstance(report.get("name"), str) else ""
     if not name or len(name) > NAME_MAX:
         raise ValueError(f"A name is needed, under {NAME_MAX} characters.")
-    error = check_sql(report.get("sql"))
+    source_spec = report.get("source_spec")
+    if source_spec:
+        from utils.self_analytics_builder import prepare
+        plan = prepare(report)
+        report = {**report, "sql": plan["sql"], "charts": plan["charts"]}
+        source_spec = plan["source_spec"]
+    error = None if source_spec else check_sql(report.get("sql"))
     if error:
         raise ValueError(error)
     charts = report.get("charts") if isinstance(report.get("charts"), list) else []
@@ -314,6 +326,7 @@ def clean_report(report: dict) -> dict:
         "visibility": visibility, "users": users if visibility == "chosen" else [],
         "shared": visibility == "everyone",
         "show_table": bool(report.get("show_table")),
+        "source_spec": source_spec or None,
     }
 
 
@@ -349,6 +362,7 @@ def _ensure(conn) -> None:
         cur.execute("ALTER TABLE self_analytics_reports ADD COLUMN IF NOT EXISTS description TEXT NOT NULL DEFAULT ''")
         cur.execute("ALTER TABLE self_analytics_reports ADD COLUMN IF NOT EXISTS visibility VARCHAR(10) NOT NULL DEFAULT 'only_me'")
         cur.execute("ALTER TABLE self_analytics_reports ADD COLUMN IF NOT EXISTS show_table BOOLEAN NOT NULL DEFAULT FALSE")
+        cur.execute("ALTER TABLE self_analytics_reports ADD COLUMN IF NOT EXISTS source_spec TEXT")
         cur.execute("UPDATE self_analytics_reports SET visibility = 'everyone' WHERE shared AND visibility = 'only_me'")
         cur.execute("""
             CREATE TABLE IF NOT EXISTS self_analytics_report_users (
@@ -361,7 +375,7 @@ def _ensure(conn) -> None:
 
 
 _COLS = ("id, name, folder, sql, charts, shared, created_by, updated_by, updated_at, "
-         "description, visibility, show_table")
+         "description, visibility, show_table, source_spec")
 
 
 def _row(r, users=None) -> dict:
@@ -373,6 +387,10 @@ def _row(r, users=None) -> dict:
     if isinstance(report["updated_at"], datetime.datetime):
         report["updated_at"] = report["updated_at"].isoformat()
     report["users"] = sorted(users or [])
+    try:
+        report["source_spec"] = json.loads(report.get("source_spec") or "null")
+    except (ValueError, TypeError):
+        report["source_spec"] = None
     return report
 
 
@@ -421,7 +439,7 @@ def save_report(report: dict, user: str, admin: bool, known_users=None) -> dict:
         if unknown:
             raise ValueError(f"Not a user of this site: {', '.join(unknown)}")
     values = (clean["name"], clean["folder"], clean["sql"], json.dumps(clean["charts"]), clean["shared"], user,
-              clean["description"], clean["visibility"], clean["show_table"])
+              clean["description"], clean["visibility"], clean["show_table"], json.dumps(clean["source_spec"]))
     with get_prod_pricer_connection() as conn:
         _ensure(conn)
         with conn.cursor() as cur:
@@ -434,12 +452,12 @@ def save_report(report: dict, user: str, admin: bool, known_users=None) -> dict:
                     raise ValueError("Only the person who made this report can change it. Use Save As.")
                 cur.execute(
                     "UPDATE self_analytics_reports SET name = %s, folder = %s, sql = %s, charts = %s, shared = %s, "
-                    "updated_by = %s, description = %s, visibility = %s, show_table = %s, updated_at = NOW() "
+                    "updated_by = %s, description = %s, visibility = %s, show_table = %s, source_spec = %s, updated_at = NOW() "
                     f"WHERE id = %s RETURNING {_COLS}", values + (int(report["id"]),))
             else:
                 cur.execute(
                     "INSERT INTO self_analytics_reports (name, folder, sql, charts, shared, updated_by, description, "
-                    f"visibility, show_table, created_by) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s) "
+                    f"visibility, show_table, source_spec, created_by) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) "
                     f"RETURNING {_COLS}", values + (user,))
             row = cur.fetchone()
             cur.execute("DELETE FROM self_analytics_report_users WHERE report_id = %s", (row[0],))
@@ -455,7 +473,7 @@ def save_report(report: dict, user: str, admin: bool, known_users=None) -> dict:
 # A report as a file, so a Claude chat can write the SQL and charts and Tom
 # pastes or uploads it (format in docs/self_analytics_report_format.md).
 
-EXPORT_KEYS = ["name", "folder", "description", "sql", "charts", "visibility", "users", "show_table"]
+EXPORT_KEYS = ["name", "folder", "description", "sql", "charts", "visibility", "users", "show_table", "source_spec"]
 
 
 def export_report(report: dict) -> dict:
@@ -493,6 +511,10 @@ _CACHE_MAX = 30
 
 
 def run_report(report: dict, settings: dict, refresh: bool, now_text: str) -> dict:
+    # Revalidate approved definitions and workbook freshness on every guided run.
+    if report.get("source_spec"):
+        from utils.self_analytics_builder import run
+        return {**run(report["source_spec"], report["charts"], settings), "as_at": now_text, "from_cache": False}
     hit = _cache.get(report["id"])
     max_age = settings["cache_minutes"] * 60
     if hit and not refresh and hit[0] == report["sql"] and time.time() - hit[1] < max_age:

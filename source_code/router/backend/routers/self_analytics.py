@@ -12,6 +12,7 @@ from fastapi.responses import HTMLResponse
 
 from utils import self_analytics as sa
 from utils import ai_knowledge as ak
+from utils import self_analytics_builder as builder
 from fastapi.responses import Response
 
 from .core import (BASE_URL, VALID_USERS, templates, is_admin, user_details, user_has_permission, require_page,
@@ -55,7 +56,7 @@ def _semantic_hints(user: str) -> list:
         return []
     hints = []
     for e in entries:
-        if e["status"] != "active" or not e.get("show_on_page", True):
+        if e["status"] != "active" or not e.get("enabled", True) or not e.get("show_on_page", True):
             continue
         if not is_admin(user) and e["kind"] not in settings["kinds_shown"]:
             continue
@@ -122,6 +123,54 @@ def self_analytics_run(request: Request, payload: dict, user: str = Depends(requ
         return {"status": "error", "message": f"Snowflake said: {str(e)[:800]}"}
     _track(request, 'self_analytics_run', '/self-analytics', {"rows": result["row_count"]})
     return {"status": "ok", **result}
+
+
+def _builder_access(user):
+    if not _can_write_sql(user):
+        raise HTTPException(status_code=403, detail="Report Building Requires Run Own Queries Permission")
+    if not sa.get_settings().get("builder_enabled"):
+        raise HTTPException(status_code=403, detail="Enable Guided Reports In Self-Analytics Settings First")
+
+
+@router.get("/self-analytics/builder/catalog")
+def builder_catalog(user: str = Depends(require_page_api(PAGE_KEY))):
+    _builder_access(user)
+    return builder.catalog()
+
+
+@router.post("/self-analytics/builder/source")
+def builder_source(payload: dict, user: str = Depends(require_page_api(PAGE_KEY))):
+    _builder_access(user)
+    try:
+        return {"source": builder.source(payload.get("id"))}
+    except (ValueError, KeyError) as exc:
+        return {"status": "error", "message": str(exc)}
+
+
+@router.post("/self-analytics/builder/preview")
+def builder_preview(payload: dict, user: str = Depends(require_page_api(PAGE_KEY))):
+    _builder_access(user)
+    try:
+        return builder.prepare(payload)
+    except (ValueError, TypeError, KeyError) as exc:
+        return {"status": "error", "message": str(exc)}
+
+
+@router.post("/self-analytics/builder/run")
+def builder_run(payload: dict, request: Request, user: str = Depends(require_page_api(PAGE_KEY))):
+    _builder_access(user)
+    try:
+        plan = builder.prepare(payload)
+        if payload.get("confirmed") is not True or payload.get("review_hash") != plan["review_hash"]:
+            raise ValueError("Review And Confirm The Current Report Before Running")
+        result = builder.run(plan["source_spec"], plan["charts"], sa.get_settings())
+        _track(request, 'self_analytics_run', '/self-analytics', {"rows": result["row_count"]})
+        return {"status": "ok", "plan": plan, **result, "as_at": _uk_now().strftime("%d %b %Y %H:%M"), "from_cache": False}
+    except (ValueError, TypeError, KeyError) as exc:
+        return {"status": "error", "message": str(exc)}
+    except Exception:
+        logger.exception("Guided report failed for %s", user)
+        return {"status": "error", "message": "The Source Could Not Be Read. Check Its Configuration And Availability; No Chart Was Built."}
 
 
 @router.post("/self-analytics/save")

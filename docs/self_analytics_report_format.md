@@ -9,6 +9,15 @@ simply be imported again. **Export** on the page gives the same format back.
 
 The checks are in `utils/self_analytics.py` (`clean_report`, `_clean_chart`, `check_sql`).
 
+Guided reports additionally export `source_spec` (approved source ID/revision,
+selected fields, date range, population answers, filters and original request).
+They are revalidated against the website's current source definition on import
+and execution. SharePoint guided reports have empty `sql`; Snowflake guided
+reports regenerate it from `source_spec`. Charts also support `cohort`,
+`x_title`, `y_title` and a measure's `denominator` for ratios of sums.
+See [Guided Self-Analytics](self_analytics_guided_reports.md) for exact behavior
+and limits. Existing SQL-only version-1 files remain supported.
+
 ## The file
 
 ```json

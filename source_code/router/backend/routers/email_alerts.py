@@ -9,7 +9,7 @@ import logging
 
 from fastapi import APIRouter, Depends, HTTPException
 
-from utils import email_client
+from utils import email_client, page_alerts
 from utils.db_utils import get_database_connection, read_user_details
 
 from .core import get_current_user, is_admin, ADMIN_USERNAME
@@ -105,6 +105,34 @@ def email_alerts_save(payload: dict, user: str = Depends(get_current_user)):
         return {'status': 'ok', 'config': cfg}
     except Exception as e:
         logger.error("Email alerts save failed: %s", e)
+        return {'status': 'error', 'message': str(e)}
+
+
+@router.get(_API + "/style")
+def email_alert_style(user: str = Depends(get_current_user)):
+    """The look shared by every page alert (see utils/page_alerts.py)."""
+    _admin(user)
+    try:
+        return {'status': 'ok', 'style': page_alerts.saved_style(kpi._read_kpi_layout_value(page_alerts.STYLE_KEY)),
+                'meta': page_alerts.style_meta()}
+    except Exception as e:
+        logger.error("Alert email style read failed: %s", e)
+        return {'status': 'error', 'message': str(e)}
+
+
+@router.post(_API + "/style")
+def email_alert_style_save(payload: dict, user: str = Depends(get_current_user)):
+    _admin(user)
+    style = (payload or {}).get('style')
+    err = page_alerts.validate_style(style, whole=True)
+    if err:
+        return {'status': 'error', 'message': err}
+    try:
+        kpi._write_kpi_layout_value(page_alerts.STYLE_KEY, style)
+        logger.info("Alert email style saved by %s", user)
+        return {'status': 'ok'}
+    except Exception as e:
+        logger.error("Alert email style save failed: %s", e)
         return {'status': 'error', 'message': str(e)}
 
 

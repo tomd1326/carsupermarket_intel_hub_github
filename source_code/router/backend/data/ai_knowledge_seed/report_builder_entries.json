@@ -1,0 +1,277 @@
+[
+  {
+    "id": "seed_report_knowledge_20261106_1",
+    "title": "Report Clarification",
+    "kind": "rule",
+    "scope": "all",
+    "category": "Report Building",
+    "tags": "self-analytics,project-knowledge",
+    "content": "Do not infer a user's intended population, date, metric, units, chart or axis. Present exact choices and require review before execution. Unknown wording is not an executable rule. Missing catalogue entries do not prove absence from Snowflake.\n\nSource: Tom's Self-Analytics Requirements, 2026-11-06",
+    "fields": {
+      "definition": "Do not infer a user's intended population, date, metric, units, chart or axis. Present exact choices and require review before execution. Unknown wording is not an executable rule. Missing catalogue entries do not prove absence from Snowflake.",
+      "owner": "Confirm With The Data Owner"
+    }
+  },
+  {
+    "id": "seed_report_knowledge_20261106_2",
+    "title": "Orders And Deliveries",
+    "kind": "rule",
+    "scope": "all",
+    "category": "Report Building",
+    "tags": "self-analytics,project-knowledge",
+    "content": "Acknowledged means a deposit has been paid; paid means delivered or collected. SALES_PERFORMANCE also contains cancelled invoices. Confirm status, credited-invoice treatment and date basis separately.\n\nSource: .claude/carsupermarket_intel_hub.md; .claude/uk_dbt.md",
+    "fields": {
+      "definition": "Acknowledged means a deposit has been paid; paid means delivered or collected. SALES_PERFORMANCE also contains cancelled invoices. Confirm status, credited-invoice treatment and date basis separately.",
+      "owner": "Confirm With The Data Owner"
+    }
+  },
+  {
+    "id": "seed_report_knowledge_20261106_3",
+    "title": "Price Comparisons",
+    "kind": "rule",
+    "scope": "all",
+    "category": "Report Building",
+    "tags": "self-analytics,project-knowledge",
+    "content": "Interest-free prices are inflated to absorb finance subsidy. Exclude interest-free deals from mixed price averages, or isolate them in a separate sales-type group. Cancelled-order prices may be placeholders even when reconstructed at order time; exclude them from price averages. Actual cost and GPU metrics have different populations: do not automatically apply price exclusions to everything.\n\nSource: .claude/carsupermarket_intel_hub.md; .claude/uk_dbt.md",
+    "fields": {
+      "definition": "Interest-free prices are inflated to absorb finance subsidy. Exclude interest-free deals from mixed price averages, or isolate them in a separate sales-type group. Cancelled-order prices may be placeholders even when reconstructed at order time; exclude them from price averages. Actual cost and GPU metrics have different populations: do not automatically apply price exclusions to everything.",
+      "owner": "Confirm With The Data Owner"
+    }
+  },
+  {
+    "id": "seed_report_knowledge_20261106_4",
+    "title": "Advertised And Paid Prices",
+    "kind": "rule",
+    "scope": "all",
+    "category": "Report Building",
+    "tags": "self-analytics,project-knowledge",
+    "content": "The advertised price includes the standard mandatory admin fee. The price actually paid may include a different charged fee and discount. Use explicitly named model columns. Do not add the example HTML's historical £199 fee to today's columns or double-count a fee already included.\n\nSource: .claude/uk_dbt.md; buyer_estimates_vs_actual.html; sales_performance__p.sql",
+    "fields": {
+      "definition": "The advertised price includes the standard mandatory admin fee. The price actually paid may include a different charged fee and discount. Use explicitly named model columns. Do not add the example HTML's historical £199 fee to today's columns or double-count a fee already included.",
+      "owner": "Confirm With The Data Owner"
+    }
+  },
+  {
+    "id": "seed_report_knowledge_20261106_5",
+    "title": "Buyer Comparison Cohorts",
+    "kind": "rule",
+    "scope": "all",
+    "category": "Report Building",
+    "tags": "self-analytics,project-knowledge",
+    "content": "Compare buyer, original and actual values on matched rows when the question is like-for-like. A missing estimate must not silently become zero or actual cost. Available-value means have different denominators; show that choice and row counts. A report may need a different matched cohort for each chart.\n\nSource: buyer_estimates_vs_actual.html (embedded report in companion folder)",
+    "fields": {
+      "definition": "Compare buyer, original and actual values on matched rows when the question is like-for-like. A missing estimate must not silently become zero or actual cost. Available-value means have different denominators; show that choice and row counts. A report may need a different matched cohort for each chart.",
+      "owner": "Confirm With The Data Owner"
+    }
+  },
+  {
+    "id": "seed_report_knowledge_20261106_6",
+    "title": "Buyer Comparison Sources",
+    "kind": "rule",
+    "scope": "all",
+    "category": "Report Building",
+    "tags": "self-analytics,project-knowledge",
+    "content": "The historical report combines Apex sales, Cars Bought estimates, AutoView costs and finance. Current SALES_PERFORMANCE already supplies buyer/original/actual margin fields. Reuse those model columns before proposing joins. The HTML's dates, channel mapping, exclusions, fee and prep fallback are report-specific choices, not universal defaults.\n\nSource: buyer_estimates_vs_actual.html; uk_dbt_product_data/source_code/source/models/sales_performance/sales_performance__p.sql",
+    "fields": {
+      "definition": "The historical report combines Apex sales, Cars Bought estimates, AutoView costs and finance. Current SALES_PERFORMANCE already supplies buyer/original/actual margin fields. Reuse those model columns before proposing joins. The HTML's dates, channel mapping, exclusions, fee and prep fallback are report-specific choices, not universal defaults.",
+      "owner": "Confirm With The Data Owner"
+    }
+  },
+  {
+    "id": "seed_report_knowledge_20261106_7",
+    "title": "Historical Channels",
+    "kind": "rule",
+    "scope": "all",
+    "category": "Report Building",
+    "tags": "self-analytics,project-knowledge",
+    "content": "The example groups supplier Z001 as BCB and excludes DPARVAL, DPSANTAN and DPLEX as consignments. It also excludes buybacks. This builder must not reinterpret those as the current supplier_channel values. An exact recreation needs confirmed mapping and a verified buyback field.\n\nSource: buyer_estimates_vs_actual.html",
+    "fields": {
+      "definition": "The example groups supplier Z001 as BCB and excludes DPARVAL, DPSANTAN and DPLEX as consignments. It also excludes buybacks. This builder must not reinterpret those as the current supplier_channel values. An exact recreation needs confirmed mapping and a verified buyback field.",
+      "owner": "Confirm With The Data Owner"
+    }
+  },
+  {
+    "id": "seed_report_knowledge_20261106_8",
+    "title": "Weighted Averages And Rates",
+    "kind": "rule",
+    "scope": "all",
+    "category": "Report Building",
+    "tags": "self-analytics,project-knowledge",
+    "content": "Recompute averages from underlying rows when filtering; never average subgroup averages without counts. A period rate is generally sum(numerator)/sum(denominator), with an explicit zero-denominator policy. Daily stock snapshots must not be added up as if they were transactions.\n\nSource: .claude/carsupermarket_intel_hub.md; data/ai_knowledge_seed/daily_summary.md",
+    "fields": {
+      "definition": "Recompute averages from underlying rows when filtering; never average subgroup averages without counts. A period rate is generally sum(numerator)/sum(denominator), with an explicit zero-denominator policy. Daily stock snapshots must not be added up as if they were transactions.",
+      "owner": "Confirm With The Data Owner"
+    }
+  },
+  {
+    "id": "seed_report_knowledge_20261106_9",
+    "title": "Portal Enquiry Conversion",
+    "kind": "rule",
+    "scope": "all",
+    "category": "Report Building",
+    "tags": "self-analytics,project-knowledge",
+    "content": "DAILY_SUMMARY at_portal_enquiries counts deduplicated enquiries. at_portal_orders_from_enquiries deliberately includes orders attributed to duplicate enquiries, by enquiry date. Keep that asymmetry; the latest enquiry may be the one that converted.\n\nSource: .claude/uk_dbt.md",
+    "fields": {
+      "definition": "DAILY_SUMMARY at_portal_enquiries counts deduplicated enquiries. at_portal_orders_from_enquiries deliberately includes orders attributed to duplicate enquiries, by enquiry date. Keep that asymmetry; the latest enquiry may be the one that converted.",
+      "owner": "Confirm With The Data Owner"
+    }
+  },
+  {
+    "id": "seed_report_knowledge_20261106_10",
+    "title": "Costs And Margin",
+    "kind": "rule",
+    "scope": "all",
+    "category": "Report Building",
+    "tags": "self-analytics,project-knowledge",
+    "content": "Management accounts costs are already negative; late_costs are positive and negated once in compute. Add negative gpu_m_costs to reduce margin. Use AutoView-derived costs and writedowns, not reconstructed mutable transaction splits. Confirm per-vehicle versus total and sign conventions. WBR's confirmed 2026-11-05 decision uses Snowflake gpu_m, gpu_s, gpu_ms and gpu_msb; the assumed £495 recon fallback was removed. Apex supplies total vehicle costs; AutoView supplies the recon/other breakdown. Historical reconciliation found shared AutoView records across multiple Apex stock IDs, so do not assume those identifiers are one-to-one. Older AutoView coverage and frozen sheets may differ from restated current models.\n\nSource: .claude/uk_dbt.md; docs/wbr_report_discrepancies.md",
+    "fields": {
+      "definition": "Management accounts costs are already negative; late_costs are positive and negated once in compute. Add negative gpu_m_costs to reduce margin. Use AutoView-derived costs and writedowns, not reconstructed mutable transaction splits. Confirm per-vehicle versus total and sign conventions. WBR's confirmed 2026-11-05 decision uses Snowflake gpu_m, gpu_s, gpu_ms and gpu_msb; the assumed £495 recon fallback was removed. Apex supplies total vehicle costs; AutoView supplies the recon/other breakdown. Historical reconciliation found shared AutoView records across multiple Apex stock IDs, so do not assume those identifiers are one-to-one. Older AutoView coverage and frozen sheets may differ from restated current models.",
+      "owner": "Confirm With The Data Owner"
+    }
+  },
+  {
+    "id": "seed_report_knowledge_20261106_11",
+    "title": "Valuation Benchmarks",
+    "kind": "rule",
+    "scope": "all",
+    "category": "Report Building",
+    "tags": "self-analytics,project-knowledge",
+    "content": "CAP Clean is the trade/purchase benchmark. Autotrader is the retail/selling benchmark. CAP Retail is available but not the usual benchmark. Confirm valuation date and mileage rather than substituting today's valuation.\n\nSource: .claude/carsupermarket_intel_hub.md",
+    "fields": {
+      "definition": "CAP Clean is the trade/purchase benchmark. Autotrader is the retail/selling benchmark. CAP Retail is available but not the usual benchmark. Confirm valuation date and mileage rather than substituting today's valuation.",
+      "owner": "Confirm With The Data Owner"
+    }
+  },
+  {
+    "id": "seed_report_knowledge_20261106_12",
+    "title": "Advert Status",
+    "kind": "rule",
+    "scope": "all",
+    "category": "Report Building",
+    "tags": "self-analytics,project-knowledge",
+    "content": "Use adverts_retail_autotrader_advert_status (PUBLISHED/CAPPED/NOT_PUBLISHED), carried in stock evolution as autotrader_advert_status. The profile advert-status field can still say published for a capped car.\n\nSource: .claude/uk_dbt.md",
+    "fields": {
+      "definition": "Use adverts_retail_autotrader_advert_status (PUBLISHED/CAPPED/NOT_PUBLISHED), carried in stock evolution as autotrader_advert_status. The profile advert-status field can still say published for a capped car.",
+      "owner": "Confirm With The Data Owner"
+    }
+  },
+  {
+    "id": "seed_report_knowledge_20261106_13",
+    "title": "Source Grain And Joins",
+    "kind": "rule",
+    "scope": "all",
+    "category": "Report Building",
+    "tags": "self-analytics,project-knowledge",
+    "content": "Raw __s models map to SOURCE_*; compute __c to COMPUTE_*; product __p to PRODUCT_*. Suffixes are not Snowflake table names. Read both model definitions before choosing a join. Preserve row grain; DISTINCT is not a repair for multiplied joins. Vehicles stock evolution is per vehicle per day.\n\nSource: .claude/uk_dbt.md; common_dbt_skills_packages compute/product/raw validation references",
+    "fields": {
+      "definition": "Raw __s models map to SOURCE_*; compute __c to COMPUTE_*; product __p to PRODUCT_*. Suffixes are not Snowflake table names. Read both model definitions before choosing a join. Preserve row grain; DISTINCT is not a repair for multiplied joins. Vehicles stock evolution is per vehicle per day.",
+      "owner": "Confirm With The Data Owner"
+    }
+  },
+  {
+    "id": "seed_report_knowledge_20261106_14",
+    "title": "Source Time And Freshness",
+    "kind": "rule",
+    "scope": "all",
+    "category": "Report Building",
+    "tags": "self-analytics,project-knowledge",
+    "content": "S3 partition export timestamps describe ingestion run time, not the business event date. UK local time is used. DEV is not refreshed by the PROD schedule. For actively rebuilt tables, last_altered distinguishes same-day rebuilds; a transform DATE cannot.\n\nSource: .claude/ingestion.md; .claude/uk_dbt.md",
+    "fields": {
+      "definition": "S3 partition export timestamps describe ingestion run time, not the business event date. UK local time is used. DEV is not refreshed by the PROD schedule. For actively rebuilt tables, last_altered distinguishes same-day rebuilds; a transform DATE cannot.",
+      "owner": "Confirm With The Data Owner"
+    }
+  },
+  {
+    "id": "seed_report_knowledge_20261106_15",
+    "title": "Raw History And Backfills",
+    "kind": "rule",
+    "scope": "all",
+    "category": "Report Building",
+    "tags": "self-analytics,project-knowledge",
+    "content": "Rolling lookbacks cannot recover outages longer than their window. Historical full refresh depends on retained S3 files. Raw models preserve source formats; business changes belong in compute. AutoView sales disappearing from a later complete period extract represent credits; latest-row-per-stock can resurrect them.\n\nSource: .claude/ingestion.md; .claude/uk_dbt.md",
+    "fields": {
+      "definition": "Rolling lookbacks cannot recover outages longer than their window. Historical full refresh depends on retained S3 files. Raw models preserve source formats; business changes belong in compute. AutoView sales disappearing from a later complete period extract represent credits; latest-row-per-stock can resurrect them.",
+      "owner": "Confirm With The Data Owner"
+    }
+  },
+  {
+    "id": "seed_report_knowledge_20261106_16",
+    "title": "SharePoint Data Sources",
+    "kind": "rule",
+    "scope": "all",
+    "category": "Report Building",
+    "tags": "self-analytics,project-knowledge",
+    "content": "Daily Spend And Enquiries can be read using the site's configured SharePoint source and downloaded copy. Confirm workbook row meaning, exact headers, dates, currency and duplicate policy with the owner. For recurring Snowflake reporting consider the existing uk_sharepoint_to_s3 ingestion path and dbt models; an existing project is not proof that a particular workbook is ingested.\n\nSource: utils/sharepoint_sources.py; uk_sharepoint_to_s3/readme.md",
+    "fields": {
+      "definition": "Daily Spend And Enquiries can be read using the site's configured SharePoint source and downloaded copy. Confirm workbook row meaning, exact headers, dates, currency and duplicate policy with the owner. For recurring Snowflake reporting consider the existing uk_sharepoint_to_s3 ingestion path and dbt models; an existing project is not proof that a particular workbook is ingested.",
+      "owner": "Confirm With The Data Owner"
+    }
+  },
+  {
+    "id": "seed_report_knowledge_20261106_17",
+    "title": "Google Sheets And Analytics Sources",
+    "kind": "rule",
+    "scope": "all",
+    "category": "Report Building",
+    "tags": "self-analytics,project-knowledge",
+    "content": "common_gsheet_to_s3 provides configurable sheet-to-S3 ingestion with normalized column names; raw values are strings. common_google_analytics_ingestion extracts GA4 to S3 with explicit date overrides and cursor/lookback behavior. Inspect the deployed configuration and models before claiming a specific metric is available.\n\nSource: common_gsheet_to_s3/README.md; common_google_analytics_ingestion/README.md",
+    "fields": {
+      "definition": "common_gsheet_to_s3 provides configurable sheet-to-S3 ingestion with normalized column names; raw values are strings. common_google_analytics_ingestion extracts GA4 to S3 with explicit date overrides and cursor/lookback behavior. Inspect the deployed configuration and models before claiming a specific metric is available.",
+      "owner": "Confirm With The Data Owner"
+    }
+  },
+  {
+    "id": "seed_report_knowledge_20261106_18",
+    "title": "Unavailable Data",
+    "kind": "rule",
+    "scope": "all",
+    "category": "Report Building",
+    "tags": "self-analytics,project-knowledge",
+    "content": "If a required measure is not mapped, identify the exact missing measure, grain, period and join key. Check current models/schema before declaring it absent. Possible owners/sources include marketing workbooks for spend/enquiries, Cars Bought for original estimates, AutoView for actual costs, and finance for subsidy. No cross-source join or fallback is inferred. The Obeya documentation identifies DOC Orders, Staff Numbers, Outbound Calls, Price Changes and AutoConvert CS / CSMF as Daily Spend And Enquiries sources at that time. Recheck current Snowflake coverage before treating that historical list as current.\n\nSource: tools/obeya_charts/README.md; docs/wbr_report_discrepancies.md; .claude/uk_dbt.md",
+    "fields": {
+      "definition": "If a required measure is not mapped, identify the exact missing measure, grain, period and join key. Check current models/schema before declaring it absent. Possible owners/sources include marketing workbooks for spend/enquiries, Cars Bought for original estimates, AutoView for actual costs, and finance for subsidy. No cross-source join or fallback is inferred. The Obeya documentation identifies DOC Orders, Staff Numbers, Outbound Calls, Price Changes and AutoConvert CS / CSMF as Daily Spend And Enquiries sources at that time. Recheck current Snowflake coverage before treating that historical list as current.",
+      "owner": "Confirm With The Data Owner"
+    }
+  },
+  {
+    "id": "seed_report_knowledge_20261106_19",
+    "title": "Documentation Authority",
+    "kind": "rule",
+    "scope": "all",
+    "category": "Report Building",
+    "tags": "self-analytics,project-knowledge",
+    "content": "Historical WBR comparisons and the buyer example document specific periods and assumptions. Engineering improvement plans are proposals, not verified business facts. Setup/deployment credentials, assistant permissions and generic sample glossary definitions are not analytical rules. The historical WBR glossary describes GPU-MS as metal plus services and distinguishes Awaiting Arrival, Trade, Reserved and Courtesy stock. Held is explicitly undefined. Its DIS label appears in different contexts, so confirm days in stock, days advertised or days to sale and their dates rather than treating every DIS label alike.\n\nSource: C:/Git Markdown Review, 2026-11-06",
+    "fields": {
+      "definition": "Historical WBR comparisons and the buyer example document specific periods and assumptions. Engineering improvement plans are proposals, not verified business facts. Setup/deployment credentials, assistant permissions and generic sample glossary definitions are not analytical rules. The historical WBR glossary describes GPU-MS as metal plus services and distinguishes Awaiting Arrival, Trade, Reserved and Courtesy stock. Held is explicitly undefined. Its DIS label appears in different contexts, so confirm days in stock, days advertised or days to sale and their dates rather than treating every DIS label alike.",
+      "owner": "Confirm With The Data Owner"
+    }
+  },
+  {
+    "id": "seed_builder_sales_20261106",
+    "title": "Sales And Buyer Comparisons",
+    "kind": "table",
+    "scope": "all",
+    "category": "Report Building",
+    "tags": "self-analytics,sales,buyer",
+    "content": "Verified against sales_performance__p.sql and _sales_performance__models.yml in uk_dbt_product_data; buyer_estimates_vs_actual.html provides comparison requirements. Repository definitions were checked on 2026-11-06; live Snowflake schema was not queried. Confirm price basis, cancelled rows, finance switches, missing estimates, consignment and buyback treatment. This definition does not reproduce the HTML's custom channel mapping or prep fallback.",
+    "fields": {
+      "source_table": "PROD_CARSUPERMARKET_DB.PRODUCT_SALES_PERFORMANCE.SALES_PERFORMANCE",
+      "grain": "One Invoice (Not Necessarily One Vehicle)",
+      "report_schema": "{\n  \"table\": \"PROD_CARSUPERMARKET_DB.PRODUCT_SALES_PERFORMANCE.SALES_PERFORMANCE\",\n  \"grain\": \"One Invoice (Not Necessarily One Vehicle)\",\n  \"columns\": [\n    {\n      \"name\": \"invoice_posted_date\",\n      \"type\": \"date\"\n    },\n    {\n      \"name\": \"order_acknowledged_date\",\n      \"type\": \"date\"\n    },\n    {\n      \"name\": \"date_stock_in\",\n      \"type\": \"date\"\n    },\n    {\n      \"name\": \"date_first_registered\",\n      \"type\": \"date\"\n    },\n    {\n      \"name\": \"vrm\",\n      \"type\": \"text\"\n    },\n    {\n      \"name\": \"stock_id\",\n      \"type\": \"text\"\n    },\n    {\n      \"name\": \"invoice_reference\",\n      \"type\": \"text\"\n    },\n    {\n      \"name\": \"invoice_status\",\n      \"type\": \"text\"\n    },\n    {\n      \"name\": \"supplier_name\",\n      \"type\": \"text\"\n    },\n    {\n      \"name\": \"supplier_channel\",\n      \"type\": \"text\"\n    },\n    {\n      \"name\": \"sales_type_bucket\",\n      \"type\": \"text\"\n    },\n    {\n      \"name\": \"price_band\",\n      \"type\": \"text\"\n    },\n    {\n      \"name\": \"make_model\",\n      \"type\": \"text\"\n    },\n    {\n      \"name\": \"discount_type\",\n      \"type\": \"text\"\n    },\n    {\n      \"name\": \"invoice_credited\",\n      \"type\": \"bool\"\n    },\n    {\n      \"name\": \"interest_free\",\n      \"type\": \"bool\"\n    },\n    {\n      \"name\": \"purchase_price_inc_vat\",\n      \"type\": \"number\"\n    },\n    {\n      \"name\": \"buyer_rrp\",\n      \"type\": \"number\"\n    },\n    {\n      \"name\": \"buyer_rrp_zero_pct\",\n      \"type\": \"number\"\n    },\n    {\n      \"name\": \"buyer_rrp_inc_admin_fee\",\n      \"type\": \"number\"\n    },\n    {\n      \"name\": \"buyer_rrp_zero_pct_inc_admin_fee\",\n      \"type\": \"number\"\n    },\n    {\n      \"name\": \"original_price_inc_vat\",\n      \"type\": \"number\"\n    },\n    {\n      \"name\": \"original_price_inc_vat_inc_admin_fee\",\n      \"type\": \"number\"\n    },\n    {\n      \"name\": \"sale_price_inc_vat\",\n      \"type\": \"number\"\n    },\n    {\n      \"name\": \"sale_price_after_discount_inc_admin_fee\",\n      \"type\": \"number\"\n    },\n    {\n      \"name\": \"advertised_price_inc_vat_inc_admin_fee\",\n      \"type\": \"number\"\n    },\n    {\n      \"name\": \"discount_inc_vat\",\n      \"type\": \"number\"\n    },\n    {\n      \"name\": \"buyer_est_chassis_margin_after_subsidy\",\n      \"type\": \"number\"\n    },\n    {\n      \"name\": \"original_chassis_margin_after_subsidy\",\n      \"type\": \"number\"\n    },\n    {\n      \"name\": \"chassis_margin_after_subsidy\",\n      \"type\": \"number\"\n    },\n    {\n      \"name\": \"buyer_est_prep\",\n      \"type\": \"number\"\n    },\n    {\n      \"name\": \"recon_costs_autoview\",\n      \"type\": \"number\"\n    },\n    {\n      \"name\": \"other_costs_autoview\",\n      \"type\": \"number\"\n    },\n    {\n      \"name\": \"vehicle_costs\",\n      \"type\": \"number\"\n    },\n    {\n      \"name\": \"write_down\",\n      \"type\": \"number\"\n    },\n    {\n      \"name\": \"finance_subsidy\",\n      \"type\": \"number\"\n    },\n    {\n      \"name\": \"buyer_est_metal_margin\",\n      \"type\": \"number\"\n    },\n    {\n      \"name\": \"original_metal_margin\",\n      \"type\": \"number\"\n    },\n    {\n      \"name\": \"metal_margin\",\n      \"type\": \"number\"\n    },\n    {\n      \"name\": \"buyer_est_gpu_m\",\n      \"type\": \"number\"\n    },\n    {\n      \"name\": \"original_gpu_m\",\n      \"type\": \"number\"\n    },\n    {\n      \"name\": \"gpu_m\",\n      \"type\": \"number\"\n    },\n    {\n      \"name\": \"gpu_m_costs\",\n      \"type\": \"number\"\n    },\n    {\n      \"name\": \"mileage\",\n      \"type\": \"number\"\n    }\n  ],\n  \"questions\": [\n    {\n      \"column\": \"invoice_status\",\n      \"label\": \"Which Invoice Population?\",\n      \"choices\": [\n        {\n          \"id\": \"paid\",\n          \"label\": \"Delivered / Paid\",\n          \"value\": \"STATUS_PAID\"\n        },\n        {\n          \"id\": \"ordered\",\n          \"label\": \"Acknowledged / Awaiting Collection\",\n          \"value\": \"STATUS_ACKNOWLEDGED\"\n        },\n        {\n          \"id\": \"cancelled\",\n          \"label\": \"Cancelled\",\n          \"value\": \"STATUS_CANCELLED\"\n        },\n        {\n          \"id\": \"all\",\n          \"label\": \"All Statuses (Includes Cancelled)\"\n        }\n      ]\n    },\n    {\n      \"column\": \"invoice_credited\",\n      \"label\": \"How Should Credited Invoices Be Treated?\",\n      \"choices\": [\n        {\n          \"id\": \"exclude\",\n          \"label\": \"Exclude Credits\",\n          \"value\": false\n        },\n        {\n          \"id\": \"only\",\n          \"label\": \"Credits Only\",\n          \"value\": true\n        },\n        {\n          \"id\": \"all\",\n          \"label\": \"Include Credits\"\n        }\n      ]\n    },\n    {\n      \"column\": \"sales_type_bucket\",\n      \"label\": \"Which Sales Type? Price Averages Need Separate 0% Treatment.\",\n      \"choices\": [\n        {\n          \"id\": \"rate\",\n          \"label\": \"Rate / Cash\",\n          \"value\": \"Rate/Cash\"\n        },\n        {\n          \"id\": \"zero\",\n          \"label\": \"Interest Free Only\",\n          \"value\": \"0%\"\n        },\n        {\n          \"id\": \"unknown\",\n          \"label\": \"Unknown Only\",\n          \"value\": \"Unknown\"\n        },\n        {\n          \"id\": \"all\",\n          \"label\": \"All (Confirm Separate Price Comparisons)\"\n        }\n      ]\n    }\n  ]\n}"
+    }
+  },
+  {
+    "id": "seed_builder_daily_20261106",
+    "title": "Daily Business Metrics",
+    "kind": "table",
+    "scope": "all",
+    "category": "Report Building",
+    "tags": "self-analytics,kpi",
+    "content": "Source: uk_dbt_product_data daily_summary__p.sql and data/ai_knowledge_seed/daily_summary.md. Today can have stock data while flow values are incomplete. Confirm complete days, totals versus daily averages and conversion denominator. Do not sum stock snapshots.",
+    "fields": {
+      "source_table": "PROD_CARSUPERMARKET_DB.PRODUCT_SLT_KPIS.DAILY_SUMMARY",
+      "grain": "One Calendar Day; Stock Is A Snapshot, Flows Are Daily Totals",
+      "report_schema": "{\n  \"table\": \"PROD_CARSUPERMARKET_DB.PRODUCT_SLT_KPIS.DAILY_SUMMARY\",\n  \"grain\": \"One Calendar Day; Stock Is A Snapshot, Flows Are Daily Totals\",\n  \"columns\": [\n    {\n      \"name\": \"date\",\n      \"type\": \"date\"\n    },\n    {\n      \"name\": \"orders\",\n      \"type\": \"number\"\n    },\n    {\n      \"name\": \"purchases\",\n      \"type\": \"number\"\n    },\n    {\n      \"name\": \"website_sessions\",\n      \"type\": \"number\"\n    },\n    {\n      \"name\": \"at_portal_enquiries\",\n      \"type\": \"number\"\n    },\n    {\n      \"name\": \"at_portal_orders_from_enquiries\",\n      \"type\": \"number\"\n    },\n    {\n      \"name\": \"stock_on_sale\",\n      \"type\": \"number\"\n    }\n  ],\n  \"questions\": []\n}"
+    }
+  }
+]

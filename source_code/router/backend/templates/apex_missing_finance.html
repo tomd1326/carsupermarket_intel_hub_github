@@ -58,6 +58,17 @@
         .apex-link:hover { background: #0d6efd; color: #fff; }
         .sort-arrow { opacity: 0.35; font-size: 0.65em; margin-left: 2px; }
         #row-count { white-space: nowrap; }
+
+        /* Alerts tab and Send Alert popup (page_alerts.js). */
+        .modal-content.busy { opacity: 0.55; pointer-events: none; cursor: wait; }
+        .pa-users { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 2px 12px; }
+        .pa-style-row { display: flex; align-items: center; gap: 10px; padding: 2px 0; font-size: 0.8rem; }
+        .pa-style-name { width: 270px; flex: none; }
+        .pa-own { width: 60px; flex: none; }
+        .pa-colour { width: 44px; height: 26px; padding: 1px; }
+        .pa-block { display: flex; align-items: flex-start; gap: 6px; padding: 4px 0; }
+        .pa-block-name { width: 110px; flex: none; font-size: 0.8rem; font-weight: 600; padding-top: 4px; }
+        .pa-block .btn { padding: 2px 7px; font-size: 0.72rem; }
     </style>
 </head>
 <body>
@@ -76,6 +87,10 @@
             </button>
             <button class="btn btn-outline-secondary btn-sm" onclick="openSettings()">
                 <i class="fas fa-cog me-1"></i>Settings
+            </button>
+            <button class="btn btn-outline-primary btn-sm" onclick="PageAlerts.openSend(ALERT_API, 'sendAlertModal')"
+                    title="Email this report to the people ticked in Settings > Alerts">
+                <i class="fas fa-paper-plane me-1"></i>Send Alert
             </button>
             {% endif %}
             <span id="sf-status" class="toolbar-text"><i class="fas fa-snowflake me-1 text-info"></i>Snowflake</span>
@@ -165,6 +180,10 @@
                     <button type="button" class="btn btn-sm btn-outline-primary mt-2" onclick="addCellRuleDraft()">
                         <i class="fas fa-plus"></i> Add Colour Rule</button>
                     </div>
+                    <div class="settings-pane" data-title="Alerts">
+                    <h6 class="settings-section">Alerts</h6>
+                    <div id="alertEditor"></div>
+                    </div>
                     </div>
                     </div>
                     </div>
@@ -178,6 +197,22 @@
     </div>
 
     {% if is_admin %}
+    <div class="modal fade" id="sendAlertModal" tabindex="-1" aria-hidden="true">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">Send Alert</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body pa-send-body"></div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Close</button>
+                    <button type="button" class="btn btn-primary pa-send-btn" disabled><i class="fas fa-paper-plane me-1"></i>Send</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <div class="modal fade" id="liveUpdateModal" tabindex="-1" aria-hidden="true">
         <div class="modal-dialog modal-xl" style="max-width:min(1300px, 95vw)">
             <div class="modal-content">
@@ -204,6 +239,7 @@
     {% if is_admin %}
     <script src="{{ static_url('js/api_requests.js') }}"></script>
     <script src="{{ static_url('js/live_update.js') }}"></script>
+    <script src="{{ static_url('js/page_alerts.js') }}"></script>
     {% endif %}
     <script src="{{ static_url('js/apex_missing_finance.js') }}"></script>
 </body>
