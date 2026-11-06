@@ -1,0 +1,607 @@
+{#- The text of the Technical Guide (/technical-guide), included by technical_guide.html.
+    Each <section> holds one h2; the contents list down the left is built from the
+    h2 and h3 headings by static/js/technical_guide.js. Wrapped in raw so code
+    examples with braces are shown as written. Keep it up to date in the same merge
+    request as the code it describes. Problems found go in docs/improvement_plan.md. -#}
+{% raw %}
+<section>
+<h2>Overview</h2>
+<p><strong>Intelligence Hub is Carsupermarket's internal website for buying, pricing and reporting on used cars.</strong> Buyers use it to value supplier stock lists and decide what to buy; managers use it for KPI dashboards, the Weekly Business Review and sales reports; the admin uses it to run data refreshes and manage users.</p>
+<p>It is one Python web application (FastAPI with Jinja HTML templates) packed into a Docker image and run on AWS Lambda behind API Gateway. It keeps its own working data in an Aurora PostgreSQL database, reads reporting data from Snowflake (built by the dbt projects), stores files in S3, and calls outside services such as CAP HPI, Autotrader, DVSA, Microsoft Graph (SharePoint and email) and Google Slides.</p>
+
+<h3>How The Pieces Fit</h3>
+<pre>
+ Browser (Jinja pages + plain JS, Bootstrap 5, Chart.js)
+    |  HTTPS  uk-intel-hub.aramis-group.eu  (dev: dev-uk-intel-hub.aramis-group.eu)
+    v
+ API Gateway (REST, regional, no authorizer)  -->  Lambda  vehicle_list_router_carsupermarket_&lt;env&gt;
+                                                   (Docker image, Python 3.12, FastAPI via Mangum)
+                                                       |
+      +--------------------+-----------------+---------+-----------+------------------+
+      |                    |                 |                     |                  |
+  Aurora PostgreSQL    Snowflake (PROD)     S3 bucket          Secrets Manager    Outside APIs
+  carsupermarket_      tables built by      aa-raw-sources-uk  logins + keys      CAP, Autotrader, HPI,
+  pricer database      the dbt projects     (eu-west-1)                           DVSA, Graph, Google,
+  (users, settings,                                                               Nexus Point, Textract,
+  tasks, vehicles...)                                                             ECS (dbt runs)
+</pre>
+<p>Long jobs (supplier list valuations, reports, keeper checks, SharePoint downloads) do not run inside the web request. The Lambda calls itself again in the background with a fake web request, and the page polls for progress. See <a href="#background-jobs">Background Jobs</a>.</p>
+
+<h3>Technology</h3>
+<table>
+<thead><tr><th>Part</th><th>What is used</th></tr></thead>
+<tbody>
+<tr><td>Language</td><td>Python 3.12 in the image (<code>pyproject.toml</code> asks for 3.11 or later)</td></tr>
+<tr><td>Web framework</td><td>FastAPI 0.110, Starlette sessions, Jinja2 templates, Mangum (Lambda adapter)</td></tr>
+<tr><td>Key libraries</td><td>psycopg2 (Aurora), snowflake-connector-python, boto3, pandas, openpyxl, python-calamine (fast xlsx reading), pypdf, olefile, Playwright with Chromium (supplier website logins), requests</td></tr>
+<tr><td>Front end</td><td>Server-rendered Jinja pages, plain JavaScript (no framework, no build step), Bootstrap 5.1.3, Font Awesome 6.0.0-beta3, Chart.js 4.4.0, SheetJS xlsx 0.18.5, local DM Sans font</td></tr>
+<tr><td>Hosting</td><td>AWS Lambda (3072 MB, 600 s timeout) + API Gateway REST API + ACM certificate + Route53, all in Terraform</td></tr>
+<tr><td>Build and deploy</td><td>GitLab CI with shared job templates from <code>data/platform/common/gitlab_ci_job_templates</code></td></tr>
+<tr><td>Dependencies</td><td>Poetry (<code>source_code/router/pyproject.toml</code>), exported to requirements in the Docker build</td></tr>
+</tbody>
+</table>
+
+<h3>Repository Layout</h3>
+<table>
+<thead><tr><th>Folder</th><th>What is in it</th></tr></thead>
+<tbody>
+<tr><td><code>source_code/router/</code></td><td><code>Dockerfile</code>, <code>docker-compose.yml</code>, <code>pyproject.toml</code>, <code>poetry.lock</code></td></tr>
+<tr><td><code>source_code/router/backend/</code></td><td>The whole application. <code>main.py</code> builds the app.</td></tr>
+<tr><td><code>backend/routers/</code></td><td>One file per page or area: routes, page rendering and JSON endpoints. <code>core.py</code> holds the shared pieces.</td></tr>
+<tr><td><code>backend/templates/</code></td><td>Jinja HTML pages. Files starting <code>_</code> are shared parts (navigation, settings nav).</td></tr>
+<tr><td><code>backend/static/</code></td><td><code>js/</code>, <code>css/</code>, <code>fonts/</code>, icons</td></tr>
+<tr><td><code>backend/utils/</code></td><td>Database access, Snowflake, S3, SharePoint, email, caches, rate limiter and business helpers</td></tr>
+<tr><td><code>backend/clients/</code></td><td>CAP, Autotrader, HPI Spec Check and Google Slides clients; supplier column mapping</td></tr>
+<tr><td><code>backend/reports/</code></td><td>Builders for the Apex Reports page (Nexus Point data plus Snowflake)</td></tr>
+<tr><td><code>backend/supplier_stock/</code></td><td>Supplier list valuation (<code>batch_processor.py</code>) and the Motability and 1link fetchers</td></tr>
+<tr><td><code>backend/data/</code></td><td>Seed files: AI knowledge, <code>dbt_lineage.json</code>, the WBR glossary</td></tr>
+<tr><td><code>backend/scripts/</code></td><td>One-off and maintenance scripts (dbt lineage builder, KPI chart conversion)</td></tr>
+<tr><td><code>backend/tests/</code></td><td>pytest tests</td></tr>
+<tr><td><code>db/</code></td><td>SQL files <code>00</code> to <code>23</code> describing the Aurora tables (most tables are also created by the app itself)</td></tr>
+<tr><td><code>terraform/</code></td><td>AWS infrastructure: <code>dev/</code> and <code>prod/</code> (identical files) plus <code>modules/</code></td></tr>
+<tr><td><code>tools/obeya_charts/</code></td><td>Script that adds the Daily OBEYA Targets workbook's charts to the KPI page</td></tr>
+<tr><td><code>docs/</code></td><td>Working notes, and <code>improvement_plan.md</code> (known problems and fixes)</td></tr>
+<tr><td><code>source_code/evaluator/</code></td><td>Unused. A one-line Dockerfile that CI still builds.</td></tr>
+</tbody>
+</table>
+</section>
+
+<section>
+<h2>Business And Industry Knowledge</h2>
+<p><strong>Carsupermarket buys used cars in bulk from trade suppliers and sells them to the public online and from its sites.</strong> Most of the site exists to answer three questions: what should we buy, what should we pay, and how are we doing.</p>
+
+<h3>The Life Of A Car</h3>
+<ol>
+<li><strong>Supplier list.</strong> Suppliers (Enterprise, Motability, 1link, Purchase Pro, Universal and others) send lists of cars for sale, as a file, an email or on their own website.</li>
+<li><strong>Valuation.</strong> Each car is valued by registration (VRM) and mileage: CAP Clean (what the trade pays) and the Autotrader retail valuation (what the public pays), plus Autotrader's retail rating and days to sell. This is the Supplier Stock Evaluator and Assess Vehicle.</li>
+<li><strong>Buying decision.</strong> Buying Requirements shows, for each model (CAP ID) and price band, how many we sold in the last 90 days, how fast, at what margin, and how many more we should hold.</li>
+<li><strong>Purchase.</strong> The buyer agrees the price. The purchase goes on the Daily Buyers Sheet and the Cars Bought sheet (SharePoint), and the invoice is read by Cars Bought.</li>
+<li><strong>Stock.</strong> The car arrives, is prepared (prep / reconditioning costs), priced and advertised on Autotrader and the website. Stock lives in Apex (the dealer system) and AutoView (costs).</li>
+<li><strong>Order.</strong> A customer pays a deposit: status <code>ORDERED</code> (<code>STATUS_ACKNOWLEDGED</code>).</li>
+<li><strong>Delivery.</strong> The customer collects and the balance is paid: status <code>SOLD</code> (<code>STATUS_PAID</code>). A credited invoice means the sale was reversed and it is left out.</li>
+<li><strong>Trade disposal.</strong> Cars not worth retailing are sold at auction or to the trade (Trade Report).</li>
+</ol>
+
+<h3>Pricing Benchmarks</h3>
+<ul>
+<li><strong>CAP Clean</strong> is the trade benchmark used for purchase prices. <strong>CAP Retail</strong> exists but is rarely used. "Live" CAP values are adjusted for the exact mileage; "monthly" values come from the monthly CAP book.</li>
+<li><strong>Autotrader valuation</strong> is the retail benchmark for selling prices. Normal stock sells at about 98% of it.</li>
+<li><strong>0% (interest-free) cars</strong> sell at about 125% of the Autotrader valuation, because the higher price pays for a subsidy (about 14%) charged by the finance company. They must be left out of any price-based average (sell price, AT valuation, price to market) but kept in counts and non-price figures. In code the band is <code>interest_free</code>; Snowflake sends <code>0%</code>, which is renamed on arrival; the page shows "0%".</li>
+</ul>
+
+<h3>Glossary</h3>
+<table>
+<thead><tr><th>Term</th><th>Meaning</th></tr></thead>
+<tbody>
+<tr><td>VRM</td><td>Vehicle registration mark (number plate). The main key for a car across the site.</td></tr>
+<tr><td>CAP ID</td><td>CAP HPI's ID for a model derivative. The main key for "the same kind of car".</td></tr>
+<tr><td>CAP Clean / CAP Retail</td><td>CAP HPI trade valuations (clean condition / retail).</td></tr>
+<tr><td>AT valuation, retail rating</td><td>Autotrader's retail valuation and its 0-100 rating of how strong the retail market is for that car.</td></tr>
+<tr><td>PTM / price position</td><td>Price to market: selling price as a % of the Autotrader valuation.</td></tr>
+<tr><td>DIS</td><td>Days in stock.</td></tr>
+<tr><td>DTS</td><td>Days to sell (days advertised before the order).</td></tr>
+<tr><td>GPU-M</td><td>Gross profit per unit on the metal: sale price minus purchase and standard costs.</td></tr>
+<tr><td>GPU-S</td><td>Gross profit per unit from products and finance (commission, add-ons).</td></tr>
+<tr><td>GPU-MS</td><td>GPU-M plus GPU-S.</td></tr>
+<tr><td>RRP</td><td>The retail price the buyer plans to sell at, entered on the Daily Buyers Sheet.</td></tr>
+<tr><td>Prep costs</td><td>Preparation / reconditioning cost before the car can be sold.</td></tr>
+<tr><td>Subsidy</td><td>The charge a finance company makes for offering 0% finance on a car. Subsidy Rates works out the % for every term.</td></tr>
+<tr><td>Ideal Stock / Required</td><td>Buying Requirements: Ideal Stock = (current stock + number to buy) x this group's share of 90-day sales. Required = Ideal Stock minus current stock.</td></tr>
+<tr><td>ORDERED / SOLD</td><td>Deposit paid / collected and fully paid. Both count as a sale.</td></tr>
+<tr><td>Apex</td><td>The dealer management system from Nexus Point (deals, invoices, finance). Its data comes in through the Nexus Point Data API.</td></tr>
+<tr><td>AutoView</td><td>The costs system (purchase cost, reconditioning, write-downs). Costs must come from AutoView, not from accounting splits.</td></tr>
+<tr><td>Obeya</td><td>The daily targets meeting. "Obeya" means the KPI page (<code>/kpi</code>), not the Weekly Business Review.</td></tr>
+<tr><td>WBR</td><td>Weekly Business Review.</td></tr>
+<tr><td>DSE</td><td>Daily Spend and Enquiries (marketing spend against enquiries).</td></tr>
+<tr><td>DBS</td><td>The Daily Buyers Sheet in SharePoint: today's purchases not yet on Apex.</td></tr>
+<tr><td>Keeper change</td><td>A change of registered keeper, from Autotrader vehicle history.</td></tr>
+<tr><td>Motability</td><td>A supplier of ex-Motability cars, bought through the MFL Direct website.</td></tr>
+<tr><td>Trade sales</td><td>Cars sold at auction or to the trade rather than to the public.</td></tr>
+</tbody>
+</table>
+
+<h3>Where The Business Rules Are Written Down</h3>
+<ul>
+<li><code>C:\Git\.claude\carsupermarket_intel_hub.md</code> and <code>uk_dbt.md</code>: the agreed rules (sale statuses, interest-free handling, Buying Requirements aggregation, conversion maths).</li>
+<li><code>backend/data/wbr_report_glossary.md</code>: line-by-line definitions for the WBR report.</li>
+<li><code>backend/data/ai_knowledge_seed/</code>: business rules written for Ask AI.</li>
+</ul>
+</section>
+
+<section>
+<h2>Running It Locally</h2>
+<p><strong>Run <code>python main.py</code> from <code>source_code/router/backend</code>; the site opens at <code>http://127.0.0.1:8080/</code>.</strong> It uses uvicorn with auto-reload.</p>
+<ol>
+<li>Install Python 3.12 and Poetry, then run <code>poetry install --with dev</code> in <code>source_code/router</code>.</li>
+<li>Sign in to AWS SSO (<code>aws sso login</code>, or the "Sign In To AWS" item in the account menu, which only appears when running locally). The app reads all logins from Secrets Manager, so nothing works without a session.</li>
+<li>Set <code>LOCAL_ENV=1</code>. This makes the session cookie work over plain http and runs background jobs in a thread instead of calling Lambda.</li>
+<li>Leave <code>AWS_REGION</code> unset or set it to <code>us-east-2</code>. Anything with <code>AWS_REGION=eu-west-1</code> is treated as production, including your laptop.</li>
+</ol>
+<div class="tg-issue"><strong>Careful:</strong> a local run still writes to some <em>production</em> tables (KPI layout, page names, WBR comments, budgets, SharePoint sources, AI knowledge) through <code>get_prod_pricer_connection</code>, and always reads production Snowflake. Settings > Live Update starts production dbt jobs from any environment.</div>
+<p>Other ways to run it: the VS Code launch config (port 8000), or <code>docker-compose.yml</code> (Lambda emulator on port 9000, plus local Postgres and Redis). The compose file sets <code>AWS_REGION=eu-west-1</code>, which makes the container act as production; change it before using it. <code>README.md</code> is out of date (Python 3.9, conda).</p>
+
+<h3>Environment Variables</h3>
+<table>
+<thead><tr><th>Variable</th><th>Effect</th></tr></thead>
+<tbody>
+<tr><td><code>AWS_REGION</code></td><td><code>eu-west-1</code> = production (prod secrets, prod S3 folder, prod database). Anything else = dev.</td></tr>
+<tr><td><code>LOCAL_ENV</code></td><td><code>1</code> = local: http cookie, background jobs in threads, local database override allowed.</td></tr>
+<tr><td><code>AWS_LAMBDA_FUNCTION_NAME</code></td><td>Set by Lambda. Its absence is how <code>is_local_app()</code> knows it is local.</td></tr>
+<tr><td><code>AWS_PROFILE</code></td><td>Profile used by the Sign In To AWS button.</td></tr>
+<tr><td><code>BASE_URL</code></td><td>URL prefix, empty since the 2026-10-27 domain move. Old <code>/dev/...</code> links are redirected.</td></tr>
+<tr><td><code>DB_HOST</code>, <code>VEHICLE_DB_HOST</code> and their <code>_USER</code>, <code>_PASSWORD</code>, <code>_DATABASE</code>, <code>_PORT</code></td><td>Local Postgres instead of Aurora (local only).</td></tr>
+<tr><td><code>DVSA_CLIENT_ID</code>, <code>DVSA_CLIENT_SECRET</code>, <code>DVSA_API_KEY</code></td><td>MOT history API login. Not set by Terraform, so the fallback values in the code are used (see the improvement plan).</td></tr>
+<tr><td><code>CACHE_CLUSTER</code></td><td>Redis host for an unused Redis cache class.</td></tr>
+</tbody>
+</table>
+</section>
+
+<section>
+<h2>AWS Infrastructure</h2>
+<p><strong>Everything runs in one Lambda function per environment, behind API Gateway, built by Terraform in <code>terraform/</code>.</strong></p>
+
+<h3>Environments</h3>
+<table>
+<thead><tr><th></th><th>Dev</th><th>Prod</th></tr></thead>
+<tbody>
+<tr><td>Region</td><td>us-east-2</td><td>eu-west-1</td></tr>
+<tr><td>Website</td><td><code>https://dev-uk-intel-hub.aramis-group.eu</code></td><td><code>https://uk-intel-hub.aramis-group.eu</code></td></tr>
+<tr><td>Lambda</td><td><code>vehicle_list_router_carsupermarket_dev</code></td><td><code>vehicle_list_router_carsupermarket_prod</code></td></tr>
+<tr><td>Git branch that deploys</td><td><code>dev</code></td><td><code>main</code></td></tr>
+<tr><td>Aurora</td><td><code>dev-aurora-pg-core-cluster</code></td><td><code>prod-aurora-pg-core-cluster</code></td></tr>
+<tr><td>S3 folder</td><td><code>.../dev/</code></td><td><code>.../prod/</code></td></tr>
+</tbody>
+</table>
+<p>Intelligence Hub branches are cut from <code>main</code> and merged straight into <code>main</code>, so a merge goes to the production website. Anything unfinished must be hidden behind a setting that is off.</p>
+
+<h3>What Terraform Builds</h3>
+<ul>
+<li><strong>Lambda</strong> (<code>modules/lambda/docker/vpc/lambda.tf</code>): image-based, 3072 MB, 600 s timeout, in two private subnets of the default VPC with its own security group. Logs go to <code>/aws/lambda/&lt;function&gt;</code> for 60 days. <code>ignore_changes = [image_uri]</code>: Terraform never changes the code after creation; CI does.</li>
+<li><strong>API Gateway</strong> (<code>modules/api_gateway/api.tf</code>): REST API, regional, <code>{proxy+}</code> and <code>/</code> both pass everything to the Lambda, no authorizer (the app does its own login). Requests are cut off at 29 seconds by API Gateway, whatever the Lambda timeout.</li>
+<li><strong>Domain</strong>: ACM certificate, a Route53 zone per site name delegated from <code>aramis-group.eu</code>, a regional custom domain and base path mapping.</li>
+<li><strong>Security group</strong> (<code>modules/vpc/security_group/sg.tf</code>) plus a rule letting it reach Aurora on port 5432.</li>
+<li><strong>IAM role</strong> (<code>modules/iam/</code>): S3, CloudWatch Logs, invoke Lambda (used for background jobs), Textract AnalyzeExpense, Secrets Manager read, ECS run/stop task (dbt runs) and pass-role for the dbt task roles.</li>
+</ul>
+<p>Not in Terraform: the S3 bucket, the secrets, Aurora itself, ECR repositories (made by CI), any alarms or schedules. Terraform state is in S3 bucket <code>aa-terraform-running-tfstate-prod</code>, one key, with dev and prod as workspaces. <code>terraform/dev</code> and <code>terraform/prod</code> hold the same files.</p>
+
+<h3>Docker Image</h3>
+<p><code>source_code/router/Dockerfile</code> has two stages on <code>public.ecr.aws/lambda/python:3.12</code>. The first exports Poetry dependencies and installs them into <code>/python_build</code>. The second copies them in, installs Chromium's system libraries, runs <code>python3 -m playwright install chromium</code> (Playwright is not on the PATH), copies <code>backend/</code> and starts <code>main.handler</code>. The running image uses <code>TZ=Europe/London</code>.</p>
+</section>
+
+<section>
+<h2>Deployment</h2>
+<p><strong>Merging to <code>main</code> deploys production; merging to <code>dev</code> deploys dev.</strong> <code>.gitlab-ci.yml</code> uses shared templates from the data platform GitLab project.</p>
+<ol>
+<li><code>.pre</code>: work out region and environment from the branch, make sure the ECR repository exists.</li>
+<li><code>build_docker_image</code>: build and push the image to ECR. <code>plan_tf</code> runs alongside.</li>
+<li><code>deploy_docker_image</code>: point the Lambda at the new image. This is what puts code live.</li>
+</ol>
+<ul>
+<li>Terraform changes to prod are applied by hand by the platform team. Never apply an old <code>plan_tf</code> plan: on 2026-10-19 that rolled the site back to old code.</li>
+<li>There is no test or lint stage. Run the tests yourself before merging (see <a href="#tests">Tests</a>).</li>
+<li>A pre-commit hook blocks commits straight to <code>main</code> and <code>dev</code>.</li>
+<li>Browser files are cache-busted: <code>static_url()</code> adds <code>?v=&lt;hash of the file&gt;</code>, and those URLs are cached for a year, so a deploy always serves the new JS and CSS.</li>
+</ul>
+</section>
+
+<section>
+<h2>Backend Application</h2>
+<p><strong><code>main.py</code> builds the FastAPI app; <code>routers/__init__.py</code> combines every router; <code>routers/core.py</code> holds what they all share.</strong></p>
+
+<h3>Request Path</h3>
+<ol>
+<li>API Gateway passes the request to Mangum (<code>handler</code> in <code>main.py</code>).</li>
+<li>Middleware, outermost first: GZip (keeps big JSON under Lambda's 6 MB response limit), the base path middleware (redirects old <code>/dev/...</code> links, times the request, records slow ones), then the session middleware (signed cookie).</li>
+<li>The route runs. Page routes use <code>Depends(require_page('key'))</code>; data routes use <code>Depends(require_page_api('key'))</code>; admin routes check <code>is_admin(user)</code>.</li>
+<li>Errors: <code>PageRedirect</code> becomes a 303 redirect; other errors render <code>error.html</code> (a database connection error shows "Database Unreachable").</li>
+</ol>
+
+<h3>routers/core.py</h3>
+<table>
+<thead><tr><th>Name</th><th>What it does</th></tr></thead>
+<tbody>
+<tr><td><code>BASE_URL</code>, <code>templates</code></td><td>URL prefix and the shared Jinja environment. Every page must use this <code>templates</code> object.</td></tr>
+<tr><td><code>get_current_user</code></td><td>Returns the signed-in username or None. Signs the user out if their password changed, an admin forced re-login, or the session row is gone.</td></tr>
+<tr><td><code>require_page</code>, <code>require_page_api</code></td><td>Page access checks (redirect for pages, 401/403 for data).</td></tr>
+<tr><td><code>is_admin</code>, <code>ADMIN_USERNAME</code></td><td>The admin is one username, <code>tdrayson</code>.</td></tr>
+<tr><td><code>user_can</code>, <code>visible_pages</code>, <code>page_name</code></td><td>Page access and the names set in Settings > Page Names.</td></tr>
+<tr><td><code>_track</code></td><td>Writes a <code>user_events</code> row (page views and actions) for User Activity.</td></tr>
+<tr><td><code>_uk_now</code></td><td>Current UK time. Use it instead of <code>date.today()</code>, which is UTC on Lambda.</td></tr>
+<tr><td><code>worker_secret</code>, <code>check_worker_secret</code></td><td>The shared secret that background job routes check.</td></tr>
+<tr><td><code>static_url</code></td><td>Static file URL with a content hash for cache-busting.</td></tr>
+</tbody>
+</table>
+<p>Jinja globals available in every template: <code>static_url</code>, <code>page_name</code>, <code>site_name</code>, <code>user_menu</code>, <code>presence_config</code>, <code>appearance_css</code>, <code>user_is_admin</code>, <code>is_local_app</code>, <code>user_details</code>, <code>user_has_permission</code>, <code>page_settings_sections</code>, <code>user_guide_menu</code>. <code>core.py</code> also adds <code>client_errors.js</code> to the head of every page, so browser errors reach the Logs page.</p>
+
+<h3>Caches Inside The App</h3>
+<ul>
+<li>Users, page access, page names, appearance and session settings are read from Aurora and kept in memory for 30-60 seconds per Lambda container.</li>
+<li><code>utils/cache.py</code> <code>@cache</code> keeps Autotrader answers in memory for 24 hours.</li>
+<li>Snowflake results are cached in memory and in S3; see <a href="#snowflake">Snowflake</a>.</li>
+<li>Several Lambda containers can run at once and each has its own memory, so an in-memory change (for example new CAP credentials) only reaches the other containers when their cache runs out or they restart.</li>
+</ul>
+
+<h3>Logging</h3>
+<p><code>utils/app_log.py</code> writes to the Aurora <code>app_logs</code> table: every warning and error, every Snowflake query, SharePoint activity and requests slower than the <code>logs_slow_request_ms</code> setting (default 1000 ms). Rows are kept for <code>logs_retention_days</code> (default 30). The admin reads them on the Logs page. Everything also goes to CloudWatch.</p>
+</section>
+
+<section>
+<h2>Authentication And Access</h2>
+<p><strong>The site has its own username and password login, kept in Aurora, with a signed session cookie. API Gateway does no checking.</strong></p>
+
+<h3>Login</h3>
+<ul>
+<li><code>POST /login</code> (<code>routers/auth.py</code>) accepts a username or an email address (Settings can require email). The password is hashed with SHA-256 and compared to <code>users.pwd_hash</code>.</li>
+<li>The session cookie (Starlette <code>SessionMiddleware</code>) is signed, not encrypted, and lasts 30 days. It holds the username, the password hash, a session ID and the login time.</li>
+<li>Each login is a row in <code>user_sessions</code>. The idle timeout (<code>session_timeout_minutes</code>) closes the activity row and starts a new one; it does not sign the user out. Sign-out happens on logout, Force Re-login, a password change, user deletion or cookie expiry.</li>
+<li>Password rules (<code>utils/password_rules.py</code>): at least 6 characters, a digit, an upper-case letter and a symbol.</li>
+</ul>
+
+<h3>New Users And Password Links</h3>
+<ol>
+<li>The admin adds a user on Settings > User Accounts. A new user is inactive, has an unusable password and no pages.</li>
+<li>The admin creates a set-password link (valid for <code>password_link_hours</code>, default 48) and emails it through Microsoft Graph.</li>
+<li><code>GET /set-password</code> only checks the link, so email preview tools do not use it up. <code>POST /set-password</code> sets the password, activates the user and ends their other sessions.</li>
+</ol>
+<p>Only a hash of the link token is stored (<code>password_links</code>). Making a new link cancels older unused ones.</p>
+
+<h3>Page Access</h3>
+<ul>
+<li><code>routers/page_registry.py</code> is the one list of pages that can be granted. Each has a key, a path, a label and whether it is a default.</li>
+<li>Grants are in <code>user_page_access</code>. A user never configured gets the defaults (Buying Requirements, Supplier Stock Evaluator, Orders &amp; Deliveries). Once saved, a user gets exactly what was ticked, kept apart from "never configured" by a <code>__configured__</code> marker row.</li>
+<li>Settings, Logs, Users and this Technical Guide are not in the list: they are admin only and cannot be granted.</li>
+<li>To add a page: add a <code>Page</code> to <code>PAGES</code>, put <code>require_page</code> on its route and <code>require_page_api</code> on its endpoints. The home tile and the Page Access column follow automatically.</li>
+<li>Roles and permissions (<code>user_roles</code>): one role, <code>buyer</code>, and one permission, <code>approve_site_changes</code>.</li>
+</ul>
+
+<h3>Routes Without A Login</h3>
+<table>
+<thead><tr><th>Route</th><th>Why</th></tr></thead>
+<tbody>
+<tr><td><code>/login</code>, <code>/set-password</code>, <code>/logout</code>, <code>/static/*</code>, <code>/healthcheck</code></td><td>Needed before sign-in</td></tr>
+<tr><td><code>/api/enterprise-email/create-task</code>, <code>/start-task</code></td><td>Called by Power Automate when the Enterprise stock email arrives</td></tr>
+<tr><td><code>/elaborate-task</code>, <code>/api/fetch-supplier-stock-internal</code>, <code>/api/reports/run</code></td><td>Background job routes called by the Lambda itself. <strong>They have no secret check; see the improvement plan.</strong></td></tr>
+<tr><td><code>/api/api-requests/run</code>, <code>/api/cars-bought/inbox-run</code>, <code>/keeper-change-check/run</code>, <code>/api/prod-to-dev/run</code>, <code>/api/sharepoint/refresh-run</code></td><td>Background job routes protected by the worker secret</td></tr>
+</tbody>
+</table>
+</section>
+
+<section>
+<h2>Aurora PostgreSQL</h2>
+<p><strong>The site's own data (users, settings, page layouts, tasks, vehicles, valuations, comments, budgets, logs) is in the <code>carsupermarket_pricer</code> database on the shared Aurora PostgreSQL cluster.</strong></p>
+
+<h3>Connections</h3>
+<ul>
+<li><code>utils/db_utils.py</code> uses psycopg2 <code>ThreadedConnectionPool</code>s. Login details come from Secrets Manager <code>&lt;env&gt;/aramis_group/data_platform/rds/aurora_pg_core_cluster_admin_credentials</code> (the cluster admin login).</li>
+<li>Always use the context managers, which give the connection back to the pool:
+<pre><code>with get_database_connection() as conn:
+    with conn.cursor() as cur:
+        cur.execute("SELECT value FROM settings WHERE key = %s", (key,))</code></pre></li>
+</ul>
+<table>
+<thead><tr><th>Function</th><th>Database it reaches</th><th>Used for</th></tr></thead>
+<tbody>
+<tr><td><code>get_database_connection</code></td><td>This environment's cluster (pool of 10)</td><td>Almost everything</td></tr>
+<tr><td><code>get_prod_pricer_connection</code></td><td>Prod when run locally; this environment on Lambda</td><td>KPI layout, page names, WBR comments, budgets, SharePoint sources, AI knowledge, AT invoices: data that should be the same everywhere</td></tr>
+<tr><td><code>get_prod_activity_connection</code></td><td>Prod from every environment, including dev</td><td>User sessions, the Users page prod view, Developments, User Guide</td></tr>
+<tr><td><code>get_vehicle_database_connection</code></td><td>Same as the main pool (or a local override)</td><td>The vehicle store</td></tr>
+</tbody>
+</table>
+<p>The dev Lambda can reach the prod cluster (some older code comments say it cannot; they are out of date). There is no RDS Proxy: each Lambda container opens up to 10 connections and the cluster allows about 400.</p>
+
+<h3>Tables</h3>
+<table>
+<thead><tr><th>Area</th><th>Tables</th></tr></thead>
+<tbody>
+<tr><td>Users and access</td><td><code>users</code>, <code>user_page_access</code>, <code>user_roles</code>, <code>password_links</code>, <code>user_sessions</code>, <code>user_events</code>, <code>user_preferences</code>, <code>page_presence</code>, <code>page_names</code></td></tr>
+<tr><td>Settings and layouts</td><td><code>settings</code> (key/value; defaults in <code>SETTINGS_DEFAULTS</code>), <code>kpi_layout</code> (JSON for KPI, WBR, Stock List, Apex Missing Finance, DSE and more), <code>kpi_layout_history</code>, <code>chart_targets</code>, <code>ga4_campaigns</code></td></tr>
+<tr><td>Supplier evaluator and vehicles</td><td><code>tasks</code>, <code>suppliers</code>, <code>supplier_invoice_names</code>, <code>vehicles</code>, <code>vehicle_valuations</code>, <code>supplier_vehicle_listings</code>, <code>supplier_vehicle_status</code>, <code>vehicle_buyer_figures</code>, <code>cap_images</code>, <code>vehicle_spec_checks</code></td></tr>
+<tr><td>Cars Bought</td><td><code>purchase_batches</code>, <code>purchase_vehicles</code>, <code>purchase_invoice_files</code></td></tr>
+<tr><td>Reporting</td><td><code>wbr_comments</code> (also vehicle comments), <code>user_alerts</code>, <code>budget_lines</code>, <code>budget_values</code>, <code>at_invoices</code>, <code>at_invoice_lines</code>, <code>vehicle_site_changes</code>, <code>subsidy_rate_schedules</code>, <code>subsidy_rate_benchmarks</code>, <code>snowflake_column_cache</code></td></tr>
+<tr><td>Admin and jobs</td><td><code>app_logs</code>, <code>sharepoint_sources</code>, <code>sharepoint_refresh_jobs</code>, <code>api_request_routes</code>, <code>api_request_jobs</code>, <code>dbt_job_definitions</code>, <code>dbt_runs</code>, <code>dbt_lineage</code>, <code>live_update_recipes</code>, <code>live_update_runs</code>, <code>prod_to_dev_jobs</code>, <code>developments</code>, <code>development_emails</code>, <code>user_guide_sections</code>, <code>user_guide_settings</code>, <code>ai_knowledge</code>, <code>ai_page_settings</code></td></tr>
+</tbody>
+</table>
+
+<h3>Shared Vehicle Store</h3>
+<p>Assessing, pricing and buying share one set of tables keyed on VRM and supplier, through <code>utils/vehicle_store.py</code> and <code>utils/supplier_store.py</code>. Never add a separate copy of vehicle, supplier, CAP, Autotrader, RRP or prep cost data for one page.</p>
+<ul>
+<li><code>vehicles</code>: one row per VRM, with Autotrader and CAP identity and spec.</li>
+<li><code>vehicle_valuations</code>: one row per lookup (VRM + mileage rounded to 1,000). Reused for <code>valuation_cache_hours</code> (default 36), so the same car is not paid for twice.</li>
+<li><code>supplier_vehicle_listings</code>: every car on every imported list (price history).</li>
+<li><code>supplier_vehicle_status</code>: one row per VRM and supplier: first and last seen, removed, current and previous price.</li>
+</ul>
+
+<h3>How The Schema Is Made</h3>
+<p>Most tables are created by the app the first time they are needed (<code>CREATE TABLE IF NOT EXISTS</code>, run once per container through <code>utils/ddl_once.py</code>). The <code>db/</code> SQL files are a record of the main tables, not a full or re-runnable set. To add a column, follow the module's existing <code>_ensure_...</code> function and add a matching <code>db/</code> file.</p>
+</section>
+
+<section>
+<h2>Snowflake</h2>
+<p><strong>Snowflake holds the business data (stock, sales, finance, marketing), built by the dbt projects. Intelligence Hub only reads it, always from <code>PROD_CARSUPERMARKET_DB</code>.</strong></p>
+<ul>
+<li><code>utils/snowflake_client.py</code> logs in with username and password from <code>prod/carsupermarket/core/snowflake/data_analyst_credentials</code>, the same in every environment. It keeps up to 4 open connections per container and retries once on a dropped connection. Every query is written to <code>app_logs</code>.</li>
+<li>Names: <code>SOURCE_*</code> schemas are raw data (dbt <code>__s</code> models), <code>COMPUTE_*</code> are business logic (<code>__c</code>), <code>PRODUCT_*</code> are finished tables for reports (<code>__p</code>).</li>
+<li>Only PROD dbt is scheduled (Rundeck, at about 08:15, 10:15, 12:15, 14:15 and 16:15 UK). Several caches here expect those times.</li>
+</ul>
+
+<h3>Tables Used</h3>
+<table>
+<thead><tr><th>Table</th><th>Used by</th></tr></thead>
+<tbody>
+<tr><td><code>PRODUCT_VEHICLE_JOURNEY.BUYING_REQUIREMENTS</code></td><td>Buying Requirements, Assess Vehicle</td></tr>
+<tr><td><code>PRODUCT_VEHICLE_JOURNEY.CURRENT_STOCK</code></td><td>Stock List</td></tr>
+<tr><td><code>PRODUCT_VEHICLE_JOURNEY.PURCHASES</code></td><td>WBR report</td></tr>
+<tr><td><code>PRODUCT_SLT_KPIS.DAILY_SUMMARY</code></td><td>KPI, WBR</td></tr>
+<tr><td><code>PRODUCT_SALES_PERFORMANCE.SALES_PERFORMANCE</code></td><td>Orders &amp; Deliveries, KPI vehicle lists</td></tr>
+<tr><td><code>PRODUCT_SALES_PERFORMANCE.TRADE_SALES</code></td><td>Trade Report</td></tr>
+<tr><td><code>PRODUCT_SALES_PERFORMANCE.MISSING_FINANCE_AMOUNTS</code></td><td>Apex Missing Finance</td></tr>
+<tr><td><code>PRODUCT_SALES_PERFORMANCE.WEEKLY_BUSINESS_REVIEW</code>, <code>SOURCE_FINANCE.MANAGEMENT_ACCOUNTS</code></td><td>WBR report</td></tr>
+<tr><td><code>COMPUTE_UX_TRACKING.GA4_CAMPAIGN_METRICS</code></td><td>Google Ads Campaigns</td></tr>
+<tr><td><code>COMPUTE_SALES_B2C.ENQUIRIES</code></td><td>Apex Reports (CRM enquiries)</td></tr>
+<tr><td><code>SOURCE_VEHICLES.*</code>, <code>COMPUTE_VEHICLES.VEHICLES</code>, <code>SOURCE_COMPANY.ORGANISATION_UNITS</code></td><td>Apex Reports (Vehicles AutoEdit)</td></tr>
+<tr><td><code>SOURCE_PURCHASES_B2B.CONTACTS_SUPPLIERS</code></td><td>Cars Bought supplier list</td></tr>
+<tr><td>Any <code>COMPUTE_</code> / <code>PRODUCT_</code> table the admin picks</td><td>KPI data sources, DSE rows, Cars Bought metric columns. Names are checked against <code>INFORMATION_SCHEMA</code> before use.</td></tr>
+</tbody>
+</table>
+
+<h3>Caching Snowflake Results</h3>
+<ul>
+<li>Most pages keep results in memory, then in S3, and only query Snowflake when both are out of date.</li>
+<li>S3 cache files have a version in the name (for example <code>buying_requirements_v25.json</code>, <code>orders_deliveries_v14.json</code>). <strong>When a query adds or removes columns, raise the version number</strong>, or the old file is served and new columns show blank.</li>
+<li>Buying Requirements and Orders &amp; Deliveries treat their cache as fresh until 45 minutes after the next dbt run time.</li>
+<li>Files under <code>.../shared/</code> are used by dev and prod alike.</li>
+</ul>
+<p>Snowflake Cortex (Snowflake's built-in AI) must not be used. <code>utils/cortex.py</code> now always raises <code>AIUnavailable</code>, so Ask AI on KPI and Orders &amp; Deliveries is switched off until it is rebuilt on another AI service.</p>
+</section>
+
+<section>
+<h2>S3</h2>
+<p><strong>One bucket, <code>aa-raw-sources-uk</code>, always in eu-west-1.</strong> Always create S3 clients with <code>region_name='eu-west-1'</code>: the dev Lambda runs in us-east-2, and presigned URLs signed for the wrong region fail with a 400.</p>
+<table>
+<thead><tr><th>Path under <code>applications/pricing/uk-vehicle-list-evaluator/&lt;env&gt;/</code></th><th>Contents</th></tr></thead>
+<tbody>
+<tr><td><code>raw/</code>, <code>elaborated/</code>, <code>error-logs/</code></td><td>Supplier list uploads, valued output files, API error logs</td></tr>
+<tr><td><code>cache/</code></td><td>Snowflake result caches</td></tr>
+<tr><td><code>reports/</code></td><td>Apex Reports: task list, status, outputs, Nexus data cache</td></tr>
+<tr><td><code>cap-lookup/</code>, <code>mot-check/</code>, <code>keeper-change/</code></td><td>Job state and result files</td></tr>
+<tr><td><code>cars_bought/</code></td><td>Uploaded invoices, job files, metric caches</td></tr>
+<tr><td><code>autotrader_invoices/</code>, <code>weekly_business_review/</code></td><td>AT invoice PDFs, chart images for Slides</td></tr>
+</tbody>
+</table>
+<p>Also: <code>.../shared/</code> (caches used by both environments) and <code>nexus_point/&lt;route&gt;/json/v0/year=/month=/day=/hour=/</code>, the raw Nexus files that dbt reads. Writing there from dev or local changes what prod dbt sees.</p>
+</section>
+
+<section>
+<h2>Secrets Manager</h2>
+<p><strong>All logins and keys come from Secrets Manager, cached for 5 minutes (<code>utils/secrets_manager_client.py</code>).</strong> The region follows the name: <code>prod/</code> is eu-west-1, <code>dev/</code> is us-east-2. Values are never written here.</p>
+<table>
+<thead><tr><th>Secret</th><th>Holds</th></tr></thead>
+<tbody>
+<tr><td><code>&lt;env&gt;/aramis_group/data_platform/rds/aurora_pg_core_cluster_admin_credentials</code></td><td>Aurora endpoint, username, password, port</td></tr>
+<tr><td><code>prod/carsupermarket/core/snowflake/data_analyst_credentials</code></td><td>Snowflake user, password, account, warehouse, database, role</td></tr>
+<tr><td><code>&lt;env&gt;/carsupermarket/car_pricer/api_access</code></td><td>Autotrader (<code>ADVERTISER_ID</code>, <code>AUTOTRADER_KEY</code>, <code>AUTOTRADER_SECRET</code>), CAP (<code>CAP_SUBSCRIBER_ID</code>, <code>CAP_PASSWORD</code>, test pair), HPI (<code>HPI_CUSTOMER_CODE</code>, <code>HPI_INITIALS</code>, <code>HPI_PASSWORD</code>), Motability, 1link, Google OAuth (<code>GOOGLE_OAUTH_CLIENT_ID</code>, <code>GOOGLE_OAUTH_CLIENT_SECRET</code>, <code>GOOGLE_TOKEN_KEY</code>), <code>WORKER_SHARED_SECRET</code></td></tr>
+<tr><td><code>prod/carsupermarket/sharepoint/credentials</code></td><td>Microsoft Graph app login for SharePoint, and a second "Website Mailer" app login for email (expires 03/11/2027)</td></tr>
+<tr><td><code>prod/carsupermarket/car_pricer/nexus_point_api_access</code></td><td>Nexus Point Data API token</td></tr>
+</tbody>
+</table>
+</section>
+
+<section>
+<h2>Outside APIs</h2>
+<p><strong>Every outside service, what it is for, and how it is called.</strong> CAP and Autotrader calls are throttled by <code>utils/rate_limiter.py</code>; their limits are on Settings > Page Settings > Supplier Stock Evaluator (<code>cap_workers</code> 25, <code>cap_rate_limit</code> 100/s, <code>at_workers</code> 40, <code>at_rate_limit</code> 60/s).</p>
+
+<h3>CAP HPI</h3>
+<p>Trade valuations. <code>clients/cap_client.py</code>, SOAP-style form posts to <code>soap.cap.co.uk</code>: valuation by VRM, live value by CAP ID and registration date, monthly value, model image. Login from <code>api_access</code>, or the override on Settings > CAP Credentials. 20 s timeout, 3 tries. Used by the Supplier Stock Evaluator, Assess Vehicle, CAP Lookup and Cars Bought.</p>
+
+<h3>Autotrader Connect</h3>
+<p>Retail valuation, retail rating, days to sell, vehicle data and features, keeper history, advert allowance. <code>clients/autotrader_client.py</code>, <code>api.autotrader.co.uk</code> (<code>/authenticate</code>, <code>/vehicles</code>, <code>/valuations</code>, <code>/advertisers</code>). Answers are kept in memory for 24 hours. A supplier run stops after 10 "too many requests" replies. For advert status use only <code>adverts_retail_autotrader_advert_status</code>.</p>
+
+<h3>HPI Spec Check</h3>
+<p>The options a car left the factory with. <code>clients/spec_check_client.py</code>, SOAP to <code>wss.hpi.co.uk</code> (live only; our login does not work on the test service). <strong>Every call is billed</strong>, so it is a manual button on Assess Vehicle only, behind a confirmation, and every answer (including "no data", codes 103 and 120) is stored for ever in <code>vehicle_spec_checks</code> and never asked for again.</p>
+
+<h3>DVSA MOT History</h3>
+<p>Government MOT test history. <code>utils/dvsa_client.py</code>: Microsoft login token, then <code>history.mot.api.gov.uk/v1/trade/vehicles/registration/{vrm}</code> with an API key. Used by MOT Check, which flags mileage going backwards and early tests.</p>
+
+<h3>Microsoft Graph (SharePoint And Email)</h3>
+<ul>
+<li><strong>SharePoint</strong> (<code>utils/sharepoint_client.py</code>, <code>utils/sharepoint_sources.py</code>): reads workbooks from <code>carsmkt.sharepoint.com</code>, for example the Daily Buyers Sheet, Cars Bought, Daily Spend and Enquiries, Autotrader CTR and the WBR sheets. The list of files is on Settings > SharePoint. Before using a copy, the app asks Graph when the file was last saved; a newer file is downloaded by a background job and kept in memory and S3. Workbooks are read with python-calamine.</li>
+<li><strong>Email</strong> (<code>utils/email_client.py</code>): sends as <code>intel-hub@carsupermarket.com</code> through the Website Mailer app. Used for password links, Developments emails and the test email.</li>
+<li><strong>Cars Bought invoice folder</strong>: PDFs dropped in <code>Department/Buying/Invoices</code> are picked up and read.</li>
+</ul>
+
+<h3>Nexus Point (Apex Data API)</h3>
+<p>Apex's data, from <code>data-api.nexuspointapex.com</code> with a bearer token. <code>utils/nexus_ingest.py</code> (Settings > Live Update API pulls, which write the raw S3 files dbt reads, and the "Import From Nexus" user import) and <code>reports/nexus_source.py</code> (recent changes on top of Snowflake for Apex Reports). The API's <code>updated_at</code> filter is UK local time.</p>
+
+<h3>Google Slides</h3>
+<p>Exports the Weekly Business Review to a Google Slides deck. <code>clients/google_slides_client.py</code> and <code>utils/google_oauth.py</code>. The admin connects a Google account on Settings > Google (scope <code>drive.file</code>); the refresh token is stored encrypted in <code>settings</code>. Chart images are passed to Google as 10-minute S3 links.</p>
+
+<h3>Supplier Websites</h3>
+<ul>
+<li><strong>Motability</strong> (<code>supplier_stock/motability_client.py</code>): headless Chromium (Playwright) logs in to MFL Direct and downloads the stock list.</li>
+<li><strong>1link</strong> (<code>supplier_stock/onelink_client.py</code>): token then stock list from <code>disposalnetwork.1link.co.uk</code>. Light commercial vehicles are dropped.</li>
+<li><strong>Enterprise</strong>: arrives by email; Power Automate calls <code>/api/enterprise-email/create-task</code>, uploads the file to the presigned S3 link, then calls <code>/start-task</code>.</li>
+</ul>
+
+<h3>AWS Services Called By The App</h3>
+<ul>
+<li><strong>Textract AnalyzeExpense</strong>: reads supplier invoice PDFs for Cars Bought (no AI model).</li>
+<li><strong>ECS</strong>: Settings > Live Update starts the dbt raw, transform and product tasks on <code>aramis_group_core_prod_cluster</code> (always prod) and reads their CloudWatch logs.</li>
+<li><strong>Lambda invoke</strong>: background jobs (next section).</li>
+</ul>
+</section>
+
+<section>
+<h2 id="background-jobs">Background Jobs</h2>
+<p><strong>Anything that takes longer than a page can wait for runs as a second call to the same Lambda, started in the background.</strong></p>
+<ol>
+<li>The page posts to a start route. It saves a job row (Aurora table or S3 file) and returns straight away.</li>
+<li>The start route calls <code>LambdaRequestsManager().simulate_http(...)</code> (<code>utils/lambda_http.py</code>), which invokes the same Lambda with <code>InvocationType='Event'</code> and a made-up API Gateway request for the worker route. Locally (<code>LOCAL_ENV=1</code>) it runs in a thread instead.</li>
+<li>The worker route checks the worker secret, does the work (up to the 600 s Lambda limit) and writes progress to the job row.</li>
+<li>The page polls a status route and shows progress.</li>
+</ol>
+<table>
+<thead><tr><th>Job</th><th>Worker route</th></tr></thead>
+<tbody>
+<tr><td>Supplier list valuation</td><td><code>/elaborate-task</code></td></tr>
+<tr><td>Motability / 1link fetch</td><td><code>/api/fetch-supplier-stock-internal</code></td></tr>
+<tr><td>Apex Reports</td><td><code>/api/reports/run</code></td></tr>
+<tr><td>Keeper Change Check (chunks of 2,500)</td><td><code>/keeper-change-check/run</code></td></tr>
+<tr><td>Nexus API pulls</td><td><code>/api/api-requests/run</code></td></tr>
+<tr><td>SharePoint downloads</td><td><code>/api/sharepoint/refresh-run</code></td></tr>
+<tr><td>Cars Bought invoice folder</td><td><code>/api/cars-bought/inbox-run</code></td></tr>
+<tr><td>Copy Prod To Dev</td><td><code>/api/prod-to-dev/run</code></td></tr>
+</tbody>
+</table>
+<p>Do not start plain threads for work that must finish: Lambda freezes the container as soon as the response is sent. MOT Check and the home page cache warm-up still use threads.</p>
+
+<h3>Supplier Stock Evaluator In Detail</h3>
+<ol>
+<li>Upload (or Get Stock, or the Enterprise email) saves a <code>tasks</code> row and the file in S3 <code>raw/</code>.</li>
+<li><code>/elaborate-task</code> downloads it and calls <code>supplier_stock/batch_processor.process_file_with_cache</code>.</li>
+<li>Rows are mapped to standard columns per supplier (<code>clients/columns_mapper.py</code>).</li>
+<li>Stored valuations still in date are read in one batch; only the rest go to CAP and Autotrader, both at once in their own worker pools.</li>
+<li>Results are written to the vehicle store in batches, price reductions against the last list are counted, and the output xlsx goes to S3 <code>elaborated/</code>.</li>
+<li>Progress lines are written to <code>tasks.progress_message</code> every 1.5 s; the page polls <code>/api/tasks-json</code>.</li>
+</ol>
+</section>
+
+<section>
+<h2>Pages</h2>
+<p><strong>Each page is a template in <code>templates/</code>, a router in <code>routers/</code>, and for bigger pages a JS file in <code>static/js/</code>.</strong> Smaller pages keep their JS inside the template.</p>
+<table>
+<thead><tr><th>Page</th><th>URL</th><th>Files</th><th>Data</th><th>What it is for</th></tr></thead>
+<tbody>
+<tr><td>Home</td><td><code>/home</code></td><td><code>pages.py</code>, <code>home.html</code></td><td>Page access</td><td>A tile for each page the user may open. Also warms caches.</td></tr>
+<tr><td>Buying Requirements</td><td><code>/buying-requirements</code></td><td><code>buying_requirements.py/.html/.js</code></td><td>Snowflake <code>BUYING_REQUIREMENTS</code>, Daily Buyers Sheet, Cars Bought</td><td>How many of each model and price band to buy, with sales speed and margin.</td></tr>
+<tr><td>Supplier Stock Evaluator</td><td><code>/tasks</code></td><td><code>tasks.py</code>, <code>supplier_stock_evaluator.html</code></td><td>Supplier files, CAP, Autotrader, vehicle store</td><td>Values every car on a supplier list.</td></tr>
+<tr><td>Assess Vehicle</td><td><code>/assess-vehicle</code></td><td><code>assess_vehicle.py/.html/.js</code></td><td>CAP, Autotrader, HPI, Snowflake, vehicle store</td><td>Everything about one car before buying it.</td></tr>
+<tr><td>Cars Bought</td><td><code>/cars-bought</code></td><td><code>cars_bought.py</code>, <code>cars_bought_table.html</code>, <code>cars_bought*.js</code></td><td>Invoices (Textract), SharePoint, Aurora</td><td>Turns supplier invoices into purchase records.</td></tr>
+<tr><td>KPI (Obeya)</td><td><code>/kpi</code></td><td><code>kpi.py</code>, <code>kpi.html</code>, <code>kpi.js</code>, <code>charts.js</code></td><td>Snowflake <code>DAILY_SUMMARY</code> and chosen tables, SharePoint, AT invoices</td><td>Daily, weekly and monthly KPI charts against targets. Layout in <code>kpi_layout</code>.</td></tr>
+<tr><td>Weekly Business Review</td><td><code>/weekly-business-review</code></td><td><code>kpi.html</code> (<code>page_mode="wbr"</code>), <code>wbr_report*.py</code>, <code>budgets.py</code>, <code>wbr_comments.py</code></td><td>Snowflake, SharePoint, budgets</td><td>Grid, slides and report views, comments, budgets, Google Slides export.</td></tr>
+<tr><td>Orders &amp; Deliveries</td><td><code>/reports/orders-deliveries</code></td><td><code>orders_deliveries.py/.html/.js</code></td><td>Snowflake <code>SALES_PERFORMANCE</code></td><td>Orders (by order date) and deliveries (by invoice date) by supplier, sales type and bands.</td></tr>
+<tr><td>Trade Report</td><td><code>/reports/trade</code></td><td><code>trade_report.py/.js</code></td><td>Snowflake <code>TRADE_SALES</code></td><td>Cars sold to trade or at auction.</td></tr>
+<tr><td>DSE</td><td><code>/dse</code></td><td><code>dse.py/.js</code></td><td>Admin-chosen Snowflake tables</td><td>Daily marketing spend and enquiries.</td></tr>
+<tr><td>Google Ads Campaigns</td><td><code>/google-ads-campaigns</code></td><td><code>kpi.py</code>, <code>google_ads_campaigns.html</code></td><td>Snowflake <code>GA4_CAMPAIGN_METRICS</code></td><td>Campaign sessions and conversions against targets.</td></tr>
+<tr><td>Stock List</td><td><code>/stock-list</code></td><td><code>pages.py</code>, <code>stock_list.html/.js</code></td><td>Snowflake <code>CURRENT_STOCK</code></td><td>Current stock with admin-chosen columns and filters.</td></tr>
+<tr><td>Apex Reports</td><td><code>/reports/apex</code></td><td><code>reports.py</code>, <code>reports/</code></td><td>Snowflake plus Nexus API</td><td>Rebuilds retired Apex reports as downloads.</td></tr>
+<tr><td>Apex Missing Finance</td><td><code>/reports/apex-missing-finance</code></td><td><code>apex_missing_finance.py/.js</code></td><td>Snowflake <code>MISSING_FINANCE_AMOUNTS</code></td><td>Orders missing finance commission or subsidy in Apex.</td></tr>
+<tr><td>Keeper Change Check</td><td><code>/keeper-change-check</code></td><td><code>keeper_change.py</code></td><td>Autotrader history</td><td>Last keeper change and owner count for a list of VRMs.</td></tr>
+<tr><td>MOT Check</td><td><code>/mot-check</code></td><td><code>mot_check.py</code></td><td>DVSA, Cars Bought</td><td>MOT history with mileage warnings.</td></tr>
+<tr><td>CAP Lookup</td><td><code>/cap-lookup</code></td><td><code>cap_lookup.py</code></td><td>CAP</td><td>CAP IDs for a list of VRMs; current or historic values.</td></tr>
+<tr><td>Subsidy Rates</td><td><code>/subsidy-rates</code></td><td><code>subsidy_rates.py</code></td><td>Aurora</td><td>Fills 0% finance subsidy % for every term from 1 to 120 months.</td></tr>
+<tr><td>Email Attachment Extractor</td><td><code>/email-attachments</code></td><td><code>email_attachments.py/.html</code></td><td>Browser only</td><td>Pulls attachments out of an Outlook <code>.msg</code> file in the browser.</td></tr>
+<tr><td>User Guide</td><td><code>/user-guide</code></td><td><code>user_guide.py</code></td><td>Aurora</td><td>Help written by the admin, per section and audience.</td></tr>
+<tr><td>What's New</td><td><code>/whats-new</code></td><td><code>developments.py</code></td><td>Aurora</td><td>Change log; edited on Settings > Developments.</td></tr>
+<tr><td>My Account</td><td><code>/my-account</code></td><td><code>pages.py</code></td><td>Aurora</td><td>The user's own details.</td></tr>
+<tr><td>Logs</td><td><code>/logs</code></td><td><code>logs.py</code></td><td><code>app_logs</code></td><td>Admin only. Errors, slow requests, Snowflake queries.</td></tr>
+<tr><td>Technical Guide</td><td><code>/technical-guide</code></td><td><code>technical_guide.py</code>, <code>technical_guide*.html</code></td><td>This file</td><td>Admin only. This page.</td></tr>
+</tbody>
+</table>
+
+<h3>Buying Requirements Rules</h3>
+<ul>
+<li>A row is a CAP ID and price band. Bands come from Snowflake; cars on today's buyers sheet are banded from their RRP, and any car with an "RRP 0%" value goes in the interest-free band.</li>
+<li>Days in stock, days to sell and margin averages use sold or ordered cars only (<code>sales90 === 1</code>). Max DIS, Max DTS and Min GPU-M filters apply to the table, the vehicle popup and the export.</li>
+<li>Ideal Stock and Required are kept as decimals and shown to 1 decimal place; never round them before summing.</li>
+<li>The export groups by CAP ID only and leaves interest-free cars out of price averages.</li>
+</ul>
+
+<h3>Orders &amp; Deliveries Rules</h3>
+<ul>
+<li>Orders count <code>STATUS_ACKNOWLEDGED</code> and <code>STATUS_PAID</code> by order date; deliveries count <code>STATUS_PAID</code> by invoice date. Credited invoices are left out.</li>
+<li>Covers the last three full months plus this month. Price, mileage and age bands are editable in its settings.</li>
+</ul>
+</section>
+
+<section>
+<h2>Front End</h2>
+<p><strong>Every page is a full HTML file (no shared base template) that calls <code>page_header(title, user)</code> from <code>_navigation.html</code> and talks to the server with <code>fetch()</code> and JSON.</strong></p>
+<ul>
+<li><code>_navigation.html</code>: the header row, side menu (built from <code>user_menu()</code> and the page categories in Settings > Page Names), alerts bell, live users and account menu.</li>
+<li><code>static/css/theme.css</code>: colours, borders, radii and the red-amber-green shading scale. Settings > Appearance overrides them. Check it before adding a colour to a page.</li>
+<li><code>static/js/shading.js</code>: <code>shadeScale()</code> for red-amber-green table cells.</li>
+<li><code>static/js/charts.js</code>: shared Chart.js helpers (target background, labels, day window).</li>
+<li>Other shared JS: <code>searchable_select.js</code> (search box on long drop-downs), <code>column_editor.js</code>, <code>colour_picker.js</code>, <code>popup_scroll_lock.js</code>, <code>date_range_jump.js</code>, <code>live_users.js</code>, <code>alerts.js</code>, <code>client_errors.js</code>, <code>account_nav.js</code>.</li>
+<li>Pages pass <code>BASE_URL</code> to JS as <code>window.BASE_URL</code> or a <code>data-base</code> attribute.</li>
+</ul>
+
+<h3>Rules For New Front-End Work</h3>
+<ul>
+<li>Make things editable on the page (a setting, a list to add to and rename) rather than fixed in code. Put sizes, colours and labels next to similar existing settings.</li>
+<li>All visible text in Proper Case. No <code>text-transform: uppercase</code> except on number plates.</li>
+<li>A popup that saves must grey out (<code>busy</code> on <code>.modal-box</code>), disable its button and show "Saving..." until done. Copy <code>whileSaving()</code> in <code>trade_report.js</code>.</li>
+<li>Any new From / To date pair goes in <code>PAIRS</code> in <code>date_range_jump.js</code>.</li>
+<li>Escape any server or user text before putting it in <code>innerHTML</code>.</li>
+<li>Run <code>node --check</code> on every changed JS file: one syntax error stops the whole file and the page sticks on "Loading...".</li>
+<li>Downloads of xlsx files must set the xlsx media type and an explicit <code>Content-Disposition</code> header.</li>
+</ul>
+</section>
+
+<section>
+<h2>Settings Area</h2>
+<p><strong>Settings (<code>/settings-page</code>) is admin only.</strong> Each section saves only its own keys to the <code>settings</code> table.</p>
+<table>
+<thead><tr><th>Section</th><th>What it controls</th></tr></thead>
+<tbody>
+<tr><td>Page Settings</td><td>Per-page settings: Buying Requirements (number to buy, filters, cache minutes), Supplier Stock Evaluator (API workers and limits, valuation cache hours), MOT Check, Email Attachments</td></tr>
+<tr><td>AI</td><td>Ask AI switches and knowledge (currently off)</td></tr>
+<tr><td>CAP Credentials</td><td>Override the CAP login</td></tr>
+<tr><td>Email</td><td>Sender address and a test email</td></tr>
+<tr><td>Live Users</td><td>Who can see who is online</td></tr>
+<tr><td>Appearance</td><td>Site-wide colours and sizes</td></tr>
+<tr><td>SharePoint</td><td>The workbooks the site reads</td></tr>
+<tr><td>GA4 Requests</td><td>List of GA4 ingestion steps</td></tr>
+<tr><td>Prod To Dev</td><td>Copies settings, KPI layout, page names and similar tables from prod to dev</td></tr>
+<tr><td>Live Update</td><td>Nexus API pulls and dbt runs, singly or as a recipe</td></tr>
+<tr><td>Google</td><td>Connect the Google account used for Slides export</td></tr>
+<tr><td>Users</td><td>User accounts, page access, user activity, force re-login, login mode</td></tr>
+<tr><td>Page Names</td><td>Names, categories, order and hiding of pages</td></tr>
+<tr><td>Developments, User Guide</td><td>What's New entries and emails; User Guide sections</td></tr>
+</tbody>
+</table>
+</section>
+
+<section>
+<h2 id="tests">Tests</h2>
+<p><strong>Run <code>poetry run pytest tests/</code> from <code>source_code/router/backend</code>.</strong> CI does not run them.</p>
+<ul>
+<li>26 files, mostly KPI, WBR, Cars Bought, User Guide, page access and password links.</li>
+<li>Importing <code>routers</code> tries to load users from Aurora; without an AWS session it falls back quietly.</li>
+<li>No tests yet for login, sessions, the supplier evaluator or background jobs.</li>
+<li>Before merging: run the tests, <code>node --check</code> every changed JS file, and open every page the change touches.</li>
+</ul>
+</section>
+
+<section>
+<h2>Known Problems</h2>
+<p><strong>The full list, with file references, how to fix and how to test, is in <code>docs/improvement_plan.md</code>.</strong> The most urgent:</p>
+<ul>
+<li>Five background job routes run with no login or secret check, on a public address.</li>
+<li>The session cookie signing key and the DVSA API login are written in the code.</li>
+<li>Passwords are stored as unsalted SHA-256, and the hash is inside the readable session cookie. No limit on login attempts.</li>
+<li>Supplier Stock Evaluator puts file names into the page without escaping them.</li>
+<li>The Lambda role can read every secret and every S3 bucket in the account; the app uses the Aurora admin login.</li>
+<li>Failed Autotrader calls are cached as answers for 24 hours.</li>
+</ul>
+</section>
+{% endraw %}
