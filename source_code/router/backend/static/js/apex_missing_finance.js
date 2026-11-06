@@ -508,6 +508,8 @@ function downloadCsv() {
 }
 
 /* ── Settings (admin only) ───────────────────────────────────────────────── */
+const ALERT_API = API + '/alert';
+let alertEditor = null;
 let columnEditor = null;
 let liveColumns = [];
 let filterDraft = [];
@@ -594,6 +596,8 @@ async function openSettings() {
     document.getElementById('settingsSaveBtn').disabled = true;
     document.getElementById('colEditor').innerHTML = '';
     bootstrap.Modal.getOrCreateInstance(document.getElementById('settingsModal')).show();
+    alertEditor = new PageAlerts.Editor(document.getElementById('alertEditor'), ALERT_API);
+    alertEditor.load();
     try {
         const resp = await fetch(API + '/columns').then(r => r.json());
         if (resp.status !== 'ok') throw new Error(resp.message || 'Could not read the columns');
@@ -632,8 +636,11 @@ async function openSettings() {
 async function saveSettings() {
     if (!columnEditor) return;
     const btn = document.getElementById('settingsSaveBtn');
-    btn.disabled = true;
     settingsError('');
+    await PageAlerts.whileBusy(btn, 'Saving...', saveSettingsNow);
+}
+
+async function saveSettingsNow() {
     try {
         const body = {
             columns: columnEditor.columns(),
@@ -651,12 +658,13 @@ async function saveSettings() {
             body: JSON.stringify(body),
         }).then(r => r.json());
         if (resp.status !== 'ok') throw new Error(resp.message || 'Save failed');
+        if (alertEditor) {
+            try { await alertEditor.save(); } catch (e) { throw new Error('Settings saved, but not the alert: ' + e.message); }
+        }
         bootstrap.Modal.getOrCreateInstance(document.getElementById('settingsModal')).hide();
         fetchData();
     } catch (e) {
         settingsError(e.message);
-    } finally {
-        btn.disabled = false;
     }
 }
 

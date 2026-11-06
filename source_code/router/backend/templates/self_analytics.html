@@ -122,6 +122,8 @@
             </div>
         </div>
 
+        <div class="panel sa-section sa-edit-only" id="sa-guided" hidden></div>
+        <div class="sa-bar mb-2" id="sa-live-filters"></div>
         <!-- The open report: name, description, when the data is from. -->
         <div class="sa-report-head" id="sa-report-head" style="display:none;">
             <div class="d-flex align-items-baseline gap-3 flex-wrap">
@@ -170,7 +172,7 @@
                 <label>Values</label>
                 <div class="sa-help">Each value is a calculation on one column. Minus gives the difference between two columns, for example sale price minus purchase price; tick As % to show it as a percentage of the second column.</div>
                 <table class="sa-list-table" id="sa-e-measures">
-                    <thead><tr><th style="width:14%;">Calculation</th><th>Column</th><th>Minus Column</th><th style="width:7%;">As %</th><th>Label</th><th style="width:6%;">Colour</th><th style="width:7%;"></th></tr></thead>
+                    <thead><tr><th>Calculation</th><th>Column</th><th>Minus Column</th><th>Ratio Denominator</th><th>As %</th><th>Label</th><th>Colour</th><th></th></tr></thead>
                     <tbody></tbody>
                 </table>
                 <button type="button" class="btn btn-sm btn-outline-primary mt-1" id="sa-e-add-measure">Add Value</button>
@@ -199,6 +201,12 @@
                     </div>
                 </div>
             </div>
+            <div class="sa-row two">
+                <div class="modal-field"><label for="sa-e-cohort">Rows Used For Comparisons</label><select id="sa-e-cohort"><option value="">Choose</option><option value="complete">Matched Rows With Every Measure Present</option><option value="available">Available Values (Counts Can Differ)</option></select></div>
+                <div class="sa-help">Ratios Use Total Numerator / Total Denominator × 100; Choose Total And Leave Minus Empty. A Zero Denominator Produces A Blank. Click A Chart Point To Inspect Its Rows.</div>
+                <div class="modal-field"><label for="sa-e-x-title">X Axis Title</label><input id="sa-e-x-title" maxlength="200"></div>
+                <div class="modal-field"><label for="sa-e-y-title">Y Axis Title</label><input id="sa-e-y-title" maxlength="200"></div>
+            </div>
             <div class="modal-actions">
                 <span class="sa-note" id="sa-e-note"></span>
                 <span class="spacer"></span>
@@ -208,6 +216,10 @@
         </div>
     </div>
 
+    <div class="modal-overlay" id="sa-drill-modal"><div class="modal-box sa-editor">
+        <h2>Report Rows</h2><p id="sa-drill-note"></p><div class="sa-data-wrap" id="sa-drill-data"></div>
+        <div class="modal-actions"><button type="button" class="btn btn-outline-secondary" id="sa-drill-close">Close</button></div>
+    </div></div>
     {% if can_write_sql %}
     <!-- The report's name, description and who can see it. Filled by self_analytics.js. -->
     <div class="modal-overlay" id="sa-details-modal">
@@ -298,6 +310,8 @@
                 <div class="modal-field"><label for="sa-s-tile-label">Tile Label Size (px)</label><input type="number" id="sa-s-tile-label"></div>
             </div>
             <div class="modal-field">
+                <label><input type="checkbox" id="sa-s-builder"> Enable Guided Reports</label>
+                <div class="sa-help">Uses Approved Source Definitions In Semantic &amp; Context Layer And Configured SharePoint Files. Confirm The Source Setup Before Enabling.</div>
                 <label>Series Colours, In Order</label>
                 <div class="sa-palette" id="sa-s-palette"></div>
             </div>
@@ -313,6 +327,8 @@
     {% endif %}
 
     <script src="{{ static_url('js/self_analytics_core.js') }}"></script>
+    <script src="{{ static_url('js/self_analytics_builder.js') }}"></script>
     <script src="{{ static_url('js/self_analytics.js') }}"></script>
+    <script src="{{ static_url('js/date_range_jump.js') }}"></script>
 </body>
 </html>

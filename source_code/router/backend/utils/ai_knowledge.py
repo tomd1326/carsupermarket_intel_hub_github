@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 # before it can be switched on), then everything else is set in Settings > AI.
 AI_PAGES = [("kpi", "KPI"), ("orders_deliveries", "Orders & Deliveries")]
 PAGE_KEYS = [key for key, _ in AI_PAGES]
-SCOPES = ["all"] + PAGE_KEYS
+SCOPES = ["all"] + PAGE_KEYS + ["self_analytics"]
 
 # Kinds of entry, in the order they are sent to the model: rules and
 # instructions first, so they survive when the size limit cuts entries off.
@@ -119,6 +119,7 @@ REFERENCE_DEFAULTS = {
         {"key": "synonyms", "label": "Also Called", "type": "text",
          "kinds": ["metric", "dimension", "term"], "send_to_ai": True},
         {"key": "owner", "label": "Owner", "type": "text", "kinds": [], "send_to_ai": False},
+        {"key": "report_schema", "label": "Guided Report Source Definition (JSON)", "type": "code", "kinds": ["table"], "send_to_ai": False},
     ],
 }
 
@@ -342,6 +343,8 @@ def clean_reference_settings(stored) -> dict:
                 "send_to_ai": bool(f.get("send_to_ai")),
             })
         result["fields"] = clean
+    if not any(f["key"] == "report_schema" for f in result["fields"]):
+        result["fields"].append(dict(next(f for f in d["fields"] if f["key"] == "report_schema")))
     return result
 
 
@@ -394,6 +397,14 @@ def validate_entry(entry: dict) -> str | None:
         return f"Tags must be under {TAGS_MAX} characters"
     if entry["kind"] == "column" and title.count(".") != 2:
         return "A column note's title must be SCHEMA.TABLE.COLUMN"
+    if fields.get("report_schema"):
+        if entry["kind"] != "table":
+            return "A Guided Report Source Definition Belongs To A Table Entry"
+        from utils.self_analytics_builder import schema
+        try:
+            schema({**entry, "id": entry.get("id") or "new_source"})
+        except ValueError as exc:
+            return str(exc)
     return None
 
 
@@ -602,16 +613,44 @@ def _ensure_tables(conn) -> None:
     conn.commit()
     if is_new:
         _insert_seeds(conn, "setup")
+    _import_report_knowledge(conn)
     _tables_ready = True
 
 
 def _reference_seeds() -> list:
-    try:
-        with open(os.path.join(_SEED_DIR, REFERENCE_SEED_FILE), encoding="utf-8") as f:
-            return json.load(f)
-    except (OSError, ValueError) as e:
-        logger.warning("AI knowledge: %s not loaded: %s", REFERENCE_SEED_FILE, e)
-        return []
+    entries = []
+    for filename in (REFERENCE_SEED_FILE, "report_builder_entries.json"):
+        try:
+            with open(os.path.join(_SEED_DIR, filename), encoding="utf-8") as f:
+                entries.extend(json.load(f))
+        except (OSError, ValueError) as e:
+            logger.warning("Knowledge seeds %s not loaded: %s", filename, e)
+    return entries
+
+
+def _import_report_knowledge(conn) -> None:
+    """One additive import per bundle, proposed for review. Never overwrite edits.
+
+    A persistent marker means entries deleted afterwards stay deleted. The marker
+    and entries commit together so interrupted deployments can retry safely.
+    """
+    key = "report_knowledge_import_20261106"
+    with conn.cursor() as cur:
+        cur.execute("SELECT value FROM ai_page_settings WHERE page_key = %s", (key,))
+        if cur.fetchone():
+            return
+        with open(os.path.join(_SEED_DIR, "report_builder_entries.json"), encoding="utf-8") as f:
+            entries = json.load(f)
+        for s in entries:
+            cur.execute(
+                "INSERT INTO ai_knowledge (id, title, kind, scope, content, enabled, status, updated_by, category, tags, fields) "
+                "VALUES (%s, %s, %s, %s, %s, TRUE, 'proposed', 'project_knowledge_import', %s, %s, %s) "
+                "ON CONFLICT (id) DO NOTHING",
+                (s["id"], s["title"], s["kind"], s.get("scope", "all"), s.get("content", ""),
+                 s.get("category", ""), s.get("tags", ""), json.dumps(s.get("fields") or {})))
+        cur.execute("INSERT INTO ai_page_settings (page_key, value, updated_by) VALUES (%s, %s, %s) "
+                    "ON CONFLICT (page_key) DO NOTHING", (key, 'true', "project_knowledge_import"))
+    conn.commit()
 
 
 def _insert_seeds(conn, user: str) -> int:

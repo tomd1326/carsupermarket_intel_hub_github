@@ -18,6 +18,7 @@
     let editingIndex = null, editDraft = null;
     let dirty = false;
     let tableSort = {col: -1, desc: false};
+    let builderColumns = null, builderReviewed = false;
 
     // ── Helpers ─────────────────────────────────────────────────────────────
     async function api(path, body) {
@@ -84,6 +85,10 @@
 
     function setDirty(on) {
         dirty = on;
+        if (on) {
+            builderReviewed = false;
+            document.dispatchEvent(new Event('sa-plan-changed'));
+        }
         const save = $('sa-save');
         if (save) save.textContent = on && current && current.id ? 'Save *' : 'Save';
     }
@@ -119,6 +124,7 @@
         root.style.setProperty('--sa-tile-value', settings.tile_value_px + 'px');
         root.style.setProperty('--sa-tile-label', settings.tile_label_px + 'px');
         $('sa-intro').textContent = settings.intro;
+        document.dispatchEvent(new CustomEvent('sa-ready', {detail: {settings, canSql}}));
         if (window.Chart) {
             Chart.defaults.font.family = "'DM Sans', system-ui, sans-serif";
             Chart.defaults.font.size = settings.axis_font_px;
@@ -151,9 +157,12 @@
     }
 
     function newReport() {
+        builderColumns = null; builderReviewed = false; result = null;
         current = {id: null, name: '', folder: '', description: '', visibility: 'only_me', users: [],
                    show_table: false, sql: ''};
+        document.dispatchEvent(new CustomEvent('sa-report-opened', {detail: current}));
         charts = [];
+        liveFilters();
         showReportFields();
         renderCharts();
         setDirty(false);
@@ -183,12 +192,15 @@
     }
 
     function openReport(id, run = true) {
+        builderColumns = null; builderReviewed = false; result = null;
         const r = reports.find(x => String(x.id) === String(id));
         if (!r) { newReport(); return; }
         current = {id: r.id, name: r.name, folder: r.folder, description: r.description || '',
                    visibility: r.visibility || (r.shared ? 'everyone' : 'only_me'), users: (r.users || []).slice(),
-                   show_table: !!r.show_table, sql: r.sql, created_by: r.created_by};
+                   show_table: !!r.show_table, sql: r.sql, created_by: r.created_by, source_spec: r.source_spec};
+        document.dispatchEvent(new CustomEvent('sa-report-opened', {detail: current}));
         charts = JSON.parse(JSON.stringify(r.charts || []));
+        liveFilters();
         showReportFields();
         setDirty(false);
         const url = new URL(location.href);
@@ -217,6 +229,10 @@
     // A saved report whose SQL is unchanged is run by its id, so the server can
     // reuse its rows for the cache time; refresh asks for fresh rows.
     async function runQuery(refresh = false) {
+        const runningReport = current;
+        if (current && current.source_spec && dirty) {
+            status('Review And Confirm The Guided Report After Changing It.', true); return;
+        }
         const btn = presenting ? $('sa-refresh') : $('sa-run');
         const saved = current && current.id && (!canSql || $('sa-sql').value.trim() === (current.sql || '').trim());
         const body = saved ? {report_id: current.id, refresh: refresh === true}
@@ -226,9 +242,12 @@
         try {
             await whileSaving(btn, 'Running...', async () => {
                 const data = await api('/self-analytics/run', body);
+                if (current !== runningReport) return;
                 result = data;
+                liveFilters();
                 tableSort = {col: -1, desc: false};
-                $('sa-as-at').textContent = `Data as at ${data.as_at}` + (data.from_cache ? ' (saved copy, Refresh for the latest)' : '');
+                $('sa-as-at').textContent = `Data as at ${data.as_at}` + (data.from_cache ? ' (saved copy, Refresh for the latest)' : '') +
+                    (data.source_modified ? `; SharePoint File Modified ${data.source_modified}` : '');
                 status(`${data.row_count.toLocaleString()} rows` + (data.from_cache ? '' : ` in ${(data.ms / 1000).toFixed(1)}s`) +
                     (data.truncated ? ` - cut off at the ${settings.row_limit.toLocaleString()} row limit` : ''), data.truncated);
                 $('sa-csv').disabled = false;
@@ -236,6 +255,8 @@
                 renderCharts();
             });
         } catch (e) {
+            if (current !== runningReport) return;
+            result = null; renderData(); renderCharts(); liveFilters();
             status(e.message, true);
         }
     }
@@ -244,7 +265,11 @@
     $('sa-refresh').addEventListener('click', () => runQuery(true));
     if ($('sa-sql')) {
         $('sa-sql').addEventListener('keydown', e => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); runQuery(false); } });
-        $('sa-sql').addEventListener('input', () => setDirty(true));
+        $('sa-sql').addEventListener('input', () => {
+            if (current) current.source_spec = null;
+            builderColumns = null; setDirty(true);
+            document.dispatchEvent(new CustomEvent('sa-report-opened', {detail: current}));
+        });
     }
 
     $('sa-copy-link').addEventListener('click', e => {
@@ -261,19 +286,26 @@
     function reportPayload() {
         return {name: current.name, folder: current.folder, description: current.description,
                 visibility: current.visibility, users: current.users, show_table: current.show_table,
-                sql: $('sa-sql').value, charts};
+                sql: $('sa-sql').value, charts, source_spec: current.source_spec};
     }
 
     async function saveReport(asNew, button) {
+        if (current.source_spec && dirty && !builderReviewed) {
+            status('Review And Run The Guided Report Before Saving Changes.', true); return;
+        }
         if (!current.name) { openDetails(); $('sa-d-note').textContent = 'Give the report a name, then save.'; return; }
         const payload = reportPayload();
         if (!asNew && current.id) payload.id = current.id;
         if (asNew && current.id) payload.name = payload.name + ' (Copy)';
         try {
             await whileSaving(button, 'Saving...', async () => {
+                const confirmedResult = current.source_spec && builderReviewed ? result : null;
                 const data = await api('/self-analytics/save', payload);
                 setDirty(false);
                 await load(data.report.id);
+                if (confirmedResult) {
+                    result = confirmedResult; liveFilters(); renderData(); renderCharts();
+                }
                 status('Saved.');
             });
         } catch (e) {
@@ -503,9 +535,9 @@
         const tick = {font: {size: settings.axis_font_px}};
         const valueTicks = {...tick, callback: v => fmt(v, chart)};
         const scales = pie ? {} : {
-            x: {stacked, ticks: horizontal ? valueTicks : tick, beginAtZero: horizontal && chart.from_zero,
+            x: {title: {display: !!chart.x_title, text: chart.x_title}, stacked, ticks: horizontal ? valueTicks : tick, beginAtZero: horizontal && chart.from_zero,
                 type: chart.type === 'scatter' ? 'linear' : undefined},
-            y: {stacked, ticks: horizontal ? tick : valueTicks, beginAtZero: !horizontal && chart.from_zero},
+            y: {title: {display: !!chart.y_title, text: chart.y_title}, stacked, ticks: horizontal ? tick : valueTicks, beginAtZero: !horizontal && chart.from_zero},
         };
         return {
             type: typeMap[chart.type] || 'bar',
@@ -513,12 +545,19 @@
             options: {
                 responsive: true, maintainAspectRatio: false, animation: false,
                 indexAxis: horizontal ? 'y' : 'x',
+                onClick: (event, hits) => {
+                    if (!hits.length || !data.keys) return;
+                    const hit = hits[0], series = data.series[hit.datasetIndex];
+                    showDrill(chart, data.keys[hit.index], series.splitValue);
+                },
                 plugins: {
                     legend: {display: chart.legend && (pie || datasets.length > 1),
                              labels: {font: {size: settings.legend_font_px}, boxWidth: 12}},
                     tooltip: {callbacks: {label: ctx => {
                         const v = ctx.raw && typeof ctx.raw === 'object' ? ctx.raw.y : ctx.raw;
-                        return `${ctx.dataset.label}: ${fmt(v, chart)}`;
+                        const s = data.series[ctx.datasetIndex];
+                        const n = s && s.counts ? ` (${s.counts[ctx.dataIndex]} Nonempty Values)` : '';
+                        return `${ctx.dataset.label}: ${fmt(v, chart)}${n}`;
                     }}},
                 },
                 scales,
@@ -547,7 +586,7 @@
     // filters (the X column and split are not used).
     function chartTile(chart) {
         const one = {...chart, x: null, split: null, grain: 'none', measures: chart.measures.slice(0, 1), top_n: 0};
-        const data = C.buildSeries(one, result.columns, result.rows);
+        const data = C.buildSeries(one, result.columns, visibleRows());
         const value = data.series[0] ? data.series[0].data[0] : null;
         const box = el('div', 'sa-tile');
         box.appendChild(el('div', 'sa-tile-value', value === null || value === undefined ? '-' : fmt(value, chart)));
@@ -590,7 +629,7 @@
                 grid.appendChild(card);
                 return;
             }
-            const data = C.buildSeries(chart, result.columns, result.rows);
+            const data = C.buildSeries(chart, result.columns, visibleRows());
             data.notes.forEach(n => card.appendChild(el('div', 'sa-card-note', n)));
             if (chart.type === 'tile') {
                 card.appendChild(chartTile(chart));
@@ -639,16 +678,14 @@
                 result.columns.slice(0, 4).map(c => C.columnLabel(c.name).toLowerCase()).join(', ') + '.';
             return;
         }
-        charts.push({...blankChart(), ...r.chart, id: 'c' + Date.now(), description: text});
-        out.textContent = 'Understood as: ' + r.understood.join('. ') + '. Click Edit on the chart to change anything.';
-        setDirty(true);
-        renderCharts();
+        out.textContent = 'Suggested Fields Only. Confirm Every Chart Choice In The Editor.';
+        openEditor(null, {...blankChart(), ...r.chart, description: text});
     }
 
     $('sa-describe-go').addEventListener('click', describeChart);
     $('sa-describe').addEventListener('keydown', e => { if (e.key === 'Enter') describeChart(); });
     $('sa-add-chart').addEventListener('click', () => {
-        if (!result) { $('sa-understood').textContent = 'Run a query first, so the columns are known.'; return; }
+        if (!result && !builderColumns) { $('sa-understood').textContent = 'Choose A Guided Source Or Run A Query First.'; return; }
         openEditor(null);
     });
 
@@ -657,16 +694,17 @@
     const closeModal = id => $(id).classList.remove('open');
 
     function columnOptions(blankLabel) {
-        const cols = result ? result.columns.map(c => [c.name, C.columnLabel(c.name)]) : [];
+        const cols = (builderColumns || (result ? result.columns : [])).map(c => [c.name, C.columnLabel(c.name)]);
         // Keep a column a saved chart names even if this query no longer returns it.
-        const named = [editDraft.x, editDraft.split].concat(editDraft.measures.flatMap(m => [m.column, m.minus]))
+        const named = [editDraft.x, editDraft.split].concat(editDraft.measures.flatMap(m => [m.column, m.minus, m.denominator]))
             .filter(n => n && !cols.some(c => c[0].toLowerCase() === n.toLowerCase()));
         return [['', blankLabel]].concat(cols, [...new Set(named)].map(n => [n, n + ' (Not In Query)']));
     }
 
-    function openEditor(index) {
+    function openEditor(index, suggested) {
         editingIndex = index;
-        editDraft = JSON.parse(JSON.stringify(index === null ? blankChart() : charts[index]));
+        editDraft = JSON.parse(JSON.stringify(suggested || (index === null ? blankChart() : charts[index])));
+        if (index === null && builderColumns && !suggested) Object.assign(editDraft, {type: '', x: null, grain: '', format: '', cohort: ''});
         $('sa-e-title').value = editDraft.title;
         $('sa-e-subtitle').value = editDraft.subtitle;
         fillSelect($('sa-e-type'), labelled(options.chart_types, TYPE_LABELS), editDraft.type);
@@ -675,6 +713,14 @@
         fillSelect($('sa-e-split'), columnOptions('No Split'), editDraft.split);
         fillSelect($('sa-e-sort'), labelled(options.sorts, SORT_LABELS), editDraft.sort);
         fillSelect($('sa-e-format'), labelled(options.formats, FORMAT_LABELS), editDraft.format);
+        if (builderColumns) ['sa-e-type', 'sa-e-grain', 'sa-e-format'].forEach(id => {
+            const sel = $(id);
+            sel.insertBefore(new Option('Choose', ''), sel.firstChild);
+            sel.value = editDraft[id === 'sa-e-type' ? 'type' : id === 'sa-e-grain' ? 'grain' : 'format'] || '';
+        });
+        $('sa-e-cohort').value = editDraft.cohort || (builderColumns ? '' : 'available');
+        $('sa-e-x-title').value = editDraft.x_title || '';
+        $('sa-e-y-title').value = editDraft.y_title || '';
         $('sa-e-top').value = editDraft.top_n;
         $('sa-e-decimals').value = editDraft.decimals;
         $('sa-e-width').value = editDraft.width;
@@ -718,6 +764,7 @@
             tr.insertCell().appendChild(rowSelect(labelled(options.aggs, AGG_LABELS), m.agg, v => { m.agg = v; }));
             tr.insertCell().appendChild(rowSelect(columnOptions(m.agg === 'count' ? 'Rows' : 'Choose'), m.column, v => { m.column = v || null; }));
             tr.insertCell().appendChild(rowSelect(columnOptions('Nothing'), m.minus, v => { m.minus = v || null; }));
+            tr.insertCell().appendChild(rowSelect(columnOptions('No Ratio'), m.denominator, v => { m.denominator = v || null; }));
             tr.insertCell().appendChild(rowInput('checkbox', m.as_pct, v => { m.as_pct = v; }));
             tr.insertCell().appendChild(rowInput('text', m.label, v => { m.label = v; }));
             const colour = m.color || settings.palette[i % settings.palette.length];
@@ -764,6 +811,11 @@
         d.from_zero = $('sa-e-zero').checked;
         d.data_labels = $('sa-e-labels').checked;
         d.legend = $('sa-e-legend').checked;
+        d.cohort = $('sa-e-cohort').value;
+        d.x_title = $('sa-e-x-title').value.trim(); d.y_title = $('sa-e-y-title').value.trim();
+        if (!d.type || !d.grain || !d.format || !d.cohort) {
+            $('sa-e-note').textContent = 'Choose Chart Type, Date Grouping, Units And Row Matching.'; return;
+        }
         d.measures = d.measures.filter(m => m.column || m.agg === 'count');
         d.filters = d.filters.filter(f => f.column);
         if (!d.measures.length) { $('sa-e-note').textContent = 'Add at least one value.'; return; }
@@ -807,6 +859,7 @@
     if ($('sa-settings-modal')) {
         $('sa-settings-btn').addEventListener('click', () => {
             $('sa-s-intro').value = settings.intro;
+            $('sa-s-builder').checked = settings.builder_enabled;
             Object.entries(SETTING_INPUTS).forEach(([k, id]) => { $(id).value = settings[k]; });
             fillSelect($('sa-s-type'), labelled(options.chart_types, TYPE_LABELS), settings.default_chart_type);
             fillSelect($('sa-s-grain'), labelled(options.grains, GRAIN_LABELS), settings.default_grain);
@@ -819,7 +872,7 @@
         });
         $('sa-s-cancel').addEventListener('click', () => closeModal('sa-settings-modal'));
         $('sa-s-save').addEventListener('click', async e => {
-            const payload = {intro: $('sa-s-intro').value, default_chart_type: $('sa-s-type').value,
+            const payload = {builder_enabled: $('sa-s-builder').checked, intro: $('sa-s-intro').value, default_chart_type: $('sa-s-type').value,
                              default_grain: $('sa-s-grain').value, describe_default_agg: $('sa-s-agg').value,
                              currency_symbol: $('sa-s-currency').value, palette: paletteDraft};
             Object.entries(SETTING_INPUTS).forEach(([k, id]) => { payload[k] = $(id).value; });
@@ -847,5 +900,62 @@
         });
     }
 
+    function visibleRows() {
+        if (!result) return [];
+        const filters = Array.from(document.querySelectorAll('#sa-live-filters select')).filter(s => s.value !== '')
+            .map(s => ({column: s.dataset.column, op: '=', value: s.value}));
+        return result.rows.filter(r => filters.every(f => {
+            const i = result.columns.findIndex(c => c.name.toLowerCase() === f.column.toLowerCase());
+            return i >= 0 && r[i] != null && String(r[i]) === f.value;
+        }));
+    }
+    function liveFilters() {
+        const box = $('sa-live-filters'); box.replaceChildren();
+        if (!result) return;
+        ((current.source_spec || {}).interactive || []).forEach(name => {
+            const i = result.columns.findIndex(c => c.name.toLowerCase() === name.toLowerCase());
+            if (i < 0) return;
+            const label = el('label', '', C.columnLabel(name) + ' '), select = document.createElement('select');
+            select.dataset.column = name; select.appendChild(new Option('All Values', ''));
+            [...new Set(result.rows.map(r => r[i]).filter(v => v != null && v !== '').map(String))].sort()
+                .forEach(v => select.appendChild(new Option(v, v)));
+            select.addEventListener('change', renderCharts); label.appendChild(select); box.appendChild(label);
+        });
+    }
+    function showDrill(chart, key, split) {
+        const rows = C.drillRows(chart, result.columns, visibleRows(), key, split);
+        const box = $('sa-drill-data'); box.replaceChildren();
+        $('sa-drill-note').textContent = `${rows.length.toLocaleString()} Rows In This Cohort. Showing Up To ${settings.table_rows_shown.toLocaleString()}.`;
+        const table = el('table', 'sa-table'), head = table.createTHead().insertRow();
+        result.columns.forEach(c => head.appendChild(el('th', '', C.columnLabel(c.name))));
+        const body = table.createTBody(); rows.slice(0, settings.table_rows_shown).forEach(r => {
+            const tr = body.insertRow(); r.forEach(v => { tr.insertCell().textContent = v ?? ''; });
+        });
+        box.appendChild(table); openModal('sa-drill-modal');
+    }
+    $('sa-drill-close').addEventListener('click', () => closeModal('sa-drill-modal'));
+    window.SAReportBuilder = {
+        api, el, fillSelect, whileSaving, labels: C.columnLabel,
+        start(spec, columns) {
+            newReport(); current.source_spec = spec; builderColumns = columns;
+            setDirty(true); renderData(); liveFilters();
+        },
+        columns(columns) { builderColumns = columns; setDirty(true); },
+        charts: () => JSON.parse(JSON.stringify(charts)),
+        addChart: () => openEditor(null),
+        changed: () => setDirty(true),
+        clearResult() { result = null; renderData(); renderCharts(); liveFilters(); },
+        accept(data, name) {
+            current.source_spec = data.plan.source_spec; current.sql = data.plan.sql;
+            current.name = name; charts = data.plan.charts; result = data;
+            $('sa-sql').value = current.sql; builderColumns = data.plan.columns;
+            setDirty(true); builderReviewed = true;
+            $('sa-as-at').textContent = `Data As At ${data.as_at}` +
+                (data.source_modified ? `; SharePoint File Modified ${data.source_modified}` : '');
+            status(`${data.row_count.toLocaleString()} Rows. Review Complete; Save To Keep This Report.`);
+            $('sa-csv').disabled = false; liveFilters(); renderData(); renderCharts();
+        }
+    };
+    document.addEventListener('sa-result-ready', liveFilters);
     load();
 })();

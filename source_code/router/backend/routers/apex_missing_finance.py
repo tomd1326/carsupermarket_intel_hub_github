@@ -14,9 +14,12 @@ from fastapi import APIRouter, Request, Depends
 from fastapi.responses import HTMLResponse
 import logging
 
+from utils import email_client, page_alerts
+from utils.db_utils import get_database_connection, read_user_details
 from utils.snowflake_client import SnowflakeClient
 
-from .core import BASE_URL, templates, _track, require_page, require_page_api, is_admin
+from .core import (BASE_URL, templates, _track, require_page, require_page_api, is_admin, page_name, _uk_now,
+                   _ENV, ADMIN_USERNAME)
 from . import kpi
 from .buying_requirements import _sf_cache_is_fresh
 from .pages import (_validate_stock_columns, _validate_stock_filters, _validate_stock_hard_filters,
@@ -227,40 +230,163 @@ def amf_data(request: Request, force: bool = False, user: str = Depends(require_
     """The saved columns plus the fixed ones, one row per finance amount.
     Saved columns not in the table are left out and named in `missing`."""
     try:
-        view = _columns_saved()
-        filters = _filters_saved()
-        hard_filters = _hard_filters_saved()
-        cell_rules = _cell_rules_saved()
-        appearance = _appearance_saved()
-        live = {c for c, _ in _live_columns()}
-        if not live:
-            return {"status": "error", "message": f"Table {_AMF_TABLE} was not found"}
-        err = _validate_hard_filters(hard_filters, live)
-        if err:
-            return {"status": "error", "message": err}
-        wanted = list(dict.fromkeys(_AMF_FIXED_COLUMNS + [c["column"] for c in view]
-                                    + [f["column"] for f in filters] + [r["column"] for r in cell_rules]))
-        select = [c for c in wanted if c in live]
-        missing = [c for c in dict.fromkeys([c["column"] for c in view] + [f["column"] for f in filters])
-                   if c not in live]
-        filters = [f for f in filters if f["column"] in live]
-        key = (tuple(select), tuple((f["column"], f["operator"], f["value"]) for f in hard_filters))
-        with _amf_cache_lock:
-            cache = dict(_amf_cache)
-        if force or cache["key"] != key or not _sf_cache_is_fresh(cache["cached_at"]):
-            with SnowflakeClient() as sf:
-                clauses, params = _hard_filter_sql(hard_filters)
-                where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
-                rows, _ = sf.execute(f"SELECT {', '.join(select)} FROM {kpi._VEHICLE_DB}.{_AMF_TABLE}{where}", params)
-                built, _ = sf.execute(_AMF_LAST_BUILT_SQL, [])
-            cache = {"key": key, "columns": select, "cached_at": time.time(),
-                     "last_built": kpi._json_cell(built[0][0]) if built else None,
-                     "rows": [[kpi._json_cell(v) for v in r] for r in rows]}
-            with _amf_cache_lock:
-                _amf_cache.update(cache)
+        data = _load_data(force)
     except Exception as e:
         logger.error(f"Apex missing finance data failed: {e}")
         return {"status": "error", "message": str(e)}
-    return {"status": "ok", "view": view, "filters": filters, "cell_rules": cell_rules, "columns": cache["columns"],
+    return {"status": "ok", **data}
+
+
+def _load_data(force: bool = False) -> dict:
+    """The page's data, from the cache while it is fresh. Raises with a readable message."""
+    view = _columns_saved()
+    filters = _filters_saved()
+    hard_filters = _hard_filters_saved()
+    cell_rules = _cell_rules_saved()
+    appearance = _appearance_saved()
+    live = {c for c, _ in _live_columns()}
+    if not live:
+        raise ValueError(f"Table {_AMF_TABLE} was not found")
+    err = _validate_hard_filters(hard_filters, live)
+    if err:
+        raise ValueError(err)
+    wanted = list(dict.fromkeys(_AMF_FIXED_COLUMNS + [c["column"] for c in view]
+                                + [f["column"] for f in filters] + [r["column"] for r in cell_rules]))
+    select = [c for c in wanted if c in live]
+    missing = [c for c in dict.fromkeys([c["column"] for c in view] + [f["column"] for f in filters])
+               if c not in live]
+    filters = [f for f in filters if f["column"] in live]
+    key = (tuple(select), tuple((f["column"], f["operator"], f["value"]) for f in hard_filters))
+    with _amf_cache_lock:
+        cache = dict(_amf_cache)
+    if force or cache["key"] != key or not _sf_cache_is_fresh(cache["cached_at"]):
+        with SnowflakeClient() as sf:
+            clauses, params = _hard_filter_sql(hard_filters)
+            where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
+            rows, _ = sf.execute(f"SELECT {', '.join(select)} FROM {kpi._VEHICLE_DB}.{_AMF_TABLE}{where}", params)
+            built, _ = sf.execute(_AMF_LAST_BUILT_SQL, [])
+        cache = {"key": key, "columns": select, "cached_at": time.time(),
+                 "last_built": kpi._json_cell(built[0][0]) if built else None,
+                 "rows": [[kpi._json_cell(v) for v in r] for r in rows]}
+        with _amf_cache_lock:
+            _amf_cache.update(cache)
+    return {"view": view, "filters": filters, "cell_rules": cell_rules, "columns": cache["columns"],
             "rows": cache["rows"], "missing": missing, "cached_at": cache["cached_at"], "last_built": cache["last_built"],
             "appearance": appearance}
+
+
+# ── Alert: set up in Settings > Alerts, sent by hand with the Send Alert button ──
+
+_ALERT_KEY = page_alerts.KEY_PREFIX + PAGE_KEY
+_PAGE_PATH = "/reports/apex-missing-finance"
+_SITE_URLS = {"prod": "https://uk-intel-hub.aramis-group.eu", "dev": "https://dev-uk-intel-hub.aramis-group.eu"}
+
+
+def _alert_saved() -> dict:
+    return page_alerts.saved_config(kpi._read_kpi_layout_value(_ALERT_KEY), ADMIN_USERNAME)
+
+
+def _global_style() -> dict:
+    return page_alerts.saved_style(kpi._read_kpi_layout_value(page_alerts.STYLE_KEY))
+
+
+def _people() -> dict:
+    with get_database_connection() as conn:
+        return read_user_details(conn)
+
+
+def _page_url(request: Request) -> str:
+    site = _SITE_URLS.get(_ENV) or str(request.base_url).rstrip("/")
+    return site + BASE_URL + _PAGE_PATH
+
+
+def _alert_email(request: Request, cfg: dict) -> tuple[str, str]:
+    """Subject and HTML for the alert, from the same data the page shows, newest order first."""
+    data = _load_data()
+    col_idx = {c: i for i, c in enumerate(data["columns"])}
+    columns = [c for c in data["view"] if c["column"] in col_idx]
+    rows = data["rows"]
+    if "ORDER_ACKNOWLEDGED_AT" in col_idx:
+        i = col_idx["ORDER_ACKNOWLEDGED_AT"]
+        rows = sorted(rows, key=lambda r: r[i] or "", reverse=True)
+    style = page_alerts.effective_style(_global_style(), cfg["style"])
+    values = {"count": f"{len(rows):,}", "date": _uk_now().strftime("%d/%m/%Y"), "page": page_name(PAGE_KEY),
+              "last_built": page_alerts.uk_datetime_text(data["last_built"])}
+    return page_alerts.build_email(cfg, style, values, _page_url(request), columns, col_idx, rows, data["cell_rules"])
+
+
+@router.get("/reports/apex-missing-finance/alert")
+def amf_alert(request: Request, user: str = Depends(require_page_api(PAGE_KEY))):
+    """The saved alert and every user, for Settings > Alerts and the Send Alert popup."""
+    if not is_admin(user):
+        return {"status": "error", "message": "Only the admin can set up or send this alert"}
+    try:
+        people = _people()
+        users = sorted(({"username": u, "name": f"{d['first_name']} {d['last_name']}".strip() or u, "email": d["email"]}
+                        for u, d in people.items()), key=lambda p: p["name"].lower())
+        return {"status": "ok", "alert": _alert_saved(), "users": users, "placeholders": list(page_alerts.PLACEHOLDERS),
+                "global_style": _global_style(), "style_meta": page_alerts.style_meta()}
+    except Exception as e:
+        logger.error(f"Apex missing finance alert read failed: {e}")
+        return {"status": "error", "message": str(e)}
+
+
+@router.post("/reports/apex-missing-finance/alert")
+def amf_alert_save(request: Request, payload: dict, user: str = Depends(require_page_api(PAGE_KEY))):
+    if not is_admin(user):
+        return {"status": "error", "message": "Only the admin can set up this alert"}
+    cfg = (payload or {}).get("alert")
+    try:
+        err = page_alerts.validate(cfg, set(_people()))
+        if err:
+            return {"status": "error", "message": err}
+        kpi._write_kpi_layout_value(_ALERT_KEY, cfg)
+        logger.info("Apex missing finance alert saved by %s", user)
+    except Exception as e:
+        logger.error(f"Apex missing finance alert save failed: {e}")
+        return {"status": "error", "message": str(e)}
+    return {"status": "ok"}
+
+
+@router.post("/reports/apex-missing-finance/alert/test")
+def amf_alert_test(request: Request, payload: dict, user: str = Depends(require_page_api(PAGE_KEY))):
+    """The alert as set up in the popup (saved or not), sent only to the person testing it."""
+    if not is_admin(user):
+        return {"status": "error", "message": "Only the admin can test this alert"}
+    cfg = (payload or {}).get("alert")
+    try:
+        people = _people()
+        err = page_alerts.validate(cfg, set(people))
+        if err:
+            return {"status": "error", "message": err}
+        me = people.get(user, {}).get("email")
+        if not me:
+            return {"status": "error", "message": "You have no email address on Settings > User Accounts"}
+        subject, body = _alert_email(request, cfg)
+        email_client.send_email(me, "Test: " + subject, body)
+        logger.info("Apex missing finance alert test sent to %s", me)
+    except Exception as e:
+        logger.error(f"Apex missing finance alert test failed: {e}")
+        return {"status": "error", "message": str(e)}
+    return {"status": "ok", "sent_to": [me]}
+
+
+@router.post("/reports/apex-missing-finance/alert/send")
+def amf_alert_send(request: Request, user: str = Depends(require_page_api(PAGE_KEY))):
+    """The saved alert, to the saved recipients who have an email address."""
+    if not is_admin(user):
+        return {"status": "error", "message": "Only the admin can send this alert"}
+    try:
+        cfg = _alert_saved()
+        people = _people()
+        to = sorted({people[u]["email"] for u in cfg["users"] if people.get(u, {}).get("email")})
+        if not to:
+            return {"status": "error", "message": "Nobody on the alert has an email address. Tick people in Settings > Alerts."}
+        subject, body = _alert_email(request, cfg)
+        email_client.send_email(to, subject, body)
+        _track(request, 'alert_sent', _PAGE_PATH)
+        logger.info("Apex missing finance alert sent by %s to %d people", user, len(to))
+    except Exception as e:
+        logger.error(f"Apex missing finance alert send failed: {e}")
+        return {"status": "error", "message": str(e)}
+    return {"status": "ok", "sent_to": to}

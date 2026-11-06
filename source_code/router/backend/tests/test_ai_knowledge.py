@@ -129,7 +129,10 @@ def test_reference_settings_defaults_and_bad_values():
     assert s["kind_layers"]["metric"] == "context" and s["kind_layers"]["term"] == "context"
     assert s["kind_layers"]["dimension"] == "semantic"
     keys = [f["key"] for f in s["fields"]]
-    assert len(keys) == 2 and len(set(keys)) == 2
+    assert keys == ["owner", "owner_2", "report_schema"]
+    assert len(set(keys)) == 3
+    definition = next(f for f in s["fields"] if f["key"] == "report_schema")
+    assert definition["type"] == "code" and definition["kinds"] == ["table"]
 
 
 def test_entry_with_fields_only_is_valid_and_reaches_ask_ai():
