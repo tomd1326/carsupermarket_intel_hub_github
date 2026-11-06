@@ -1,0 +1,318 @@
+{% from '_navigation.html' import page_header with context %}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ page_name('self_analytics') }}</title>
+    <link rel="icon" type="image/png" href="{{ BASE_URL }}/static/icon.png">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css" rel="stylesheet">
+    <link href="{{ static_url('css/theme.css') }}" rel="stylesheet">
+    <link href="{{ static_url('css/charts.css') }}" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+    <style>
+        @font-face { font-family: 'DM Sans'; src: url('{{ BASE_URL }}/static/fonts/DMSans-Regular.ttf');  font-weight: 400; }
+        @font-face { font-family: 'DM Sans'; src: url('{{ BASE_URL }}/static/fonts/DMSans-Medium.ttf');   font-weight: 500; }
+        @font-face { font-family: 'DM Sans'; src: url('{{ BASE_URL }}/static/fonts/DMSans-SemiBold.ttf'); font-weight: 600; }
+        @font-face { font-family: 'DM Sans'; src: url('{{ BASE_URL }}/static/fonts/DMSans-Bold.ttf');     font-weight: 700; }
+        body { font-family: 'DM Sans', system-ui, sans-serif; }
+        /* Sizes come from Page Settings (self_analytics.js sets these). */
+        #self-analytics { --sa-cols: 2; --sa-chart-h: 320px; --sa-title: 14px; }
+        .sa-wrap { max-width: 1800px; margin: 16px auto 48px auto; padding: 0 16px; }
+        .sa-intro { color: #475569; font-size: 0.85rem; margin-bottom: 12px; max-width: 1100px; }
+        .sa-bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+        .sa-bar .form-control, .sa-bar .form-select { width: auto; }
+        .sa-sql { font-family: ui-monospace, Consolas, monospace; font-size: 0.85rem; min-height: 160px; margin-top: 10px; }
+        .sa-status { font-size: 0.82rem; color: #64748b; }
+        .sa-status.error { color: #b91c1c; font-weight: 600; white-space: pre-wrap; }
+        .sa-section { margin-top: 16px; }
+        .sa-describe { display: flex; gap: 8px; flex-wrap: wrap; }
+        .sa-describe input { flex: 1; min-width: 320px; }
+        .sa-understood { font-size: 0.8rem; color: #475569; margin-top: 6px; white-space: pre-wrap; }
+        .sa-grid { display: grid; grid-template-columns: repeat(var(--sa-cols), minmax(0, 1fr)); gap: 14px; margin-top: 12px; }
+        .sa-grid .chart-card { margin: 0; }
+        .sa-grid .chart-card h2 { font-size: var(--sa-title); }
+        .sa-card-head { display: flex; align-items: flex-start; gap: 6px; }
+        .sa-card-head h2 { flex: 1; overflow-wrap: anywhere; }
+        .sa-card-head .btn { padding: 0 6px; font-size: 0.75rem; }
+        .sa-card-sub { font-size: 0.78rem; color: #64748b; margin: -2px 0 6px; }
+        .sa-card-note { font-size: 0.78rem; color: #b45309; }
+        .sa-grid .chart-wrap { height: var(--sa-chart-h); }
+        .sa-table-wrap { max-height: var(--sa-chart-h); overflow: auto; }
+        .sa-table { font-size: 0.8rem; border-collapse: collapse; width: 100%; }
+        .sa-table th { position: sticky; top: 0; background: var(--c-table-header-bg, #1e3a8a); color: var(--c-table-header-text, #fff);
+                       font-weight: 600; padding: 4px 8px; white-space: nowrap; cursor: pointer; border-bottom: 1px solid #cbd5e1; }
+        .sa-table td { padding: 3px 8px; border-bottom: 1px solid #f1f5f9; white-space: nowrap; }
+        .sa-table td.num { text-align: right; font-variant-numeric: tabular-nums; }
+        .sa-data-wrap { max-height: 520px; overflow: auto; border: 1px solid #e2e8f0; border-radius: 8px; }
+        .sa-empty { color: #64748b; font-size: 0.85rem; padding: 12px 0; }
+        /* Popups. While saving, the popup is greyed out and locked. */
+        .modal-box.busy { opacity: 0.55; pointer-events: none; cursor: wait; }
+        .modal-box.sa-editor { width: 1000px; max-width: 96vw; max-height: 90vh; overflow-y: auto; }
+        .modal-box.sa-settings { width: 760px; max-width: 96vw; max-height: 90vh; overflow-y: auto; }
+        .sa-row { display: grid; gap: 12px; }
+        .sa-row.two { grid-template-columns: 1fr 1fr; }
+        .sa-row.three { grid-template-columns: 1fr 1fr 1fr; }
+        .sa-row.four { grid-template-columns: 1fr 1fr 1fr 1fr; }
+        .sa-list-table { width: 100%; font-size: 0.82rem; border-collapse: collapse; }
+        .sa-list-table th { text-align: left; color: #475569; font-weight: 600; padding: 3px 4px; border-bottom: 1px solid #e2e8f0; }
+        .sa-list-table td { padding: 3px 4px; vertical-align: middle; }
+        .sa-list-table select, .sa-list-table input[type="text"] { width: 100%; padding: 2px 6px; border: 1px solid #cbd5e1; border-radius: 5px; }
+        .sa-list-table input[type="color"] { width: 36px; height: 26px; padding: 0; border: 1px solid #cbd5e1; }
+        .sa-checks { display: flex; flex-wrap: wrap; gap: 4px 16px; font-size: 0.85rem; }
+        .sa-checks label { display: inline-flex; gap: 5px; align-items: center; font-weight: 400; }
+        .sa-help { font-size: 0.78rem; color: #64748b; margin: -6px 0 10px; }
+        .sa-note { font-size: 0.8rem; color: #b91c1c; }
+        .sa-palette { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+        .sa-palette input[type="color"] { width: 36px; height: 28px; padding: 0; border: 1px solid #cbd5e1; }
+        .d-contents { display: contents; }
+        /* Present view (and anyone who only looks): no SQL or editing controls. */
+        #self-analytics.presenting .sa-edit-only { display: none !important; }
+        #self-analytics.presenting .sa-card-head .btn { display: none; }
+        .sa-report-head { margin: 16px 0 4px; }
+        .sa-report-title { font-size: var(--sa-report-title, 22px); font-weight: 700; color: #0f172a; margin: 0; }
+        .sa-as-at { font-size: 0.82rem; color: #64748b; }
+        .sa-report-desc { white-space: pre-line; color: #334155; font-size: 0.9rem; margin-top: 4px; max-width: 1100px; }
+        .sa-tile { display: flex; flex-direction: column; justify-content: center; align-items: center; min-height: 120px; text-align: center; }
+        .sa-tile-value { font-size: var(--sa-tile-value, 40px); font-weight: 700; color: #0f172a; line-height: 1.1; }
+        .sa-tile-label { font-size: var(--sa-tile-label, 13px); color: #64748b; margin-top: 4px; }
+        .sa-people { max-height: 260px; overflow-y: auto; border: 1px solid #e2e8f0; border-radius: 6px; padding: 6px 10px;
+                     display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 2px 12px; font-size: 0.85rem; }
+        .sa-people label { display: flex; gap: 6px; align-items: center; font-weight: 400; }
+        .modal-box.sa-details { width: 820px; max-width: 96vw; max-height: 90vh; overflow-y: auto; }
+        .modal-box.sa-import { width: 760px; max-width: 96vw; }
+        @media (max-width: 1000px) { .sa-grid { grid-template-columns: 1fr; } .sa-grid .chart-card { grid-column: auto !important; } }
+    </style>
+</head>
+<body>
+    {{ page_header(page_name('self_analytics'), user) }}
+    <div class="sa-wrap" id="self-analytics" data-base="{{ BASE_URL }}">
+        <div class="sa-intro" id="sa-intro"></div>
+
+        <div class="panel">
+            <div class="sa-bar">
+                <select class="form-select form-select-sm" id="sa-report" style="min-width: 280px;"></select>
+                {% if can_write_sql %}
+                <span class="sa-edit-only d-contents">
+                    <button type="button" class="btn btn-sm btn-outline-secondary" id="sa-new">New</button>
+                    <button type="button" class="btn btn-sm btn-outline-primary" id="sa-details-btn">Details And Sharing</button>
+                    <button type="button" class="btn btn-sm btn-primary" id="sa-save">Save</button>
+                    <button type="button" class="btn btn-sm btn-outline-primary" id="sa-save-as">Save As New</button>
+                    <button type="button" class="btn btn-sm btn-outline-secondary" id="sa-import-btn">Import</button>
+                    <button type="button" class="btn btn-sm btn-outline-secondary" id="sa-export">Export</button>
+                    <button type="button" class="btn btn-sm btn-outline-danger" id="sa-delete">Delete</button>
+                </span>
+                <button type="button" class="btn btn-sm btn-outline-secondary" id="sa-present">Present</button>
+                {% endif %}
+                <button type="button" class="btn btn-sm btn-outline-secondary" id="sa-copy-link">Copy Link</button>
+                {% if show_admin %}
+                <button type="button" class="btn btn-sm btn-outline-secondary ms-auto sa-edit-only" id="sa-settings-btn">Page Settings</button>
+                {% endif %}
+            </div>
+            {% if can_write_sql %}
+            <textarea class="form-control sa-sql sa-edit-only" id="sa-sql" spellcheck="false" placeholder="SELECT ... FROM PROD_CARSUPERMARKET_DB.SCHEMA.TABLE WHERE ..."></textarea>
+            {% endif %}
+            <div class="sa-bar mt-2">
+                <button type="button" class="btn btn-sm btn-primary sa-edit-only" id="sa-run">Run Query</button>
+                {% if can_write_sql %}<span class="small text-muted sa-edit-only">Ctrl + Enter also runs it.</span>{% endif %}
+                <span class="sa-status" id="sa-status"></span>
+                <span class="flex-grow-1"></span>
+                <button type="button" class="btn btn-sm btn-outline-secondary" id="sa-csv" disabled>Download CSV</button>
+            </div>
+        </div>
+
+        <!-- The open report: name, description, when the data is from. -->
+        <div class="sa-report-head" id="sa-report-head" style="display:none;">
+            <div class="d-flex align-items-baseline gap-3 flex-wrap">
+                <h1 class="sa-report-title" id="sa-report-title"></h1>
+                <span class="sa-as-at" id="sa-as-at"></span>
+                <button type="button" class="btn btn-sm btn-outline-primary" id="sa-refresh">Refresh</button>
+            </div>
+            <div class="sa-report-desc" id="sa-report-desc"></div>
+        </div>
+
+        <div class="panel sa-section">
+            <div class="sa-describe sa-edit-only">
+                <input type="text" class="form-control form-control-sm" id="sa-describe"
+                       placeholder="Describe A Chart, e.g. average purchase price inc vat and sale price before discount by month, line chart">
+                <button type="button" class="btn btn-sm btn-primary" id="sa-describe-go">Create Chart</button>
+                <button type="button" class="btn btn-sm btn-outline-primary" id="sa-add-chart">Add Chart By Hand</button>
+            </div>
+            <div class="sa-understood sa-edit-only" id="sa-understood"></div>
+            <div class="sa-grid" id="sa-charts"></div>
+        </div>
+
+        <div class="panel sa-section" id="sa-data-panel">
+            <div class="sa-bar mb-2">
+                <strong>Data</strong>
+                <span class="sa-status" id="sa-data-note"></span>
+            </div>
+            <div class="sa-data-wrap" id="sa-data"><div class="sa-empty p-2">Run a query to see its rows.</div></div>
+        </div>
+    </div>
+
+    <!-- Edit a chart. Filled by self_analytics.js. -->
+    <div class="modal-overlay" id="sa-editor-modal">
+        <div class="modal-box sa-editor">
+            <h2>Chart</h2>
+            <div class="sa-row two">
+                <div class="modal-field"><label for="sa-e-title">Title</label><input type="text" id="sa-e-title" maxlength="200"></div>
+                <div class="modal-field"><label for="sa-e-subtitle">Subtitle</label><input type="text" id="sa-e-subtitle" maxlength="300"></div>
+            </div>
+            <div class="sa-row four">
+                <div class="modal-field"><label for="sa-e-type">Chart Type</label><select id="sa-e-type"></select></div>
+                <div class="modal-field"><label for="sa-e-x">Along The Bottom (X)</label><select id="sa-e-x"></select></div>
+                <div class="modal-field"><label for="sa-e-grain">Group Dates By</label><select id="sa-e-grain"></select></div>
+                <div class="modal-field"><label for="sa-e-split">Split Into Series By</label><select id="sa-e-split"></select></div>
+            </div>
+            <div class="modal-field">
+                <label>Values</label>
+                <div class="sa-help">Each value is a calculation on one column. Minus gives the difference between two columns, for example sale price minus purchase price; tick As % to show it as a percentage of the second column.</div>
+                <table class="sa-list-table" id="sa-e-measures">
+                    <thead><tr><th style="width:14%;">Calculation</th><th>Column</th><th>Minus Column</th><th style="width:7%;">As %</th><th>Label</th><th style="width:6%;">Colour</th><th style="width:7%;"></th></tr></thead>
+                    <tbody></tbody>
+                </table>
+                <button type="button" class="btn btn-sm btn-outline-primary mt-1" id="sa-e-add-measure">Add Value</button>
+            </div>
+            <div class="modal-field">
+                <label>Only Include Rows Where</label>
+                <table class="sa-list-table" id="sa-e-filters">
+                    <tbody></tbody>
+                </table>
+                <button type="button" class="btn btn-sm btn-outline-primary mt-1" id="sa-e-add-filter">Add Filter</button>
+            </div>
+            <div class="sa-row four">
+                <div class="modal-field"><label for="sa-e-sort">Order</label><select id="sa-e-sort"></select></div>
+                <div class="modal-field"><label for="sa-e-top">Show Only The Top (0 = All)</label><input type="number" id="sa-e-top" min="0" max="1000"></div>
+                <div class="modal-field"><label for="sa-e-format">Number Format</label><select id="sa-e-format"></select></div>
+                <div class="modal-field"><label for="sa-e-decimals">Decimal Places</label><input type="number" id="sa-e-decimals" min="0" max="4"></div>
+            </div>
+            <div class="sa-row two">
+                <div class="modal-field"><label for="sa-e-width">Width (Columns Spanned)</label><input type="number" id="sa-e-width" min="1" max="4"></div>
+                <div class="modal-field">
+                    <label>Options</label>
+                    <div class="sa-checks">
+                        <label><input type="checkbox" id="sa-e-zero"> Start Axis At Zero</label>
+                        <label><input type="checkbox" id="sa-e-labels"> Show Values On Chart</label>
+                        <label><input type="checkbox" id="sa-e-legend"> Show Legend</label>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-actions">
+                <span class="sa-note" id="sa-e-note"></span>
+                <span class="spacer"></span>
+                <button type="button" class="btn btn-outline-secondary" id="sa-e-cancel">Cancel</button>
+                <button type="button" class="btn btn-primary" id="sa-e-apply">Apply</button>
+            </div>
+        </div>
+    </div>
+
+    {% if can_write_sql %}
+    <!-- The report's name, description and who can see it. Filled by self_analytics.js. -->
+    <div class="modal-overlay" id="sa-details-modal">
+        <div class="modal-box sa-details">
+            <h2>Details And Sharing</h2>
+            <div class="sa-row two">
+                <div class="modal-field"><label for="sa-d-name">Report Name</label><input type="text" id="sa-d-name" maxlength="120"></div>
+                <div class="modal-field"><label for="sa-d-folder">Folder</label><input type="text" id="sa-d-folder" maxlength="80" list="sa-folder-list"><datalist id="sa-folder-list"></datalist></div>
+            </div>
+            <div class="modal-field">
+                <label for="sa-d-desc">Description (Shown Under The Name)</label>
+                <textarea id="sa-d-desc" rows="3" class="form-control" maxlength="3000"></textarea>
+            </div>
+            <div class="modal-field">
+                <label>Who Can See It</label>
+                <div class="sa-help">People who can see it only look at the charts: they never see the SQL and cannot change anything. You and the admin always see it.</div>
+                <div class="sa-checks">
+                    <label><input type="radio" name="sa-d-vis" value="only_me"> Only Me</label>
+                    <label><input type="radio" name="sa-d-vis" value="everyone"> Everyone With This Page</label>
+                    <label><input type="radio" name="sa-d-vis" value="chosen"> Chosen People</label>
+                </div>
+            </div>
+            <div class="modal-field" id="sa-d-people-wrap">
+                <label>Chosen People</label>
+                <div class="sa-help">They also need Self-Analytics ticked in Settings > Page Access.</div>
+                <div class="sa-people" id="sa-d-people"></div>
+            </div>
+            <div class="modal-field">
+                <div class="sa-checks"><label><input type="checkbox" id="sa-d-table"> Show The Data Table To People Who Only Look</label></div>
+            </div>
+            <div class="modal-actions">
+                <span class="sa-note" id="sa-d-note"></span>
+                <span class="spacer"></span>
+                <button type="button" class="btn btn-outline-secondary" id="sa-d-cancel">Cancel</button>
+                <button type="button" class="btn btn-primary" id="sa-d-save">Save Report</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Import a report file (docs/self_analytics_report_format.md). -->
+    <div class="modal-overlay" id="sa-import-modal">
+        <div class="modal-box sa-import">
+            <h2>Import Report</h2>
+            <div class="sa-help">Paste the report file a Claude chat gave you, or choose the .json file. A report with the same name and folder as one of yours is updated, not added twice.</div>
+            <div class="modal-field"><input type="file" id="sa-i-file" accept=".json,application/json"></div>
+            <div class="modal-field"><textarea id="sa-i-text" rows="14" class="form-control font-monospace" spellcheck="false" placeholder='{"name": "...", "sql": "SELECT ...", "charts": [...]}'></textarea></div>
+            <div class="modal-actions">
+                <span class="sa-note" id="sa-i-note"></span>
+                <span class="spacer"></span>
+                <button type="button" class="btn btn-outline-secondary" id="sa-i-cancel">Cancel</button>
+                <button type="button" class="btn btn-primary" id="sa-i-go">Import</button>
+            </div>
+        </div>
+    </div>
+    {% endif %}
+
+    {% if show_admin %}
+    <!-- Page settings. Filled by self_analytics.js. -->
+    <div class="modal-overlay" id="sa-settings-modal">
+        <div class="modal-box sa-settings">
+            <h2>Page Settings</h2>
+            <div class="modal-field"><label for="sa-s-intro">Intro Text</label><textarea id="sa-s-intro" rows="3" class="form-control"></textarea></div>
+            <div class="sa-row three">
+                <div class="modal-field"><label for="sa-s-row-limit">Most Rows A Query Returns</label><input type="number" id="sa-s-row-limit"></div>
+                <div class="modal-field"><label for="sa-s-max-mb">Largest Result (MB, Up To 6)</label><input type="number" id="sa-s-max-mb"></div>
+                <div class="modal-field"><label for="sa-s-table-rows">Rows Shown In The Data Table</label><input type="number" id="sa-s-table-rows"></div>
+            </div>
+            <div class="sa-row three">
+                <div class="modal-field"><label for="sa-s-cols">Charts Per Row</label><input type="number" id="sa-s-cols"></div>
+                <div class="modal-field"><label for="sa-s-height">Chart Height (px)</label><input type="number" id="sa-s-height"></div>
+                <div class="modal-field"><label for="sa-s-title">Chart Title Size (px)</label><input type="number" id="sa-s-title"></div>
+            </div>
+            <div class="sa-row three">
+                <div class="modal-field"><label for="sa-s-axis">Axis Text Size (px)</label><input type="number" id="sa-s-axis"></div>
+                <div class="modal-field"><label for="sa-s-legend">Legend Text Size (px)</label><input type="number" id="sa-s-legend"></div>
+                <div class="modal-field"><label for="sa-s-labels">Value Label Size (px)</label><input type="number" id="sa-s-labels"></div>
+            </div>
+            <div class="sa-row four">
+                <div class="modal-field"><label for="sa-s-type">New Chart Type</label><select id="sa-s-type"></select></div>
+                <div class="modal-field"><label for="sa-s-grain">New Chart Date Grouping</label><select id="sa-s-grain"></select></div>
+                <div class="modal-field"><label for="sa-s-agg">Describe Box Default Calculation</label><select id="sa-s-agg"></select></div>
+                <div class="modal-field"><label for="sa-s-currency">Currency Symbol</label><input type="text" id="sa-s-currency" maxlength="3"></div>
+            </div>
+            <div class="sa-row four">
+                <div class="modal-field"><label for="sa-s-cache">Reuse A Report's Rows For (Minutes)</label><input type="number" id="sa-s-cache"></div>
+                <div class="modal-field"><label for="sa-s-report-title">Report Name Size (px)</label><input type="number" id="sa-s-report-title"></div>
+                <div class="modal-field"><label for="sa-s-tile-value">Tile Number Size (px)</label><input type="number" id="sa-s-tile-value"></div>
+                <div class="modal-field"><label for="sa-s-tile-label">Tile Label Size (px)</label><input type="number" id="sa-s-tile-label"></div>
+            </div>
+            <div class="modal-field">
+                <label>Series Colours, In Order</label>
+                <div class="sa-palette" id="sa-s-palette"></div>
+            </div>
+            <div class="modal-actions">
+                <span class="sa-note" id="sa-s-note"></span>
+                <span class="spacer"></span>
+                <button type="button" class="btn btn-outline-secondary" id="sa-s-reset">Reset To Default</button>
+                <button type="button" class="btn btn-outline-secondary" id="sa-s-cancel">Cancel</button>
+                <button type="button" class="btn btn-primary" id="sa-s-save">Save</button>
+            </div>
+        </div>
+    </div>
+    {% endif %}
+
+    <script src="{{ static_url('js/self_analytics_core.js') }}"></script>
+    <script src="{{ static_url('js/self_analytics.js') }}"></script>
+</body>
+</html>

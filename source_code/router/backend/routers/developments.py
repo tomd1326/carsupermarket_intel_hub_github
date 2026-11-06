@@ -10,7 +10,8 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 
 from utils import developments as dv
 from utils import email_client
-from .core import BASE_URL, templates, get_current_user, is_admin, page_name, user_can, _track, PageRedirect
+from .core import (BASE_URL, templates, get_current_user, is_admin, page_name, user_can, _track, PageRedirect,
+                   ADMIN_USERNAME, get_user_pages, user_details, page_hidden)
 from .page_registry import PAGES, ALL_PAGE_KEYS
 from .settings import SETTINGS_SECTIONS
 
@@ -55,6 +56,7 @@ def developments_data(request: Request, user: str = Depends(get_current_user)):
         "template": template,
         "types": dv.type_list(template, developments),
         "pages": [{"key": key, "name": page["name"]} for key, page in _pages().items()],
+        "statuses": [{"key": key, "label": label} for key, label in dv.STATUSES.items()],
         "emails": dv.list_emails(),
         "sender": email_client.configured_sender(),
     }
@@ -179,6 +181,124 @@ def developments_email_resend(email_id: int, request: Request, payload: dict, us
     if stored is None:
         raise HTTPException(status_code=404, detail="That email no longer exists.")
     return _send(stored["subject"], stored["html"], recipients, user)
+
+
+# ── Request A Feature (account menu, anyone signed in) ───────────────────────
+
+def _signed_in(user: str | None) -> None:
+    """These routes are open to every user, so the only check is being signed in."""
+    if not user:
+        raise HTTPException(status_code=401, detail="Sign in again to send a request.")
+
+
+def _allowed_pages(user: str) -> list:
+    """The pages this user may open and can see in the menu, by name, as the
+    popup's choices."""
+    allowed = get_user_pages(user)
+    pages = [{"key": p.key, "name": page_name(p.key)} for p in PAGES if p.key in allowed and not page_hidden(p.key)]
+    return sorted(pages, key=lambda p: p["name"].lower())
+
+
+def _person(username: str | None) -> dict:
+    details = user_details(username)
+    name = " ".join(part for part in (details.get("first_name"), details.get("last_name")) if part)
+    return {"name": name or username or "", "email": details.get("email") or ""}
+
+
+def _send_request_emails(development: dict, send_confirmation: bool, send_alert: bool) -> dict:
+    """Send the confirmation to the requester and the alert to the admin, each on
+    its own, so one failing does not stop the other. The request is already
+    saved; what went is recorded on it so the admin can resend from Developments.
+    Graph accepting a send is taken as sent; it does not report delivery."""
+    template = dv.get_template()
+    person = _person(development["requested_by"])
+    page = page_name(development["page_key"]) if development["page_key"] else template["request_general_label"]
+    values = {**person, "page": page, "when": development["created_label"], "title": development["title"],
+              "request": development["request_text"]}
+    sender = email_client.configured_sender()
+    errors = []
+    confirmation_sent = alert_sent = False
+
+    def send(to, subject_key, text_key, label):
+        try:
+            subject = dv.clean_subject(dv.fill_request_wording(template[subject_key], values))
+            body = email_client.text_to_html(dv.fill_request_wording(template[text_key], values))
+            email_client.send_email(to, subject, body, sender=sender)
+            return True
+        except Exception as e:
+            logger.exception("Request %s: %s email not sent", development["id"], label)
+            errors.append(f"{label}: {str(e)[:300]}")
+            return False
+
+    if send_confirmation:
+        if person["email"]:
+            confirmation_sent = send(person["email"], "request_confirm_subject", "request_confirm_text",
+                                     "Confirmation")
+        else:
+            errors.append("Confirmation: no email address is stored for this user.")
+    if send_alert:
+        try:
+            alert_to = dv.clean_recipients(template["request_alert_to"] or _person(ADMIN_USERNAME)["email"])
+        except ValueError as e:
+            alert_to = None
+            errors.append(f"Alert: {e}")
+        if alert_to:
+            alert_sent = send(alert_to, "request_alert_subject", "request_alert_text", "Alert")
+    error = "; ".join(errors)
+    dv.record_request_emails(development["id"], confirmation_sent, alert_sent, error)
+    return {"confirmation_sent": confirmation_sent, "alert_sent": alert_sent, "error": error}
+
+
+@router.get("/request-feature/options")
+def request_feature_options(request: Request, user: str = Depends(get_current_user)):
+    _signed_in(user)
+    template = dv.get_template()
+    return {"pages": _allowed_pages(user), "general_label": template["request_general_label"],
+            "intro": template["request_intro"]}
+
+
+@router.post("/request-feature/submit")
+def request_feature_submit(request: Request, payload: dict, user: str = Depends(get_current_user)):
+    _signed_in(user)
+    payload = payload or {}
+    page_key = str(payload.get("page_key") or "").strip() or None
+    # Checked here, not trusted from the popup: only a page this user may open.
+    if page_key and page_key not in get_user_pages(user):
+        return {"status": "error", "message": "Pick a page from the list."}
+    try:
+        development, is_repeat = dv.submit_request(user, page_key, payload.get("title"), payload.get("text"))
+    except ValueError as e:
+        return {"status": "error", "message": str(e)}
+    if is_repeat:
+        logger.info("Request %s sent again by %s; kept as one", development["id"], user)
+    else:
+        logger.info("Request %s sent by %s for page %s", development["id"], user, page_key or "general")
+    _track(request, "feature_request", "/request-feature", {"id": development["id"], "page_key": page_key})
+    # A repeat only sends whichever email has not gone yet.
+    sent = _send_request_emails(development, not development["confirmation_sent_at"],
+                                not development["alert_sent_at"])
+    confirmed = sent["confirmation_sent"] or bool(development["confirmation_sent_at"])
+    message = ("Thanks, your request has been sent. A confirmation email is on its way." if confirmed else
+               "Thanks, your request has been saved, but the confirmation email could not be sent.")
+    return {"status": "ok", "id": development["id"], "message": message}
+
+
+@router.post("/settings/developments/{dev_id}/request-emails")
+def developments_request_emails_resend(dev_id: int, request: Request, user: str = Depends(get_current_user)):
+    """Send again whichever of a request's two emails did not go, without making
+    a second request."""
+    _admin(user)
+    development = dv.get_development(dev_id)
+    if development is None or development["source"] != "request":
+        raise HTTPException(status_code=404, detail="That request no longer exists.")
+    need_confirmation = not development["confirmation_sent_at"]
+    need_alert = not development["alert_sent_at"]
+    if not need_confirmation and not need_alert:
+        return {"status": "ok", "message": "Both emails were already sent."}
+    sent = _send_request_emails(development, need_confirmation, need_alert)
+    if sent["error"]:
+        return {"status": "error", "message": sent["error"]}
+    return {"status": "ok", "message": "Sent."}
 
 
 @router.get("/whats-new", response_class=HTMLResponse)

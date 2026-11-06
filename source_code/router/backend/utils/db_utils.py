@@ -1175,6 +1175,7 @@ USER_ROLES = ('buyer',)
 # edited in the website. Key at most 30 characters: (name, what it allows).
 USER_PERMISSIONS = {
     'approve_site_changes': ('Approve Site Changes', 'can approve a vehicle moving to another site'),
+    'self_analytics_sql': ('Run Own Queries On Self-Analytics', 'can write, run and save their own Snowflake queries'),
 }
 
 

@@ -61,7 +61,6 @@ CONTENT_MAX = 100_000
 # none reaches the model until Tom has checked and approved it.
 _SEED_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "ai_knowledge_seed")
 SEEDS = [
-    ("seed_business_rules", "Business Rules", "instruction", "all", "business_rules.md"),
     ("seed_sales_performance", "PRODUCT_SALES_PERFORMANCE.SALES_PERFORMANCE", "table", "all", "sales_performance.md"),
     ("seed_daily_summary", "PRODUCT_SLT_KPIS.DAILY_SUMMARY", "table", "kpi", "daily_summary.md"),
 ]

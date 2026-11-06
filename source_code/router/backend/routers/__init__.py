@@ -7,7 +7,7 @@ shared state (user reload from Aurora) initialises before any routes.
 from fastapi import APIRouter
 
 from . import core  # noqa: F401 — initialises shared state on import
-from . import auth, settings, pages, kpi, buying_requirements, cap_lookup, mot_check, tasks, preferences, reports, orders_deliveries, subsidy_rates, assess_vehicle, keeper_change, presence, sharepoint, api_requests, dbt_runs, live_update, logs, apex_missing_finance, ai_knowledge, email_attachments, dse, ga4_requests, wbr_comments, vehicle_comments, budgets, cars_bought, wbr_report, trade_report, developments, user_guide, technical_guide, semantic_layer, external_data, email_alerts
+from . import auth, settings, pages, kpi, buying_requirements, cap_lookup, mot_check, tasks, preferences, reports, orders_deliveries, subsidy_rates, assess_vehicle, keeper_change, presence, sharepoint, api_requests, dbt_runs, live_update, logs, apex_missing_finance, ai_knowledge, email_attachments, dse, ga4_requests, wbr_comments, vehicle_comments, budgets, cars_bought, wbr_report, trade_report, developments, user_guide, technical_guide, semantic_layer, external_data, email_alerts, self_analytics
 
 router = APIRouter(
     prefix="",
@@ -15,5 +15,5 @@ router = APIRouter(
     responses={404: {"description": "Not found"}},
 )
 
-for _module in (auth, settings, pages, kpi, buying_requirements, cap_lookup, mot_check, tasks, preferences, reports, orders_deliveries, subsidy_rates, assess_vehicle, keeper_change, presence, sharepoint, api_requests, dbt_runs, live_update, logs, apex_missing_finance, ai_knowledge, email_attachments, dse, ga4_requests, wbr_comments, vehicle_comments, budgets, cars_bought, wbr_report, trade_report, developments, user_guide, technical_guide, semantic_layer, external_data, email_alerts):
+for _module in (auth, settings, pages, kpi, buying_requirements, cap_lookup, mot_check, tasks, preferences, reports, orders_deliveries, subsidy_rates, assess_vehicle, keeper_change, presence, sharepoint, api_requests, dbt_runs, live_update, logs, apex_missing_finance, ai_knowledge, email_attachments, dse, ga4_requests, wbr_comments, vehicle_comments, budgets, cars_bought, wbr_report, trade_report, developments, user_guide, technical_guide, semantic_layer, external_data, email_alerts, self_analytics):
     router.include_router(_module.router)

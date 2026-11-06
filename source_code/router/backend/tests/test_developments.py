@@ -77,7 +77,7 @@ def test_bad_template_values_refused(key, value):
 
 def test_clean_development_needs_the_basics():
     good = {"title": "T", "dev_type": "Improvement"}
-    assert dv.clean_development(good, ALL_PAGE_KEYS)["status"] == "draft"
+    assert dv.clean_development(good, ALL_PAGE_KEYS)["status"] == "planned"
     for bad in ({**good, "title": " "}, {**good, "dev_type": ""}, {**good, "status": "nonsense"},
                 {**good, "status": "live"}, {**good, "page_key": "not_a_page"}, {**good, "released_on": "soon"},
                 {**good, "faqs": [{"question": "Q", "answer": ""}]}, {**good, "faqs": "text"}):
@@ -259,7 +259,7 @@ def test_only_live_rows_are_asked_for_on_whats_new(monkeypatch):
     assert any("FROM developments WHERE status = 'live'" in sql for sql, _ in conn.statements)
 
 
-def test_first_setup_adds_the_apex_draft(monkeypatch):
+def test_first_setup_adds_the_apex_entry_as_planned(monkeypatch):
     conn = FakeConn()
     original = FakeCursor.execute
 
@@ -273,7 +273,7 @@ def test_first_setup_adds_the_apex_draft(monkeypatch):
     inserts = [p for sql, p in conn.statements if sql.startswith("INSERT INTO developments")]
     assert len(inserts) == 1
     assert "apex_missing_finance" in inserts[0]
-    assert any("'draft'" in sql for sql, _ in conn.statements if sql.startswith("INSERT INTO developments"))
+    assert any("'planned'" in sql for sql, _ in conn.statements if sql.startswith("INSERT INTO developments"))
 
 
 def test_seed_page_exists():
@@ -290,6 +290,7 @@ def test_seed_page_exists():
     lambda: router.developments_email_get(1, None, user="someone"),
     lambda: router.developments_email_send(None, {}, user="someone"),
     lambda: router.developments_email_resend(1, None, {}, user="someone"),
+    lambda: router.developments_request_emails_resend(1, None, user="someone"),
     lambda: router.developments_data(None, user=None),
 ])
 def test_admin_routes_refuse_everyone_else(call):
@@ -329,6 +330,186 @@ def test_generate_records_the_ticked_developments(monkeypatch):
     result = router.developments_email_generate(None, {"subject": "S", "intro": "I", "ids": ["1"]}, user=ADMIN)
     assert result["status"] == "ok" and result["id"] == 5
     assert asked == [[1]] and len(recorded) == 1
+
+
+# ── Statuses and the table changes ───────────────────────────────────────────
+
+@pytest.mark.parametrize("status", list(dv.STATUSES))
+def test_every_status_is_accepted_and_fits_the_column(status):
+    cleaned = dv.clean_development({"title": "T", "dev_type": "Improvement", "status": status, "summary": "S"},
+                                   ALL_PAGE_KEYS)
+    assert cleaned["status"] == status and len(status) <= dv._STATUS_MAX
+
+
+def test_old_status_column_is_widened_and_drafts_become_planned(monkeypatch):
+    conn = FakeConn()
+    original = FakeCursor.execute
+
+    def execute(self, sql, params=None):
+        original(self, sql, params)
+        if "character_maximum_length" in sql:
+            self.rows = [(10,)]
+
+    monkeypatch.setattr(FakeCursor, "execute", execute)
+    dv._ensure_tables(conn)
+    sqls = [sql for sql, _ in conn.statements]
+    assert any("ALTER COLUMN status TYPE VARCHAR(30)" in s for s in sqls)
+    assert any("SET DEFAULT 'planned'" in s for s in sqls)
+    assert any("SET status = 'planned' WHERE status = 'draft'" in s for s in sqls)
+    for column in ("source", "requested_by", "request_text", "created_by", "created_at",
+                   "confirmation_sent_at", "alert_sent_at", "email_error"):
+        assert any(f"ADD COLUMN IF NOT EXISTS {column} " in s for s in sqls)
+
+
+def test_wide_status_column_is_left_alone(monkeypatch):
+    conn = FakeConn()
+    original = FakeCursor.execute
+
+    def execute(self, sql, params=None):
+        original(self, sql, params)
+        if "character_maximum_length" in sql:
+            self.rows = [(30,)]
+
+    monkeypatch.setattr(FakeCursor, "execute", execute)
+    dv._ensure_tables(conn)
+    assert not any("ALTER COLUMN status TYPE" in sql for sql, _ in conn.statements)
+
+
+# ── Request A Feature ────────────────────────────────────────────────────────
+
+def request_dev(**changes):
+    base = {"id": 9, "title": "Faster Export", "page_key": "apex_missing_finance", "requested_by": "jsmith",
+            "request_text": "Please {name} make it <b>faster</b>", "created_label": "6 Nov 2026 14:05",
+            "source": "request", "confirmation_sent_at": "", "alert_sent_at": ""}
+    return {**base, **changes}
+
+
+@pytest.fixture
+def request_setup(monkeypatch):
+    """The request routes with no database and no real email. Returns what was
+    sent and what was recorded."""
+    state = {"sent": [], "recorded": [], "fail": set(), "submitted": [], "dev": request_dev(), "repeat": False}
+
+    def send_email(to, subject, html, sender=None, bcc=None):
+        label = "alert" if "New Intelligence Hub Request" in subject else "confirmation"
+        if label in state["fail"]:
+            raise RuntimeError(f"{label} 500 from Graph")
+        state["sent"].append({"to": to, "subject": subject, "html": html, "label": label})
+
+    def submit(user, page_key, title, text):
+        state["submitted"].append((user, page_key, title, text))
+        return state["dev"], state["repeat"]
+
+    monkeypatch.setattr(router, "get_user_pages", lambda user: frozenset({"apex_missing_finance"}))
+    monkeypatch.setattr(router, "user_details", lambda u: {
+        "jsmith": {"first_name": "Jo", "last_name": "Smith", "email": "jo@x.com"},
+        ADMIN: {"first_name": "Tom", "last_name": "D", "email": "tom@x.com"}}.get(u, {}))
+    monkeypatch.setattr(router, "page_name", lambda key: "Apex Missing Finance")
+    monkeypatch.setattr(router, "_track", lambda *a, **k: None)
+    monkeypatch.setattr(dv, "get_template", lambda: dict(dv.TEMPLATE_DEFAULTS))
+    monkeypatch.setattr(dv, "submit_request", submit)
+    monkeypatch.setattr(dv, "record_request_emails", lambda *a: state["recorded"].append(a))
+    monkeypatch.setattr(dv, "get_development", lambda i: state["dev"])
+    monkeypatch.setattr(router.email_client, "configured_sender", lambda: "hub@x.com")
+    monkeypatch.setattr(router.email_client, "send_email", send_email)
+    return state
+
+
+@pytest.mark.parametrize("call", [
+    lambda: router.request_feature_options(None, user=None),
+    lambda: router.request_feature_submit(None, {"title": "T", "text": "x"}, user=None),
+])
+def test_request_routes_refuse_signed_out_people(call):
+    with pytest.raises(HTTPException) as e:
+        call()
+    assert e.value.status_code == 401
+
+
+def test_request_page_list_is_only_the_users_pages(monkeypatch):
+    monkeypatch.setattr(router, "get_user_pages", lambda user: frozenset({"apex_missing_finance"}))
+    monkeypatch.setattr(router, "page_hidden", lambda key: False)
+    monkeypatch.setattr(router, "page_name", lambda key: key)
+    monkeypatch.setattr(dv, "get_template", lambda: dict(dv.TEMPLATE_DEFAULTS))
+    data = router.request_feature_options(None, user="jsmith")
+    assert [p["key"] for p in data["pages"]] == ["apex_missing_finance"]
+    assert data["general_label"] == dv.TEMPLATE_DEFAULTS["request_general_label"]
+
+
+def test_request_for_a_page_the_user_cannot_open_is_refused(request_setup):
+    result = router.request_feature_submit(None, {"page_key": "kpi", "title": "T", "text": "x"}, user="jsmith")
+    assert result["status"] == "error"
+    assert request_setup["submitted"] == [] and request_setup["sent"] == []
+
+
+def test_general_request_needs_no_page(request_setup):
+    result = router.request_feature_submit(None, {"page_key": "", "title": "T", "text": "x"}, user="jsmith")
+    assert result["status"] == "ok"
+    assert request_setup["submitted"][0][1] is None
+
+
+def test_request_sends_confirmation_to_the_user_and_alert_to_the_admin(request_setup):
+    result = router.request_feature_submit(None, {"page_key": "apex_missing_finance", "title": "T", "text": "x"},
+                                           user="jsmith")
+    assert result["status"] == "ok" and result["id"] == 9
+    to = {e["label"]: e["to"] for e in request_setup["sent"]}
+    assert to == {"confirmation": "jo@x.com", "alert": ["tom@x.com"]}
+    assert request_setup["recorded"] == [(9, True, True, "")]
+
+
+def test_request_text_is_escaped_and_braces_left_alone(request_setup):
+    router.request_feature_submit(None, {"page_key": "", "title": "T", "text": "x"}, user="jsmith")
+    html = request_setup["sent"][0]["html"]
+    assert "<b>faster</b>" not in html and "&lt;b&gt;faster&lt;/b&gt;" in html
+    assert "Please {name} make it" in html
+
+
+def test_one_email_failing_still_sends_the_other_and_keeps_the_request(request_setup):
+    request_setup["fail"].add("alert")
+    result = router.request_feature_submit(None, {"page_key": "", "title": "T", "text": "x"}, user="jsmith")
+    assert result["status"] == "ok" and result["id"] == 9
+    assert [e["label"] for e in request_setup["sent"]] == ["confirmation"]
+    dev_id, confirmation, alert, error = request_setup["recorded"][0]
+    assert (dev_id, confirmation, alert) == (9, True, False) and "Alert" in error
+
+
+def test_failed_confirmation_is_told_to_the_user(request_setup):
+    request_setup["fail"].add("confirmation")
+    result = router.request_feature_submit(None, {"page_key": "", "title": "T", "text": "x"}, user="jsmith")
+    assert result["status"] == "ok" and "could not be sent" in result["message"]
+
+
+def test_repeat_submit_only_sends_what_has_not_gone(request_setup):
+    request_setup["dev"] = request_dev(confirmation_sent_at="2026-11-06T14:05:00", alert_sent_at="")
+    request_setup["repeat"] = True
+    router.request_feature_submit(None, {"page_key": "", "title": "T", "text": "x"}, user="jsmith")
+    assert [e["label"] for e in request_setup["sent"]] == ["alert"]
+
+
+def test_resend_only_sends_the_missing_email(request_setup):
+    request_setup["dev"] = request_dev(alert_sent_at="2026-11-06T14:05:00")
+    result = router.developments_request_emails_resend(9, None, user=ADMIN)
+    assert result["status"] == "ok"
+    assert [e["label"] for e in request_setup["sent"]] == ["confirmation"]
+
+
+def test_resend_when_both_went_sends_nothing(request_setup):
+    request_setup["dev"] = request_dev(confirmation_sent_at="x", alert_sent_at="y")
+    result = router.developments_request_emails_resend(9, None, user=ADMIN)
+    assert result["status"] == "ok" and request_setup["sent"] == []
+
+
+def test_request_needs_a_title_and_words():
+    with pytest.raises(ValueError):
+        dv.clean_request_title("  ")
+    with pytest.raises(ValueError):
+        dv.clean_request_text("")
+    assert dv.clean_request_title(" Faster\nExport ") == "Faster Export"
+
+
+def test_bad_alert_address_refused_in_the_template():
+    with pytest.raises(ValueError):
+        dv.clean_template({"request_alert_to": "not-an-address"})
+    assert dv.clean_template({"request_alert_to": ""})["request_alert_to"] == ""
 
 
 # ── Pages ────────────────────────────────────────────────────────────────────

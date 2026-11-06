@@ -6913,6 +6913,17 @@
             }
             if (/current monthly spend is made up of/i.test(line)) { section = out.current; continue; }
             if (/changes we discussed/i.test(line)) { section = out.changes; continue; }
+            // "Current  Future" table: name, current slots, future slots.
+            if (/\bCurrent\b/i.test(line) && /\bFuture\b/i.test(line) && !/\d/.test(line)) { section = 'table'; continue; }
+            if (section === 'table') {
+                const t = line.match(/^(.*?[A-Za-z)])\s+(\d[\d,]*)\s+(\d[\d,]*)$/);
+                if (!t) continue;                         // blank-name total line
+                const tp = AT_EMAIL_PRODUCTS.find(p => p.re.test(t[1]));
+                if (!tp) { out.unknown.push(t[1]); continue; }
+                out.current[tp.id] = { qty: Number(t[2].replace(/,/g, '')), money: null };
+                out.changes[tp.id] = { qty: Number(t[3].replace(/,/g, '')), money: null };
+                continue;
+            }
             if (!section || /^all other products/i.test(line)) continue;
             // Cells are tab-separated when pasted from Outlook; otherwise the
             // name runs up to the first number after a word.
@@ -7088,6 +7099,12 @@
         // current figures, then the row before.
         const row = { from: email.goLive, to: null, source: 'email' };
         AT_FIELDS.forEach(f => { row[f] = changes[f] ?? current[f] ?? (before ? before[f] : null); });
+        // New tactical slots with no price in the email: scale the cost from the row before.
+        if (changes.tactical !== undefined && changes.tactical_cost === undefined && before
+            && Number(before.base) > 0 && before.me_cost !== null && before.me_cost !== undefined) {
+            row.tactical_cost = atPence(changes.tactical * Number(before.me_cost) / Number(before.base));
+            messages.push({ kind: 'warn', text: `Tactical cost worked out as ${changes.tactical} slots at the row before's ME cost per slot. Check it.` });
+        }
         const missing = AT_FIELDS.filter(f => row[f] === null || row[f] === undefined);
         const existing = atDraft.findIndex(p => p.from === email.goLive);
         if (existing >= 0) atDraft.splice(existing, 1, row); else atDraft.push(row);
