@@ -41,107 +41,13 @@
         <div class="alert alert-danger py-2">Could not load prod's accounts: {{ error }}</div>
         {% endif %}
 
-        {% if not viewing_prod %}
-        <div class="card mb-4">
-            <div class="card-header fw-semibold">Sign In</div>
-            {% if request.query_params.get('loginok') %}
-            <div class="alert alert-success mb-0 rounded-0 border-0 py-2 px-3">Sign in setting saved.</div>
-            {% endif %}
-            <div class="card-body">
-                <form method="post" action="{{ BASE_URL }}/settings/login-mode" class="d-flex gap-2 align-items-end flex-wrap">
-                    <div>
-                        <label for="login_mode" class="form-label mb-1">Sign In With</label>
-                        <select class="form-select" id="login_mode" name="login_mode" style="width: 320px;">
-                            <option value="both" {% if login_mode != 'email' %}selected{% endif %}>Username Or Email Address</option>
-                            <option value="email" {% if login_mode == 'email' %}selected{% endif %}>Email Address Only</option>
-                        </select>
-                    </div>
-                    <button type="submit" class="btn btn-primary">Save</button>
-                </form>
-                <div class="form-text">The admin account can always sign in by username. Users without an email below cannot sign in when set to Email Address Only.</div>
-            </div>
-        </div>
-
-        <div class="card mb-4">
-            <div class="card-header fw-semibold">Password Links</div>
-            {% if request.query_params.get('linkok') %}
-            <div class="alert alert-success mb-0 rounded-0 border-0 py-2 px-3">Password link settings saved.</div>
-            {% endif %}
-            {% if request.query_params.get('linkerr') %}
-            <div class="alert alert-danger mb-0 rounded-0 border-0 py-2 px-3">{{ request.query_params.get('linkerr') }}</div>
-            {% endif %}
-            <div class="card-body">
-                <form method="post" action="{{ BASE_URL }}/settings/password-links" class="row g-2 align-items-end">
-                    <div class="col-auto">
-                        <label for="password_link_hours" class="form-label mb-1">Link Lasts (Hours)</label>
-                        <input type="number" class="form-control" id="password_link_hours" name="password_link_hours"
-                               min="1" max="720" value="{{ link_settings.password_link_hours }}" style="width: 130px;" required>
-                    </div>
-                    <div class="col-md">
-                        <label for="password_link_base_prod" class="form-label mb-1">Prod Address</label>
-                        <input type="url" class="form-control" id="password_link_base_prod" name="password_link_base_prod"
-                               value="{{ link_settings.password_link_base_prod }}" required>
-                    </div>
-                    <div class="col-md">
-                        <label for="password_link_base_dev" class="form-label mb-1">Dev Address</label>
-                        <input type="url" class="form-control" id="password_link_base_dev" name="password_link_base_dev"
-                               value="{{ link_settings.password_link_base_dev }}" required>
-                    </div>
-                    <div class="col-auto">
-                        <button type="submit" class="btn btn-primary">Save</button>
-                    </div>
-                </form>
-                <div class="form-text">Open a user with Edit to make an activation link (no password yet) or a reset link. Each link works once and stops working after this many hours. Passwords need {{ password_rules_text }}.</div>
-            </div>
-        </div>
-        {% endif %}
-
-        <div class="card mb-4">
-            <div class="card-header fw-semibold">Email Wording</div>
-            {% if request.query_params.get('wordingok') %}
-            <div class="alert alert-success mb-0 rounded-0 border-0 py-2 px-3">Email wording saved.</div>
-            {% endif %}
-            {% if request.query_params.get('wordingerr') %}
-            <div class="alert alert-danger mb-0 rounded-0 border-0 py-2 px-3">{{ request.query_params.get('wordingerr') }}</div>
-            {% endif %}
-            <div class="card-body">
-                {% if email_wording %}
-                <form method="post" action="{{ BASE_URL }}/settings/password-email-wording">
-                    <input type="hidden" name="source" value="{{ source }}">
-                    <details>
-                        <summary class="small">Activation And Reset Emails (Sent From The Edit Popup)</summary>
-                        <div class="form-text mb-2">One version for prod and dev. Use {first_name}, {link} and {expires}. No signature is added, so include the sign-off here. Leave a box empty to use the built-in wording.</div>
-                        <div class="row g-2 mb-2">
-                            <div class="col-md-6">
-                                <label for="password_email_subject_activate" class="form-label mb-1">Activation Email Subject</label>
-                                <input type="text" class="form-control mb-2" id="password_email_subject_activate" name="password_email_subject_activate" value="{{ email_wording.password_email_subject_activate }}">
-                                <label for="password_email_body_activate" class="form-label mb-1">Activation Email Text</label>
-                                <textarea class="form-control" rows="9" id="password_email_body_activate" name="password_email_body_activate">{{ email_wording.password_email_body_activate }}</textarea>
-                            </div>
-                            <div class="col-md-6">
-                                <label for="password_email_subject_reset" class="form-label mb-1">Reset Email Subject</label>
-                                <input type="text" class="form-control mb-2" id="password_email_subject_reset" name="password_email_subject_reset" value="{{ email_wording.password_email_subject_reset }}">
-                                <label for="password_email_body_reset" class="form-label mb-1">Reset Email Text</label>
-                                <textarea class="form-control" rows="9" id="password_email_body_reset" name="password_email_body_reset">{{ email_wording.password_email_body_reset }}</textarea>
-                            </div>
-                        </div>
-                        <button type="submit" class="btn btn-primary">Save</button>
-                    </details>
-                </form>
-                {% else %}
-                <div class="small text-danger">The email wording could not be loaded from prod's database.</div>
-                {% endif %}
-            </div>
-        </div>
+        <div class="alert alert-info py-2 small">Users sign in with Keycloak single sign-on. A user's email address below
+            must match their Keycloak email, and only one user can have it.</div>
 
         <div class="card">
             <div class="card-header fw-semibold d-flex align-items-center justify-content-between">
                 <span>Accounts{% if viewing_prod %} <span class="text-muted fw-normal small">(prod)</span>{% endif %}</span>
                 <span class="d-flex gap-2 align-items-center">
-                    <span class="form-check mb-0 fw-normal small">
-                        <input class="form-check-input" type="checkbox" id="not-activated-only">
-                        <label class="form-check-label" for="not-activated-only">Not Activated Only ({{ all_users|select('in', inactive)|list|length }})</label>
-                    </span>
                     <button type="button" class="btn btn-outline-secondary btn-sm" id="copy-emails-btn">Copy Emails</button>
                     <a href="{{ BASE_URL }}/settings/users/export?source={{ source }}" class="btn btn-outline-secondary btn-sm">Export CSV</a>
                     <button type="button" class="btn btn-outline-primary btn-sm" id="nexus-fill-btn" title="Fill in empty Nexus ids, site and company for users already here, matched on email">Fill From Nexus</button>
@@ -154,9 +60,6 @@
             {% endif %}
             {% if request.query_params.get('useradded') %}
             <div class="alert alert-success mb-0 rounded-0 border-0 py-2 px-3">User {{ request.query_params.get('useradded') }} created.</div>
-            {% endif %}
-            {% if request.query_params.get('userpending') %}
-            <div class="alert alert-success mb-0 rounded-0 border-0 py-2 px-3">User {{ request.query_params.get('userpending') }} created and waiting for activation. Open Edit to make their activation link.</div>
             {% endif %}
             {% if request.query_params.get('userdeleted') %}
             <div class="alert alert-warning mb-0 rounded-0 border-0 py-2 px-3">User {{ request.query_params.get('userdeleted') }} deleted.</div>
@@ -184,9 +87,8 @@
                         {% if d.company_name and d.company_name not in companies %}{% set _ = companies.append(d.company_name) %}{% endif %}
                         {% set ll = last_logins.get(u, {}) %}
                         {% set user_pages = access.get(u, []) %}
-                        <tr data-inactive="{{ '1' if u in inactive else '0' }}">
+                        <tr>
                             <td class="text-nowrap">{{ ((d.first_name or '') ~ ' ' ~ (d.last_name or ''))|trim }}
-                                {% if u in inactive %}<span class="badge bg-warning text-dark ms-1">Not Activated</span>{% endif %}
                                 {% if u in buyers %}<span class="badge bg-info text-dark ms-1">Buyer</span>{% endif %}
                                 {% for key, info in (permission_list or {}).items() %}{% if key in (user_permissions or {}).get(u, []) %}<span class="badge bg-info text-dark ms-1">{{ info[0] }}</span>{% endif %}{% endfor %}
                             </td>
@@ -214,7 +116,6 @@
                                         data-company-type="{{ d.company_type or '' }}"
                                         data-last-login="{{ ll.last_login or 'Never' }}"
                                         data-last-seen="{{ ll.last_seen or 'Never' }}"
-                                        data-pending="{{ '1' if u in inactive else '0' }}"
                                         data-buyer="{{ '1' if u in buyers else '0' }}"
                                         data-pages="{{ user_pages|sort|join(',') }}"
                                         data-permissions="{{ (user_permissions or {}).get(u, [])|sort|join(',') }}"
@@ -261,6 +162,7 @@
                         <div class="mb-2">
                             <label for="um-email" class="form-label mb-1">Email</label>
                             <input type="email" class="form-control" id="um-email" name="email">
+                            <div class="form-text">Must match the person's Keycloak email. Needed to sign in.</div>
                         </div>
                         <div class="row g-2 mb-2" id="um-org-row">
                             <div class="col-4">
@@ -339,20 +241,6 @@
                             {% else %}
                             <div class="small text-danger">Page access could not be loaded, so saving here leaves it as it is.</div>
                             {% endif %}
-                        </div>
-                        <div class="mb-2" id="um-password-row">
-                            <label for="um-password" class="form-label mb-1">Password</label>
-                            <input type="password" class="form-control" id="um-password" name="password" autocomplete="new-password">
-                            <div class="form-text" id="um-password-help"></div>
-                        </div>
-                        <div class="mb-2" id="um-link-row">
-                            <button type="button" class="btn btn-outline-primary btn-sm" id="um-link-btn">Make Link</button>
-                            <div id="um-link-result" class="mt-2" style="display: none;">
-                                <input type="text" class="form-control form-control-sm" id="um-link-url" readonly>
-                                <button type="button" class="btn btn-outline-secondary btn-sm mt-2" id="um-email-btn">Send Email</button>
-                                <div class="form-text" id="um-link-note"></div>
-                            </div>
-                            <div class="form-text text-danger" id="um-link-error"></div>
                         </div>
                         <div class="small text-muted" id="um-activity">
                             Last Login: <span id="um-last-login"></span> &middot; Last Seen: <span id="um-last-seen"></span>
@@ -452,18 +340,8 @@
             const ticked = (opts.pages || '').split(',');
             document.querySelectorAll('.um-access').forEach(box => { box.checked = ticked.includes(box.value); });
             show($('um-access-row'), !isAdmin);
-            $('um-password').value = '';
-            const rules = 'Needs {{ password_rules_text }}.';
-            $('um-password-help').textContent = isAdd
-                ? 'Leave blank to send an activation link instead. ' + rules
-                : 'Leave blank to keep the current password. Changing it signs the user out. ' + rules;
-            $('um-link-row').dataset.username = opts.username || '';
-            $('um-link-btn').textContent = opts.pending ? 'Make Activation Link' : 'Make Password Reset Link';
-            $('um-link-result').style.display = 'none';
-            $('um-link-error').textContent = '';
-            show($('um-link-row'), !isAdd && !isAdmin);
             ['um-first', 'um-last', 'um-email'].forEach(id => { $(id).readOnly = isAdmin; });
-            show($('um-password-row'), !isAdmin);
+            $('um-email').required = isAdd;
             show($('um-activity'), !isAdd);
             $('um-last-login').textContent = opts.lastLogin || '';
             $('um-last-seen').textContent = opts.lastSeen || '';
@@ -496,7 +374,6 @@
                 lastLogin: btn.dataset.lastLogin,
                 lastSeen: btn.dataset.lastSeen,
                 admin: btn.dataset.admin === '1',
-                pending: btn.dataset.pending === '1',
                 buyer: btn.dataset.buyer === '1',
                 pages: btn.dataset.pages,
                 permissions: btn.dataset.permissions,
@@ -507,11 +384,6 @@
         $('um-access-all').addEventListener('click', () => tickAll(true));
         $('um-access-none').addEventListener('click', () => tickAll(false));
         {% endif %}
-        $('not-activated-only').addEventListener('change', e => {
-            document.querySelectorAll('#accounts-table tbody tr').forEach(tr => {
-                show(tr, !e.target.checked || tr.dataset.inactive === '1');
-            });
-        });
         // Every email shown in the list as one semicolon separated line, to paste into Outlook's To box.
         $('copy-emails-btn').addEventListener('click', async () => {
             const emails = [...new Set(
@@ -538,59 +410,6 @@
                 ta.remove();
             }
             done('Copied ' + emails.length);
-        });
-        // The last link made, so the email button can build the message from it.
-        let emailDraft = null;
-        // Sends the email with the link in it, after a confirmation box.
-        $('um-email-btn').addEventListener('click', async () => {
-            if (!emailDraft || !emailDraft.email) return;
-            const kind = emailDraft.purpose === 'activate' ? 'activation' : 'password reset';
-            if (!confirm('Send the ' + kind + ' email to ' + emailDraft.email + ' from ' + emailDraft.sender + '?')) return;
-            const btn = $('um-email-btn');
-            btn.disabled = true;
-            $('um-link-error').textContent = '';
-            try {
-                const body = new URLSearchParams({
-                    username: emailDraft.username, subject: emailDraft.subject,
-                    body: emailDraft.body, source: '{{ source }}',
-                });
-                const resp = await fetch('{{ BASE_URL }}/settings/user/send-password-email', { method: 'POST', body: body });
-                const data = await resp.json();
-                if (!resp.ok) throw new Error(data.error || 'Could not send the email');
-                $('um-link-note').textContent = 'Email sent to ' + data.email + ' from ' + data.sender + '.';
-            } catch (e) {
-                $('um-link-error').textContent = e.message;
-            } finally {
-                btn.disabled = false;
-            }
-        });
-        // Makes a link and shows it for copying. The link is shown once: only a hash of it is stored.
-        $('um-link-btn').addEventListener('click', async () => {
-            const username = $('um-link-row').dataset.username;
-            const where = toProd ? ' on PROD' : '';
-            if (!username || !confirm('Make a new link for ' + username + where + '? Any earlier unused link for them stops working.')) return;
-            const btn = $('um-link-btn');
-            btn.disabled = true;
-            $('um-link-error').textContent = '';
-            try {
-                const body = new URLSearchParams({ username: username, source: '{{ source }}' });
-                const resp = await fetch('{{ BASE_URL }}/settings/user/password-link', { method: 'POST', body: body });
-                const data = await resp.json();
-                if (!resp.ok) throw new Error(data.error || 'Could not make the link');
-                $('um-link-url').value = data.url;
-                $('um-link-note').textContent = (data.purpose === 'activate' ? 'Activation link' : 'Password reset link')
-                    + ' for ' + username + '. Works once, until ' + data.expires + '. Copy it now: it cannot be shown again.';
-                emailDraft = { ...data, username: username };
-                $('um-email-btn').disabled = !data.email;
-                $('um-email-btn').title = data.email ? '' : 'This user has no email address';
-                $('um-link-result').style.display = '';
-                $('um-link-url').select();
-                try { await navigator.clipboard.writeText(data.url); $('um-link-note').textContent += ' Copied.'; } catch (e) { /* copy by hand */ }
-            } catch (e) {
-                $('um-link-error').textContent = e.message;
-            } finally {
-                btn.disabled = false;
-            }
         });
         // Import From Nexus
         const nxModal = new bootstrap.Modal($('nexusModal'));
@@ -688,7 +507,7 @@
         $('nx-add').addEventListener('click', async () => {
             const rows = [...nxPicked].map(i => nxRows[i]);
             const where = toProd ? ' on PROD' : '';
-            if (!rows.length || !confirm('Add ' + rows.length + ' user(s)' + where + '? Each is created waiting for activation; make their link from Edit.')) return;
+            if (!rows.length || !confirm('Add ' + rows.length + ' user(s)' + where + '? They can sign in with Keycloak once an admin gives them page access.')) return;
             const btn = $('nx-add');
             btn.disabled = true;
             $('nx-error').textContent = '';

@@ -72,13 +72,12 @@ DEFAULT_PAGE_KEYS: frozenset[str] = frozenset(
 CONFIGURED_MARKER = '__configured__'
 
 
-def shown_page_access(rows: set | None, is_inactive: bool) -> set:
+def shown_page_access(rows: set | None) -> set:
     """The pages to tick for a user on Settings > User Accounts, from their stored
-    rows. Saved: exactly what was saved. Never saved: the defaults, except an
-    account not activated yet, which starts with no pages."""
+    rows. Saved: exactly what was saved. Never saved: the defaults."""
     if rows is not None and CONFIGURED_MARKER in rows:
         return set(rows) & ALL_PAGE_KEYS
-    return set() if is_inactive else set(DEFAULT_PAGE_KEYS)
+    return set(DEFAULT_PAGE_KEYS)
 
 
 # The Settings area is intentionally absent from PAGES. It stays admin-only, so
