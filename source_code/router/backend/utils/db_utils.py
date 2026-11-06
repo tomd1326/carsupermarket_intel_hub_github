@@ -1121,8 +1121,8 @@ def upsert_user(conn, username: str) -> None:
     """Make sure the user exists. An existing user is left as it is."""
     with conn.cursor() as cur:
         cur.execute(
-            "INSERT INTO users (username, pwd_hash) VALUES (%s, %s) ON CONFLICT (username) DO NOTHING",
-            (username, SSO_PWD_PLACEHOLDER),
+            "INSERT INTO users (username) VALUES (%s) ON CONFLICT (username) DO NOTHING",
+            (username,),
         )
     conn.commit()
 
@@ -1244,22 +1244,31 @@ def set_user_role(conn, username: str, role: str, on: bool) -> None:
 
 
 # ── Adding users ─────────────────────────────────────────────────────────────
-# Sign-in is Keycloak single sign-on, so a user has no password here. The
-# users.pwd_hash column is still NOT NULL until it is dropped from the
-# database (see docs/keycloak_sso.md), so every new row gets this value, which
-# nothing reads.
+# Sign-in is Keycloak single sign-on, so a user has no password here and new
+# rows do not set users.pwd_hash. Until that column is dropped from the
+# database (see docs/keycloak_sso.md) it may still be NOT NULL, so it is made
+# optional first. Once it is dropped this does nothing.
 
-SSO_PWD_PLACEHOLDER = '!sso'
+@once_per_database
+def _ensure_pwd_hash_optional(conn) -> None:
+    with conn.cursor() as cur:
+        cur.execute(
+            "DO $$ BEGIN "
+            "IF EXISTS (SELECT 1 FROM information_schema.columns "
+            "WHERE table_schema = current_schema() AND table_name = 'users' "
+            "AND column_name = 'pwd_hash') THEN "
+            "ALTER TABLE users ALTER COLUMN pwd_hash DROP NOT NULL; "
+            "END IF; END $$"
+        )
+    conn.commit()
 
 
 def add_user(conn, username: str) -> None:
     """A new user who can sign in with Keycloak but sees no pages until an
     admin grants some."""
+    _ensure_pwd_hash_optional(conn)
     with conn.cursor() as cur:
-        cur.execute(
-            "INSERT INTO users (username, pwd_hash) VALUES (%s, %s)",
-            (username, SSO_PWD_PLACEHOLDER),
-        )
+        cur.execute("INSERT INTO users (username) VALUES (%s)", (username,))
         _start_with_no_pages(cur, username)
     conn.commit()
 
@@ -1423,6 +1432,7 @@ def add_nexus_users(conn, rows: list) -> list:
     email are skipped. Returns the usernames created. Adds the Nexus
     columns first if this database has not got them yet."""
     ensure_user_nexus_columns(conn)
+    _ensure_pwd_hash_optional(conn)
     created = []
     try:
         with conn.cursor() as cur:
@@ -1433,10 +1443,10 @@ def add_nexus_users(conn, rows: list) -> list:
                 if not email or email_match_key(email) in taken:
                     continue
                 cur.execute(
-                    f"INSERT INTO users (username, pwd_hash, first_name, last_name, email, "
+                    f"INSERT INTO users (username, first_name, last_name, email, "
                     f"{', '.join(NEXUS_USER_COLUMNS)}) "
-                    f"VALUES (%s, %s, %s, %s, %s, {', '.join(['%s'] * len(NEXUS_USER_COLUMNS))})",
-                    (email, SSO_PWD_PLACEHOLDER,
+                    f"VALUES (%s, %s, %s, %s, {', '.join(['%s'] * len(NEXUS_USER_COLUMNS))})",
+                    (email,
                      (r.get('first_name') or '').strip() or None,
                      (r.get('last_name') or '').strip() or None, email,
                      *[r.get(c) if r.get(c) not in ('', None) else None for c in NEXUS_USER_COLUMNS]),
