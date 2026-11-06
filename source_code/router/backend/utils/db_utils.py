@@ -191,30 +191,6 @@ SETTINGS_DEFAULTS = {
     'presence_interval_seconds':        20,
     'presence_drop_off_seconds':        150,
     'presence_circle_size':             26,
-    # Set-password links (Settings > User Accounts > Password Links): hours a
-    # link works for, and the address each environment's links start with.
-    'password_link_hours':              48,
-    'password_link_base_prod':          'https://uk-intel-hub.aramis-group.eu',
-    'password_link_base_dev':           'https://dev-uk-intel-hub.aramis-group.eu',
-    # The email the Users page sends. Placeholders: {first_name}, {link}, {expires}.
-    'password_email_subject_activate':  'Your Vehicle List Evaluator Account',
-    'password_email_body_activate': (
-        'Hi {first_name},\n\n'
-        'Your Vehicle List Evaluator account has been created. Please use the link below to set your password:\n\n'
-        '{link}\n\n'
-        'The link works once and expires on {expires}.\n\n'
-        'If the link does not work, reply to this email and we will send you a new one.\n\n'
-        'Kind regards,\nIntelligence Hub\n'
-    ),
-    'password_email_subject_reset':     'Reset Your Vehicle List Evaluator Password',
-    'password_email_body_reset': (
-        'Hi {first_name},\n\n'
-        'Please use the link below to set a new password:\n\n'
-        '{link}\n\n'
-        'The link works once and expires on {expires}.\n\n'
-        'If the link does not work, reply to this email and we will send you a new one.\n\n'
-        'Kind regards,\nIntelligence Hub\n'
-    ),
     'presence_max_circles':             5,
     'presence_border_width':            2,
     'presence_gap':                     4,
@@ -314,12 +290,8 @@ ADMIN_DETAILS = {
 }
 
 
-PASSWORD_EMAIL_KEYS = ('password_email_subject_activate', 'password_email_body_activate',
-                       'password_email_subject_reset', 'password_email_body_reset')
-
-
 def widen_settings_values(conn) -> None:
-    """settings.value starts as VARCHAR(250), too short for an email body.
+    """settings.value starts as VARCHAR(250), too short for long text values.
     Changed to TEXT once; does nothing when it already is."""
     with conn.cursor() as cur:
         cur.execute(
@@ -332,21 +304,6 @@ def widen_settings_values(conn) -> None:
     conn.commit()
 
 
-def read_password_email_wording(conn) -> dict:
-    """The activation and reset email wording. There is one version, stored in
-    prod's database: pass a get_prod_activity_connection connection. A blank or
-    missing value uses the built-in wording. Unlike get_settings this RAISES on a
-    failed read, so a save cannot overwrite wording nobody was shown."""
-    try:
-        with conn.cursor() as cur:
-            cur.execute("SELECT key, value FROM settings WHERE key IN %s", (PASSWORD_EMAIL_KEYS,))
-            stored = dict(cur.fetchall())
-    except Exception:
-        conn.rollback()
-        raise
-    return {key: stored.get(key) or SETTINGS_DEFAULTS[key] for key in PASSWORD_EMAIL_KEYS}
-
-
 def get_settings(conn, user: str = None) -> dict:
     try:
         with conn.cursor() as cur:
@@ -355,8 +312,7 @@ def get_settings(conn, user: str = None) -> dict:
         row_map = dict(rows)
         result = dict(SETTINGS_DEFAULTS)
         STRING_SETTINGS = {'cap_override_subscriber_id', 'cap_override_password', 'cortex_model', 'cortex_models',
-                           'email_sender', 'email_test_recipient', 'login_mode',
-                           'password_link_base_prod', 'password_link_base_dev'} | set(PASSWORD_EMAIL_KEYS) | PRESENCE_COLOUR_SETTINGS | APPEARANCE_COLOUR_SETTINGS
+                           'email_sender', 'email_test_recipient'} | PRESENCE_COLOUR_SETTINGS | APPEARANCE_COLOUR_SETTINGS
         for key, value in rows:
             if key in BOOL_SETTINGS or key in STRING_SETTINGS or '__' in key:
                 continue
@@ -383,10 +339,6 @@ def get_settings(conn, user: str = None) -> dict:
         result['cap_override_password'] = row_map.get('cap_override_password', '')
         result['email_sender'] = row_map.get('email_sender', '')
         result['email_test_recipient'] = row_map.get('email_test_recipient', '')
-        # 'both' = username or email address at login, 'email' = email address only.
-        result['login_mode'] = row_map.get('login_mode', 'both')
-        for key in ('password_link_base_prod', 'password_link_base_dev') + PASSWORD_EMAIL_KEYS:
-            result[key] = row_map.get(key) or SETTINGS_DEFAULTS[key]
         for key in PRESENCE_COLOUR_SETTINGS | APPEARANCE_COLOUR_SETTINGS:
             result[key] = row_map.get(key, SETTINGS_DEFAULTS[key])
         # valuation_cache_hours: integer, global.
@@ -407,7 +359,6 @@ def get_settings(conn, user: str = None) -> dict:
         d['cap_override_password'] = ''
         d['email_sender'] = ''
         d['email_test_recipient'] = ''
-        d['login_mode'] = 'both'
         return d
 
 
@@ -692,7 +643,7 @@ def record_login(conn, session_id: str, username: str, environment: str) -> None
         cur.execute(
             """
             INSERT INTO user_sessions (session_id, username, environment, login_at, last_seen_at, started_by)
-            VALUES (%s, %s, %s, NOW(), NOW(), 'password')
+            VALUES (%s, %s, %s, NOW(), NOW(), 'sso')
             ON CONFLICT (session_id) DO NOTHING
             """,
             (session_id, username, environment),
@@ -1159,19 +1110,19 @@ def remove_session_presence(conn, session_id: str) -> None:
 
 # ── User management (always prod) ────────────────────────────────────────────
 
-def load_all_users(conn) -> dict:
-    """Returns {username: pwd_hash} for all users."""
+def load_all_users(conn) -> set:
+    """Usernames of all users."""
     with conn.cursor() as cur:
-        cur.execute("SELECT username, pwd_hash FROM users")
-        return {row[0]: row[1] for row in cur.fetchall()}
+        cur.execute("SELECT username FROM users")
+        return {row[0] for row in cur.fetchall()}
 
 
-def upsert_user(conn, username: str, pwd_hash: str) -> None:
+def upsert_user(conn, username: str) -> None:
+    """Make sure the user exists. An existing user is left as it is."""
     with conn.cursor() as cur:
         cur.execute(
-            "INSERT INTO users (username, pwd_hash) VALUES (%s, %s) "
-            "ON CONFLICT (username) DO UPDATE SET pwd_hash = EXCLUDED.pwd_hash",
-            (username, pwd_hash),
+            "INSERT INTO users (username, pwd_hash) VALUES (%s, %s) ON CONFLICT (username) DO NOTHING",
+            (username, SSO_PWD_PLACEHOLDER),
         )
     conn.commit()
 
@@ -1292,195 +1243,25 @@ def set_user_role(conn, username: str, role: str, on: bool) -> None:
     conn.commit()
 
 
-# ── Set-password links (account activation and password reset) ──────────────
-# One table for both kinds of link: purpose 'activate' (new account with no
-# password yet) or 'reset'. Only a hash of the token is stored, so a copy of the
-# database cannot be used to open a link. db/19_password_links.sql is the same
-# change for running by hand.
+# ── Adding users ─────────────────────────────────────────────────────────────
+# Sign-in is Keycloak single sign-on, so a user has no password here. The
+# users.pwd_hash column is still NOT NULL until it is dropped from the
+# database (see docs/keycloak_sso.md), so every new row gets this value, which
+# nothing reads.
 
-PASSWORD_LINK_PURPOSES = ('activate', 'reset')
+SSO_PWD_PLACEHOLDER = '!sso'
 
 
-def _password_links_present(conn) -> bool:
-    """True when both the password_links table and users.activated exist.
-    A plain read, so it never locks the users table."""
+def add_user(conn, username: str) -> None:
+    """A new user who can sign in with Keycloak but sees no pages until an
+    admin grants some."""
     with conn.cursor() as cur:
         cur.execute(
-            "SELECT (SELECT COUNT(*) FROM information_schema.tables "
-            "        WHERE table_schema = current_schema() AND table_name = 'password_links'), "
-            "       (SELECT COUNT(*) FROM information_schema.columns "
-            "        WHERE table_schema = current_schema() AND table_name = 'users' "
-            "          AND column_name = 'activated')"
-        )
-        tables, columns = cur.fetchone()
-    return tables > 0 and columns > 0
-
-
-@once_per_database
-def _ensure_password_links(conn) -> None:
-    """Create the table and the users.activated column on first use. Every
-    existing user stays activated (the column defaults to TRUE). The ALTER only
-    runs when the column is missing, because it locks the users table."""
-    if _password_links_present(conn):
-        return
-    with conn.cursor() as cur:
-        cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS activated BOOLEAN NOT NULL DEFAULT TRUE")
-        cur.execute(
-            """
-            CREATE TABLE IF NOT EXISTS password_links (
-                token_hash   CHAR(64) PRIMARY KEY,
-                username     VARCHAR(100) NOT NULL REFERENCES users (username) ON DELETE CASCADE,
-                purpose      VARCHAR(10) NOT NULL,
-                created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-                expires_at   TIMESTAMPTZ NOT NULL,
-                used_at      TIMESTAMPTZ NULL,
-                cancelled_at TIMESTAMPTZ NULL,
-                created_by   VARCHAR(100)
-            )
-            """
-        )
-        cur.execute("CREATE INDEX IF NOT EXISTS idx_password_links_username ON password_links (username)")
-    conn.commit()
-
-
-def _hash_link_token(token: str) -> str:
-    return hashlib.sha256(token.encode()).hexdigest()
-
-
-def read_inactive_users(conn) -> set:
-    """Usernames that have not set a password yet. Empty when the activated
-    column does not exist (every user counts as activated)."""
-    with conn.cursor() as cur:
-        cur.execute(
-            "SELECT 1 FROM information_schema.columns WHERE table_schema = current_schema() "
-            "AND table_name = 'users' AND column_name = 'activated'"
-        )
-        if cur.fetchone() is None:
-            return set()
-        cur.execute("SELECT username FROM users WHERE NOT activated")
-        return {row[0] for row in cur.fetchall()}
-
-
-def add_pending_user(conn, username: str) -> str:
-    """A new user with no password. The stored hash is not a hex digest, so no
-    password can ever match it; the activation link replaces it. Returns that
-    stored value."""
-    _ensure_password_links(conn)
-    pwd_hash = '!' + secrets.token_hex(16)
-    with conn.cursor() as cur:
-        cur.execute(
-            "INSERT INTO users (username, pwd_hash, activated) VALUES (%s, %s, FALSE)",
-            (username, pwd_hash),
+            "INSERT INTO users (username, pwd_hash) VALUES (%s, %s)",
+            (username, SSO_PWD_PLACEHOLDER),
         )
         _start_with_no_pages(cur, username)
     conn.commit()
-    return pwd_hash
-
-
-def mark_user_activated(conn, username: str) -> None:
-    """A password set by hand also activates the account. Nothing to do when
-    the column does not exist yet (everyone is already activated)."""
-    if not _password_links_present(conn):
-        return
-    with conn.cursor() as cur:
-        cur.execute("UPDATE users SET activated = TRUE WHERE username = %s AND NOT activated", (username,))
-        if cur.rowcount == 1:
-            _start_with_no_pages(cur, username)
-    conn.commit()
-
-
-def cancel_password_links(conn, username: str) -> int:
-    """Cancel this user's unused links, so an old link cannot overwrite a
-    password that was just set another way. Returns how many were cancelled."""
-    if not _password_links_present(conn):
-        return 0
-    with conn.cursor() as cur:
-        cur.execute(
-            "UPDATE password_links SET cancelled_at = NOW() "
-            "WHERE username = %s AND used_at IS NULL AND cancelled_at IS NULL",
-            (username,),
-        )
-        count = cur.rowcount
-    conn.commit()
-    return count
-
-
-def create_password_link(conn, username: str, purpose: str, hours: int, created_by: str) -> tuple:
-    """New link for an existing user; any earlier unused link for them is
-    cancelled in the same step. Returns (token, expires_at). The token is shown
-    once and never stored."""
-    if purpose not in PASSWORD_LINK_PURPOSES:
-        raise ValueError(f"Unknown password link purpose: {purpose}")
-    _ensure_password_links(conn)
-    token = secrets.token_urlsafe(32)
-    try:
-        with conn.cursor() as cur:
-            cur.execute(
-                "UPDATE password_links SET cancelled_at = NOW() "
-                "WHERE username = %s AND used_at IS NULL AND cancelled_at IS NULL",
-                (username,),
-            )
-            cur.execute(
-                "INSERT INTO password_links (token_hash, username, purpose, expires_at, created_by) "
-                "VALUES (%s, %s, %s, NOW() + INTERVAL '1 hour' * %s, %s) RETURNING expires_at",
-                (_hash_link_token(token), username, purpose, hours, created_by),
-            )
-            expires_at = cur.fetchone()[0]
-        conn.commit()
-    except Exception:
-        conn.rollback()
-        raise
-    return token, expires_at
-
-
-def peek_password_link(conn, token: str) -> tuple | None:
-    """(username, purpose) when the link is unused, not cancelled and not
-    expired, else None. Read only: opening the page must not use the link up,
-    because email and chat programs open links to make a preview."""
-    if not token or not _password_links_present(conn):
-        return None
-    with conn.cursor() as cur:
-        cur.execute(
-            "SELECT username, purpose FROM password_links WHERE token_hash = %s "
-            "AND used_at IS NULL AND cancelled_at IS NULL AND expires_at > NOW()",
-            (_hash_link_token(token),),
-        )
-        row = cur.fetchone()
-    return (row[0], row[1]) if row else None
-
-
-def redeem_password_link(conn, token: str, pwd_hash: str) -> tuple | None:
-    """Use the link and save the password as one step. Returns (username,
-    purpose), or None when the link is not valid (nothing is changed). If the
-    password cannot be saved the link is left usable."""
-    if not token or not _password_links_present(conn):
-        return None
-    try:
-        with conn.cursor() as cur:
-            cur.execute(
-                "UPDATE password_links SET used_at = NOW() WHERE token_hash = %s "
-                "AND used_at IS NULL AND cancelled_at IS NULL AND expires_at > NOW() "
-                "RETURNING username, purpose",
-                (_hash_link_token(token),),
-            )
-            row = cur.fetchone()
-            if row is None:
-                conn.rollback()
-                return None
-            cur.execute(
-                "UPDATE users SET pwd_hash = %s, activated = TRUE WHERE username = %s",
-                (pwd_hash, row[0]),
-            )
-            if cur.rowcount != 1:
-                conn.rollback()
-                return None
-            if row[1] == 'activate':
-                _start_with_no_pages(cur, row[0])
-        conn.commit()
-    except Exception:
-        conn.rollback()
-        raise
-    return row[0], row[1]
 
 
 def find_usernames_by_email(conn, email: str) -> list:
@@ -1602,7 +1383,6 @@ def fill_user_nexus_details(conn, rows: list) -> tuple:
     (the user's email, else their username). A field that already has a value
     is left as it is. rows is the list from nexus_ingest.fetch_users_with_units.
     Returns (users updated, users here with no Nexus match)."""
-    _ensure_password_links(conn)
     ensure_user_nexus_columns(conn)
     by_email = {}
     for r in rows:
@@ -1637,12 +1417,11 @@ def fill_user_nexus_details(conn, rows: list) -> tuple:
 
 
 def add_nexus_users(conn, rows: list) -> list:
-    """Create one pending user per Nexus row, in one transaction. Each row is
+    """Create one user per Nexus row, in one transaction. Each row is
     {'email', 'first_name', 'last_name', NEXUS_USER_COLUMNS...}. The username is
     the email in lower case. Rows whose email is already a username or a user's
-    email are skipped. Returns the usernames created. Adds the activated and
-    Nexus columns first if this database has not got them yet."""
-    _ensure_password_links(conn)
+    email are skipped. Returns the usernames created. Adds the Nexus
+    columns first if this database has not got them yet."""
     ensure_user_nexus_columns(conn)
     created = []
     try:
@@ -1654,10 +1433,10 @@ def add_nexus_users(conn, rows: list) -> list:
                 if not email or email_match_key(email) in taken:
                     continue
                 cur.execute(
-                    f"INSERT INTO users (username, pwd_hash, activated, first_name, last_name, email, "
+                    f"INSERT INTO users (username, pwd_hash, first_name, last_name, email, "
                     f"{', '.join(NEXUS_USER_COLUMNS)}) "
-                    f"VALUES (%s, %s, FALSE, %s, %s, %s, {', '.join(['%s'] * len(NEXUS_USER_COLUMNS))})",
-                    (email, '!' + secrets.token_hex(16),
+                    f"VALUES (%s, %s, %s, %s, %s, {', '.join(['%s'] * len(NEXUS_USER_COLUMNS))})",
+                    (email, SSO_PWD_PLACEHOLDER,
                      (r.get('first_name') or '').strip() or None,
                      (r.get('last_name') or '').strip() or None, email,
                      *[r.get(c) if r.get(c) not in ('', None) else None for c in NEXUS_USER_COLUMNS]),

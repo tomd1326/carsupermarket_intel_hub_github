@@ -9,7 +9,7 @@ from fastapi import APIRouter, Request, Depends, HTTPException
 from fastapi.responses import HTMLResponse, RedirectResponse
 
 from utils import user_guide as ug
-from utils.db_utils import get_database_connection, read_inactive_users
+from utils.db_utils import get_database_connection
 from .core import (BASE_URL, VALID_USERS, templates, get_current_user, is_admin, page_name, user_can, user_details,
                    visible_pages, _track, PageRedirect)
 from .page_registry import PAGES, PAGES_BY_KEY, ALL_PAGE_KEYS
@@ -88,16 +88,10 @@ def user_guide_page(request: Request, section: str = "", user: str = Depends(get
 
 def _people() -> list:
     """Everyone who can sign in except the admin, as {'username', 'name'}, by name.
-    Accounts not activated yet are left out, as they cannot read anything."""
-    try:
-        with get_database_connection() as conn:
-            inactive = read_inactive_users(conn)
-    except Exception as e:
-        logger.warning("User Guide: could not read inactive users: %s", e)
-        inactive = set()
+    """
     people = []
     for username in VALID_USERS:
-        if is_admin(username) or username in inactive:
+        if is_admin(username):
             continue
         details = user_details(username)
         name = f"{details['first_name']} {details['last_name']}".strip()
