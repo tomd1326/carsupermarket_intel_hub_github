@@ -46,7 +46,7 @@ def test_new_user_starts_with_no_pages():
     db_utils.add_user(conn, "jo")
     assert len(_marker_inserts(cur)) == 1
     inserts = [c for c in cur.execute.call_args_list if 'INSERT INTO USERS' in c.args[0].upper()]
-    assert len(inserts) == 1 and inserts[0].args[1] == ("jo", db_utils.SSO_PWD_PLACEHOLDER)
+    assert len(inserts) == 1 and inserts[0].args[1] == ("jo",)
 
 
 def _save(ticked, stored=None, hidden=(), is_new=False):

@@ -251,7 +251,7 @@
 
 <h3>Login</h3>
 <ul>
-<li><code>POST /login</code> (<code>routers/auth.py</code>) accepts a username or an email address (Settings can require email). The password is hashed with SHA-256 and compared to <code>users.pwd_hash</code>.</li>
+<li>Sign-in is Keycloak single sign-on (<code>routers/auth.py</code>, <code>utils/keycloak_auth.py</code>). The callback matches the email Keycloak sends to exactly one row of the <code>users</code> table (case does not matter), then starts the session under that row's username. There are no passwords in this app.</li>
 <li>The session cookie (Starlette <code>SessionMiddleware</code>) is signed, not encrypted, and lasts 30 days. It holds the username, the password hash, a session ID and the login time.</li>
 <li>Each login is a row in <code>user_sessions</code>. The idle timeout (<code>session_timeout_minutes</code>) closes the activity row and starts a new one; it does not sign the user out. Sign-out happens on logout, Force Re-login, a password change, user deletion or cookie expiry.</li>
 <li>Password rules (<code>utils/password_rules.py</code>): at least 6 characters, a digit, an upper-case letter and a symbol.</li>
