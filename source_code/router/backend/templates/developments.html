@@ -41,22 +41,37 @@
                     </span>
                 </div>
                 <div class="card-body">
-                    <p class="form-text mt-0">Tick the developments to include in an email. Only live ones can be sent, and only live ones show on What's New.</p>
+                    <p class="form-text mt-0">Tick the developments to include in an email. Only live ones can be sent, and only live ones show on What's New. Requests sent from the account menu's Request A Feature arrive here as New.</p>
+                    <div class="btn-group btn-group-sm mb-3" role="group" aria-label="Show" id="dev-filters">
+                        <button type="button" class="btn btn-outline-secondary active" data-filter="open">Open</button>
+                        <button type="button" class="btn btn-outline-secondary" data-filter="live">Live</button>
+                        <button type="button" class="btn btn-outline-secondary" data-filter="revisit_later">Revisit Later</button>
+                        <button type="button" class="btn btn-outline-secondary" data-filter="rejected">Rejected</button>
+                        <button type="button" class="btn btn-outline-secondary" data-filter="all">All</button>
+                    </div>
                     <div class="table-responsive">
                         <table class="table table-sm mb-0" id="dev-table">
                             <thead>
-                                <tr><th></th><th>Title</th><th>Type</th><th>Page</th><th>Released</th><th>Status</th><th>Last Emailed</th><th></th></tr>
+                                <tr><th></th><th>Created</th><th>Title</th><th>Type</th><th>Page</th><th>From</th><th>Status</th><th>Released</th><th>Last Emailed</th><th></th></tr>
                             </thead>
                             <tbody></tbody>
                         </table>
                     </div>
-                    <div class="text-muted small mt-2" id="dev-empty" style="display:none">No developments yet.</div>
+                    <div class="text-muted small mt-2" id="dev-empty" style="display:none">Nothing to show here.</div>
                 </div>
             </div>
 
             <div class="card mb-4" id="dev-editor" style="display:none">
                 <div class="card-header fw-semibold" id="dev-editor-title">Add Development</div>
                 <div class="card-body">
+                    <div class="alert alert-light border py-2 mb-3" id="dev-request-info" style="display:none">
+                        <div class="d-flex align-items-center gap-2 flex-wrap">
+                            <span id="dev-request-from"></span>
+                            <button type="button" class="btn btn-sm btn-outline-secondary" id="dev-request-view-btn">View Request</button>
+                            <button type="button" class="btn btn-sm btn-outline-secondary" id="dev-request-resend-btn">Resend Emails</button>
+                        </div>
+                        <div class="small mt-1" id="dev-request-emails"></div>
+                    </div>
                     <div class="row g-3">
                         <div class="col-md-6">
                             <label class="form-label mb-1" for="dev-title">Title</label>
@@ -70,10 +85,7 @@
                         </div>
                         <div class="col-md-3">
                             <label class="form-label mb-1" for="dev-status">Status</label>
-                            <select class="form-select" id="dev-status">
-                                <option value="draft">Draft</option>
-                                <option value="live">Live</option>
-                            </select>
+                            <select class="form-select" id="dev-status"></select>
                         </div>
                         <div class="col-md-6">
                             <label class="form-label mb-1" for="dev-page">Page</label>
@@ -201,6 +213,39 @@
                                 <textarea class="form-control" id="t-types" data-template="types" rows="4"></textarea>
                                 <div class="form-text">One per line. The email groups developments under these, in this order.</div>
                             </div>
+                            <div class="template-wide fw-semibold mt-2">Request A Feature</div>
+                            <div class="template-wide">
+                                <label class="form-label mb-1" for="t-request_intro">Popup Introduction</label>
+                                <textarea class="form-control" id="t-request_intro" data-template="request_intro" rows="2"></textarea>
+                            </div>
+                            <div>
+                                <label class="form-label mb-1" for="t-request_general_label">General Page Choice</label>
+                                <input class="form-control" id="t-request_general_label" data-template="request_general_label" autocomplete="off">
+                            </div>
+                            <div class="template-wide">
+                                <label class="form-label mb-1" for="t-request_alert_to">Request Alerts Go To</label>
+                                <input class="form-control" id="t-request_alert_to" data-template="request_alert_to" autocomplete="off">
+                                <div class="form-text">Blank sends them to you. Separate several addresses with semicolons.</div>
+                            </div>
+                            <div class="template-wide">
+                                <label class="form-label mb-1" for="t-request_confirm_subject">Confirmation Subject</label>
+                                <input class="form-control" id="t-request_confirm_subject" data-template="request_confirm_subject" autocomplete="off">
+                            </div>
+                            <div class="template-wide">
+                                <label class="form-label mb-1" for="t-request_confirm_text">Confirmation Email</label>
+                                <textarea class="form-control" id="t-request_confirm_text" data-template="request_confirm_text" rows="7"></textarea>
+                                <div class="form-text">Sent to the person who made the request. {name}, {email}, {page}, {when}, {title} and {request} are filled in.</div>
+                            </div>
+                            <div class="template-wide">
+                                <label class="form-label mb-1" for="t-request_alert_subject">Alert Subject</label>
+                                <input class="form-control" id="t-request_alert_subject" data-template="request_alert_subject" autocomplete="off">
+                            </div>
+                            <div class="template-wide">
+                                <label class="form-label mb-1" for="t-request_alert_text">Alert Email</label>
+                                <textarea class="form-control" id="t-request_alert_text" data-template="request_alert_text" rows="5"></textarea>
+                                <div class="form-text">Sent to you. Same fill-ins as above.</div>
+                            </div>
+                            <div class="template-wide fw-semibold mt-2">Update Email Look</div>
                             <div>
                                 <label class="form-label mb-1" for="t-header_colour">Header Colour</label>
                                 <input class="form-control form-control-color" type="color" id="t-header_colour" data-template="header_colour">
@@ -277,6 +322,18 @@
                 </div>
             </div>
         </div>
+        </div>
+    </div>
+    {# The words of a request as the user sent them. Uses the Request A Feature
+       popup's styles, which page_header loads on every page. #}
+    <div class="rf-overlay" id="dev-request-modal" data-scroll-lock hidden>
+        <div class="rf-box" role="dialog" aria-modal="true" aria-labelledby="dev-request-heading">
+            <h2 id="dev-request-heading"></h2>
+            <p class="rf-intro" id="dev-request-meta"></p>
+            <div id="dev-request-text" style="white-space: pre-wrap; overflow-wrap: anywhere; margin-bottom: 16px"></div>
+            <div class="rf-actions">
+                <button type="button" class="rf-btn" id="dev-request-close-btn">Close</button>
+            </div>
         </div>
     </div>
     <script src="{{ static_url('js/developments.js') }}"></script>

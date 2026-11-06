@@ -10,6 +10,17 @@
     let developments = [];
     const ticked = new Set();
     let editingId = null;
+    let editingDev = null;
+    let filter = 'open';
+    let statusLabels = {};
+    // Closed statuses each have their own tab; Open is everything else.
+    const CLOSED = ['live', 'revisit_later', 'rejected'];
+    const BADGES = {
+        new: 'bg-danger', needs_clarification: 'bg-warning text-dark', accepted: 'bg-info text-dark',
+        planned: 'bg-secondary', in_progress: 'bg-primary', testing: 'bg-primary',
+        ready_to_release: 'bg-primary', live: 'bg-success', revisit_later: 'bg-light text-dark border',
+        rejected: 'bg-dark',
+    };
     let previewTimer = null;
     let previewRun = 0;
     let sender = '';
@@ -43,10 +54,28 @@
 
     // ── Developments list ────────────────────────────────────────────────
 
+    function shown(dev) {
+        if (filter === 'all') return true;
+        if (filter === 'open') return !CLOSED.includes(dev.status);
+        return dev.status === filter;
+    }
+
+    function renderFilters() {
+        document.querySelectorAll('#dev-filters [data-filter]').forEach(btn => {
+            const key = btn.dataset.filter;
+            const count = developments.filter(d => key === 'all' || (key === 'open' ? !CLOSED.includes(d.status)
+                : d.status === key)).length;
+            btn.textContent = `${btn.dataset.label} (${count})`;
+            btn.classList.toggle('active', key === filter);
+        });
+    }
+
     function renderDevelopments(pageNames) {
         const body = document.querySelector('#dev-table tbody');
         body.textContent = '';
-        developments.forEach(dev => {
+        renderFilters();
+        const rows = developments.filter(shown);
+        rows.forEach(dev => {
             const row = document.createElement('tr');
             const tickCell = document.createElement('td');
             const tick = document.createElement('input');
@@ -60,24 +89,92 @@
             });
             tickCell.appendChild(tick);
             row.appendChild(tickCell);
+            row.appendChild(make('td', dev.created_label, 'text-nowrap'));
             row.appendChild(make('td', dev.title));
             row.appendChild(make('td', dev.dev_type));
-            row.appendChild(make('td', pageNames[dev.page_key] || ''));
-            row.appendChild(make('td', dev.released_label));
+            row.appendChild(make('td', pageLabel(dev)));
+            row.appendChild(make('td', dev.source === 'request' ? dev.requested_by : (dev.created_by || '')));
             const statusCell = document.createElement('td');
-            statusCell.appendChild(make('span', dev.status === 'live' ? 'Live' : 'Draft',
-                'badge ' + (dev.status === 'live' ? 'bg-success' : 'bg-secondary')));
+            statusCell.appendChild(make('span', dev.status_label, 'badge ' + (BADGES[dev.status] || 'bg-secondary')));
             row.appendChild(statusCell);
+            row.appendChild(make('td', dev.released_label));
             row.appendChild(make('td', dev.last_emailed));
-            const editCell = make('td', null, 'text-end');
+            const actions = make('td', null, 'text-end text-nowrap');
+            if (dev.source === 'request') {
+                const view = make('button', 'View Request', 'btn btn-sm btn-outline-secondary me-1');
+                view.type = 'button';
+                view.addEventListener('click', () => viewRequest(dev));
+                actions.appendChild(view);
+            }
             const edit = make('button', 'Edit', 'btn btn-sm btn-outline-secondary');
             edit.type = 'button';
             edit.addEventListener('click', () => openEditor(dev));
-            editCell.appendChild(edit);
-            row.appendChild(editCell);
+            actions.appendChild(edit);
+            row.appendChild(actions);
             body.appendChild(row);
         });
-        $('dev-empty').style.display = developments.length ? 'none' : '';
+        $('dev-empty').style.display = rows.length ? 'none' : '';
+    }
+
+    function pageLabel(dev) {
+        if (dev.page_key) return pageNames[dev.page_key] || dev.page_key;
+        return dev.source === 'request' ? 'General' : '';
+    }
+
+    // ── Requests ─────────────────────────────────────────────────────────
+
+    function viewRequest(dev) {
+        $('dev-request-heading').textContent = dev.title;
+        $('dev-request-meta').textContent = `From ${dev.requested_by} on ${dev.created_label}. Page: ${pageLabel(dev)}.`;
+        $('dev-request-text').textContent = dev.request_text;
+        $('dev-request-modal').hidden = false;
+        $('dev-request-close-btn').focus();
+    }
+
+    function closeRequest() {
+        $('dev-request-modal').hidden = true;
+    }
+
+    function requestEmailNote(dev) {
+        const parts = [
+            dev.confirmation_sent_at ? 'Confirmation sent' : 'Confirmation not sent',
+            dev.alert_sent_at ? 'alert sent' : 'alert not sent',
+        ];
+        return parts.join(', ') + '.' + (dev.email_error ? ' Last problem: ' + dev.email_error : '');
+    }
+
+    function showRequestInfo(dev) {
+        const box = $('dev-request-info');
+        if (!dev || dev.source !== 'request') {
+            box.style.display = 'none';
+            return;
+        }
+        box.style.display = '';
+        $('dev-request-from').textContent = `Requested by ${dev.requested_by} on ${dev.created_label}.`;
+        const allSent = dev.confirmation_sent_at && dev.alert_sent_at;
+        $('dev-request-emails').textContent = requestEmailNote(dev);
+        $('dev-request-emails').className = 'small mt-1' + (allSent ? ' text-muted' : ' text-danger');
+        $('dev-request-resend-btn').style.display = allSent ? 'none' : '';
+    }
+
+    async function resendRequestEmails() {
+        const btn = $('dev-request-resend-btn');
+        btn.disabled = true;
+        btn.textContent = 'Sending...';
+        try {
+            const data = await call(`/${editingDev.id}/request-emails`, {});
+            $('dev-request-emails').textContent = data.message;
+            $('dev-request-emails').className = 'small mt-1 text-muted';
+            await load();
+            const fresh = developments.find(d => d.id === editingDev.id);
+            if (fresh) { editingDev = fresh; showRequestInfo(fresh); }
+        } catch (e) {
+            $('dev-request-emails').textContent = e.message;
+            $('dev-request-emails').className = 'small mt-1 text-danger';
+        } finally {
+            btn.disabled = false;
+            btn.textContent = 'Resend Emails';
+        }
     }
 
     let pageNames = {};
@@ -94,6 +191,17 @@
             option.value = page.key;
             pageSelect.appendChild(option);
         });
+        const statusSelect = $('dev-status');
+        const current = statusSelect.value;
+        statusSelect.textContent = '';
+        statusLabels = {};
+        data.statuses.forEach(status => {
+            statusLabels[status.key] = status.label;
+            const option = make('option', status.label);
+            option.value = status.key;
+            statusSelect.appendChild(option);
+        });
+        if (current) statusSelect.value = current;
         fillTypes(data.types);
     }
 
@@ -127,10 +235,13 @@
 
     function openEditor(dev) {
         editingId = dev ? dev.id : null;
-        $('dev-editor-title').textContent = dev ? 'Edit Development' : 'Add Development';
+        editingDev = dev;
+        $('dev-editor-title').textContent = dev ? (dev.source === 'request' ? 'Edit Request' : 'Edit Development')
+            : 'Add Development';
+        showRequestInfo(dev);
         $('dev-title').value = dev ? dev.title : '';
         $('dev-type').value = dev ? dev.dev_type : '';
-        $('dev-status').value = dev ? dev.status : 'draft';
+        $('dev-status').value = dev ? dev.status : 'planned';
         $('dev-page').value = dev ? (dev.page_key || '') : '';
         $('dev-released').value = dev ? dev.released_on : '';
         $('dev-replaces').value = dev ? dev.replaces : '';
@@ -148,6 +259,7 @@
 
     function closeEditor() {
         editingId = null;
+        editingDev = null;
         $('dev-editor').style.display = 'none';
     }
 
@@ -416,6 +528,20 @@
     $('email-send-btn').addEventListener('click', sendTicked);
     $('email-copy-btn').addEventListener('click', copyTicked);
     $('template-save-btn').addEventListener('click', saveTemplate);
+    $('dev-request-view-btn').addEventListener('click', () => { if (editingDev) viewRequest(editingDev); });
+    $('dev-request-resend-btn').addEventListener('click', resendRequestEmails);
+    $('dev-request-close-btn').addEventListener('click', closeRequest);
+    $('dev-request-modal').addEventListener('click', e => { if (e.target === $('dev-request-modal')) closeRequest(); });
+    document.addEventListener('keydown', e => {
+        if (e.key === 'Escape' && !$('dev-request-modal').hidden) closeRequest();
+    });
+    document.querySelectorAll('#dev-filters [data-filter]').forEach(btn => {
+        btn.dataset.label = btn.textContent;
+        btn.addEventListener('click', () => {
+            filter = btn.dataset.filter;
+            renderDevelopments(pageNames);
+        });
+    });
 
     load(true).catch(e => {
         const box = $('dev-load-error');

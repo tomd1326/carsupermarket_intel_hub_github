@@ -3,8 +3,14 @@ Developments, and the What's New page everyone can read).
 
 One copy of the data, in prod's database, reached from every environment with
 get_prod_activity_connection, so a development added anywhere is the same
-development everywhere. A new entry starts as a draft: only live entries appear
-on What's New or can go in an email.
+development everywhere. Each entry has a status (STATUSES): only live entries
+appear on What's New or can go in an email.
+
+Anyone signed in can send a feature request from the account menu
+(submit_request). It lands here as a development with source 'request' and
+status 'new', with the requester's title and their own words kept in
+request_text; the admin then changes the title, writes the summary and sets the
+status like any other development.
 
 Emails are built here as HTML that Outlook desktop can draw (tables and inline
 styles, see templates/emails/development_update.html) and sent through
@@ -26,7 +32,28 @@ from utils.ddl_once import once_per_database
 
 logger = logging.getLogger(__name__)
 
-STATUSES = ("draft", "live")
+# Key -> label, in the order the page lists them. The keys are fixed because
+# 'live' decides what What's New and the email show, and 'new' is what a
+# request starts as.
+STATUSES = {
+    "new": "New",
+    "needs_clarification": "Needs Clarification",
+    "accepted": "Accepted",
+    "planned": "Planned",
+    "in_progress": "In Progress",
+    "testing": "Testing",
+    "ready_to_release": "Ready To Release",
+    "live": "Live",
+    "revisit_later": "Revisit Later",
+    "rejected": "Rejected",
+}
+DEFAULT_STATUS = "planned"
+REQUEST_TYPE = "Request"
+_STATUS_MAX = 30
+_REQUEST_MAX = 5000
+# The same words from the same person within this many minutes are one request
+# sent twice, not two requests.
+_DUPLICATE_MINUTES = 10
 _TITLE_MAX = 200
 _TYPE_MAX = 60
 _TEXT_MAX = 20000
@@ -61,12 +88,25 @@ TEMPLATE_DEFAULTS = {
     "title_size": "18",
     "footer_size": "12",
     "email_width": "640",
+    # Request A Feature: the popup's wording and the two emails a request sends.
+    # {name}, {email}, {page}, {when}, {title} and {request} are filled in.
+    "request_intro": "Tell us what you would like added or changed. Pick the page it is about, "
+                     "or General for anything else.",
+    "request_general_label": "General / New Page",
+    "request_alert_to": "",
+    "request_confirm_subject": "Your Intelligence Hub Request: {title}",
+    "request_confirm_text": "Hello {name},\n\nThanks for your request. Tom will look at it and let you know "
+                            "what happens next.\n\nTitle: {title}\nPage: {page}\nSent: {when}\n\n"
+                            "Your request:\n{request}\n\nThanks,\nTom",
+    "request_alert_subject": "New Intelligence Hub Request From {name}: {title}",
+    "request_alert_text": "{name} ({email}) sent a request on {when}.\n\nTitle: {title}\nPage: {page}\n\n{request}",
 }
 _COLOUR_KEYS = {k for k in TEMPLATE_DEFAULTS if k.endswith("_colour")}
 _NUMBER_LIMITS = {"font_size": (10, 24), "heading_size": (14, 40), "title_size": (12, 30), "footer_size": (9, 18),
                   "email_width": (480, 900)}
 # Blank is allowed for these; every other wording box must hold something.
-_MAY_BE_BLANK = {"sign_off", "footer", "intro", "replaces_label", "default_send_to"}
+# A blank request_alert_to sends the alert to the admin.
+_MAY_BE_BLANK = {"sign_off", "footer", "intro", "replaces_label", "default_send_to", "request_alert_to"}
 _TEMPLATE_TEXT_MAX = 2000
 
 # The first entry, added once when the table is first made. A draft, for checking.
@@ -85,7 +125,8 @@ _SEEDS = [{
 }]
 
 _COLUMNS = ("id, title, dev_type, page_key, summary, details, replaces, guide, faqs, "
-            "released_on, status, updated_by, updated_at")
+            "released_on, status, updated_by, updated_at, source, requested_by, request_text, "
+            "created_by, created_at, confirmation_sent_at, alert_sent_at, email_error")
 
 
 @once_per_database
@@ -93,7 +134,7 @@ def _ensure_tables(conn) -> None:
     with conn.cursor() as cur:
         cur.execute("SELECT to_regclass('developments')")
         is_new = cur.fetchone()[0] is None
-        cur.execute("""
+        cur.execute(f"""
             CREATE TABLE IF NOT EXISTS developments (
                 id SERIAL PRIMARY KEY,
                 title VARCHAR(200) NOT NULL,
@@ -105,10 +146,28 @@ def _ensure_tables(conn) -> None:
                 guide TEXT NOT NULL DEFAULT '',
                 faqs JSONB NOT NULL DEFAULT '[]',
                 released_on DATE,
-                status VARCHAR(10) NOT NULL DEFAULT 'draft',
+                status VARCHAR({_STATUS_MAX}) NOT NULL DEFAULT '{DEFAULT_STATUS}',
                 updated_by VARCHAR(100),
                 updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
             )""")
+        # Added for Request A Feature. created_by stays NULL on rows made before
+        # it, so they are filled from the last edit below, once.
+        for column in ("source VARCHAR(10) NOT NULL DEFAULT 'own'", "requested_by VARCHAR(100)",
+                       "request_text TEXT NOT NULL DEFAULT ''", "created_by VARCHAR(100)",
+                       "created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()", "confirmation_sent_at TIMESTAMPTZ",
+                       "alert_sent_at TIMESTAMPTZ", "email_error TEXT NOT NULL DEFAULT ''"):
+            cur.execute(f"ALTER TABLE developments ADD COLUMN IF NOT EXISTS {column}")
+        cur.execute("UPDATE developments SET created_by = updated_by, created_at = updated_at "
+                    "WHERE created_by IS NULL AND source = 'own'")
+        # The status column was VARCHAR(10) with only draft and live. Widening a
+        # VARCHAR takes a lock, so only when it is still short.
+        cur.execute("SELECT character_maximum_length FROM information_schema.columns "
+                    "WHERE table_schema = current_schema() AND table_name = 'developments' AND column_name = 'status'")
+        width = cur.fetchone()
+        if width and width[0] and width[0] < _STATUS_MAX:
+            cur.execute(f"ALTER TABLE developments ALTER COLUMN status TYPE VARCHAR({_STATUS_MAX})")
+        cur.execute(f"ALTER TABLE developments ALTER COLUMN status SET DEFAULT '{DEFAULT_STATUS}'")
+        cur.execute(f"UPDATE developments SET status = '{DEFAULT_STATUS}' WHERE status = 'draft'")
         cur.execute("""
             CREATE TABLE IF NOT EXISTS development_emails (
                 id SERIAL PRIMARY KEY,
@@ -132,7 +191,8 @@ def _ensure_tables(conn) -> None:
             for seed in _SEEDS:
                 cur.execute(
                     "INSERT INTO developments (title, dev_type, page_key, summary, details, replaces, guide, faqs, "
-                    "status, updated_by) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 'draft', 'setup')",
+                    f"status, updated_by, created_by) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, '{DEFAULT_STATUS}', "
+                    "'setup', 'setup')",
                     (seed["title"], seed["dev_type"], seed["page_key"], seed["summary"], seed["details"],
                      seed["replaces"], seed["guide"], Json(seed["faqs"])))
     conn.commit()
@@ -161,14 +221,14 @@ def clean_development(raw: dict, page_keys) -> dict:
     title = _text(raw.get("title"), _TITLE_MAX)
     dev_type = _text(raw.get("dev_type"), _TYPE_MAX)
     summary = _text(raw.get("summary"))
-    status = _text(raw.get("status"), 10) or "draft"
+    status = _text(raw.get("status"), _STATUS_MAX) or DEFAULT_STATUS
     page_key = _text(raw.get("page_key"), 64) or None
     if not title:
         raise ValueError("Give the development a title.")
     if not dev_type:
         raise ValueError("Give the development a type.")
     if status not in STATUSES:
-        raise ValueError("Status must be Draft or Live.")
+        raise ValueError("Pick a status from the list.")
     if status == "live" and not summary:
         raise ValueError("A live development needs a summary, as that is what the email shows.")
     if page_key and page_key not in page_keys:
@@ -215,6 +275,12 @@ def _template_value_error(key: str, value: str) -> str | None:
     if key in _NUMBER_LIMITS:
         low, high = _NUMBER_LIMITS[key]
         return None if value.isdigit() and low <= int(value) <= high else f"{key} must be from {low} to {high}."
+    if key == "request_alert_to" and value:
+        try:
+            clean_recipients(value)
+        except ValueError as e:
+            return f"Request Alerts Go To: {e}"
+        return None
     if not value and key not in _MAY_BE_BLANK:
         return f"{key} cannot be blank."
     return None
@@ -265,12 +331,23 @@ def _uk_day_label(when) -> str:
     return released_label(when.astimezone(ZoneInfo("Europe/London"))) if when else ""
 
 
+def uk_time_label(when) -> str:
+    """A stored timestamp as UK date and time, e.g. '6 Nov 2026 14:05'."""
+    if not when:
+        return ""
+    local = when.astimezone(ZoneInfo("Europe/London"))
+    return f"{local.day} {local:%b %Y %H:%M}"
+
+
 def _development_row(row) -> dict:
     dev = dict(zip([c.strip() for c in _COLUMNS.split(",")], row))
     dev["released_label"] = released_label(dev["released_on"])
     dev["released_on"] = dev["released_on"].isoformat() if dev["released_on"] else ""
-    dev["updated_at"] = dev["updated_at"].isoformat() if dev["updated_at"] else ""
+    dev["created_label"] = uk_time_label(dev["created_at"])
+    for key in ("updated_at", "created_at", "confirmation_sent_at", "alert_sent_at"):
+        dev[key] = dev[key].isoformat() if dev[key] else ""
     dev["faqs"] = dev["faqs"] or []
+    dev["status_label"] = STATUSES.get(dev["status"], dev["status"])
     return dev
 
 
@@ -312,13 +389,88 @@ def save_development(raw: dict, user: str, page_keys) -> dict:
             else:
                 cur.execute(
                     "INSERT INTO developments (title, dev_type, page_key, summary, details, replaces, guide, faqs, "
-                    "released_on, status, updated_by) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) "
-                    f"RETURNING {_COLUMNS}", values)
+                    "released_on, status, updated_by, created_by) "
+                    "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) "
+                    f"RETURNING {_COLUMNS}", (*values, user))
             row = cur.fetchone()
         conn.commit()
     if row is None:
         raise ValueError("That development no longer exists.")
     return _development_row(row)
+
+
+def get_development(dev_id: int) -> dict | None:
+    with get_prod_activity_connection() as conn:
+        _ensure_tables(conn)
+        with conn.cursor() as cur:
+            cur.execute(f"SELECT {_COLUMNS} FROM developments WHERE id = %s", (dev_id,))
+            row = cur.fetchone()
+    return _development_row(row) if row else None
+
+
+# ── Feature requests ─────────────────────────────────────────────────────────
+
+def clean_request_text(value) -> str:
+    text = _text(value, _REQUEST_MAX)
+    if not text:
+        raise ValueError("Describe what you would like.")
+    return text
+
+
+def clean_request_title(value) -> str:
+    title = " ".join(_text(value, _TITLE_MAX).split())
+    if not title:
+        raise ValueError("Give your request a short title.")
+    return title
+
+
+def submit_request(user: str, page_key: str | None, title: str, text: str) -> tuple:
+    """Save a request as a new development, with the requester's title (the
+    admin can change it later). Returns (development, is_repeat): the same words
+    from the same person within _DUPLICATE_MINUTES give back the first one
+    rather than a second copy, so a double click or a retry after a slow answer
+    makes one request. The caller checks page_key is allowed."""
+    title = clean_request_title(title)
+    text = clean_request_text(text)
+    with get_prod_activity_connection() as conn:
+        _ensure_tables(conn)
+        with conn.cursor() as cur:
+            cur.execute(
+                f"SELECT {_COLUMNS} FROM developments WHERE source = 'request' AND requested_by = %s "
+                "AND request_text = %s AND created_at > NOW() - make_interval(mins => %s) ORDER BY id DESC LIMIT 1",
+                (user, text, _DUPLICATE_MINUTES))
+            row = cur.fetchone()
+            if row:
+                return _development_row(row), True
+            cur.execute(
+                "INSERT INTO developments (title, dev_type, page_key, status, source, requested_by, request_text, "
+                "updated_by, created_by) VALUES (%s, %s, %s, 'new', 'request', %s, %s, %s, %s) "
+                f"RETURNING {_COLUMNS}", (title, REQUEST_TYPE, page_key, user, text, user, user))
+            row = cur.fetchone()
+        conn.commit()
+    return _development_row(row), False
+
+
+def record_request_emails(dev_id: int, confirmation_sent: bool, alert_sent: bool, error: str) -> None:
+    """Mark which of the two emails went. A send that failed keeps the earlier
+    time (if any), so a retry that fails does not wipe a past success."""
+    with get_prod_activity_connection() as conn:
+        _ensure_tables(conn)
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE developments SET "
+                "confirmation_sent_at = CASE WHEN %s THEN NOW() ELSE confirmation_sent_at END, "
+                "alert_sent_at = CASE WHEN %s THEN NOW() ELSE alert_sent_at END, email_error = %s WHERE id = %s",
+                (confirmation_sent, alert_sent, error[:2000], dev_id))
+        conn.commit()
+
+
+def fill_request_wording(wording: str, values: dict) -> str:
+    """Put the request's details into a template's wording. Plain replace, not
+    str.format, so braces in what the user typed cannot break it."""
+    for key in ("name", "email", "page", "when", "title", "request"):
+        wording = wording.replace("{" + key + "}", values.get(key, ""))
+    return wording
 
 
 def delete_development(dev_id: int) -> None:
@@ -428,8 +580,8 @@ def clean_subject(value) -> str:
 
 
 def email_problem(ids: list, developments: list) -> str | None:
-    """Why these cannot go in an email, or None. Drafts are refused because the
-    email would link to a What's New entry nobody can see yet."""
+    """Why these cannot go in an email, or None. Anything not live is refused
+    because the email would link to a What's New entry nobody can see yet."""
     if not ids:
         return "Tick at least one development."
     if len(developments) != len(set(ids)):

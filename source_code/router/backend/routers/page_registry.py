@@ -51,6 +51,7 @@ PAGES: tuple[Page, ...] = (
     Page('apex_missing_finance', '/reports/apex-missing-finance', 'Apex Missing Finance',   False),
     Page('trade_report',        '/reports/trade',              'Trade Report',             False),
     Page('semantic_layer',      '/semantic-layer',             'Semantic & Context Layer', False),
+    Page('self_analytics',      '/self-analytics',             'Self-Analytics',           False),
 )
 
 PAGES_BY_KEY: dict[str, Page] = {p.key: p for p in PAGES}

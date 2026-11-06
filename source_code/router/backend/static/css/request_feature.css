@@ -1,0 +1,35 @@
+/* Request A Feature popup (account menu, every page). Drawn by page_header in
+   templates/_navigation.html, so it cannot rely on a page's own CSS: everything
+   it needs is here, and its colours come from the shared theme tokens with a
+   plain fallback. */
+.rf-overlay {
+    position: fixed; inset: 0; z-index: 1300;
+    background: rgba(15, 23, 42, 0.45);
+    display: flex; align-items: flex-start; justify-content: center;
+    padding-top: 10vh;
+}
+.rf-overlay[hidden] { display: none; }
+.rf-box {
+    box-sizing: border-box; background: #fff; border-radius: 12px; padding: 22px 24px;
+    width: 560px; max-width: 94vw; max-height: 84vh; overflow-y: auto;
+    box-shadow: 0 10px 40px rgba(0, 0, 0, 0.25); font-size: 0.9rem; color: #0f172a;
+}
+.rf-box.busy { opacity: 0.55; pointer-events: none; cursor: wait; }
+.rf-box h2 { font-size: 1.05rem; font-weight: 700; margin: 0 0 8px; }
+.rf-intro { color: #64748b; font-size: 0.82rem; margin: 0 0 16px; white-space: pre-line; }
+.rf-box label { display: block; font-size: 0.8rem; font-weight: 700; color: #334155; margin: 0 0 4px; }
+.rf-box select, .rf-box textarea, .rf-box input {
+    box-sizing: border-box; width: 100%; padding: 6px 10px; margin-bottom: 14px;
+    border: 1px solid var(--c-border, #cbd5e1); border-radius: 6px; background: #fff; color: #0f172a;
+    font: inherit;
+}
+.rf-box textarea { resize: vertical; min-height: 140px; }
+.rf-error { color: #dc2626; font-size: 0.8rem; margin-bottom: 10px; }
+.rf-done { color: #15803d; font-size: 0.85rem; margin-bottom: 10px; }
+.rf-actions { display: flex; justify-content: flex-end; gap: 10px; }
+.rf-btn {
+    padding: 6px 14px; border-radius: 6px; border: 1px solid #cbd5e1; background: #fff; color: #334155;
+    font: inherit; cursor: pointer;
+}
+.rf-btn:disabled { opacity: 0.6; cursor: not-allowed; }
+.rf-btn.rf-primary { background: var(--c-accent, #0d6efd); border-color: var(--c-accent, #0d6efd); color: #fff; }

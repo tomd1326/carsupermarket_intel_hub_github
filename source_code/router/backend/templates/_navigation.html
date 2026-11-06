@@ -81,6 +81,9 @@
                     <i class="fas fa-book me-2" aria-hidden="true"></i>{{ guide.title }}
                 </a>
                 {% endif %}
+                <a href="#" class="account-menu-item request-feature-item">
+                    <i class="fas fa-lightbulb me-2" aria-hidden="true"></i>Request A Feature
+                </a>
                 {% if user_is_admin(user_name) %}
                 <a href="{{ BASE_URL }}/logs" class="account-menu-item">
                     <i class="fas fa-list me-2" aria-hidden="true"></i>Logs
@@ -137,6 +140,7 @@
     {% endfor %}
     <div class="side-menu-divider"></div>
     <a href="{{ BASE_URL }}/whats-new" class="side-menu-item"><i class="fas fa-bullhorn me-2" aria-hidden="true"></i>What's New</a>
+    <a href="#" class="side-menu-item request-feature-item"><i class="fas fa-lightbulb me-2" aria-hidden="true"></i>Request A Feature</a>
     <a href="{{ BASE_URL }}/my-account" class="side-menu-item"><i class="fas fa-user me-2" aria-hidden="true"></i>My Account</a>
     {% if user_is_admin(user_name) %}
     <a href="{{ BASE_URL }}/logs" class="side-menu-item"><i class="fas fa-list me-2" aria-hidden="true"></i>Logs</a>
@@ -144,5 +148,27 @@
     {% endif %}
     <a href="{{ BASE_URL }}/logout" class="side-menu-item"><i class="fas fa-sign-out-alt me-2" aria-hidden="true"></i>Logout</a>
 </nav>
+{# Request A Feature popup, opened by the two menu items above (request_feature.js).
+   Its wording comes from Settings > Developments > Email Template. #}
+<link href="{{ static_url('css/request_feature.css') }}" rel="stylesheet">
+<div class="rf-overlay" id="rf-overlay" data-base="{{ BASE_URL }}" data-scroll-lock hidden>
+    <div class="rf-box" role="dialog" aria-modal="true" aria-labelledby="rf-heading">
+        <h2 id="rf-heading">Request A Feature</h2>
+        <p class="rf-intro" id="rf-intro"></p>
+        <label for="rf-page">Page</label>
+        <select id="rf-page"></select>
+        <label for="rf-title-box">Title</label>
+        <input type="text" id="rf-title-box" maxlength="200" autocomplete="off">
+        <label for="rf-text">Description</label>
+        <textarea id="rf-text" rows="7" maxlength="5000"></textarea>
+        <div class="rf-error" id="rf-error" hidden></div>
+        <div class="rf-done" id="rf-done" hidden></div>
+        <div class="rf-actions">
+            <button type="button" class="rf-btn" id="rf-cancel">Cancel</button>
+            <button type="button" class="rf-btn rf-primary" id="rf-submit">Submit</button>
+        </div>
+    </div>
+</div>
+<script src="{{ static_url('js/request_feature.js') }}" defer></script>
 {% endif %}
 {%- endmacro %}
