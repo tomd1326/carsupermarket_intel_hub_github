@@ -99,3 +99,59 @@ def test_starting_entry_files_exist():
     for _, _, kind, scope, filename in ak.SEEDS:
         assert kind in ak.KIND_KEYS and scope in ak.SCOPES
         assert os.path.getsize(os.path.join(ak._SEED_DIR, filename)) > 0
+
+
+# ── Semantic & Context Layer ─────────────────────────────────────────────────
+
+def test_semantic_layer_starting_entries_are_valid():
+    seeds = ak._reference_seeds()
+    assert len(seeds) >= 10
+    ids = [s["id"] for s in seeds]
+    assert len(ids) == len(set(ids))
+    field_keys = {f["key"] for f in ak.REFERENCE_DEFAULTS["fields"]}
+    for s in seeds:
+        assert ak.validate_entry({**s, "scope": s.get("scope", "all")}) is None, s["id"]
+        assert set(s.get("fields", {})) <= field_keys, s["id"]
+
+
+def test_reference_settings_defaults_and_bad_values():
+    assert ak.clean_reference_settings(None)["categories"] == ak.REFERENCE_DEFAULTS["categories"]
+    s = ak.clean_reference_settings({
+        "title_font_px": 999, "group_by": "nonsense", "kinds_shown": ["metric", "nonsense"],
+        "categories": ["Sales", " sales ", "", 5, "Stock"],
+        "kind_layers": {"metric": "context", "term": "nowhere"},
+        "fields": [{"label": "Owner"}, {"label": "Owner", "key": "owner"}, {"label": ""}, "bad"],
+    })
+    assert s["title_font_px"] == ak.REFERENCE_LIMITS["title_font_px"][1]
+    assert s["group_by"] == ak.REFERENCE_DEFAULTS["group_by"]
+    assert s["kinds_shown"] == ["metric"]
+    assert s["categories"] == ["Sales", "Stock"]
+    assert s["kind_layers"]["metric"] == "context" and s["kind_layers"]["term"] == "context"
+    assert s["kind_layers"]["dimension"] == "semantic"
+    keys = [f["key"] for f in s["fields"]]
+    assert len(keys) == 2 and len(set(keys)) == 2
+
+
+def test_entry_with_fields_only_is_valid_and_reaches_ask_ai():
+    e = {**entry("m", "GPU M", kind="metric", content=""), "fields": {"definition": "metal margin", "owner": "Tom"}}
+    assert ak.validate_entry(e) is None
+    fields = ak.ai_fields(ak.clean_reference_settings(None))
+    k = ak.assemble_knowledge([e], "kpi", 10000, fields)
+    assert "Definition: metal margin" in k["text"]
+    assert "Tom" not in k["text"]  # Owner is not sent to Ask AI by default
+
+
+def test_export_splits_layers_and_yaml_is_safe():
+    settings = ak.clean_reference_settings(None)
+    entries = [
+        {**entry("m", "GPU M", kind="metric"), "fields": {"calculation": "a + b\nline two"}, "category": "Margin"},
+        {**entry("t", 'Say "sold"', kind="term"), "fields": {}},
+        {**entry("p", "Proposed", kind="metric", status="proposed"), "fields": {}},
+    ]
+    data = ak.build_export(entries, settings, "2026-11-06 12:00", "Semantic & Context Layer")
+    metrics = data["semantic_layer"]["kinds"]["metric"]["entries"]
+    assert [m["name"] for m in metrics] == ["GPU M"]
+    assert "term" in data["context_layer"]["kinds"]
+    text = ak.to_yaml(data)
+    assert 'name: "Say \\"sold\\""' in text
+    assert "calculation: |-" in text and "line two" in text
