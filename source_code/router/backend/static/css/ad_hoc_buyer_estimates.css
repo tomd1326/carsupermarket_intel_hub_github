@@ -1,0 +1,153 @@
+/* Ad-Hoc Analysis pages (ad_hoc_buyer_estimates.html / .js).
+   Chart rows and cards use the KPI page's charts.css (.chart-row-title, .chart-card).
+   Filters, tables and the vehicle popup are copied from orders_deliveries.css so they look the same. */
+.be-page {
+  /* Series colours: the KPI page "Office" theme, first colours in order */
+  --s-buyer: #156082;
+  --s-original: #e97132;
+  --s-actual: #196b24;
+  display: flex; align-items: flex-start; color: var(--c-text);
+}
+
+/* ── Left column: the analyses, then this analysis's filters. Stays in view while scrolling. ── */
+.be-side { position: sticky; top: 0; height: 100vh; width: 200px; flex: none; overflow-y: auto;
+  display: flex; flex-direction: column; gap: 10px; padding: 12px 10px; box-sizing: border-box;
+  background: var(--c-page-bg); border-right: 1px solid var(--c-border-soft); z-index: 5; }
+/* Slicer panels and pills, as on Orders & Deliveries */
+.be-side .slicer { background: var(--c-surface); border: 1px solid var(--c-border); border-radius: var(--radius-lg); padding: 8px 10px;
+  display: flex; flex-direction: column; box-sizing: border-box; }
+.be-side .slicer-head { display: flex; align-items: center; justify-content: space-between; font-weight: 600; font-size: 1em;
+  color: var(--c-text-heading); padding-bottom: 6px; margin-bottom: 6px; border-bottom: 1px solid var(--c-border-soft); }
+.be-side .slicer-list { display: flex; flex-direction: column; gap: 4px; }
+.be-side .slicer-item { font: inherit; font-size: 1em; text-align: left; color: var(--c-text); padding: 0.35em 0.7em; border-radius: var(--radius-sm);
+  cursor: pointer; border: 1px solid var(--c-border-soft); background: var(--c-surface-alt); user-select: none; text-decoration: none; display: block; }
+.be-side .slicer-item:hover { border-color: var(--c-control-border); color: var(--c-text); }
+.be-side .slicer-item.selected { background: var(--c-dark); color: var(--c-surface); border-color: var(--c-dark); }
+/* Analysis names can be long: let them wrap rather than cut off */
+.be-side .slicer-item.analysis { white-space: normal; line-height: 1.3; }
+.be-side .data-status { margin-top: auto; font-size: 0.85em; color: var(--c-text-muted); line-height: 1.4; }
+/* Refresh button: .btn-refresh on Orders & Deliveries */
+.be-side .btn-refresh { width: 100%; margin-top: 6px; background-color: var(--c-btn-bg); border: 1px solid var(--c-btn-border); color: var(--c-btn-text);
+  font-weight: 600; font-size: 0.9em; padding: 7px 15px; border-radius: var(--radius-md); cursor: pointer; }
+.be-side .btn-refresh:hover { background-color: var(--c-btn-hover-bg); border-color: var(--c-btn-hover-bg); color: var(--c-btn-hover-text); }
+.be-side .btn-refresh:disabled { opacity: 0.6; cursor: default; }
+@media (max-width: 1000px) {
+  .be-page { display: block; }
+  .be-side { position: static; height: auto; width: auto; flex-direction: row; flex-wrap: wrap; border-right: none; border-bottom: 1px solid var(--c-border-soft); }
+  .be-side .slicer { min-width: 180px; }
+  .be-side .data-status { margin-top: 0; }
+}
+
+/* ── Right side: the analysis ── */
+.be-content { flex: 1; min-width: 0; padding-bottom: 40px; }
+.be-content .be-intro { margin: 14px auto 0; width: min(var(--content-w, 100%), calc(100% - 96px)); }
+.be-content .be-intro h2 { font-size: 1.15rem; font-weight: 700; color: var(--c-text-heading); margin: 0; }
+/* Read This First / Summary: theme .panel cards */
+.be-content .caveats { margin: 12px auto 0; width: min(var(--content-w, 100%), calc(100% - 96px)); border-left: 4px solid var(--s-original); }
+.be-content .caveats.summary { border-left-color: var(--s-buyer); }
+.be-content .caveats h2 { margin: 0; font-size: 1rem; font-weight: 700; color: var(--c-text-heading); display: inline; }
+.be-content .caveats > summary { cursor: pointer; list-style: none; }
+.be-content .caveats > summary::-webkit-details-marker { display: none; }
+.be-content .caveats > summary::before { content: "\25BC"; display: inline-block; width: 1.3em; font-size: 0.8rem; color: var(--c-text-muted); }
+.be-content .caveats:not([open]) > summary::before { content: "\25B6"; }
+.be-content .caveats:not([open]) > summary::after { content: "  (click to open)"; font-size: 0.8rem; color: var(--c-text-muted); }
+.be-content .caveats[open] > summary { margin-bottom: 6px; }
+.be-content .caveats p { margin: 0 0 6px; font-size: 0.88rem; color: var(--c-text); line-height: 1.45; }
+.be-content .caveats ul { margin: 4px 0 2px; padding-left: 20px; font-size: 0.88rem; line-height: 1.45; color: var(--c-text); }
+.be-content .caveats li { margin-bottom: 4px; }
+.be-content .box-close { text-align: right; margin-top: 8px; }
+.be-content .hint { margin: 10px auto 0; width: min(var(--content-w, 100%), calc(100% - 96px)); color: var(--c-text-muted); font-size: 0.85rem; }
+
+.be-content main { padding: 8px 48px 0; }
+/* One chart row per section: KPI .chart-row-title bar over a month card and a week card */
+.be-content .chart-row { margin: 18px auto 0; max-width: var(--content-w, none); }
+.be-content .chart-row-title { margin-bottom: 4px; }
+.be-content .mv { margin-left: auto; white-space: nowrap; display: flex; gap: 4px; }
+.be-content .note { color: #475569; font-size: 0.8rem; margin: 0 0 8px; }
+/* Card widths are set in layoutPairs() so month and week columns match; the row is centred */
+.be-content .pair { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 3fr); gap: 16px; justify-content: center; }
+@media (max-width: 1000px) { .be-content .pair { grid-template-columns: 1fr; } }
+.be-content .chart-card { min-width: 0; }
+.be-content .chart-legend { margin-bottom: 2px; }
+.be-content .legend-swatch { width: 10px; height: 10px; border-radius: 2px; display: inline-block; opacity: 0.7; }
+.be-content .avg-toggle { cursor: pointer; user-select: none; }
+.be-content .avg-toggle:hover { color: #0f172a; }
+.be-content .avg-toggle.off { opacity: 0.45; text-decoration: line-through; }
+.be-content .chart { width: 100%; }
+.be-content .chart svg { display: block; width: 100%; overflow: visible; }
+.be-content .chart text { font-family: inherit; }
+.be-content .chart rect.hit { cursor: pointer; }
+.be-content .chart-card details { margin-top: 6px; font-size: 0.8rem; color: var(--c-text-muted); }
+.be-content .chart-card details > summary { cursor: pointer; }
+.be-content .foot { color: var(--c-text-muted); font-size: 0.8rem; margin: 28px auto 0; max-width: var(--content-w, none); line-height: 1.5; }
+
+/* Show Table: table.summary from Orders & Deliveries */
+.be-content table.summary { border-collapse: separate; border-spacing: 0; font-size: 1em; white-space: nowrap; width: 100%; margin-top: 6px;
+  border: 1px solid var(--c-border); border-radius: var(--radius-md); }
+.be-content table.summary th { background: var(--c-table-header-bg); color: var(--c-table-header-text); text-align: right; font-size: 0.95em; font-weight: 600;
+  padding: 0.5em 0.7em; border-right: 1px solid var(--c-border); border-bottom: 1px solid var(--c-border); }
+.be-content table.summary td { padding: 0.35em 0.7em; color: var(--c-text); text-align: right; font-variant-numeric: tabular-nums;
+  border-bottom: 1px solid var(--c-border); border-right: 1px solid var(--c-border-soft); }
+.be-content table.summary th:first-child, .be-content table.summary td:first-child { text-align: left; }
+.be-content table.summary td.dim-label { font-weight: 600; color: var(--c-text-heading); }
+.be-content table.summary td.neg { color: var(--c-text-danger); }
+.be-content table.summary th:last-child, .be-content table.summary td:last-child { border-right: none; }
+.be-content table.summary tbody tr.total-row td { font-weight: 700; background: var(--c-table-total-bg); border-top: 2px solid var(--c-border-strong); border-bottom: none; }
+.be-content table.summary tbody tr:has(+ tr.total-row) td { border-bottom: none; }
+.be-content table.summary thead tr:first-child th:first-child { border-top-left-radius: var(--radius-md); }
+.be-content table.summary thead tr:first-child th:last-child { border-top-right-radius: var(--radius-md); }
+.be-content table.summary tbody tr:last-child td:first-child { border-bottom-left-radius: var(--radius-md); }
+.be-content table.summary tbody tr:last-child td:last-child { border-bottom-right-radius: var(--radius-md); }
+
+/* ── Vehicle popup: .vehicle-modal and table.vehicle-modal-table from Orders & Deliveries ── */
+.modal-backdrop-custom { position: fixed; inset: 0; background: rgba(0,0,0,0.45); z-index: 1050; display: none; }
+.vehicle-modal { position: fixed; top: 8vh; left: 50%; transform: translateX(-50%); z-index: 1060; background: var(--c-surface);
+  border-radius: var(--radius-lg); width: max-content; max-width: 94vw; max-height: 80vh; display: none; flex-direction: column; overflow: hidden;
+  box-shadow: 0 8px 32px rgba(0,0,0,0.22); font-size: 13px; }
+.vehicle-modal.open, .modal-backdrop-custom.open { display: flex; }
+.vehicle-modal-head { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 12px 18px; border-bottom: 1px solid var(--c-border-soft); }
+.vehicle-modal-title { font-weight: 600; color: var(--c-text-heading); font-size: 1.1em; }
+.vehicle-modal-sub { color: var(--c-text-muted); font-size: 0.95em; }
+.vehicle-modal-tools { display: flex; align-items: center; gap: 8px; }
+.vehicle-modal-search { box-sizing: border-box; background: var(--c-surface); color: var(--c-text); border: 1px solid var(--c-control-border);
+  border-radius: var(--radius-sm); font-size: 0.9em; padding: 7px 10px; max-width: 260px; }
+.vehicle-modal-search:focus { outline: none; border-color: var(--c-primary); }
+.vehicle-modal-close { border: none; background: transparent; color: var(--c-text-muted); font-size: 1.8em; line-height: 1; cursor: pointer; padding: 2px 6px; }
+.vehicle-modal-close:hover { color: var(--c-text-danger); }
+.vehicle-modal-body { overflow: auto; padding: 0 18px 13px; }
+table.vehicle-modal-table { border-collapse: separate; border-spacing: 0; width: auto; font-size: 13px; white-space: nowrap;
+  border: 1px solid var(--c-border); border-radius: var(--radius-md); }
+table.vehicle-modal-table th { position: sticky; top: 0; z-index: 3; background: var(--c-table-header-bg); color: var(--c-table-header-text); text-align: left;
+  font-size: 0.95em; font-weight: 600; padding: 0.5em 0.6em; border-right: 1px solid var(--c-border); border-bottom: 1px solid var(--c-border);
+  cursor: pointer; user-select: none; white-space: normal; line-height: 1.2; vertical-align: bottom; min-width: 70px; }
+table.vehicle-modal-table th:hover { background: var(--c-table-header-hover); }
+table.vehicle-modal-table th.num { text-align: right; }
+/* Sort arrows on every heading so it is obvious the table sorts; the sorted one in blue */
+table.vehicle-modal-table th .sort-caret { margin-left: 4px; font-size: 0.85em; opacity: 0.45; white-space: nowrap; }
+table.vehicle-modal-table th .sort-caret.on { opacity: 1; color: var(--c-primary); font-weight: 700; }
+table.vehicle-modal-table th.grp-buyer { box-shadow: inset 0 3px 0 var(--s-buyer); }
+table.vehicle-modal-table th.grp-original { box-shadow: inset 0 3px 0 var(--s-original); }
+table.vehicle-modal-table th.grp-actual { box-shadow: inset 0 3px 0 var(--s-actual); }
+table.vehicle-modal-table td { padding: 0.35em 0.6em; color: var(--c-text); border-bottom: 1px solid var(--c-border); border-right: 1px solid var(--c-border-soft); }
+table.vehicle-modal-table tbody tr:last-child td { border-bottom: none; }
+table.vehicle-modal-table thead tr:first-child th:first-child { border-top-left-radius: 4px; }
+table.vehicle-modal-table thead tr:first-child th:last-child { border-top-right-radius: 4px; }
+table.vehicle-modal-table tbody tr:last-child td:first-child { border-bottom-left-radius: 4px; }
+table.vehicle-modal-table tbody tr:last-child td:last-child { border-bottom-right-radius: 4px; }
+table.vehicle-modal-table td:last-child { border-right: none; }
+table.vehicle-modal-table td.num { text-align: right; font-variant-numeric: tabular-nums; }
+table.vehicle-modal-table td.neg { color: var(--c-text-danger); }
+table.vehicle-modal-table td.vrm { font-weight: 600; text-transform: uppercase; }
+table.vehicle-modal-table tbody tr:nth-child(even) { background: var(--c-surface-alt); }
+table.vehicle-modal-table tbody tr:hover { background: var(--c-table-total-bg); }
+
+/* Hover box on the bars, and the View Vehicles button shown on a click */
+#tip { position: fixed; pointer-events: none; background: #fff; border: 1px solid #cbd5e1; border-radius: 8px; box-shadow: 0 6px 18px rgba(15,23,42,0.12);
+  padding: 8px 10px; font-size: 0.8rem; color: #0f172a; display: none; z-index: 1070; min-width: 170px; }
+#tip .t { font-weight: 700; margin-bottom: 2px; }
+#tip .n { color: #64748b; margin-bottom: 4px; }
+#tip .r { display: flex; justify-content: space-between; gap: 14px; }
+#tip .r i { display: inline-block; width: 9px; height: 9px; border-radius: 2px; margin-right: 5px; }
+#vv { position: fixed; display: none; z-index: 1070; background: #fff; border: 1px solid #cbd5e1; border-radius: 8px; box-shadow: 0 6px 18px rgba(15,23,42,0.2);
+  padding: 8px 10px; text-align: center; }
+#vv-label { font-size: 0.8rem; font-weight: 700; color: #0f172a; margin-bottom: 6px; }

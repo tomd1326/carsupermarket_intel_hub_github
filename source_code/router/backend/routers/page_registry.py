@@ -52,6 +52,7 @@ PAGES: tuple[Page, ...] = (
     Page('trade_report',        '/reports/trade',              'Trade Report',             False),
     Page('semantic_layer',      '/semantic-layer',             'Semantic & Context Layer', False),
     Page('self_analytics',      '/self-analytics',             'Self-Analytics',           False),
+    Page('ad_hoc_analysis',     '/ad-hoc-analysis',            'Ad-Hoc Analysis',          False),
 )
 
 PAGES_BY_KEY: dict[str, Page] = {p.key: p for p in PAGES}
