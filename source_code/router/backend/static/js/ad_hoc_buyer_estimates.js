@@ -456,7 +456,7 @@ function layoutPairs() {
   else document.documentElement.style.setProperty("--content-w", rowW + "px");
 }
 function drawAll() {
-  layoutPairs(); document.querySelectorAll(".card").forEach(c => c._draw && c._draw()); }
+  layoutPairs(); document.querySelectorAll(".chart-card").forEach(c => c._draw && c._draw()); }
 
 // ---------- Vehicles behind each bar ----------
 // Popup columns: [key, heading, format, group colour]
