@@ -13,7 +13,7 @@
 </head>
 <body>
     {{ page_header('Settings', user) }}
-    <div class="settings-card{% if active_section in ('sharepoint', 'ga4-requests', 'live-update', 'ai') %} settings-card-wide{% endif %}">
+    <div class="settings-card{% if active_section in ('sharepoint', 'ga4-requests', 'external-data', 'live-update', 'ai') %} settings-card-wide{% endif %}">
 
         <div class="settings-layout">
         {% include '_settings_nav.html' %}
@@ -2557,6 +2557,16 @@
         {# ── GA4 Requests ────────────────────────────────────── #}
         {% if active_section == 'ga4-requests' %}
         {% include '_settings_ga4_requests.html' %}
+        {% endif %}
+
+        {# ── External Data ───────────────────────────────────── #}
+        {% if active_section == 'external-data' %}
+        {% include '_settings_external_data.html' %}
+        {% endif %}
+
+        {# ── Email Alerts ────────────────────────────────────── #}
+        {% if active_section == 'email-alerts' %}
+        {% include '_settings_email_alerts.html' %}
         {% endif %}
 
         </div><!-- /.settings-content -->
