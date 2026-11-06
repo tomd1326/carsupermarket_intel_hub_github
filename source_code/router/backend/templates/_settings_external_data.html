@@ -1,0 +1,222 @@
+{# Settings > External Data. Included by settings.html; the code is in static/js/external_data.js. #}
+<style>
+    .xd-intro { font-size: 0.85rem; }
+    .xd-status { font-size: 0.8rem; color: var(--c-text-muted); }
+    .xd-grid { border-collapse: separate; border-spacing: 3px; font-size: 0.75rem; }
+    .xd-grid th { font-weight: 600; text-align: center; padding: 0 4px; }
+    .xd-grid td.xd-year { font-weight: 600; padding-right: 6px; }
+    .xd-grid td.xd-cell { width: 42px; height: 22px; border-radius: var(--radius-sm); text-align: center;
+                          color: #fff; cursor: default; }
+    .xd-grid td.xd-cell.xd-click { cursor: pointer; }
+    .xd-grid td.xd-na { background: var(--c-surface-sunken); }
+    .xd-legend { display: flex; gap: 14px; flex-wrap: wrap; font-size: 0.78rem; margin-bottom: 8px; }
+    .xd-legend span::before { content: ''; display: inline-block; width: 12px; height: 12px; margin-right: 5px;
+                              vertical-align: -1px; border-radius: 2px; background: var(--xd-c); }
+    .xd-table { font-size: 0.8rem; }
+    .xd-table th { white-space: nowrap; font-weight: 600; }
+    .xd-table td.num, .xd-table th.num { text-align: right; }
+    .xd-scroll { max-height: 420px; overflow-y: auto; }
+    .xd-scroll thead th { position: sticky; top: 0; background: var(--c-surface); z-index: 1; }
+    .xd-sub { font-size: 0.75rem; color: var(--c-text-muted); }
+    .xd-err { color: var(--c-text-danger); }
+    .xd-src-row { display: grid; grid-template-columns: 180px 1fr 200px 100px 150px 70px auto; gap: 6px; margin-bottom: 2px; }
+    .xd-src-state { font-size: 0.75rem; color: var(--c-text-muted); margin: 0 0 8px 2px; }
+    .xd-grid td.xd-val { width: 46px; font-size: 0.7rem; }
+    .xd-cap-tables { display: flex; gap: 24px; flex-wrap: wrap; }
+    .xd-cap-tables table { width: auto; }
+    .xd-colours { display: flex; gap: 16px; flex-wrap: wrap; }
+    .xd-colours label { font-size: 0.8rem; display: flex; align-items: center; gap: 6px; }
+</style>
+
+<div class="card mb-4">
+    <div class="card-header fw-semibold d-flex align-items-center gap-2 flex-wrap">
+        <span>SMMT And CAP HPI Publications</span>
+        <button type="button" class="btn btn-sm btn-primary ms-auto" id="xd-check-btn" onclick="xdCheck(false)">
+            <i class="fas fa-sync me-1"></i>Check For New Data
+        </button>
+        <button type="button" class="btn btn-sm btn-outline-secondary" id="xd-full-btn" onclick="xdCheck(true)">
+            <i class="fas fa-history me-1"></i>Full Scan
+        </button>
+        <label class="btn btn-sm btn-outline-secondary mb-0" id="xd-upload-btn">
+            <i class="fas fa-upload me-1"></i>Upload Files
+            <input type="file" multiple class="d-none" id="xd-upload" onchange="xdUpload(this.files)">
+        </label>
+        <button type="button" class="btn btn-sm btn-outline-secondary" id="xd-s3-btn" onclick="xdLoadS3()">
+            <i class="fab fa-aws me-1"></i>Load From S3
+        </button>
+    </div>
+    <div class="card-body">
+        <p class="form-text xd-intro mt-0">
+            New car registrations (monthly), used car sales and the new car and van outlook from SMMT, and the
+            CAP HPI Car Market Overview and Future Car Market Overview reports. Every file found is kept unchanged
+            in S3 (<code>external_data/smmt/</code>, <code>external_data/cap_hpi/</code>) and read into the tables
+            below. Check For New Data reads each source's first page and checks whether recent files were replaced
+            at the same link; Full Scan reads every page of the listings. A check that stores new files sends the
+            CAP HPI and SMMT alerts on Settings > Email Alerts. Where several SMMT files give the same month,
+            the most recent file wins, then your own tracker, then a month worked out from the year to date.
+            Upload Files takes files from your computer (they go in the feed picked here).
+        </p>
+        <div class="d-flex align-items-center gap-2 mb-2">
+            <label for="xd-upload-feed" class="form-label mb-0 small">Upload Into</label>
+            <select id="xd-upload-feed" class="form-select form-select-sm" style="width: 220px;"></select>
+            <span class="xd-status ms-3" id="xd-status"></span>
+        </div>
+        <div id="xd-error" class="alert alert-danger d-none py-1 small"></div>
+    </div>
+</div>
+
+<div class="card mb-4">
+    <div class="card-header fw-semibold">New Car Registrations - Months Covered</div>
+    <div class="card-body">
+        <div class="xd-legend" id="xd-legend"></div>
+        <div class="d-flex gap-5 flex-wrap">
+            <div>
+                <div class="fw-semibold small mb-1">Market Total</div>
+                <div id="xd-grid-totals" class="text-muted small">Loading...</div>
+            </div>
+            <div>
+                <div class="fw-semibold small mb-1">By Marque <span class="xd-sub">(click a month to see it)</span></div>
+                <div id="xd-grid-marques" class="text-muted small">Loading...</div>
+            </div>
+        </div>
+        <div class="xd-sub mt-2" id="xd-missing"></div>
+    </div>
+</div>
+
+<div class="card mb-4">
+    <div class="card-header fw-semibold d-flex align-items-center gap-2">
+        <span>Registrations By Marque</span>
+        <input type="month" class="form-control form-control-sm ms-auto" style="width: 170px;" id="xd-month"
+               onchange="xdLoadMonth(this.value)">
+    </div>
+    <div class="card-body">
+        <div class="xd-sub mb-2" id="xd-month-total"></div>
+        <div class="xd-scroll">
+            <table class="table table-sm align-middle xd-table">
+                <thead><tr><th>Marque</th><th class="num">Units</th><th class="num">Last Year</th>
+                    <th class="num">Change</th><th>From</th></tr></thead>
+                <tbody id="xd-month-body"><tr><td colspan="5" class="text-muted">Pick a month.</td></tr></tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<div class="card mb-4">
+    <div class="card-header fw-semibold">Used Car Sales - Months Covered</div>
+    <div class="card-body"><div id="xd-grid-used" class="text-muted small">Loading...</div></div>
+</div>
+
+<div class="card mb-4">
+    <div class="card-header fw-semibold">CAP HPI - Monthly Movement In Live Valuations (3 Years, 60k Miles)</div>
+    <div class="card-body">
+        <div id="xd-grid-cap" class="text-muted small">Loading...</div>
+        <div class="xd-sub mt-2">Each month's "Overall Avg Book Movement" at 3 YR/60K from its Car Market Overview. Click a month to see the report.</div>
+    </div>
+</div>
+
+<div class="card mb-4">
+    <div class="card-header fw-semibold d-flex align-items-center gap-2">
+        <span>CAP HPI Car Market Overview</span>
+        <a class="small ms-2" id="xd-cap-file" href="#" target="_blank"></a>
+        <select id="xd-cap-month" class="form-select form-select-sm ms-auto" style="width: 170px;" onchange="xdLoadCap(this.value)"></select>
+    </div>
+    <div class="card-body">
+        <div class="fw-semibold small mb-1">Current Used Valuations - Average Value Movements</div>
+        <div class="xd-cap-tables mb-3">
+            <table class="table table-sm align-middle xd-table" id="xd-cap-sector"><tbody><tr><td class="text-muted">Pick a month.</td></tr></tbody></table>
+            <table class="table table-sm align-middle xd-table" id="xd-cap-sub"><tbody></tbody></table>
+        </div>
+        <div class="xd-sub mb-3">* Fewer than four figures in the report for this row; they are shown under the columns furthest right.</div>
+        <div class="xd-cap-tables">
+            <div><div class="fw-semibold small mb-1">Notable Movers 1 Year 20k</div>
+                <table class="table table-sm align-middle xd-table" id="xd-cap-movers-1"><tbody></tbody></table></div>
+            <div><div class="fw-semibold small mb-1">Notable Movers 3 Years 60k</div>
+                <table class="table table-sm align-middle xd-table" id="xd-cap-movers-3"><tbody></tbody></table></div>
+        </div>
+    </div>
+</div>
+
+<div class="card mb-4">
+    <div class="card-header fw-semibold">New Car And Van Outlook <span class="xd-sub" id="xd-outlook-date"></span></div>
+    <div class="card-body">
+        <div class="table-responsive">
+            <table class="table table-sm align-middle xd-table" id="xd-outlook"><tbody><tr><td class="text-muted">Loading...</td></tr></tbody></table>
+        </div>
+        <div class="xd-sub">Thousands of vehicles. (f) = forecast.</div>
+    </div>
+</div>
+
+<div class="card mb-4">
+    <div class="card-header fw-semibold d-flex align-items-center gap-2">
+        <span>Files</span>
+        <select id="xd-files-feed" class="form-select form-select-sm ms-auto" style="width: 220px;" onchange="xdRenderFiles()"></select>
+    </div>
+    <div class="card-body">
+        <div class="xd-scroll">
+            <table class="table table-sm align-middle xd-table">
+                <thead><tr><th>Period</th><th>Feed</th><th>File</th><th>Holds</th><th class="num">Rows</th>
+                    <th>Published</th><th>Fetched</th><th>Last Checked</th><th>Source</th></tr></thead>
+                <tbody id="xd-files-body"><tr><td colspan="9" class="text-muted">Loading...</td></tr></tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<div class="card mb-4" id="xd-settings">
+    <div class="card-header fw-semibold">External Data Settings</div>
+    <div class="card-body">
+        <div class="fw-semibold small mb-1">Sources</div>
+        <div class="xd-sub mb-2">
+            A Page is read for its file links. A Listing is a news list: each post on it is opened for its file links.
+            Automatic (not running yet: there is no timer set up to start it): Daily checks once a day; Start Of
+            Month checks every hour in the first N working days, for last month's file; End Of Month checks every
+            hour from N working days before the month end, for next month's report (CAP HPI), and stops once it is
+            stored. Working days skip weekends and bank holidays.
+        </div>
+        <div class="xd-src-row xd-sub fw-semibold"><span>Name</span><span>Link</span><span>Feed</span><span>Type</span>
+            <span>Automatic</span><span>Days (N)</span><span></span></div>
+        <div id="xd-sources"></div>
+        <button type="button" class="btn btn-sm btn-outline-secondary mb-3" onclick="xdAddSource()">
+            <i class="fas fa-plus me-1"></i>Add Source
+        </button>
+        <div class="mb-3">
+            <label for="xd-skip" class="form-label mb-1 small fw-semibold">Skip Files Whose Name Contains</label>
+            <input type="text" class="form-control form-control-sm" id="xd-skip" placeholder="colour, motorparc">
+            <div class="form-text">Comma separated. Colour and Motorparc reports sit in the same news list.</div>
+        </div>
+        <div class="mb-3">
+            <div class="small fw-semibold mb-1">Automatic Check Hours (UK Time, Weekdays, Not Running Yet)</div>
+            <div class="d-flex align-items-center gap-2 small">
+                <label for="xd-auto-from">From</label>
+                <input type="number" min="0" max="23" class="form-control form-control-sm" style="width: 80px;" id="xd-auto-from">
+                <label for="xd-auto-to">To</label>
+                <input type="number" min="1" max="24" class="form-control form-control-sm" style="width: 80px;" id="xd-auto-to">
+            </div>
+            <div class="form-text" id="xd-auto-last"></div>
+        </div>
+        <div class="mb-3">
+            <label for="xd-hours" class="form-label mb-1 small fw-semibold">Check Automatically On Opening, Every (Hours)</label>
+            <input type="number" min="0" class="form-control form-control-sm" style="width: 100px;" id="xd-hours">
+            <div class="form-text">0 = only when Check For New Data is pressed.</div>
+        </div>
+        <div class="mb-3">
+            <div class="small fw-semibold mb-1">Month Grid Colours</div>
+            <div class="xd-colours" id="xd-colours"></div>
+        </div>
+        <div class="mb-3">
+            <div class="small fw-semibold mb-1">Home Page News (Not Built Yet)</div>
+            <div class="form-check form-switch">
+                <input class="form-check-input" type="checkbox" id="xd-news-on">
+                <label class="form-check-label small" for="xd-news-on">Show SMMT News On The Home Page</label>
+            </div>
+            <div class="form-check form-switch">
+                <input class="form-check-input" type="checkbox" id="xd-news-admin">
+                <label class="form-check-label small" for="xd-news-admin">Only For Me (Turn Off To Show Everyone)</label>
+            </div>
+        </div>
+        <div id="xd-settings-error" class="alert alert-danger d-none py-1 small"></div>
+        <button type="button" class="btn btn-primary" id="xd-save-btn" onclick="xdSaveSettings()">Save</button>
+    </div>
+</div>
+<script>const BASE_URL = "{{ BASE_URL }}";</script>
+<script src="{{ static_url('js/external_data.js') }}"></script>

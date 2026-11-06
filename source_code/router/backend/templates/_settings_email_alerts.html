@@ -1,0 +1,114 @@
+{# Settings > Email Alerts. Included by settings.html; see routers/email_alerts.py. #}
+<style>
+    .ea-users { display: flex; flex-wrap: wrap; gap: 4px 18px; font-size: 0.82rem; }
+    .ea-desc { font-size: 0.8rem; color: var(--c-text-muted); }
+</style>
+<div class="card mb-4" id="ea-card">
+    <div class="card-header fw-semibold">Email Alerts</div>
+    <div class="card-body">
+        <p class="form-text mt-0">
+            Emails the site sends by itself. Each alert can be turned off, and goes to the people ticked under it.
+            Only people with an email address on User Accounts are listed. Mail is sent from the address on Settings > Email.
+        </p>
+        <div id="ea-error" class="alert alert-danger d-none py-1 small"></div>
+        <div id="ea-list" class="text-muted small">Loading...</div>
+        <div class="d-flex align-items-center gap-2 mt-3">
+            <button type="button" class="btn btn-primary" id="ea-save-btn" onclick="eaSave()">Save</button>
+            <span class="small text-muted" id="ea-note"></span>
+        </div>
+    </div>
+</div>
+<script>
+    const EA_API = "{{ BASE_URL }}/api/email-alerts";
+    let eaData = null;
+
+    function eaEsc(s) {
+        return String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+    }
+
+    async function eaCall(url, method = 'GET', body) {
+        const res = await fetch(url, { method, headers: body ? { 'Content-Type': 'application/json' } : {},
+                                       body: body ? JSON.stringify(body) : undefined });
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        const data = await res.json();
+        if (data.status !== 'ok') throw new Error(data.message || 'Failed');
+        return data;
+    }
+
+    function eaShowError(msg) {
+        const el = document.getElementById('ea-error');
+        el.textContent = msg || '';
+        el.classList.toggle('d-none', !msg);
+    }
+
+    function eaRender() {
+        const people = eaData.users.filter(u => u.email);
+        document.getElementById('ea-list').innerHTML = eaData.alerts.map(a => {
+            const cfg = eaData.config[a.key];
+            const users = people.map(u => `<label><input type="checkbox" class="form-check-input me-1" data-alert="${a.key}"
+                value="${eaEsc(u.username)}"${cfg.users.includes(u.username) ? ' checked' : ''}>${eaEsc(u.name)}</label>`).join('');
+            return `<div class="border rounded p-2 mb-2">
+                <div class="d-flex align-items-center gap-2">
+                    <div class="form-check form-switch mb-0">
+                        <input class="form-check-input" type="checkbox" id="ea-on-${a.key}"${cfg.enabled ? ' checked' : ''}>
+                        <label class="form-check-label fw-semibold" for="ea-on-${a.key}">${eaEsc(a.name)}</label>
+                    </div>
+                    <button type="button" class="btn btn-sm btn-outline-secondary ms-auto" onclick="eaTest('${a.key}', this)">
+                        <i class="fas fa-envelope me-1"></i>Send Test
+                    </button>
+                </div>
+                <div class="ea-desc mb-1">${eaEsc(a.description)}</div>
+                <div class="ea-users">${users || '<span class="text-muted">Nobody has an email address yet.</span>'}</div>
+            </div>`;
+        }).join('');
+    }
+
+    async function eaLoad() {
+        try {
+            eaData = await eaCall(EA_API);
+            eaShowError('');
+            eaRender();
+        } catch (e) {
+            eaShowError('Could not load the alerts: ' + e.message);
+        }
+    }
+
+    async function eaSave() {
+        const btn = document.getElementById('ea-save-btn');
+        const card = document.getElementById('ea-card');
+        btn.disabled = true; btn.textContent = 'Saving...'; card.classList.add('busy');
+        try {
+            const config = {};
+            eaData.alerts.forEach(a => {
+                config[a.key] = {
+                    enabled: document.getElementById('ea-on-' + a.key).checked,
+                    users: [...document.querySelectorAll(`input[data-alert="${a.key}"]:checked`)].map(el => el.value),
+                };
+            });
+            eaData.config = (await eaCall(EA_API, 'POST', { config })).config;
+            eaShowError('');
+            document.getElementById('ea-note').textContent = 'Saved.';
+            eaRender();
+        } catch (e) {
+            eaShowError('Not saved: ' + e.message);
+        } finally {
+            btn.disabled = false; btn.textContent = 'Save'; card.classList.remove('busy');
+        }
+    }
+
+    async function eaTest(key, btn) {
+        const label = btn.innerHTML;
+        btn.disabled = true; btn.textContent = 'Sending...';
+        try {
+            const d = await eaCall(EA_API + '/test', 'POST', { key });
+            document.getElementById('ea-note').textContent = 'Test sent to ' + d.sent_to.join(', ') + '. (Uses the saved list.)';
+            eaShowError('');
+        } catch (e) {
+            eaShowError('Test not sent: ' + e.message);
+        } finally {
+            btn.disabled = false; btn.innerHTML = label;
+        }
+    }
+
+    eaLoad();
+</script>
