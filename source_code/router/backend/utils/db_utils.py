@@ -280,14 +280,14 @@ APPEARANCE_COLOUR_SETTINGS = {
 PER_USER_BOOL_SETTINGS = {'calc_buying_reqs', 'get_stock'}
 
 ADMIN_USER = 'admin'
-ALWAYS_ENABLED_USERS = {'admin', 'tdrayson'}
-
-# The admin login comes from core._ADMIN_FALLBACK and may have no row in the
+# Admin logins come from core._ADMIN_FALLBACK and may have no row in the
 # users table, so its name and email cannot be saved there. Fixed here instead,
 # and laid over whatever is stored wherever user details are read.
 ADMIN_DETAILS = {
     'tdrayson': {'first_name': 'Tom', 'last_name': 'Drayson', 'email': 'tom.drayson@carsupermarket.com'},
+    'mthornton': {'first_name': 'Matthew', 'last_name': 'Thornton', 'email': 'matthew.thornton@carsupermarket.com'},
 }
+ALWAYS_ENABLED_USERS = {ADMIN_USER} | set(ADMIN_DETAILS)
 
 
 def widen_settings_values(conn) -> None:

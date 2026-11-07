@@ -30,7 +30,7 @@ from utils.secrets_manager_client import get_secret
 from utils.file_handler import read_dataframe_file, write_dataframe_file
 
 from .core import (BASE_URL, _S3_ENV, templates, s3_bucketname, s3_bucket_region, _track,
-                   get_current_user, _uk_now, require_page, require_page_api)
+                   get_current_user, _uk_now, require_page, require_page_api, is_admin)
 
 logger = logging.getLogger(__name__)
 
@@ -105,7 +105,7 @@ def read_tasks(request: Request, page: Optional[int] = 1, page_size: Optional[in
     return templates.TemplateResponse("supplier_stock_evaluator.html", {
         "request": request,
         "user": user,
-        "is_admin": user == 'tdrayson',
+        "is_admin": is_admin(user),
         "tasks": tasks,
         "at_least_one_pending": at_least_one_pending,
         'suppliers': suppliers,
@@ -241,7 +241,7 @@ def download_task_file(task_id: str, user: str = Depends(require_page_api('tasks
 
 @router.get("/download-error-log/{task_id}")
 def download_error_log(task_id: str, user: str = Depends(require_page_api('tasks'))):
-    if user != 'tdrayson':
+    if not is_admin(user):
         raise HTTPException(status_code=403)
     with get_database_connection() as conn:
         with conn.cursor() as cursor:
@@ -299,7 +299,7 @@ def view_task_log(task_id: str, user: str = Depends(require_page_api('tasks'))):
 
     # The API error detail stays admin-only, as it did when it had its own
     # button. Everyone else sees the stages and that errors happened.
-    if user != 'tdrayson':
+    if not is_admin(user):
         result["errors_withheld"] = True
         return result
 
@@ -664,7 +664,7 @@ async def fetch_supplier_stock(
     include_preview: Optional[str] = Form(None),
     user: str = Depends(get_current_user),
 ):
-    if user != 'tdrayson':
+    if not is_admin(user):
         raise HTTPException(status_code=403, detail="Forbidden")
 
     supplier = supplier.lower()

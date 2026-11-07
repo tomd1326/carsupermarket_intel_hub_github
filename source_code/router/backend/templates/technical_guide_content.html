@@ -223,7 +223,7 @@
 <tr><td><code>BASE_URL</code>, <code>templates</code></td><td>URL prefix and the shared Jinja environment. Every page must use this <code>templates</code> object.</td></tr>
 <tr><td><code>get_current_user</code></td><td>Returns the signed-in username or None. Signs the user out if their password changed, an admin forced re-login, or the session row is gone.</td></tr>
 <tr><td><code>require_page</code>, <code>require_page_api</code></td><td>Page access checks (redirect for pages, 401/403 for data).</td></tr>
-<tr><td><code>is_admin</code>, <code>ADMIN_USERNAME</code></td><td>The admin is one username, <code>tdrayson</code>.</td></tr>
+<tr><td><code>is_admin</code>, <code>ADMIN_USERNAME</code></td><td>Admins are the usernames in <code>ADMIN_USERNAMES</code> (from <code>db_utils.ADMIN_DETAILS</code>). <code>ADMIN_USERNAME</code> is the primary admin, <code>tdrayson</code>.</td></tr>
 <tr><td><code>user_can</code>, <code>visible_pages</code>, <code>page_name</code></td><td>Page access and the names set in Settings > Page Names.</td></tr>
 <tr><td><code>_track</code></td><td>Writes a <code>user_events</code> row (page views and actions) for User Activity.</td></tr>
 <tr><td><code>_uk_now</code></td><td>Current UK time. Use it instead of <code>date.today()</code>, which is UTC on Lambda.</td></tr>

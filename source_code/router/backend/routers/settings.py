@@ -35,7 +35,7 @@ from utils.ddl_once import once_per_database
 
 from . import core
 from .core import (BASE_URL, templates, VALID_USERS, get_current_user, session_config,
-                   ADMIN_USERNAME, _uk_now)
+                   ADMIN_USERNAME, ADMIN_USERNAMES, is_admin, _uk_now)
 from .page_registry import PAGES, ALL_PAGE_KEYS, CONFIGURED_MARKER, shown_page_access
 
 logger = logging.getLogger(__name__)
@@ -113,14 +113,14 @@ def _render_section(request: Request, user: str, slug: str):
 @router.get("/settings-page", response_class=HTMLResponse)
 def settings_page(request: Request, user: str = Depends(get_current_user)):
     """Landing on the settings area — show the first section."""
-    if user != 'tdrayson':
+    if not is_admin(user):
         return RedirectResponse(url=BASE_URL + "/home", status_code=303)
     return _render_section(request, user, PAGE_SETTINGS_SECTIONS[0][0])
 
 
 @router.get("/settings/section/{slug}", response_class=HTMLResponse)
 def settings_section(slug: str, request: Request, user: str = Depends(get_current_user)):
-    if user != 'tdrayson':
+    if not is_admin(user):
         return RedirectResponse(url=BASE_URL + "/home", status_code=303)
     if slug in _MOVED_SECTIONS:
         return RedirectResponse(url=f"{BASE_URL}/settings/section/{_MOVED_SECTIONS[slug]}", status_code=303)
@@ -149,7 +149,7 @@ def save_buying_requirements(
     snowflake_cache_minutes: int = Form(...),
     user: str = Depends(get_current_user),
 ):
-    if user != 'tdrayson':
+    if not is_admin(user):
         raise HTTPException(status_code=403, detail="Forbidden")
     with get_database_connection() as conn:
         save_settings_partial(conn, {
@@ -176,7 +176,7 @@ def save_supplier_evaluator(
     get_stock: str = Form(default=""),
     user: str = Depends(get_current_user),
 ):
-    if user != 'tdrayson':
+    if not is_admin(user):
         raise HTTPException(status_code=403, detail="Forbidden")
     values = {
         'cap_workers':           cap_workers,
@@ -203,7 +203,7 @@ def save_mot_check(
     mot_workers: int = Form(...),
     user: str = Depends(get_current_user),
 ):
-    if user != 'tdrayson':
+    if not is_admin(user):
         raise HTTPException(status_code=403, detail="Forbidden")
     with get_database_connection() as conn:
         save_settings_partial(conn, {'mot_workers': mot_workers})
@@ -218,7 +218,7 @@ def save_email_attachments(
     email_attach_inline_keep_kb: int = Form(...),
     user: str = Depends(get_current_user),
 ):
-    if user != 'tdrayson':
+    if not is_admin(user):
         raise HTTPException(status_code=403, detail="Forbidden")
     with get_database_connection() as conn:
         save_settings_partial(conn, {
@@ -233,7 +233,7 @@ def save_email_attachments(
 def refresh_ai_models(request: Request, user: str = Depends(get_current_user)):
     """Used to ask Snowflake which Cortex models it serves. The website no
     longer uses Snowflake Cortex (see utils/cortex.py), so it only says so."""
-    if user != 'tdrayson':
+    if not is_admin(user):
         raise HTTPException(status_code=403, detail="Forbidden")
     from utils.cortex import AI_OFF_MESSAGE
     return JSONResponse({"error": AI_OFF_MESSAGE}, status_code=400)
@@ -247,7 +247,7 @@ def save_ai(
     cortex_model: str = Form(...),
     user: str = Depends(get_current_user),
 ):
-    if user != 'tdrayson':
+    if not is_admin(user):
         raise HTTPException(status_code=403, detail="Forbidden")
     with get_database_connection() as conn:
         save_settings_partial(conn, {
@@ -267,7 +267,7 @@ def save_cap_credentials(
     cap_override_password: str = Form(default=""),
     user: str = Depends(get_current_user),
 ):
-    if user != 'tdrayson':
+    if not is_admin(user):
         raise HTTPException(status_code=403, detail="Forbidden")
     with get_database_connection() as conn:
         save_settings_partial(conn, {
@@ -288,7 +288,7 @@ def save_cap_credentials(
 
 @router.get("/settings/google/connect")
 def google_connect(request: Request, user: str = Depends(get_current_user)):
-    if user != 'tdrayson':
+    if not is_admin(user):
         raise HTTPException(status_code=403, detail="Forbidden")
     import secrets
     from utils import google_oauth
@@ -304,7 +304,7 @@ def google_connect(request: Request, user: str = Depends(get_current_user)):
 @router.get("/settings/google/callback")
 def google_callback(request: Request, code: str = "", state: str = "", error: str = "",
                     user: str = Depends(get_current_user)):
-    if user != 'tdrayson':
+    if not is_admin(user):
         raise HTTPException(status_code=403, detail="Forbidden")
     from utils import google_oauth
     expected = request.session.pop("google_oauth_state", None)
@@ -328,7 +328,7 @@ def google_callback(request: Request, code: str = "", state: str = "", error: st
 
 @router.post("/settings/google/disconnect")
 def google_disconnect(request: Request, user: str = Depends(get_current_user)):
-    if user != 'tdrayson':
+    if not is_admin(user):
         raise HTTPException(status_code=403, detail="Forbidden")
     from utils import google_oauth
     google_oauth.disconnect()
@@ -343,7 +343,7 @@ def save_email(
     email_sender: str = Form(default=""),
     user: str = Depends(get_current_user),
 ):
-    if user != 'tdrayson':
+    if not is_admin(user):
         raise HTTPException(status_code=403, detail="Forbidden")
     with get_database_connection() as conn:
         save_settings_partial(conn, {'email_sender': email_sender.strip()})
@@ -370,7 +370,7 @@ def save_live_users(
     presence_more_colour: str = Form(...),
     user: str = Depends(get_current_user),
 ):
-    if user != 'tdrayson':
+    if not is_admin(user):
         raise HTTPException(status_code=403, detail="Forbidden")
     # Colours go into a style attribute, so only '#rrggbb' is accepted.
     colours = {
@@ -424,7 +424,7 @@ _APPEARANCE_INTS = {
 
 @router.post("/settings/section/appearance")
 async def save_appearance(request: Request, user: str = Depends(get_current_user)):
-    if user != 'tdrayson':
+    if not is_admin(user):
         raise HTTPException(status_code=403, detail="Forbidden")
     form = await request.form()
     values = {}
@@ -450,7 +450,7 @@ async def save_appearance(request: Request, user: str = Depends(get_current_user
 @router.post("/settings/section/appearance/reset")
 async def reset_appearance(user: str = Depends(get_current_user)):
     """Every Appearance setting back to its default (db_utils.SETTINGS_DEFAULTS)."""
-    if user != 'tdrayson':
+    if not is_admin(user):
         raise HTTPException(status_code=403, detail="Forbidden")
     keys = set(APPEARANCE_COLOUR_SETTINGS) | set(_APPEARANCE_INTS)
     with get_database_connection() as conn:
@@ -511,7 +511,7 @@ def test_microsoft_photo(email: str = Form(...), user: str = Depends(get_current
     """Fetch one person's Microsoft 365 photo through Graph, to check the app
     registration has a photo permission before building on it. Also reports
     which application permissions the token carries."""
-    if user != 'tdrayson':
+    if not is_admin(user):
         raise HTTPException(status_code=403, detail="Forbidden")
     import base64
     import json as _json
@@ -552,7 +552,7 @@ def test_microsoft_photo(email: str = Form(...), user: str = Depends(get_current
 def send_test_email(request: Request, user: str = Depends(get_current_user)):
     """Send a test email from the saved sender to tom.drayson only, to confirm
     Graph mail sending works. Uses the SAVED sender, not the box."""
-    if user != 'tdrayson':
+    if not is_admin(user):
         raise HTTPException(status_code=403, detail="Forbidden")
     from utils.email_client import send_email, configured_sender
     sender = configured_sender()
@@ -578,7 +578,7 @@ def send_test_email(request: Request, user: str = Depends(get_current_user)):
 def test_other_env_connection(request: Request, user: str = Depends(get_current_user)):
     """Try to connect from this Lambda to the OTHER environment's Aurora
     cluster (dev from prod, prod from dev). Reads only — nothing is written."""
-    if user != 'tdrayson':
+    if not is_admin(user):
         raise HTTPException(status_code=403, detail="Forbidden")
     import os
     import psycopg2
@@ -750,7 +750,7 @@ def _job_claim(job_id: str) -> bool:
 @router.post("/settings/prod-to-dev/copy")
 def copy_prod_to_dev(request: Request, user: str = Depends(get_current_user)):
     """Start a Copy Prod To Dev job and return its id for the page to poll."""
-    if user != 'tdrayson':
+    if not is_admin(user):
         raise HTTPException(status_code=403, detail="Forbidden")
     import os
     import uuid
@@ -810,7 +810,7 @@ def copy_prod_to_dev(request: Request, user: str = Depends(get_current_user)):
 
 @router.get("/settings/prod-to-dev/job/{job_id}")
 def prod_to_dev_job(job_id: str, user: str = Depends(get_current_user)):
-    if user != 'tdrayson':
+    if not is_admin(user):
         raise HTTPException(status_code=403, detail="Forbidden")
     with get_database_connection() as conn:
         with conn.cursor() as cur:
@@ -827,7 +827,7 @@ def prod_to_dev_stop(user: str = Depends(get_current_user)):
     """Stop every open copy job. Cancels the dev query it is running (so a
     lock wait ends now), and the copy undoes itself. A job whose worker has
     died is marked stopped after a few seconds."""
-    if user != 'tdrayson':
+    if not is_admin(user):
         raise HTTPException(status_code=403, detail="Forbidden")
     with get_database_connection() as conn:
         conn.rollback()
@@ -1056,7 +1056,7 @@ def _read_prod_users() -> tuple:
 
 @router.get("/settings/users", response_class=HTMLResponse)
 def users_page(request: Request, user: str = Depends(get_current_user)):
-    if user != ADMIN_USERNAME:
+    if not is_admin(user):
         return RedirectResponse(url=BASE_URL + "/home", status_code=303)
     can_view_prod, source = _users_source(request.query_params)
     viewing_prod = can_view_prod and source == 'prod'
@@ -1116,7 +1116,7 @@ def users_page(request: Request, user: str = Depends(get_current_user)):
 def users_export(request: Request, user: str = Depends(get_current_user)):
     """CSV of the accounts the Users page shows: prod (read only) or this
     environment, chosen by ?source=. No passwords or hashes."""
-    if user != ADMIN_USERNAME:
+    if not is_admin(user):
         raise HTTPException(status_code=403, detail="Forbidden")
     can_view_prod, source = _users_source(request.query_params)
     try:
@@ -1182,7 +1182,7 @@ def _existing_user_keys(source: str) -> set:
 def nexus_users(request: Request, user: str = Depends(get_current_user)):
     """Every Nexus Point user, each marked existing when their email is already
     a username or a user's email here."""
-    if user != ADMIN_USERNAME:
+    if not is_admin(user):
         raise HTTPException(status_code=403)
     source = request.query_params.get('source') or 'this'
     try:
@@ -1208,7 +1208,7 @@ def _int_or_none(value):
 async def nexus_users_import(request: Request, user: str = Depends(get_current_user)):
     """Create the ticked Nexus users as pending accounts (activated later with
     a link from Edit). Existing emails are skipped."""
-    if user != ADMIN_USERNAME:
+    if not is_admin(user):
         raise HTTPException(status_code=403)
     data = await request.json()
     source = data.get('source') or 'this'
@@ -1246,7 +1246,7 @@ async def nexus_users_import(request: Request, user: str = Depends(get_current_u
 async def nexus_users_fill(request: Request, user: str = Depends(get_current_user)):
     """Fill in empty Nexus ids, site and company for the users already here,
     matched on email. Nothing already filled is changed."""
-    if user != ADMIN_USERNAME:
+    if not is_admin(user):
         raise HTTPException(status_code=403)
     data = await request.json()
     source = data.get('source') or 'this'
@@ -1313,7 +1313,7 @@ def _activity_filters(q) -> dict:
 
 @router.get("/settings/user-activity", response_class=HTMLResponse)
 def user_activity_page(request: Request, user: str = Depends(get_current_user)):
-    if user != ADMIN_USERNAME:
+    if not is_admin(user):
         return RedirectResponse(url=BASE_URL + "/home", status_code=303)
     flt = _activity_filters(request.query_params)
     date_from, date_to = flt['date_from'], flt['date_to']
@@ -1381,7 +1381,7 @@ def user_activity_export(request: Request, user: str = Depends(get_current_user)
     """CSV of every session the User Activity page's filters match, with no
     row limit beyond _EXPORT_LIMIT. Same database as the page: prod (read
     only) or this environment, chosen by ?source=."""
-    if user != ADMIN_USERNAME:
+    if not is_admin(user):
         raise HTTPException(status_code=403, detail="Forbidden")
     flt = _activity_filters(request.query_params)
     timeout = session_config()['session_timeout_minutes']
@@ -1437,7 +1437,7 @@ def save_session_timeout(
     session_timeout_minutes: int = Form(...),
     user: str = Depends(get_current_user),
 ):
-    if user != ADMIN_USERNAME:
+    if not is_admin(user):
         raise HTTPException(status_code=403, detail="Forbidden")
     minutes = max(1, min(24 * 60, session_timeout_minutes))
     with get_database_connection() as conn:
@@ -1449,7 +1449,7 @@ def save_session_timeout(
 
 @router.post("/settings/force-relogin")
 def force_relogin(request: Request, user: str = Depends(get_current_user)):
-    if user != ADMIN_USERNAME:
+    if not is_admin(user):
         return RedirectResponse(url=BASE_URL + "/home", status_code=303)
     # Stored in the settings table so every container signs people out, not
     # just this one. Whole seconds: get_settings reads it with int().
@@ -1490,7 +1490,7 @@ def _order_number(form, field: str):
 @router.get("/settings/page-names", response_class=HTMLResponse)
 def page_names_page(request: Request, user: str = Depends(get_current_user)):
     """One box per page, holding its current name. Blank = the default name."""
-    if user != ADMIN_USERNAME:
+    if not is_admin(user):
         return RedirectResponse(url=BASE_URL + "/home", status_code=303)
     try:
         with get_prod_pricer_connection() as conn:
@@ -1519,7 +1519,7 @@ async def save_page_names_route(request: Request, user: str = Depends(get_curren
     its default. Categories are stored in the same table as cat__<page_key>:
     save_page_names replaces every row, so names, categories and the site name
     must all be saved together here."""
-    if user != ADMIN_USERNAME:
+    if not is_admin(user):
         raise HTTPException(status_code=403)
     form = await request.form()
     names = {}
@@ -1584,7 +1584,7 @@ def _user_redirect(redirect_to: str, **params):
 @router.get("/settings/page-access")
 def page_access_page(user: str = Depends(get_current_user)):
     """Page access moved to the Edit popup on User Accounts. Keeps old links working."""
-    if user != ADMIN_USERNAME:
+    if not is_admin(user):
         return RedirectResponse(url=BASE_URL + "/home", status_code=303)
     return RedirectResponse(url=BASE_URL + "/settings/users", status_code=303)
 
@@ -1592,7 +1592,7 @@ def page_access_page(user: str = Depends(get_current_user)):
 @router.get("/settings/users/page-access", response_class=HTMLResponse)
 def page_access_batch_page(request: Request, user: str = Depends(get_current_user)):
     """Settings > Users > Page Access: pick one page, tick the users who have it."""
-    if user != ADMIN_USERNAME:
+    if not is_admin(user):
         return RedirectResponse(url=BASE_URL + "/home", status_code=303)
     can_view_prod, source = _users_source(request.query_params)
     viewing_prod = can_view_prod and source == 'prod'
@@ -1612,7 +1612,7 @@ def page_access_batch_page(request: Request, user: str = Depends(get_current_use
         logger.warning("Failed to load page access: %s", e)
         error = str(getattr(e, 'detail', None) or e)[:300]
     usernames = sorted(people) if viewing_prod else sorted(VALID_USERS)
-    usernames = [u for u in usernames if u != ADMIN_USERNAME]
+    usernames = [u for u in usernames if u not in ADMIN_USERNAMES]
     access = {u: shown_page_access(stored_access.get(u))
               for u in usernames} if stored_access is not None else {}
     pages = core.visible_pages()
@@ -1634,7 +1634,7 @@ def page_access_batch_save(data: dict, user: str = Depends(get_current_user)):
     """Give one page to the ticked users and take it from the unticked ones.
     data {source, page_key, usernames}. Each user's other pages are left as they
     are, and all the changes save together or not at all."""
-    if user != ADMIN_USERNAME:
+    if not is_admin(user):
         raise HTTPException(status_code=403)
     page_key = data.get('page_key')
     ticked = data.get('usernames')
@@ -1647,7 +1647,7 @@ def page_access_batch_save(data: dict, user: str = Depends(get_current_user)):
 
     with (get_prod_activity_connection() if to_prod else get_database_connection()) as conn:
         try:
-            known = set(read_user_details(conn) if to_prod else VALID_USERS) - {ADMIN_USERNAME}
+            known = set(read_user_details(conn) if to_prod else VALID_USERS) - ADMIN_USERNAMES
             if ticked - known:
                 raise HTTPException(status_code=400, detail="Unknown user: " + ', '.join(sorted(ticked - known)))
             stored = load_all_page_access(conn)
@@ -1773,15 +1773,15 @@ def save_user(
     on the page, so none ticked means no pages rather than leave as it is.
     permissions and permissions_shown work the same way.
     source 'prod' (local and dev only) saves to prod's database instead."""
-    if user != ADMIN_USERNAME:
+    if not is_admin(user):
         raise HTTPException(status_code=403)
     to_prod = _writes_to_prod(source)
     back = _prod_users_redirect if to_prod else (lambda **p: _user_redirect("users", **p))
     target = username.strip().lower() if mode == 'add' else username.strip()
     if not target:
         return back(pwderr="Username+cannot+be+empty")
-    if target == ADMIN_USERNAME:
-        return back(pwderr="The+admin+account+is+set+in+code")
+    if target in ADMIN_USERNAMES:
+        return back(pwderr="Admin+accounts+are+set+in+code")
     details = {'first_name': first_name.strip(), 'last_name': last_name.strip(), 'email': email.strip()}
     if mode == 'add' and '@' not in details['email']:
         return back(pwderr="An+email+address+is+needed+to+sign+in")
@@ -1851,9 +1851,9 @@ def delete_user(
     source: str = Form(default="this"),
     user: str = Depends(get_current_user)
 ):
-    if user != 'tdrayson':
+    if not is_admin(user):
         raise HTTPException(status_code=403)
-    if target_user == 'tdrayson':
+    if target_user in ADMIN_USERNAMES:
         raise HTTPException(status_code=400, detail="Cannot delete admin")
     if _writes_to_prod(source):
         with get_prod_activity_connection() as conn:
@@ -1909,7 +1909,7 @@ def update_settings(
     cap_override_password: str = Form(default=""),
     user: str = Depends(get_current_user),
 ):
-    if user != 'tdrayson':
+    if not is_admin(user):
         raise HTTPException(status_code=403, detail="Forbidden")
     calc = calc_buying_reqs == "on"
     gs = get_stock == "on"

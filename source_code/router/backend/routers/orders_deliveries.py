@@ -460,7 +460,7 @@ def orders_deliveries_ask_ai(request: Request, payload: dict,
     [{"role": "user"|"model", "text": ...}, ...]. When present the question is
     a follow-up: the turns are replayed and `context` may be omitted, since the
     data table is already in the first user turn."""
-    if user != 'tdrayson':
+    if not is_admin(user):
         raise HTTPException(status_code=403)
     with get_database_connection() as conn:
         if not get_settings(conn).get('orders_deliveries_ai'):

@@ -1450,7 +1450,7 @@ const BASE_URL = window.BASE_URL;
             // Both the control bar above the slicers and the Ask AI panel below
             // them line up with the panels' right edge, so the three stack as
             // one column. Same measurement for both — they cannot disagree.
-            // The Ask AI panel is only rendered for tdrayson (see the template),
+            // The Ask AI panel is only rendered for admins (see the template),
             // so it may not exist here.
             document.getElementById('control-bar').style.width = w;
             const aiPanel = document.getElementById('ai-panel');
@@ -2300,7 +2300,7 @@ const BASE_URL = window.BASE_URL;
         document.querySelectorAll('#granularity-toggle button').forEach(b =>
             b.addEventListener('click', () => setGranularity(b.dataset.granularity)));
 
-        // The Ask AI panel is only rendered for tdrayson (see the template).
+        // The Ask AI panel is only rendered for admins (see the template).
         const aiQuestionEl = document.getElementById('ai-question');
         if (aiQuestionEl) {
             aiQuestionEl.addEventListener('keydown', e => {
