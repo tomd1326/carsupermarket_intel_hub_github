@@ -171,7 +171,7 @@
                 <col>
                 <col style="width:6%">
                 {% if is_admin %}<col class="admin-only" style="width:7%">{% endif %}
-                {% if user == 'tdrayson' %}<col class="admin-only" style="width:6%">{% endif %}
+                {% if is_admin %}<col class="admin-only" style="width:6%">{% endif %}
                 <col style="width:4%">
                 <col style="width:7%">
                 <!-- Actions: Download, View vehicles, Log (two icons when the
@@ -189,7 +189,7 @@
                     <th scope="col">Filename</th>
                     <th scope="col">Vehicles</th>
                     {% if is_admin %}<th scope="col">Reductions</th>{% endif %}
-                    {% if user == 'tdrayson' %}<th scope="col">Cache</th>{% endif %}
+                    {% if is_admin %}<th scope="col">Cache</th>{% endif %}
                     <th scope="col">Time</th>
                     <th scope="col">Status</th>
                     <th scope="col">Download</th>
@@ -206,7 +206,7 @@
                     <td>{{ task.filename }}</td>
                     <td>{{ task.total_rows if task.total_rows is not none else "-" }}</td>
                     {% if is_admin %}<td>{{ task.reductions if task.reductions is not none else "-" }}</td>{% endif %}
-                    {% if user == 'tdrayson' %}<td>{{ task.aurora_cache_hits if task.aurora_cache_hits is not none else "-" }}</td>{% endif %}
+                    {% if is_admin %}<td>{{ task.aurora_cache_hits if task.aurora_cache_hits is not none else "-" }}</td>{% endif %}
                     <td>{{ "%d" | format(task.execution_time) ~ "s" if task.execution_time is not none else "-" }}</td>
                     <td>
                         {% if task.status == 'success' %}
@@ -638,7 +638,7 @@
         }
 
         const _isAdmin = {{ 'true' if is_admin else 'false' }};
-        const _isTdrayson = {{ 'true' if user == 'tdrayson' else 'false' }};
+        const _isTdrayson = {{ 'true' if is_admin else 'false' }};
 
         // ── Admin View / User View (admin only), as on the KPI page ──
         // Kept in this browser only.

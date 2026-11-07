@@ -98,7 +98,7 @@
                             <td class="text-nowrap">{{ d.company_name or '' }}</td>
                             <td class="text-muted text-nowrap">{{ ll.last_login or 'Never' }}</td>
                             <td class="text-nowrap">
-                                {% if u == admin_username %}All
+                                {% if user_is_admin(u) %}All
                                 {% elif access_loaded %}{{ user_pages|length }} of {{ pages|length }}{% endif %}
                             </td>
                             <td class="text-end">
@@ -119,7 +119,7 @@
                                         data-buyer="{{ '1' if u in buyers else '0' }}"
                                         data-pages="{{ user_pages|sort|join(',') }}"
                                         data-permissions="{{ (user_permissions or {}).get(u, [])|sort|join(',') }}"
-                                        data-admin="{{ '1' if u == admin_username else '0' }}">Edit</button>
+                                        data-admin="{{ '1' if user_is_admin(u) else '0' }}">Edit</button>
                             </td>
                         </tr>
                         {% endfor %}

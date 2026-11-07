@@ -48,7 +48,7 @@ from fastapi import APIRouter, Depends, HTTPException
 
 from utils.db_utils import get_database_connection
 from utils.ddl_once import once_per_database
-from .core import get_current_user, ADMIN_USERNAME
+from .core import is_admin, get_current_user, ADMIN_USERNAME
 
 logger = logging.getLogger(__name__)
 
@@ -104,7 +104,7 @@ _ERROR = re.compile(r"(Compilation|Database|Runtime|Parsing|Dependency) Error|Er
 
 
 def _admin(user: str):
-    if user != ADMIN_USERNAME:
+    if not is_admin(user):
         raise HTTPException(status_code=403, detail="Forbidden")
 
 

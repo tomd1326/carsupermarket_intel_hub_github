@@ -98,7 +98,8 @@ def _render_users(access_loaded=True, viewing_prod=False):
     source = source.replace("{{ page_header('Settings', user) }}", "")
     source = source.replace("{% include '_settings_head.html' %}", "")
     source = source.replace("{% include '_settings_nav.html' %}", "")
-    env.globals.update(static_url=lambda p: p, page_name=lambda k: 'Name ' + k)
+    env.globals.update(static_url=lambda p: p, page_name=lambda k: 'Name ' + k,
+                       user_is_admin=lambda u: u == 'tdrayson')
     return env.from_string(source).render(
         request=mock.MagicMock(query_params={}), user='tdrayson', BASE_URL='', admin_username='tdrayson',
         error=None,

@@ -32,7 +32,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from utils.db_utils import get_database_connection, save_settings_partial
 from utils.ddl_once import once_per_database
 from utils.snowflake_client import SnowflakeClient
-from .core import get_current_user, ADMIN_USERNAME
+from .core import is_admin, get_current_user, ADMIN_USERNAME
 from . import api_requests, dbt_runs
 
 logger = logging.getLogger(__name__)
@@ -62,7 +62,7 @@ FINISHED = ('done', 'failed', 'stopped')
 
 
 def _admin(user: str):
-    if user != ADMIN_USERNAME:
+    if not is_admin(user):
         raise HTTPException(status_code=403, detail="Forbidden")
 
 

@@ -15,7 +15,7 @@ from zoneinfo import ZoneInfo
 from fastapi import HTTPException, Request
 from fastapi.templating import Jinja2Templates
 
-from utils.db_utils import (get_database_connection, get_prod_pricer_connection,
+from utils.db_utils import (get_database_connection, get_prod_pricer_connection, ADMIN_DETAILS,
                             load_all_users, load_all_page_access, load_page_names, read_user_permissions,
                             record_event, get_settings, read_user_details,
                             touch_session, close_sessions, read_session_settings,
@@ -370,10 +370,15 @@ s3_bucketname = 'aa-raw-sources-uk'
 s3_bucket_region = 'eu-west-1'  # bucket is always in eu-west-1 regardless of Lambda region
 
 
-_ADMIN_FALLBACK = {'tdrayson'}
+# Every admin can sign in with no row in the users table: their name and email
+# are fixed in db_utils.ADMIN_DETAILS.
+ADMIN_USERNAMES: frozenset = frozenset(ADMIN_DETAILS)
+_ADMIN_FALLBACK = set(ADMIN_USERNAMES)
 VALID_USERS: set = set()
 
 
+# The primary admin: who regular users see on Live Users, and the default
+# recipient of alerts. Access checks use is_admin, which allows every admin.
 ADMIN_USERNAME = 'tdrayson'
 
 # Page access, cached per process. The app runs as several Lambda containers,
@@ -420,7 +425,7 @@ def _reload_users_from_aurora():
 
 
 def is_admin(user: str | None) -> bool:
-    return user == ADMIN_USERNAME
+    return user in ADMIN_USERNAMES
 
 
 # Not 'is_admin': some pages pass an is_admin True/False of their own, which
